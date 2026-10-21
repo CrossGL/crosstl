@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 304,
+        "endLine": 16,
+        "endOffset": 335,
         "file": "crosstl-out/directx/basic_src.hlsl",
-        "length": 304,
+        "length": 335,
         "line": 1,
         "offset": 0
       },

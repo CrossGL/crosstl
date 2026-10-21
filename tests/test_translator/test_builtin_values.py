@@ -5,6 +5,7 @@ is written in all three spellings; every spelling must give the same output for 
 compile with the target's native compiler when it is installed.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -144,7 +145,20 @@ TARGETS = tuple(GRAPHICS_EXPECTED)
 def _translate(tmp_path, source, backend):
     path = tmp_path / "shader.cgl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    # Unformatted, so the assertions do not depend on clang-format or SPIRV-Tools being installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def _view(backend, code):
+    """``code`` as the assertions read it: SPIR-V ids by their ``OpName``, HLSL semantics as ``name : SEMANTIC``."""
+    if backend == "vulkan":
+        names = dict(re.findall(r'OpName (%\d+) "(\w+)"', code))
+        return re.sub(
+            r"%\d+\b", lambda m: "%" + names.get(m.group(0), m.group(0)[1:]), code
+        )
+    if backend == "directx":
+        return re.sub(r"(\w)\s*:\s*(SV_\w+)", r"\1 : \2", code)
+    return code
 
 
 def _run(command, **kwargs):
@@ -285,7 +299,7 @@ FSOut main(vec4 fc @builtin(position), uint inmask @builtin(sample_mask)) {
 def test_sample_mask_takes_the_name_of_its_direction(tmp_path, backend, needles):
     code = _translate(tmp_path, SAMPLE_MASK, backend)
     for needle in needles:
-        assert needle in code
+        assert needle in _view(backend, code)
     _validate(tmp_path, backend, code, "fragment")
 
 
@@ -424,7 +438,9 @@ FSOut main(vec4 fc @SV_Position) { %s }
 
 
 def test_spirv_sample_index_is_a_flat_builtin(tmp_path):
-    spirv = _translate(tmp_path, GRAPHICS.format(**SPELLINGS["wgsl"]), "vulkan")
+    spirv = _view(
+        "vulkan", _translate(tmp_path, GRAPHICS.format(**SPELLINGS["wgsl"]), "vulkan")
+    )
     assert "OpCapability SampleRateShading" in spirv
     assert "OpDecorate %gl_SampleID BuiltIn SampleId" in spirv
     assert spirv.count("OpDecorate %gl_SampleID Flat") == 1
@@ -443,9 +459,10 @@ FSOut main(uint p %s) { FSOut o; o.color = vec4(float(p)); return o; }
 }
 """ % spelling
     spirv = _translate(tmp_path, source, "vulkan")
-    assert "OpCapability Geometry" in spirv
-    assert "OpDecorate %gl_PrimitiveID BuiltIn PrimitiveId" in spirv
-    assert spirv.count("OpDecorate %gl_PrimitiveID Flat") == 1
+    view = _view("vulkan", spirv)
+    assert "OpCapability Geometry" in view
+    assert "OpDecorate %gl_PrimitiveID BuiltIn PrimitiveId" in view
+    assert view.count("OpDecorate %gl_PrimitiveID Flat") == 1
     _validate(tmp_path, "vulkan", spirv, "fragment")
 
 
@@ -492,7 +509,7 @@ def test_stage_variables_in_every_spelling_become_entry_point_builtins(
     for spelling, code in outputs.items():
         for needle in needles:
             assert (
-                needle.lower() in code.lower()
+                needle.lower() in _view(backend, code).lower()
             ), f"{spelling} spelling: {needle!r} missing"
     assert outputs["wgsl"] == outputs["glsl"]
     _validate(tmp_path, backend, outputs["wgsl"], "vertex")
