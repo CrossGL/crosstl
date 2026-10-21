@@ -75,6 +75,30 @@ def test_shards_run_every_test_once_and_split_large_files(tmp_path):
         assert 20 <= len(shard) <= 60
 
 
+def test_tests_sharing_a_module_fixture_stay_in_one_shard(tmp_path):
+    (tmp_path / "test_shared.py").write_text(
+        "import pytest\n\n"
+        "@pytest.fixture(scope='module')\n"
+        "def helper():\n"
+        "    return object()\n\n"
+        "@pytest.mark.parametrize('n', range(30))\n"
+        "def test_uses_helper(helper, n):\n"
+        "    pass\n\n"
+        "@pytest.mark.parametrize('n', range(30))\n"
+        "def test_alone(n):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    shards = [_collect(tmp_path, "--shard", f"{index}/3") for index in (1, 2, 3)]
+    assert sum(len(shard) for shard in shards) == 60
+    holders = [
+        shard for shard in shards if any("test_uses_helper" in node for node in shard)
+    ]
+    assert len(holders) == 1
+    assert sum("test_uses_helper" in node for node in holders[0]) == 30
+    assert all(any("test_alone" in node for node in shard) for shard in shards)
+
+
 def test_complete_suite_runs_one_job_per_shard():
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "full-tests.yml").read_text(encoding="utf-8")

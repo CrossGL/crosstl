@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 104,
-        "endOffset": 2847,
+        "endLine": 99,
+        "endOffset": 2691,
         "file": "crosstl-out/vulkan/CubeFDM_vs.spvasm",
-        "length": 2847,
+        "length": 2691,
         "line": 1,
         "offset": 0
       },

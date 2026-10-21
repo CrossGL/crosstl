@@ -5605,26 +5605,39 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert generated_code.count("GroupMemoryBarrier();") == 2
+    # GroupMemoryBarrier orders groupshared memory only, so groupMemoryBarrier (buffer, image and shared
+    # memory) needs AllMemoryBarrier.
+    assert generated_code.count("GroupMemoryBarrier();") == 1
     assert generated_code.count("DeviceMemoryBarrier();") == 3
-    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert generated_code.count("AllMemoryBarrier();") == 3
     assert "barrier();" not in generated_code
     assert "memoryBarrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
@@ -6242,9 +6255,13 @@ def test_directx_device_memory_synchronization_builtins_allow_fragment_stage():
     shader FragmentDeviceMemorySynchronization {
         fragment {
             void main() {
+                int k = 0;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
             }
         }
     }
@@ -6339,7 +6356,7 @@ def test_directx_synchronization_helper_calls_remain_mesh_compatible():
     shader = """
     shader MeshSynchronizationHelper {
         void synchronize_workgroup() {
-            groupMemoryBarrier();
+            memoryBarrierShared();
         }
 
         mesh {

@@ -35,6 +35,7 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .subgroup_import import import_subgroup_call
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -1266,6 +1267,13 @@ class GLSLToCrossGLConverter:
             member = members[0]
             if not getattr(member, "is_array", False):
                 return None
+            # Only a block whose sole member is one runtime-sized dimension is an
+            # element buffer.  A sized member ('float d[4]') is a fixed array that
+            # whole-array reads and '.length()' observe, and 'float d[][4]' has
+            # 'float[4]' elements; both keep the block form.
+            array_sizes = getattr(member, "array_sizes", None)
+            if array_sizes is not None and list(array_sizes) != [None]:
+                return None
             return member
 
         if getattr(var, "is_array", False):
@@ -1869,6 +1877,27 @@ class GLSLToCrossGLConverter:
                 emitted.append(mapped)
         return " ".join(emitted)
 
+    # Qualifiers that do not give a global a storage class (GLSL 4.60 sections 4.5-4.7, 4.8 and 4.10).
+    _NON_STORAGE_QUALIFIERS = frozenset(
+        {"highp", "mediump", "lowp", "precise", "invariant"}
+    )
+
+    def private_global_prefix(self, var):
+        """``static `` for a global without a storage qualifier, which GLSL makes private to each invocation.
+
+        GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
+        is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
+        uniform, so the private one carries ``static``, the CrossGL storage class for per-invocation globals.
+        """
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", None) or []}
+        if qualifiers - self._NON_STORAGE_QUALIFIERS:
+            return ""
+        if getattr(var, "is_const", False):
+            return ""
+        if self._is_resource_type(self.variable_declaration_type(var)):
+            return ""
+        return "static "
+
     def interface_qualifier_prefix(self, var):
         qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
         emitted = []
@@ -2024,6 +2053,11 @@ class GLSLToCrossGLConverter:
         )
 
     def is_descriptor_set_uniform_block_struct(self, struct):
+        """Whether ``struct`` is a uniform block, which becomes a CrossGL ``cbuffer`` of its own.
+
+        A uniform block is a host interface of its own: its block name, binding and member layout are what the host
+        matches (GLSL 4.60 sections 4.3.9 and 4.4.5), so it keeps them whether or not it names a descriptor set.
+        """
         if not getattr(struct, "interface_block", False):
             return False
         if self.has_push_constant_layout(struct):
@@ -2032,10 +2066,7 @@ class GLSLToCrossGLConverter:
             str(qualifier).lower()
             for qualifier in getattr(struct, "interface_qualifiers", []) or []
         }
-        layout = getattr(struct, "interface_layout", None) or {}
-        return "uniform" in qualifiers and (
-            self.layout_has_key(layout, "set") or getattr(struct, "hlsl_cbuffer", False)
-        )
+        return "uniform" in qualifiers or getattr(struct, "hlsl_cbuffer", False)
 
     def is_arrayed_descriptor_set_uniform_block_struct(self, struct):
         return self.is_descriptor_set_uniform_block_struct(struct) and getattr(
@@ -2151,13 +2182,21 @@ class GLSLToCrossGLConverter:
             block_name, uniforms, fields
         )
 
-        result = f"cbuffer {block_name} @push_constant {{\n"
+        layout = self.uniform_block_layout(block_name, uniforms)
+        # Push constants use std430 unless the block names std140 or scalar (GL_KHR_vulkan_glsl).
+        buffer_layout = next(
+            (
+                name
+                for name in ("std140", "scalar")
+                if self.layout_has_key(layout, name)
+            ),
+            "std430",
+        )
+        result = (
+            f"cbuffer {block_name} @push_constant @buffer_layout({buffer_layout}) {{\n"
+        )
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
@@ -2179,8 +2218,7 @@ class GLSLToCrossGLConverter:
             or getattr(var, "interface_block", None)
         )
         if not (
-            self.layout_has_key(layout, "set")
-            or getattr(block_struct, "hlsl_cbuffer", False)
+            self.is_descriptor_set_uniform_block_struct(block_struct)
             or (self.layout_has_key(layout, "binding") and not is_interface_block)
         ):
             return None
@@ -2203,6 +2241,28 @@ class GLSLToCrossGLConverter:
             self.append_concrete_descriptor_attribute(attributes, name, value)
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def uniform_block_buffer_layout_suffix(self, block_name, uniforms):
+        """The ``@buffer_layout`` of a uniform block: the memory layout the host writes it with.
+
+        Uniform blocks use std140 unless they name ``std430`` or ``scalar`` (GLSL 4.60 section 4.4.5). ``shared`` and
+        ``packed`` leave the offsets to the implementation, which the host must query; std140 is the layout every
+        implementation accepts for them, so they are kept as std140 too. A block written in HLSL ``cbuffer`` syntax
+        keeps the default HLSL packing of the generators, and a struct-typed loose uniform has no byte layout.
+        """
+        block_struct = self.structs_by_name.get(block_name)
+        if (
+            block_struct is None
+            or not getattr(block_struct, "interface_block", False)
+            or getattr(block_struct, "hlsl_cbuffer", False)
+        ):
+            # A struct-typed loose uniform is set through the API, not as buffer bytes.
+            return ""
+        layout = self.uniform_block_layout(block_name, uniforms)
+        for name in ("std430", "scalar"):
+            if self.layout_has_key(layout, name):
+                return f" @buffer_layout({name})"
+        return " @buffer_layout(std140)"
+
     def descriptor_set_uniform_block_output_name(self, block_name, uniforms):
         block_struct = self.structs_by_name.get(block_name)
         if block_struct is None:
@@ -2224,19 +2284,43 @@ class GLSLToCrossGLConverter:
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, uniforms
         )
+        attributes += self.uniform_block_buffer_layout_suffix(block_name, uniforms)
         output_name = self.descriptor_set_uniform_block_output_name(
             block_name, uniforms
         )
         result = f"cbuffer {output_name}{attributes} {{\n"
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
+
+    def uniform_block_member_lines(self, fields, output_names, uniforms):
+        """The members of a uniform or push-constant block, with their layout and memory qualifiers.
+
+        Member layout qualifiers (``row_major``, ``offset``, ``align``) set the bytes the host writes (GLSL 4.60
+        section 4.4.5), so they stay on the member. Memory qualifiers of the block's instance apply to every member.
+        """
+        instance_attributes = []
+        for uniform in uniforms or []:
+            if getattr(uniform, "interface_block", None) and uniform not in fields:
+                for attribute in self.vulkan_memory_model_qualifier_attributes(uniform):
+                    if attribute not in instance_attributes:
+                        instance_attributes.append(attribute)
+        lines = ""
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = output_names.get(getattr(field, "name", ""), "")
+            array_suffix = self.array_suffix(field)
+            suffix = self.interface_member_layout_attribute_suffix(field)
+            attributes = list(instance_attributes)
+            for attribute in self.vulkan_memory_model_qualifier_attributes(field):
+                if attribute not in attributes:
+                    attributes.append(attribute)
+            if attributes:
+                suffix += " " + " ".join(attributes)
+            lines += self.indent() + f"{var_type} {var_name}{array_suffix}{suffix};\n"
+        return lines
 
     def interface_block_attribute_prefix(self, node):
         if not self.is_graphics_interface_block_struct(node):
@@ -2800,7 +2884,10 @@ class GLSLToCrossGLConverter:
                 result += self.indent_str + ssbo_block_decl + ";\n"
                 continue
             result += (
-                self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
+                self.indent_str
+                + self.private_global_prefix(global_var)
+                + self.generate_variable_declaration(global_var)
+                + ";\n"
             )
         if getattr(node, "global_variables", []):
             result += "\n"
@@ -3668,6 +3755,10 @@ class GLSLToCrossGLConverter:
         if ray_query_call is not None:
             return ray_query_call
 
+        subgroup_call = import_subgroup_call(self, name, node.args)
+        if subgroup_call is not None:
+            return subgroup_call
+
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)
 
@@ -3798,12 +3889,11 @@ class GLSLToCrossGLConverter:
 
         object_name = ""
         if isinstance(node.object, VariableNode):
+            # Geometry and tessellation inputs stay module-scope declarations, as
+            # in the variable path above, so their member reads keep the name.
             if self.shader_type in (
                 "vertex",
                 "fragment",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
             ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
             elif self.shader_type in ("vertex",) and any(
@@ -3811,7 +3901,12 @@ class GLSLToCrossGLConverter:
             ):
                 object_name = f"output.{node.object.name}"
             else:
-                object_name = node.object.name
+                # A member of an anonymous buffer block ('data.length()')
+                # names the block instance's member, as in the variable path.
+                object_name = (
+                    self.anonymous_ssbo_member_reference(node.object.name)
+                    or node.object.name
+                )
         else:
             object_name = self.generate_expression(node.object)
             if isinstance(node.object, ArrayAccessNode) and node.member == "length":
@@ -3830,8 +3925,14 @@ class GLSLToCrossGLConverter:
         return self.generate_function_call(node.object)
 
     def flattened_uniform_block_member(self, node):
-        instance_name = self.expression_base_name(getattr(node, "object", None))
-        if instance_name is None:
+        # Only ``instance.member`` names a block member: in ``instance.m[1].z`` the
+        # ``.z`` is a swizzle of ``m[1]``, even when the block also has a member ``z``.
+        instance = getattr(node, "object", None)
+        if isinstance(instance, VariableNode):
+            instance_name = instance.name
+        elif isinstance(instance, str):
+            instance_name = instance
+        else:
             return None
         fields = self.flattened_uniform_block_instances.get(instance_name)
         if fields is None or node.member not in fields:
@@ -3869,7 +3970,7 @@ class GLSLToCrossGLConverter:
             return array_expr.name, index
 
         if isinstance(array_expr, MemberAccessNode):
-            base_name = self.expression_base_name(array_expr.object)
+            base_name = self.block_instance_name(array_expr.object)
             if (
                 base_name
                 and (base_name, array_expr.member)
@@ -3895,7 +3996,7 @@ class GLSLToCrossGLConverter:
         ):
             return target.name
         if isinstance(target, MemberAccessNode):
-            base_name = self.expression_base_name(target.object)
+            base_name = self.block_instance_name(target.object)
             if (
                 base_name
                 and (base_name, target.member)
@@ -3910,6 +4011,20 @@ class GLSLToCrossGLConverter:
             index = self.generate_expression(node.index)
             return f"{array}[{index}]"
         return self.generate_expression(node)
+
+    def block_instance_name(self, node):
+        """The name of a block instance (``buf`` or an element ``bufs[i]``), else ``None``.
+
+        In ``buf.items[3].data`` the ``data`` is a member of a struct element,
+        not of the block, even when the block also has a member ``data``.
+        """
+        while isinstance(node, ArrayAccessNode):
+            node = node.array
+        if isinstance(node, VariableNode):
+            return node.name
+        if isinstance(node, str):
+            return node
+        return None
 
     def expression_base_name(self, node):
         if isinstance(node, str):

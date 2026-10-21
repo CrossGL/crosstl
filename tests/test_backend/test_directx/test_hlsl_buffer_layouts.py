@@ -14,7 +14,10 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -310,15 +313,67 @@ def test_metal_passes_hlsl_layout_members_to_reference_parameters_through_tempor
     )
 
 
-def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
+def test_metal_packs_members_into_the_last_register_of_a_cbuffer_array(tmp_path):
     # The last element of an HLSL array is not padded to a register, so the
-    # next member packs into it; Metal array elements cannot overlap it.
-    with pytest.raises(ValueError, match="overlaps the Metal storage"):
+    # next member packs into it (DXC: a at 0, c at 40, b2 at 48, d at 68, q at 80,
+    # e at 108). Such arrays are held as register words read by an element helper.
+    metal = generate_metal("""
+        cbuffer P : register(b0)
+        {
+            float2 a[3];
+            float c;
+            bool b2[2];
+            bool d;
+            int3 q[2];
+            float e;
+            float w[2];
+        }
+        RWStructuredBuffer<float> o : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID)
+        {
+            float2 t[3] = a;
+            o[id.x] = t[2].x + a[id.x].y + c + (b2[id.x] ? 1.0 : 0.0) + (d ? 1.0 : 0.0)
+                + q[id.x].z + e + w[id.x];
+        }
+        """)
+
+    assert "struct crosstl_hlsl_cbuffer_float2_array3 {\n    float v[10];\n};" in metal
+    assert "struct crosstl_hlsl_cbuffer_bool_array2 {\n    uint v[5];\n};" in metal
+    assert (
+        "return int3(a.v[4 * index], a.v[4 * index + 1], a.v[4 * index + 2]);" in metal
+    )
+    assert "crosstl_hlsl_cbuffer_float2_array3_element(p.a, id.x).y" in metal
+    assert "crosstl_hlsl_cbuffer_float2_array3_element(p.a, 2)" in metal
+    assert "crosstl_hlsl_cbuffer_bool_array2_element(p.b2, id.x) ?" in metal
+    # Nothing follows the last array, so it keeps one four-component register per element.
+    assert "    float4 w[2];\n" in metal
+    compile_metal_with_layout(
+        metal,
+        tmp_path,
+        offsets=[
+            ("P", "a", 0),
+            ("P", "c", 40),
+            ("P", "b2", 48),
+            ("P", "d", 68),
+            ("P", "q", 80),
+            ("P", "e", 108),
+            ("P", "w", 112),
+        ],
+    )
+
+
+def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
+    # The next member packs into the last register of an array of matrices,
+    # whose Metal elements are padded to whole registers.
+    with pytest.raises(
+        UnsupportedMetalFeatureError, match="overlaps the Metal storage"
+    ):
         generate_metal("""
-            cbuffer _ : register(b0) { float a[2]; float b; }
+            cbuffer _ : register(b0) { float2x2 a[2]; float b; }
             RWStructuredBuffer<float> o : register(u0);
             [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x] + b; }
+            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x][0].x + b; }
             """)
 
     with pytest.raises(ValueError, match="matrices in HLSL structured buffers"):
@@ -356,3 +411,52 @@ def test_crossgl_buffers_without_a_layout_keep_the_metal_layout():
         """)
 
     assert "    bool enabled;\n    int3 offset;\n    float scale;\n" in metal
+
+
+def test_metal_reads_packed_cbuffer_vectors_as_natural_vectors(tmp_path):
+    # ``dir`` sits at byte 4, so Metal stores it as packed_float3, which matrix
+    # products and the vector built-ins do not accept.
+    metal = generate_metal("""
+        cbuffer Params : register(b0) {
+            float scale;
+            float3 dir;
+            float3x3 rot;
+        };
+        float4 PSMain() : SV_Target {
+            return float4(normalize(mul(rot, dir)) * scale, 1.0);
+        }
+        """)
+    assert "packed_float3 dir;" in metal
+    assert "float3(params.dir)" in metal
+    compile_metal_with_layout(metal, tmp_path, offsets=[("Params", "dir", 4)])
+
+
+def test_metal_stores_components_of_packed_structured_elements(tmp_path):
+    # A uint3, float3 or bool3 element of a structured buffer is a packed (or
+    # uint-held) vector in Metal. Its reads convert, but component stores and
+    # atomics go through the storage vector, which is assignable.
+    metal = generate_metal("""
+        RWStructuredBuffer<uint3> v : register(u0);
+        RWStructuredBuffer<float3> f : register(u1);
+        RWStructuredBuffer<bool3> b : register(u2);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID) {
+            v[id.x].y = 3;
+            v[id.x].xz += uint2(1, 2);
+            f[id.x].z = length(f[0]);
+            b[id.x].y = true;
+            b[id.x].xz = bool2(false, true);
+            v[id.x].y++;
+            --v[id.x].z;
+            InterlockedAdd(v[id.x].x, 1u);
+        }
+        """)
+    assert "v[id.x].y = 3;" in metal
+    assert "v[id.x].xz += uint2(1, 2);" in metal
+    assert "f[id.x].z = length(float3(f[0]));" in metal
+    assert "b[id.x].y = uint(true);" in metal
+    assert "b[id.x].xz = uint2(bool2(false, true));" in metal
+    assert "v[id.x].y++;" in metal
+    assert "--v[id.x].z;" in metal
+    assert "(reinterpret_cast<device uint*>(&v[id.x]) + 0)" in metal
+    compile_metal_with_layout(metal, tmp_path)

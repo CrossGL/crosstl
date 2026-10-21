@@ -7,7 +7,7 @@ per runtime so container runtimes start once. Outcomes:
 - ``refused``: the translator raised a typed diagnostic; ``translator-error``: it failed without one;
 - ``invalid``: the target's native checker rejected the artifact; ``driver-rejected``: the runtime's own compiler
   or pipeline creation rejected an artifact the checker accepted; ``interface-changed``: the artifact no longer
-  exposes its source's two-buffer interface;
+  exposes its source's two-buffer interface, or the constants block its case gives the host;
 - ``preserved`` / ``diverged``: the execution matched or contradicted the source-rule oracle; ``observed``: the
   source rule leaves the result undefined, so the result is recorded without an obligation;
 - ``memory-corruption``: the kernel wrote the input buffer or past the end of the output buffer;
@@ -134,13 +134,15 @@ def prepare(
         host=platform.system(),
         translation=translation,
     )
+    if case.constants is not None:
+        base["constantsSHA256"] = digest(case.constants)
     cell = Cell(case, target, config, directory, base)
     if translation["status"] not in {"reference", "translated"}:
         cell.outcome = translation["status"]
         return cell
     base["artifactSHA256"] = digest(artifact.read_bytes())
     try:
-        abi = interface(artifact, target, case.group)
+        abi = interface(artifact, target, case.group, case.constants is not None)
     except InterfaceChanged as error:
         cell.outcome = "harness-error" if route == "reference" else "interface-changed"
         base["message"] = str(error)
@@ -184,6 +186,8 @@ def stage(cell, runtime):
     guard = np.full(GUARD_WORDS, CANARY, dtype=np.uint32).tobytes()
     (directory / "input.bin").write_bytes(case.inputs.tobytes())
     (directory / "output.bin").write_bytes(initial + guard)
+    if case.constants is not None:
+        (directory / "constants.bin").write_bytes(case.constants)
     job = dict(
         operation="execute",
         adapter=runtime.adapter,

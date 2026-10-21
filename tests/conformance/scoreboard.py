@@ -1,7 +1,7 @@
 """Per-cell regression comparison; missing or unavailable proof cannot pass.
 
 A scoreboard maps each cell key (case, language, target, configuration, route, Vulkan environment, runtime) to
-its outcome and the hashes of the source and input data it was measured on. A run is checked against the cells of
+its outcome and the hashes of the source, input and constants-block data it was measured on. A run is checked against the cells of
 the baseline that fall inside the run's declared scope; a cell in scope that is missing, measured on different
 data, or worse than recorded is a failure. Better outcomes pass and are reported so the baseline can be advanced.
 """
@@ -62,6 +62,8 @@ def snapshot(records):
         cells[identity] = {
             name: record[name] for name in ("outcome", "sourceSHA256", "inputSHA256")
         }
+        if record.get("constantsSHA256"):
+            cells[identity]["constantsSHA256"] = record["constantsSHA256"]
     counts = dict(sorted(Counter(record["outcome"] for record in records).items()))
     return {
         "schemaVersion": SCHEMA,
@@ -94,8 +96,8 @@ def check(baseline, records, scope=None):
         if actual is None:
             failures.append(f"Missing conformance cell: {identity}")
             continue
-        for name in ("sourceSHA256", "inputSHA256"):
-            if actual[name] != expected[name]:
+        for name in ("sourceSHA256", "inputSHA256", "constantsSHA256"):
+            if actual.get(name) != expected.get(name):
                 failures.append(f"Changed {name}: {identity}")
         if actual["outcome"] != expected["outcome"] and not improves(
             identity, expected["outcome"], actual["outcome"]

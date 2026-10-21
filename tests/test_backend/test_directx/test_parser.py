@@ -18,6 +18,7 @@ from crosstl.backend.DirectX.DirectxAst import (
     ForNode,
     IfNode,
     PragmaNode,
+    ScopedBlockNode,
     StructNode,
     VariableNode,
     WhileNode,
@@ -3207,10 +3208,14 @@ def test_parse_upstream_bare_scope_block():
     }
     """)
 
-    body_names = [
-        node.name for node in ast.functions[0].body if isinstance(node, VariableNode)
-    ]
-    assert body_names == ["colorSum", "ambient"]
+    body = ast.functions[0].body
+    body_names = [node.name for node in body if isinstance(node, VariableNode)]
+    assert body_names == ["colorSum"]
+    # The bare block keeps its own scope, so 'ambient' is declared inside it only.
+    (block,) = (node for node in body if isinstance(node, ScopedBlockNode))
+    assert [
+        node.name for node in block.statements if isinstance(node, VariableNode)
+    ] == ["ambient"]
 
 
 def test_parse_parenthesized_identifier_after_unary_minus_not_cast():

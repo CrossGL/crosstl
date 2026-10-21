@@ -407,7 +407,15 @@ def test_crossgl_udiv_intrinsic_lowers_to_the_helper(tmp_path):
     }
 }
 """
-    for backend in ("metal", "opengl"):
+    # The anonymous block's members are read through its instance, which Metal lowers to byte offsets.
+    operands = {
+        "metal": (
+            r"\(\*reinterpret_cast<const device uint ?\*>\(data \+ 0\)\),\s*"
+            r"\(\*reinterpret_cast<const device uint ?\*>\(data \+ 4\)\)"
+        ),
+        "opengl": r"data\.values\[0\], data\.values\[1\]",
+    }
+    for backend, pattern in operands.items():
         out = translate(tmp_path, source, backend, ".cgl")
-        assert "cgl_rule_udiv_ones(values[0], values[1])" in out
+        assert re.search(rf"= cgl_rule_udiv_ones\({pattern}\);", out), out
         assert "__cgl_" not in out

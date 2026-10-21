@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 27,
-        "endOffset": 698,
+        "endLine": 24,
+        "endOffset": 615,
         "file": "crosstl-out/metal/cube.vert.metal",
-        "length": 698,
+        "length": 615,
         "line": 1,
         "offset": 0
       },

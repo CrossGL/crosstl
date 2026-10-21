@@ -1,11 +1,6 @@
 #version 450
 
 shader main {
-    struct UBO {
-    mat4 projection;
-    mat4 model;
-};
-
     @glsl_interface_block(out) struct gl_PerVertex {
     vec4 gl_Position;
 };
@@ -20,15 +15,16 @@ shader main {
     vec4 gl_Position;
     };
 
-    cbuffer Uniforms {
-    UBO ubo;
+    cbuffer UBO @binding(0) @buffer_layout(std140) {
+    mat4 projection;
+    mat4 model;
     };
 
     vertex {
     VertexOutput main(VertexInput input) {
         VertexOutput output;
         output.outColor = input.inColor;
-        output.gl_Position = ((ubo.projection * ubo.model) * vec4(input.inPos, 1.0));
+        output.gl_Position = ((projection * model) * vec4(input.inPos, 1.0));
         return output;
     }
     }

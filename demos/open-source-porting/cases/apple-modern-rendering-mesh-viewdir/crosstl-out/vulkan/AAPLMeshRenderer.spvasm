@@ -35,10 +35,10 @@ OpName %169 "out_"
 OpDecorate %149 Location 0
 OpDecorate %151 Location 0
 OpDecorate %157 Block
-OpMemberDecorate %157 0 Offset 0
 OpMemberDecorate %156 0 Offset 0
 OpMemberDecorate %156 0 ColMajor
 OpMemberDecorate %156 0 MatrixStride 16
+OpMemberDecorate %157 0 Offset 0
 OpDecorate %159 DescriptorSet 0
 OpDecorate %159 Binding 0
 %2 = OpTypeVoid

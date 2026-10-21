@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 109,
-        "endOffset": 2918,
+        "endLine": 102,
+        "endOffset": 2704,
         "file": "crosstl-out/vulkan/cube.vert.spvasm",
-        "length": 2918,
+        "length": 2704,
         "line": 1,
         "offset": 0
       },

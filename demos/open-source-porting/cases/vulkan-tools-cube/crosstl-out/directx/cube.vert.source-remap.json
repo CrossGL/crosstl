@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 24,
-        "endOffset": 576,
+        "endLine": 21,
+        "endOffset": 526,
         "file": "crosstl-out/directx/cube.vert.hlsl",
-        "length": 576,
+        "length": 526,
         "line": 1,
         "offset": 0
       },

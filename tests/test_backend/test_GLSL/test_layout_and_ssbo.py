@@ -118,6 +118,27 @@ def test_codegen_preserves_explicit_block_member_layout_from_khronos_docs():
     assert shader_ast is not None
 
 
+def test_codegen_keeps_swizzles_named_like_block_members():
+    # ``.z`` and ``.y`` below are swizzles and a struct field, not the block's
+    # own ``z`` and ``y`` members, so only ``f.<member>`` loses its instance.
+    code = """
+    #version 450
+    struct L { vec3 color; float z; };
+    layout(std140, binding = 1) uniform F { L lights[2]; mat2x3 m; float z; vec3 y; } f;
+    layout(location = 0) out vec4 o;
+    void main() {
+        o = vec4(f.lights[1].color.z + f.lights[0].z + f.m[1].z + f.z + f.y.y);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert (
+        "o = vec4(((((lights[1].color.z + lights[0].z) + m[1].z) + z) + y.y));"
+        in crossgl
+    )
+
+
 def test_codegen_layout_integer_constant_expression_values():
     code = """
     #version 450 core

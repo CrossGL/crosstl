@@ -4751,7 +4751,13 @@ def test_codegen_lowers_combined_threadgroup_barrier_flags_from_blender_builtin(
     """
     crossgl = convert(code)
 
-    assert "allMemoryBarrier();" in crossgl
+    # An execution barrier between fences over device and texture memory: allMemoryBarrier() alone would drop
+    # the execution barrier on GLSL, HLSL and SPIR-V.
+    assert (
+        "deviceMemoryBarrier();\n            workgroupBarrier();\n"
+        "            deviceMemoryBarrier();"
+    ) in crossgl
+    assert "allMemoryBarrier();" not in crossgl
     assert "threadgroup_barrier" not in crossgl
     assert "mem_flags_u3a_u3a" not in crossgl
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
@@ -4785,7 +4791,10 @@ def test_codegen_lowers_simdgroup_barrier_from_apple_silicon_sync_sample():
     """
     crossgl = convert(code)
 
-    assert crossgl.count("workgroupBarrier();") == 2
+    # The SIMD-group barrier stays a subgroup barrier: widening it to the threadgroup would require every
+    # thread of the threadgroup to reach it.
+    assert crossgl.count("subgroupBarrier();") == 1
+    assert crossgl.count("workgroupBarrier();") == 1
     assert "simdgroup_barrier" not in crossgl
     assert "threadgroup_barrier" not in crossgl
     assert "mem_flags" not in crossgl

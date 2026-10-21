@@ -2767,7 +2767,9 @@ def test_codegen_vulkan_samples_descriptor_set_uniform_block_fixture():
 
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
 
-    assert "cbuffer GlobalUniform @set(0) @binding(1) {" in crossgl
+    assert (
+        "cbuffer GlobalUniform @set(0) @binding(1) @buffer_layout(std140) {" in crossgl
+    )
     assert "mat4 view_proj;" in crossgl
     assert "vec3 camera_position;" in crossgl
     assert "global_uniform.view_proj" not in crossgl
@@ -3134,7 +3136,7 @@ def test_codegen_vulkan_samples_buffer_device_address_fixture_snippets():
     assert "vec2 positions[];" in crossgl
     assert "struct PositionReferences {" in crossgl
     assert "Position buffers[];" in crossgl
-    assert "cbuffer Registers @push_constant {" in crossgl
+    assert "cbuffer Registers @push_constant @buffer_layout(std430) {" in crossgl
     assert "PositionReferences references;" in crossgl
     assert "restrict Position positions = references.buffers[slice];" in crossgl
     assert "\n     Position;\n" not in crossgl
@@ -3332,7 +3334,11 @@ def test_codegen_glslang_memory_scope_semantics_qualifier_fixture_snippet():
     assert "uint x @workgroupcoherent;" in crossgl
     assert "A a @subgroupcoherent;" in crossgl
     assert "sampler2D samp[2] @binding(6) @nonprivate;" in crossgl
-    assert "BufferK bufferk @nonprivate;" in crossgl
+    # The uniform block keeps its name and binding; its instance's memory qualifier applies to every member.
+    assert (
+        "cbuffer BufferK @binding(7) @buffer_layout(std140) {\n    uint x @nonprivate;"
+        in crossgl
+    )
     assert parse_crossgl(crossgl) is not None
 
 

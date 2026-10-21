@@ -21,6 +21,7 @@ from ..ast import (
     VariableNode,
     VectorType,
 )
+from .array_utils import prepend_array_dimension
 
 
 class ASTUtils:
@@ -46,11 +47,13 @@ class ASTUtils:
             element_type = ASTUtils.get_type_string(type_node.element_type, backend)
             if type_node.size is not None:
                 if isinstance(type_node.size, int):
-                    return f"{element_type}[{type_node.size}]"
+                    return prepend_array_dimension(element_type, type_node.size)
                 else:
-                    return f"{element_type}[{ASTUtils.expression_to_string(type_node.size)}]"
+                    return prepend_array_dimension(
+                        element_type, ASTUtils.expression_to_string(type_node.size)
+                    )
             else:
-                return f"{element_type}[]"
+                return prepend_array_dimension(element_type)
 
         elif isinstance(type_node, PointerType):
             pointee_type = ASTUtils.get_type_string(type_node.pointee_type, backend)

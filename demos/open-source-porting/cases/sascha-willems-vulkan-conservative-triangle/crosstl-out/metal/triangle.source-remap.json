@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 31,
-        "endOffset": 715,
+        "endLine": 28,
+        "endOffset": 653,
         "file": "crosstl-out/metal/triangle.metal",
-        "length": 715,
+        "length": 653,
         "line": 1,
         "offset": 0
       },

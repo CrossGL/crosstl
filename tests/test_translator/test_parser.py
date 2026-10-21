@@ -1990,16 +1990,17 @@ def test_nested_cbuffer_array_members_parse_as_nested_array_types():
     values = cbuffer.members[0].member_type
     offsets = cbuffer.members[1].member_type
 
+    # ``int values[2][3]`` is 2 arrays of 3: the first suffix is the outermost dimension.
     assert isinstance(values, ArrayType)
     assert isinstance(values.element_type, ArrayType)
-    assert values.size.value == 3
-    assert values.element_type.size.value == 2
+    assert values.size.value == 2
+    assert values.element_type.size.value == 3
     assert values.element_type.element_type.name == "int"
 
     assert isinstance(offsets, ArrayType)
     assert isinstance(offsets.element_type, ArrayType)
-    assert offsets.size.value == 5
-    assert offsets.element_type.size.value == 4
+    assert offsets.size.value == 4
+    assert offsets.element_type.size.value == 5
     assert offsets.element_type.element_type.name == "uint"
 
 
