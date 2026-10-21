@@ -6,7 +6,7 @@ import operator
 import os
 import re
 import struct as binary_struct
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -14,6 +14,7 @@ from heapq import heappop, heappush
 from typing import (
     Any,
     Dict,
+    Iterator,
     List,
     Mapping,
     Optional,
@@ -87,6 +88,11 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 )
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
 SOURCE_ANALYSIS_CACHE_LIMIT = 8
+LOCAL_DATA_MEMBER_MEMO_LIMIT = 65536
+_UNPARSED = object()
+SIMPLE_DECLARATION_EVENT_RE = re.compile(r"[\"'/(){};]")
+# Characters at which a template-reference scanner does more than step past.
+SCAN_STOP_RE = re.compile(r"[\"'/A-Za-z_]|[^\x00-\x7f]")
 ENTRY_DISCOVERY_CACHE_LIMIT = 8
 CONTAINING_SPAN_CACHE_LIMIT = 64
 LEXICAL_SCOPE_CACHE_LIMIT = 64
@@ -149,6 +155,24 @@ METAL_RECEIVER_DECLARATOR_PREFIX_RE = re.compile(
     r"|constant))*\s*(?:\*+|&&|&)?"
     r"(?:\s*(?:const|volatile|restrict|__restrict|__restrict__)\b)*\s*"
 )
+
+
+def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[int]:
+    """Start of the match of a trailing keyword in ``text[start:end]``.
+
+    Equivalent to ``re.search(rf"\\b{keyword}\\s*$", text[start:end])`` but without
+    copying or rescanning the prefix.
+    """
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    keyword_start = end - len(keyword)
+    if keyword_start < start or not text.startswith(keyword, keyword_start):
+        return None
+    if keyword_start > start:
+        previous = text[keyword_start - 1]
+        if previous.isalnum() or previous == "_":
+            return None
+    return keyword_start
 
 
 class MetalStructMethodError(ValueError):
@@ -484,6 +508,16 @@ class _MetalSourceAnalysis:
     template_type_traits: Dict[
         Tuple[Tuple[int, int, str], ...], Dict[str, Dict[str, object]]
     ] = field(default_factory=dict)
+    namespace_visibility: Optional["_MetalNamespaceVisibility"] = None
+    builtin_member_receiver_template_references: Optional[
+        Tuple[List[Tuple[int, int]], List[int]]
+    ] = None
+    local_data_member_declarations: Dict[
+        Tuple[int, int], Tuple[Tuple[int, str, "_MetalDataMember"], ...]
+    ] = field(default_factory=dict)
+    static_constexpr_functions: Optional[Dict[str, List["_MetalConstexprFunction"]]] = (
+        None
+    )
 
 
 @dataclass
@@ -506,6 +540,8 @@ class _MetalContainingSpanLookup:
     starts: Optional[List[int]]
     boundaries: Optional[List[int]]
     containing_spans: Optional[List[Optional[Tuple[int, int]]]]
+    # Every start and end, sorted: ``_containing_span`` is constant between them.
+    all_boundaries: Optional[List[int]] = None
 
 
 @dataclass(frozen=True)
@@ -988,6 +1024,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
+        self._local_data_member_memo: Dict[
+            str, Optional[Tuple[str, _MetalDataMember]]
+        ] = {}
         # The materialization scan alternates between multiple span lists at
         # nearly every source position. Cache their sorted lookup indexes, but
         # retain only a fixed number of lists as generated source snapshots are
@@ -1003,6 +1042,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         self._source_analysis_cache.clear()
+        self._local_data_member_memo.clear()
         # Span lists are per-source; drop any cache entries from a previous
         # source so retained references cannot pin freed lists across runs.
         self._containing_span_cache.clear()
@@ -4977,37 +5017,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 (start, end) for start, end, _name in self._find_namespace_spans(code)
             )
         for owner_start, owner_end in scan_spans:
-            owner_text = code[owner_start:owner_end]
-            search_start = 0
-            for statement in self._iter_simple_declarations(owner_text):
-                relative_start = owner_text.find(statement, search_start)
-                if relative_start == -1:
-                    continue
-                search_start = relative_start + len(statement)
-                declaration_text = statement
-                declaration_offset = 0
-                # Preserved ``#include``/``#pragma`` lines do not end in a
-                # semicolon, so the simple-declaration iterator can return them
-                # as a prefix of the next real declaration.  Ignore only leading
-                # blank/directive lines and retain the exact declaration offset;
-                # directives embedded after source tokens remain fail-closed.
-                for line in statement.splitlines(keepends=True):
-                    stripped_line = line.strip()
-                    if not stripped_line or line.lstrip().startswith("#"):
-                        declaration_offset += len(line)
-                        continue
-                    break
-                declaration_text = statement[declaration_offset:]
-                stripped = declaration_text.strip()
-                if not stripped:
-                    continue
-                declaration_position = (
-                    owner_start
-                    + relative_start
-                    + declaration_offset
-                    + len(declaration_text)
-                    - len(declaration_text.lstrip())
-                )
+            for (
+                declaration_position,
+                name,
+                member,
+            ) in self._local_data_member_declarations(code, owner_start, owner_end):
                 file_scope_only = False
                 if include_file_scope:
                     declaration_scope = self._innermost_lexical_scope(
@@ -5022,12 +5036,6 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     if selected_owner is None and declaration_scope not in file_scopes:
                         continue
                     file_scope_only = selected_owner is None
-                name = self._declared_local_name(stripped)
-                if name is None:
-                    continue
-                member = self._parse_ordered_data_member(name, stripped)
-                if member is None:
-                    continue
                 declaration_key = (declaration_position, name)
                 if declaration_key in seen_declarations:
                     continue
@@ -5167,6 +5175,80 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         record_parameters_through(len(code))
         return bindings
+
+    def _local_data_member_declarations(
+        self, code: str, owner_start: int, owner_end: int
+    ) -> Tuple[Tuple[int, str, _MetalDataMember], ...]:
+        """Simple data declarations in ``code[owner_start:owner_end]``, in source order.
+
+        Each entry is ``(position, name, member)``. The scan depends only on the
+        source text and span, and the integral-constant collector repeats it for
+        every materialization pass, so it is cached per source.
+        """
+        cache = self._source_analysis(code).local_data_member_declarations
+        key = (owner_start, owner_end)
+        cached = cache.pop(key, None)
+        if cached is None:
+            cached = tuple(
+                self._scan_local_data_member_declarations(code, owner_start, owner_end)
+            )
+            cache = self._source_analysis(code).local_data_member_declarations
+        cache[key] = cached
+        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT * 8:
+            del cache[next(iter(cache))]
+        return cached
+
+    def _scan_local_data_member_declarations(
+        self, code: str, owner_start: int, owner_end: int
+    ) -> Iterator[Tuple[int, str, _MetalDataMember]]:
+        owner_text = code[owner_start:owner_end]
+        search_start = 0
+        for statement in self._iter_simple_declarations(owner_text):
+            relative_start = owner_text.find(statement, search_start)
+            if relative_start == -1:
+                continue
+            search_start = relative_start + len(statement)
+            declaration_offset = 0
+            # Preserved ``#include``/``#pragma`` lines do not end in a
+            # semicolon, so the simple-declaration iterator can return them
+            # as a prefix of the next real declaration.  Ignore only leading
+            # blank/directive lines and retain the exact declaration offset;
+            # directives embedded after source tokens remain fail-closed.
+            for line in statement.splitlines(keepends=True):
+                stripped_line = line.strip()
+                if not stripped_line or line.lstrip().startswith("#"):
+                    declaration_offset += len(line)
+                    continue
+                break
+            declaration_text = statement[declaration_offset:]
+            stripped = declaration_text.strip()
+            if not stripped:
+                continue
+            declaration_position = (
+                owner_start
+                + relative_start
+                + declaration_offset
+                + len(declaration_text)
+                - len(declaration_text.lstrip())
+            )
+            # Most statements survive each materialization rewrite unchanged, and
+            # their parse depends only on the text, so memoize it by statement.
+            memo = self._local_data_member_memo
+            parsed = memo.get(stripped, _UNPARSED)
+            if parsed is _UNPARSED:
+                name = self._declared_local_name(stripped)
+                member = (
+                    None
+                    if name is None
+                    else self._parse_ordered_data_member(name, stripped)
+                )
+                parsed = None if member is None else (name, member)
+                if len(memo) >= LOCAL_DATA_MEMBER_MEMO_LIMIT:
+                    memo.clear()
+                memo[stripped] = parsed
+            if parsed is None:
+                continue
+            yield declaration_position, parsed[0], parsed[1]
 
     def _substitute_local_integral_constant_array_extents(self, code: str) -> str:
         template_spans = self._find_template_declaration_spans(code)
@@ -10501,6 +10583,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return left, operator_text, right
 
     def _metal_namespace_visibility(self, code: str) -> _MetalNamespaceVisibility:
+        analysis = self._source_analysis(code)
+        if analysis.namespace_visibility is None:
+            analysis.namespace_visibility = self._scan_metal_namespace_visibility(code)
+        return analysis.namespace_visibility
+
+    def _scan_metal_namespace_visibility(self, code: str) -> _MetalNamespaceVisibility:
         namespace_spans = tuple(self._find_namespace_spans(code))
         lexical_scopes = self._find_lexical_brace_scopes(code)
         ignored_spans = self._find_comment_and_literal_spans(code)
@@ -10673,6 +10761,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return owner.body_span[0] <= position < owner.body_span[1]
 
     def _static_constexpr_function_index(
+        self, code: str
+    ) -> Dict[str, List[_MetalConstexprFunction]]:
+        # The index depends only on the source text; callers filter or read the
+        # records but never mutate them, so share them and copy the containers.
+        analysis = self._source_analysis(code)
+        if analysis.static_constexpr_functions is None:
+            analysis.static_constexpr_functions = (
+                self._scan_static_constexpr_function_index(code)
+            )
+        return {
+            name: list(candidates)
+            for name, candidates in analysis.static_constexpr_functions.items()
+        }
+
+    def _scan_static_constexpr_function_index(
         self, code: str
     ) -> Dict[str, List[_MetalConstexprFunction]]:
         functions: Dict[str, List[_MetalConstexprFunction]] = {}
@@ -13083,7 +13186,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         n = len(body)
         segment_start = 0
         paren_depth = 0
+        # Only these characters change the scanner state; skip everything else.
+        find_event = SIMPLE_DECLARATION_EVENT_RE.search
         while i < n:
+            event = find_event(body, i)
+            if event is None:
+                break
+            i = event.start()
             ch = body[i]
             if ch in "\"'":
                 _literal, consumed = self._read_string(body, i)
@@ -13101,8 +13210,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 continue
             if ch == "(":
                 # Capture `for (` initializer declarations specially.
-                preceding = body[segment_start:i]
-                if re.search(r"\bfor\s*$", preceding):
+                if _keyword_before(body, segment_start, i, "for") is not None:
                     close = self._find_matching_delimiter(body, i, "(", ")")
                     if close is not None:
                         header = body[i + 1 : close]
@@ -14614,13 +14722,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         scopes = self._find_lexical_brace_scopes(code)
         name_re = re.compile(rf"{re.escape(receiver)}\b\s*(?=[,;)=\[\{{(])")
         nearest = None
-        for match in METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE.finditer(
-            code, 0, position
-        ):
-            start = match.start()
+        # The template references that end by ``position`` are exactly the ones
+        # a scan of ``code[:position]`` finds: each ends at its ``<``.
+        references, ends = self._builtin_member_receiver_template_references(code)
+        for start, end in references[: bisect_right(ends, position)]:
             if self._containing_span(start, ignored_spans) is not None:
                 continue
-            close = self._find_matching_angle(code, match.end() - 1)
+            close = self._find_matching_angle(code, end - 1)
             if close is None or close >= position:
                 continue
             prefix = METAL_RECEIVER_DECLARATOR_PREFIX_RE.match(code, close + 1)
@@ -14644,6 +14752,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             receiver_declaration is None
             or receiver_declaration.declaration_position < nearest
         )
+
+    def _builtin_member_receiver_template_references(
+        self, code: str
+    ) -> Tuple[List[Tuple[int, int]], List[int]]:
+        """Spans of the Metal library template references in ``code``, and their ends."""
+        analysis = self._source_analysis(code)
+        if analysis.builtin_member_receiver_template_references is None:
+            spans = [
+                match.span()
+                for match in METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE.finditer(code)
+            ]
+            analysis.builtin_member_receiver_template_references = (
+                spans,
+                [end for _start, end in spans],
+            )
+        return analysis.builtin_member_receiver_template_references
 
     def _builtin_declarator_list_declares(
         self, code: str, cursor: int, receiver: str, position: int
@@ -23362,7 +23486,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 included_spans is not None
                 and self._containing_span(i, included_spans) is None
             ):
-                i += 1
+                i = self._next_scan_stop(code, i + 1, excluded_spans, included_spans)
                 continue
             if code[i].isalpha() or code[i] == "_":
                 ident, consumed = self._read_identifier(code, i)
@@ -23414,7 +23538,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 calls.append((ident, template_arguments, (span_start, angle_end + 1)))
                 i = angle_end + 1
                 continue
-            i += 1
+            i = self._next_scan_stop(code, i + 1, excluded_spans, included_spans)
         if not calls:
             return calls
 
@@ -24195,7 +24319,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 i = angle_end + 1
                 continue
-            i += 1
+            i = self._next_scan_stop(code, i + 1, excluded_spans)
         return instantiations, selected_partial_specializations
 
     def _resolve_concrete_qualified_template_struct_aliases(
@@ -24810,9 +24934,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return None
 
         replacement_start = struct_span[0]
-        typename_match = re.search(r"\btypename\s*$", code[:replacement_start])
-        if typename_match is not None:
-            replacement_start = typename_match.start()
+        typename_start = _keyword_before(code, 0, replacement_start, "typename")
+        if typename_start is not None:
+            replacement_start = typename_start
         return alias_match.group(0), (replacement_start, alias_match.end())
 
     def _concrete_template_struct_scalar_alias_target(
@@ -26187,6 +26311,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         member_owner_names: Optional[Set[str]] = None,
     ) -> Set[str]:
         references: Set[str] = set()
+        if not function_names:
+            return references
         i = 0
         while i < len(code):
             if code[i] in "\"'":
@@ -26223,7 +26349,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     references.add(ident)
                 i += consumed
                 continue
-            i += 1
+            i = self._next_scan_stop(code, i + 1)
         return references
 
     def _function_reference_is_member_call(
@@ -26258,6 +26384,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         identifiers: Set[str],
     ) -> Set[str]:
         references: Set[str] = set()
+        if not identifiers:
+            return references
         i = 0
         while i < len(code):
             if code[i] in "\"'":
@@ -26282,7 +26410,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     references.add(ident)
                 i += consumed
                 continue
-            i += 1
+            i = self._next_scan_stop(code, i + 1)
         return references
 
     def _find_template_declaration_spans(self, code: str) -> List[Tuple[int, int]]:
@@ -26559,6 +26687,47 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if boundary_index >= 0:
                 return containing_spans[boundary_index]
         return None
+
+    def _next_scan_stop(
+        self, code: str, start: int, *span_lists: Optional[List[Tuple[int, int]]]
+    ) -> int:
+        """First position at or after ``start`` where a source scanner can act.
+
+        That is a quote, ``/``, an identifier character (any non-ASCII
+        character counts) or a boundary of one of ``span_lists``. A scanner that
+        only advances one character at every other position may jump here.
+        """
+        match = SCAN_STOP_RE.search(code, start)
+        stop = len(code) if match is None else match.start()
+        for spans in span_lists:
+            if not spans:
+                continue
+            boundaries = self._containing_span_boundaries(spans)
+            index = bisect_left(boundaries, start)
+            if index < len(boundaries) and boundaries[index] < stop:
+                stop = boundaries[index]
+        return stop
+
+    def _containing_span_boundaries(self, spans: List[Tuple[int, int]]) -> List[int]:
+        cache = self._containing_span_cache
+        key = id(spans)
+        cached = cache.get(key)
+        if (
+            cached is None
+            or cached.spans is not spans
+            or cached.span_count != len(spans)
+            or cached.first_span != spans[0]
+            or cached.last_span != spans[-1]
+        ):
+            cached = self._build_containing_span_lookup(spans)
+            cache[key] = cached
+            if len(cache) > CONTAINING_SPAN_CACHE_LIMIT:
+                del cache[next(iter(cache))]
+        if cached.all_boundaries is None:
+            cached.all_boundaries = sorted(
+                {position for span in spans for position in span}
+            )
+        return cached.all_boundaries
 
     @staticmethod
     def _build_containing_span_lookup(

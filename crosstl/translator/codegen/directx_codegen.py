@@ -116,6 +116,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .ast_walk import walk_ast_values
 from .barrier_peephole import (
     HLSL_EXECUTION_BARRIER_PLACEHOLDER,
     merge_adjacent_hlsl_barriers,
@@ -43657,31 +43658,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ) or self.is_hlsl_uav_buffer_type(base_type)
 
     def walk_ast(self, root):
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    yield from walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    yield from walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-            yield value
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    yield from walk(child)
-
-        yield from walk(root)
+        return walk_ast_values(root)
 
     def expression_name(self, expr):
         if isinstance(expr, str):
