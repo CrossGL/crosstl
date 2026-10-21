@@ -15,7 +15,14 @@ from typing import Callable
 
 import numpy as np
 
-from . import conversion_cases, half_cases, integer_cases, pack_cases, warp_cases
+from . import (
+    control_flow_cases,
+    conversion_cases,
+    half_cases,
+    integer_cases,
+    pack_cases,
+    warp_cases,
+)
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 EXT_LANG = {
@@ -1554,6 +1561,25 @@ CASES = [
         integer_cases.integer_pair_inputs(),
         np.uint32,
         integer_cases.signedness_reference,
+    ),
+    Case(
+        "s_structured_control_flow",
+        "control",
+        "Nested loops with continue and break, a fall-through switch, a do-while, swapped loop values, a "
+        "read-then-overwrite and a return from an endless loop, in function variables",
+        "SPIR-V 1.6 §2.11: merge instructions declare the selection, switch and loop constructs",
+        control_flow_cases.structured_control_flow_inputs(),
+        np.uint32,
+        control_flow_cases.structured_control_flow_reference,
+    ),
+    Case(
+        "s_structured_control_flow_phi",
+        "control",
+        "The s_structured_control_flow kernel after spirv-opt -O, with its loop values and switch result in OpPhi",
+        "SPIR-V 1.6 §2.11 and §3.52.17: an OpPhi takes the value of the edge control arrives by",
+        control_flow_cases.structured_control_flow_inputs(),
+        np.uint32,
+        control_flow_cases.structured_control_flow_reference,
     ),
     Case(
         "u_atomic_add",

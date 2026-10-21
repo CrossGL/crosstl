@@ -28335,43 +28335,33 @@ class VulkanSPIRVCodeGen(
         else:
             self.emit(f"OpSwitch %{expression.id} %{default_label.id}")
 
-        if not case_labels:
-            self.emit(f"%{default_label.id} = OpLabel")
-            self.current_label = default_label.id
-            self.loop_merge_labels.append(merge_label)
-            try:
-                self.process_statements(self.switch_case_statements(default_case))
-                if not self.current_block_has_terminator():
-                    self.create_branch(merge_label)
-            finally:
-                self.loop_merge_labels.pop()
+        # Cases run in source order: one whose statements do not end in a jump falls through into the next, which
+        # SPIR-V expresses as a branch to that case's block (SPIR-V 1.6 section 2.11.1).
+        labels_by_case = {id(case): label for _literal, label, case in case_labels}
+        sequence = []
+        for case in cases:
+            if id(case) in labels_by_case:
+                sequence.append((labels_by_case[id(case)], case))
+            elif default_case is not None and case is default_case:
+                sequence.append((default_label, case))
+        if default_case is not None and all(
+            case is not default_case for _label, case in sequence
+        ):
+            sequence.append((default_label, default_case))
 
-            self.emit(f"%{merge_label.id} = OpLabel")
-            self.current_label = merge_label.id
-            return
-
-        for _literal_value, label, case in case_labels:
+        for index, (label, case) in enumerate(sequence):
+            following = (
+                sequence[index + 1][0] if index + 1 < len(sequence) else merge_label
+            )
             self.emit(f"%{label.id} = OpLabel")
             self.current_label = label.id
             self.loop_merge_labels.append(merge_label)
             try:
                 self.process_statements(self.switch_case_statements(case))
                 if not self.current_block_has_terminator():
-                    self.create_branch(merge_label)
+                    self.create_branch(following)
             finally:
                 self.loop_merge_labels.pop()
-
-        if default_case is not None:
-            self.emit(f"%{default_label.id} = OpLabel")
-            self.current_label = default_label.id
-            self.loop_merge_labels.append(merge_label)
-            try:
-                self.process_statements(self.switch_case_statements(default_case))
-            finally:
-                self.loop_merge_labels.pop()
-
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id

@@ -6612,7 +6612,9 @@ def test_spirv_tools_array_return_composite_construct_codegen_reparse():
         "return {float4(0.0, 0.0, 0.0, 0.0), "
         "float4(1.0, 1.0, 1.0, 1.0)};" in generated_code
     )
-    assert "outValue = ff()[1][2];" in generated_code
+    # The call is evaluated once, into a local, rather than where its element is read.
+    assert "float4 call[2] = ff();" in generated_code
+    assert "outValue = call[1][2];" in generated_code
     assert "%array_v4" not in generated_code
     assert "OpCompositeConstruct" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -8571,10 +8573,13 @@ def test_spirv_loop_phi_complex_incoming_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert len(generated_code) < 2000
-    assert 'spirvPhi(seed, "entry", next, "body")' in generated_code
-    assert 'spirvPhi((inputValue + inputValue), "entry", next, "body")' not in (
-        generated_code
-    )
+    # The loop-carried phi is a variable assigned on the entry edge and on the back edge.
+    assert "float carry;" in generated_code
+    assert "carry = (inputValue + inputValue);" in generated_code
+    assert "while ((carry < 1.0)) {" in generated_code
+    assert "carry = ((carry + carry) + 1.0);" in generated_code
+    assert "outColor = float4(carry, carry, carry, 1.0);" in generated_code
+    assert "spirvPhi" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

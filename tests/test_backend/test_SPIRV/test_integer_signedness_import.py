@@ -125,10 +125,13 @@ def _crossgl(tmp_path):
     crossgl = crosstl.translate(
         _write(tmp_path, COMPUTE), backend="cgl", format_output=False
     )
-    # X is the loaded word, buf.v[gid.x].
-    return re.sub(r"\s+", " ", crossgl).replace(
-        "buf[0].v[gl_GlobalInvocationID[0]]", "X"
-    )
+    crossgl = re.sub(r"\s+", " ", crossgl)
+    # The stores to buf.v[0..7] may alias buf.v[gid.x], so the loaded word is read once, into x, before them.
+    snapshot = "uint x = buf[0].v[gl_GlobalInvocationID[0]];"
+    assert snapshot in crossgl
+    assert crossgl.index(snapshot) < crossgl.index("buf[0].v[0] =")
+    # X is the loaded word.
+    return re.sub(r"\bx\b", "X", crossgl.replace(snapshot, ""))
 
 
 def test_fixture_is_valid_spirv(tmp_path):

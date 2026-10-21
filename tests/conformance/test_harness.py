@@ -20,8 +20,9 @@ def test_hazard_inventory_and_oracles():
     # exchanges, the CUDA warp shuffles called from CrossGL, GLSL and SPIR-V runtime-array lengths, and GLSL matrix
     # orientation in values and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
     # built-ins, SPIR-V's FrexpStruct and ModfStruct, GLSL and SPIR-V extended integer arithmetic, and SPIR-V
-    # integer instructions whose opcode signedness differs from their operand types.
-    assert len(CASES) == len(BY_ID) == 92
+    # integer instructions whose opcode signedness differs from their operand types, and SPIR-V structured control
+    # flow with function variables and with phis.
+    assert len(CASES) == len(BY_ID) == 94
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",
