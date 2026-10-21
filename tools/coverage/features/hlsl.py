@@ -41,6 +41,9 @@ _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
 # The shader model 2 and 3 samplers. DXC's table still declares tex1D through texCUBEproj on them, but DXC has no
 # spelling for the types and rejects every call with "Unsupported intrinsic", so those functions are left out.
 _LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
+# Functions the table declares but DXC rejects for every target: "Unsupported intrinsic" when compiling to DXIL, and
+# no equivalent or no implementation when compiling to SPIR-V.
+_REJECTED = frozenset({("Intrinsics", "abort"), ("Intrinsics", "source_mark")})
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
@@ -76,7 +79,8 @@ SCALAR = {
     "p32u8": "uint8x4_packed",
 }
 # Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification), under the report's
-# stage names: Direct3D's amplification stage is the task stage, and its hull stage the tessellation-control stage.
+# stage names: Direct3D's amplification stage is the task stage, its hull stage the tessellation-control stage, and
+# a work graph's node shader the node stage.
 STAGES = {
     "fragment": (
         "clip ddx ddx_coarse ddx_fine ddy ddy_coarse ddy_fine fwidth EvaluateAttributeAtSample "
@@ -87,9 +91,9 @@ STAGES = {
         "CallShader TraceRay ReportHit IgnoreHit AcceptHitAndEndSearch DispatchRaysIndex DispatchRaysDimensions "
         "WorldRayOrigin WorldRayDirection ObjectRayOrigin ObjectRayDirection RayTMin RayTCurrent PrimitiveIndex "
         "InstanceID InstanceIndex GeometryIndex HitKind RayFlags ObjectToWorld ObjectToWorld3x4 ObjectToWorld4x3 "
-        "WorldToObject WorldToObject3x4 WorldToObject4x3 ClusterID GetRemainingRecursionLevels "
-        "TriangleObjectPositions dx::MaybeReorderThread"
+        "WorldToObject WorldToObject3x4 WorldToObject4x3 ClusterID TriangleObjectPositions dx::MaybeReorderThread"
     ),
+    "node": "GetRemainingRecursionLevels",
     "mesh": "SetMeshOutputCounts",
     "task": "DispatchMesh",
     "tessellation-control": (
@@ -348,7 +352,7 @@ def parse(
     for namespace, name, attributes, result, params in declarations(text):
         if namespace in LEFT_OUT or "hidden" in attributes or name.startswith("__"):
             continue
-        if _LEGACY_SAMPLER.search(params):
+        if _LEGACY_SAMPLER.search(params) or (namespace, name) in _REJECTED:
             continue
         if namespace in _FUNCTIONS:
             name = _FUNCTIONS[namespace] + name

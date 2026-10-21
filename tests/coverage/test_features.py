@@ -223,6 +223,9 @@ $type1 [[rn]] ddx(in float_like<> x);
 $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
 float<3> [[rn]] WorldRayOrigin();
 void [[]] IgnoreHit();
+uint [[]] GetRemainingRecursionLevels();
+void [[]]   abort();
+void [[]] source_mark();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $type1 [[rn]] NonUniformResourceIndex(in any<> index) : nonuniform_resource_index;
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
@@ -281,6 +284,10 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert "VkSubpassInput.SubpassLoad" not in features
     # DXC rejects every call to the shader model 2 and 3 sampling functions.
     assert "tex2D" not in features and "texCUBElod" not in features
+    # Nor does it compile abort or source_mark for any target.
+    assert "abort" not in features and "source_mark" not in features
+    # A work graph's recursion depth exists only in its node shaders.
+    assert features["GetRemainingRecursionLevels"].stage == "node"
     assert features["Texture2D.CalculateLevelOfDetail"].category == "method"
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
@@ -406,6 +413,7 @@ def test_hlsl_probes_compile_for_the_shader_model_the_feature_list_assumes():
             ("closest-hit", "lib"),
             ("miss", "lib"),
             ("callable", "lib"),
+            ("node", "lib"),
         )
     }
 
@@ -652,6 +660,7 @@ __DEVICE__ float fabsf(float __a) { return __nv_fabsf(__a); }
 __DEVICE__ double frexp(double __a, int *__b) { return __nv_frexp(__a, __b); }
 __DEVICE__ float frexpf(float __a, int *__b) { return __nv_frexpf(__a, __b); }
 __DEVICE__ long labs(long __a) { return llabs(__a); }
+__DEVICE__ double powi(double __a, int __b) { return __nv_powi(__a, __b); }
 __DEVICE__ void *memcpy(void *__a, const void *__b, size_t __c) {
   return __builtin_memcpy(__a, __b, __c);
 }
@@ -671,6 +680,8 @@ __DEVICE__ unsigned int __uAtomicAdd_block(unsigned int *__p, unsigned int __v) 
   return __nvvm_atom_cta_add_gen_i((int *)__p, __v);
 }
 __DEVICE__ int __popc(unsigned int __a) { return __nv_popc(__a); }
+__DEVICE__ int __isfinited(double __a) { return __nv_isfinited(__a); }
+__DEVICE__ /* clock_t= */ int clock() { return __nvvm_read_ptx_sreg_clock(); }
 __DEVICE_VOID__ void __threadfence(void) { __nvvm_membar_gl(); }
 """
 
@@ -682,6 +693,7 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
         "__threadfence",
         "atomicAdd",
         "atomicAdd_block",
+        "clock",
         "erf",
         "erff",
         "fabs",
@@ -694,6 +706,8 @@ def test_cuda_reads_device_functions_and_leaves_out_the_rest():
     assert features["labs"].signature.params[0].type == Type("int64")
     assert features["__threadfence"].group == "intrinsics"
     assert features["fabsf"].group == "math"
+    # The comment before clock's result type is not part of it.
+    assert features["clock"].signature == Signature(Type("int"), ())
 
 
 def test_cuda_atomics_take_the_int_helper_and_bind_the_pointer_inout():

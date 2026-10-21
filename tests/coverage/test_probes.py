@@ -176,6 +176,32 @@ def test_raytracing_probes_are_valid(language):
             assert verdict.accepted, verdict.log
 
 
+REMAINING_RECURSION = feature("GetRemainingRecursionLevels", Type("uint"), stage="node")
+
+
+def test_node_features_get_a_broadcasting_node_shader_crossgl_cannot_spell():
+    source = probes.build(REMAINING_RECURSION, "hlsl").source
+    assert '[Shader("node")]\n[NodeLaunch("broadcasting")]' in source
+    assert "    uint r = GetRemainingRecursionLevels();" in source
+    with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
+        probes.build(REMAINING_RECURSION, "crossgl")
+    with pytest.raises(probes.ProbeError, match="no node-stage probe for glsl"):
+        probes.build(REMAINING_RECURSION, "glsl")
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_node_probes_are_valid_and_a_library_needs_an_entry_of_the_stage():
+    for baseline in (False, True):
+        probe = probes.build(REMAINING_RECURSION, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, "node", probe.entry)
+        assert verdict.accepted, verdict.log
+    # DXC compiles a library without entry points, which no pipeline can run.
+    plain = probe.source.replace('[Shader("node")]\n', "")
+    verdict = validators.validate("hlsl", plain, "node", probe.entry)
+    assert not verdict.accepted
+    assert "no node entry point" in verdict.log
+
+
 EMIT_STREAM_VERTEX = feature(
     "EmitStreamVertex", VOID, Param(Type("int"), "const"), stage="geometry"
 )

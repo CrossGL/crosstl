@@ -33,6 +33,7 @@ _STAGE_PROGRAMS = {
     "tessellation-control": "tessellation_control",
     "mesh": "mesh",
     "task": "task",
+    "node": "node",
 }
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
 # payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
