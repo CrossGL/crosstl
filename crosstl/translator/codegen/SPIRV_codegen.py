@@ -17319,6 +17319,7 @@ class VulkanSPIRVCodeGen(
     def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
         """Emit a CrossGL cbuffer as a SPIR-V Uniform block."""
         members = []
+        row_major_members = set()
         for member in getattr(cbuffer_node, "members", []) or []:
             member_type_source = getattr(
                 member,
@@ -17327,9 +17328,17 @@ class VulkanSPIRVCodeGen(
             )
             if member_type_source is None:
                 continue
+            if self.uniform_member_is_row_major(member):
+                row_major_members.add(len(members))
             members.append((self.map_crossgl_type(member_type_source), member.name))
 
         if is_push_constant_block(self, cbuffer_node):
+            if row_major_members:
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major push-constant member",
+                    f"push-constant block {cbuffer_node.name} has row-major matrix members",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
             var_id, members = declare_push_constant_block(self, cbuffer_node, members)
         else:
             # Block members use std140 layout clones so that ArrayStride/Offset
@@ -17340,7 +17349,7 @@ class VulkanSPIRVCodeGen(
                 for member_type, member_name in members
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
-            self.decorate_cbuffer_type(cbuffer_type, members)
+            self.decorate_cbuffer_type(cbuffer_type, members, row_major_members)
 
             var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
             descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
@@ -17889,32 +17898,95 @@ class VulkanSPIRVCodeGen(
             self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
-        self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
+        self,
+        cbuffer_type: SpirvId,
+        members: List[Tuple[SpirvId, str]],
+        row_major_members=frozenset(),
     ):
+        """Decorate a uniform block with std140 offsets (GLSL 4.60 section 7.6.2.2).
+
+        ``row_major_members`` holds the indices of matrix members stored row by row: they are laid out as arrays
+        of their rows and decorated ``RowMajor``.
+        """
         if self.type_contains_bfloat16(cbuffer_type):
             self.require_bfloat16_storage(uniform=True)
         self.validate_specialization_sized_member_layout(
             cbuffer_type.type.base_type, members
         )
         self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
-        self.decorate_uniform_nested_type(cbuffer_type)
+        # The block's own members are decorated below, with their orientation; only nested types here.
+        decorated_structs = {cbuffer_type.id}
+        for member_type, _member_name in members:
+            self.decorate_uniform_nested_type(member_type, decorated_structs)
 
         offset = 0
-        for member_index, (member_type, _) in enumerate(members):
-            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+        for member_index, (member_type, member_name) in enumerate(members):
+            row_major = member_index in row_major_members
+            offset = self.align_to(
+                offset, self.uniform_layout_alignment(member_type, row_major)
+            )
             self.decorations.append(
                 f"OpMemberDecorate %{cbuffer_type.id} {member_index} Offset {offset}"
             )
-            if self.uniform_member_needs_matrix_layout(member_type):
-                self.decorations.append(
-                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} ColMajor"
-                )
-                self.decorations.append(
-                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} MatrixStride 16"
-                )
-            self.decorate_uniform_array_strides(member_type)
+            self.decorate_uniform_matrix_member(
+                cbuffer_type, member_index, member_type, row_major, member_name
+            )
+            self.decorate_uniform_array_strides(member_type, row_major)
             if member_index + 1 < len(members):
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, row_major)
+
+    @staticmethod
+    def uniform_member_is_row_major(member) -> bool:
+        """Whether a block member is declared ``row_major`` (GLSL ``layout(row_major)``, HLSL ``row_major``)."""
+        names = {str(q).lower() for q in getattr(member, "qualifiers", None) or []}
+        names.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(member, "attributes", None) or []
+        )
+        return "row_major" in names and "column_major" not in names
+
+    def decorate_uniform_matrix_member(
+        self, struct_type, member_index, member_type, row_major, member_name=""
+    ):
+        """``ColMajor`` or ``RowMajor`` and the ``MatrixStride`` of a uniform member holding matrices."""
+        matrix_type = self.uniform_innermost_matrix(member_type)
+        if matrix_type is None:
+            if row_major:
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major non-matrix uniform member",
+                    f"uniform member {member_name} is declared row_major but holds no matrix",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
+            return
+        if row_major and matrix_type is not member_type:
+            column_type, columns = self.matrix_type_info_from_type(matrix_type)
+            _component, rows = self.vector_type_info_from_type(column_type)
+            if rows != columns:
+                # The array type is shared with column-major uses, whose element stride differs.
+                raise UnsupportedSPIRVFeatureError(
+                    "row-major array of non-square matrices",
+                    f"uniform member {member_name} is an array of row-major non-square matrices",
+                    missing_capabilities=("spirv.row_major_layout",),
+                )
+        orientation = "RowMajor" if row_major else "ColMajor"
+        stride = self.uniform_matrix_stride(matrix_type, row_major)
+        self.decorations.append(
+            f"OpMemberDecorate %{struct_type.id} {member_index} {orientation}"
+        )
+        self.decorations.append(
+            f"OpMemberDecorate %{struct_type.id} {member_index} MatrixStride {stride}"
+        )
+
+    def uniform_innermost_matrix(self, type_id: SpirvId):
+        """The matrix type a member or array of members holds, or ``None``."""
+        while type_id is not None:
+            if self.matrix_type_info_from_type(type_id) is not None:
+                return type_id
+            array_info = self.array_type_info_from_type(type_id)
+            if array_info is None:
+                return None
+            type_id = array_info[0]
+        return None
 
     def validate_specialization_sized_member_layout(
         self, type_name: str, members: List[Tuple[SpirvId, str]]
@@ -17953,18 +18025,14 @@ class VulkanSPIRVCodeGen(
             type_id.type.base_type, members
         )
         offset = 0
-        for member_index, (member_type, _) in enumerate(members):
+        for member_index, (member_type, member_name) in enumerate(members):
             offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
             self.decorations.append(
                 f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
             )
-            if self.uniform_member_needs_matrix_layout(member_type):
-                self.decorations.append(
-                    f"OpMemberDecorate %{type_id.id} {member_index} ColMajor"
-                )
-                self.decorations.append(
-                    f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
-                )
+            self.decorate_uniform_matrix_member(
+                type_id, member_index, member_type, False, member_name
+            )
             self.decorate_uniform_nested_type(member_type, decorated_structs)
             if member_index + 1 < len(members):
                 offset += self.uniform_layout_size(member_type)
@@ -18012,19 +18080,21 @@ class VulkanSPIRVCodeGen(
             )
         )
 
-    def uniform_layout_alignment(self, type_id: SpirvId) -> int:
+    def uniform_layout_alignment(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 base alignment of ``type_id`` (GLSL 4.60 section 7.6.2.2, rules 1-10)."""
         if self.matrix_type_info_from_type(type_id) is not None:
-            return 16
+            return self.uniform_matrix_stride(type_id, row_major)
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, _ = array_info
-            return max(16, self.uniform_layout_alignment(element_type))
+            return self.align_to(
+                self.uniform_layout_alignment(element_type, row_major), 16
+            )
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
-            return max(
-                16,
+            return self.align_to(
                 max(
                     (
                         self.uniform_layout_alignment(member_type)
@@ -18032,30 +18102,46 @@ class VulkanSPIRVCodeGen(
                     ),
                     default=1,
                 ),
+                16,
             )
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
             component_type, component_count = vector_info
-            if self.type_contains_bfloat16(component_type):
-                component_size = self.uniform_scalar_size(component_type)
-                return component_size * (2 if component_count == 2 else 4)
-            return 8 if component_count == 2 else 16
+            component_size = self.uniform_scalar_size(component_type)
+            return component_size * (2 if component_count == 2 else 4)
 
-        if self.type_contains_bfloat16(type_id):
-            return 2
-        return 4
+        return self.uniform_scalar_size(type_id)
 
-    def uniform_layout_size(self, type_id: SpirvId) -> int:
-        matrix_info = self.matrix_type_info_from_type(type_id)
-        if matrix_info is not None:
-            _, column_count = matrix_info
-            return 16 * column_count
+    def uniform_matrix_vectors(self, type_id: SpirvId, row_major=False):
+        """``(component type, components, vectors)`` of the vectors a matrix is stored as: its columns, or its
+        rows when it is row-major (rules 5 and 7)."""
+        column_type, column_count = self.matrix_type_info_from_type(type_id)
+        component_type, row_count = self.vector_type_info_from_type(column_type)
+        if row_major:
+            return component_type, column_count, row_count
+        return component_type, row_count, column_count
+
+    def uniform_matrix_stride(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 stride between the stored vectors of a matrix: an array element's, a multiple of 16."""
+        component_type, components, _vectors = self.uniform_matrix_vectors(
+            type_id, row_major
+        )
+        component_size = self.uniform_scalar_size(component_type)
+        return self.align_to(component_size * (2 if components == 2 else 4), 16)
+
+    def uniform_layout_size(self, type_id: SpirvId, row_major=False) -> int:
+        """The std140 size of ``type_id``; a three-component vector takes three components (rule 3)."""
+        if self.matrix_type_info_from_type(type_id) is not None:
+            _component, _components, vectors = self.uniform_matrix_vectors(
+                type_id, row_major
+            )
+            return self.uniform_matrix_stride(type_id, row_major) * vectors
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            stride = self.uniform_array_stride(element_type)
+            stride = self.uniform_array_stride(element_type, row_major)
             return stride * self.array_length_default_value(size)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
@@ -18070,10 +18156,7 @@ class VulkanSPIRVCodeGen(
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
             component_type, component_count = vector_info
-            component_size = self.uniform_scalar_size(component_type)
-            if self.type_contains_bfloat16(component_type):
-                return component_size * component_count
-            return self.align_to(component_size * component_count, 16)
+            return self.uniform_scalar_size(component_type) * component_count
 
         return self.uniform_scalar_size(type_id)
 
@@ -18083,8 +18166,12 @@ class VulkanSPIRVCodeGen(
             return 2
         return 8 if primitive_name in {"double", "i64", "u64"} else 4
 
-    def uniform_array_stride(self, element_type: SpirvId) -> int:
-        return self.align_to(self.uniform_layout_size(element_type), 16)
+    def uniform_array_stride(self, element_type: SpirvId, row_major=False) -> int:
+        """The std140 array stride: the element size rounded up to its alignment rounded up to 16 (rule 4)."""
+        return self.align_to(
+            self.uniform_layout_size(element_type, row_major),
+            self.align_to(self.uniform_layout_alignment(element_type, row_major), 16),
+        )
 
     def uniform_layout_contains_matrix(self, type_id: SpirvId) -> bool:
         if self.matrix_type_info_from_type(type_id) is not None:
@@ -18104,26 +18191,15 @@ class VulkanSPIRVCodeGen(
 
         return False
 
-    def uniform_member_needs_matrix_layout(self, type_id: SpirvId) -> bool:
-        if self.matrix_type_info_from_type(type_id) is not None:
-            return True
-
-        array_info = self.array_type_info_from_type(type_id)
-        if array_info is not None:
-            element_type, _ = array_info
-            return self.uniform_member_needs_matrix_layout(element_type)
-
-        return False
-
-    def decorate_uniform_array_strides(self, type_id: SpirvId):
+    def decorate_uniform_array_strides(self, type_id: SpirvId, row_major=False):
         array_info = self.array_type_info_from_type(type_id)
         if array_info is None:
             return
 
         element_type, _ = array_info
-        stride = self.uniform_array_stride(element_type)
+        stride = self.uniform_array_stride(element_type, row_major)
         self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
-        self.decorate_uniform_array_strides(element_type)
+        self.decorate_uniform_array_strides(element_type, row_major)
 
     def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
         if type_id.type.base_type == "bool":

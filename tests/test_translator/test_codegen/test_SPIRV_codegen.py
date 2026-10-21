@@ -15631,8 +15631,10 @@ class TestVulkanSPIRVCodeGen:
 
         assert f"OpMemberDecorate {std430_block} 1 Offset 16" in spv_code
         assert f"OpMemberDecorate {std430_block} 3 Offset 32" in spv_code
+        # std140 sizes vec3 as three components, so tail packs at 28 and values starts at 32 (glslang agrees).
         assert f"OpMemberDecorate {std140_block} 1 Offset 16" in spv_code
-        assert f"OpMemberDecorate {std140_block} 3 Offset 48" in spv_code
+        assert f"OpMemberDecorate {std140_block} 2 Offset 28" in spv_code
+        assert f"OpMemberDecorate {std140_block} 3 Offset 32" in spv_code
         assert f"OpMemberDecorate {scalar_block} 1 Offset 4" in spv_code
         assert f"OpMemberDecorate {scalar_block} 3 Offset 20" in spv_code
         assert "ArrayStride 16" in spv_code

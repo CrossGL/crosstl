@@ -2053,6 +2053,11 @@ class GLSLToCrossGLConverter:
         )
 
     def is_descriptor_set_uniform_block_struct(self, struct):
+        """Whether ``struct`` is a uniform block, which becomes a CrossGL ``cbuffer`` of its own.
+
+        A uniform block is a host interface of its own: its block name, binding and member layout are what the host
+        matches (GLSL 4.60 sections 4.3.9 and 4.4.5), so it keeps them whether or not it names a descriptor set.
+        """
         if not getattr(struct, "interface_block", False):
             return False
         if self.has_push_constant_layout(struct):
@@ -2061,10 +2066,7 @@ class GLSLToCrossGLConverter:
             str(qualifier).lower()
             for qualifier in getattr(struct, "interface_qualifiers", []) or []
         }
-        layout = getattr(struct, "interface_layout", None) or {}
-        return "uniform" in qualifiers and (
-            self.layout_has_key(layout, "set") or getattr(struct, "hlsl_cbuffer", False)
-        )
+        return "uniform" in qualifiers or getattr(struct, "hlsl_cbuffer", False)
 
     def is_arrayed_descriptor_set_uniform_block_struct(self, struct):
         return self.is_descriptor_set_uniform_block_struct(struct) and getattr(
@@ -2182,11 +2184,7 @@ class GLSLToCrossGLConverter:
 
         result = f"cbuffer {block_name} @push_constant {{\n"
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
@@ -2208,8 +2206,7 @@ class GLSLToCrossGLConverter:
             or getattr(var, "interface_block", None)
         )
         if not (
-            self.layout_has_key(layout, "set")
-            or getattr(block_struct, "hlsl_cbuffer", False)
+            self.is_descriptor_set_uniform_block_struct(block_struct)
             or (self.layout_has_key(layout, "binding") and not is_interface_block)
         ):
             return None
@@ -2258,14 +2255,37 @@ class GLSLToCrossGLConverter:
         )
         result = f"cbuffer {output_name}{attributes} {{\n"
         self.increase_indent()
-        for field in fields:
-            var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = field_output_names.get(getattr(field, "name", ""), "")
-            array_suffix = self.array_suffix(field)
-            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        result += self.uniform_block_member_lines(fields, field_output_names, uniforms)
         self.decrease_indent()
         result += self.indent_str + "};\n"
         return result
+
+    def uniform_block_member_lines(self, fields, output_names, uniforms):
+        """The members of a uniform or push-constant block, with their layout and memory qualifiers.
+
+        Member layout qualifiers (``row_major``, ``offset``, ``align``) set the bytes the host writes (GLSL 4.60
+        section 4.4.5), so they stay on the member. Memory qualifiers of the block's instance apply to every member.
+        """
+        instance_attributes = []
+        for uniform in uniforms or []:
+            if getattr(uniform, "interface_block", None) and uniform not in fields:
+                for attribute in self.vulkan_memory_model_qualifier_attributes(uniform):
+                    if attribute not in instance_attributes:
+                        instance_attributes.append(attribute)
+        lines = ""
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = output_names.get(getattr(field, "name", ""), "")
+            array_suffix = self.array_suffix(field)
+            suffix = self.interface_member_layout_attribute_suffix(field)
+            attributes = list(instance_attributes)
+            for attribute in self.vulkan_memory_model_qualifier_attributes(field):
+                if attribute not in attributes:
+                    attributes.append(attribute)
+            if attributes:
+                suffix += " " + " ".join(attributes)
+            lines += self.indent() + f"{var_type} {var_name}{array_suffix}{suffix};\n"
+        return lines
 
     def interface_block_attribute_prefix(self, node):
         if not self.is_graphics_interface_block_struct(node):

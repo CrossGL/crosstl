@@ -3332,7 +3332,8 @@ def test_codegen_glslang_memory_scope_semantics_qualifier_fixture_snippet():
     assert "uint x @workgroupcoherent;" in crossgl
     assert "A a @subgroupcoherent;" in crossgl
     assert "sampler2D samp[2] @binding(6) @nonprivate;" in crossgl
-    assert "BufferK bufferk @nonprivate;" in crossgl
+    # The uniform block keeps its name and binding; its instance's memory qualifier applies to every member.
+    assert "cbuffer BufferK @binding(7) {\n    uint x @nonprivate;" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
