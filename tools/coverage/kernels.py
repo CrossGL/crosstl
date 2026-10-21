@@ -73,6 +73,7 @@ class Mojo(Dialect):
 
     language = "mojo"
     suffix = ".mojo"
+    one = "1"
     entry = "probe"
     _SCALARS = {
         "float": "Float32",
@@ -154,6 +155,7 @@ class Rust(Dialect):
 
     language = "rust"
     suffix = ".rs"
+    one = "1"
     entry = "probe"
     _SCALARS = {
         "float": "f32",
