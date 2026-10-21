@@ -654,6 +654,34 @@ def test_metal_header_parse_drops_attribute_macros():
     ]
 
 
+METAL_MATRIX_HEADER = """
+template <typename T, int Cols, int Rows>
+METAL_FUNC METAL_CONSTEXPR_SINCE_MTL_410 matrix<T, Cols, Rows> operator*(T a, const device coherent(device) matrix<T, Cols, Rows> &b)
+{
+  return b * a;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_scalar_product_impl(const device coherent(device) matrix<T, Cols, Rows> &a, T b)
+{
+}
+template <typename T, int K>
+METAL_FUNC METAL_CONSTEXPR_SINCE_MTL_410 device coherent(device) vec<T, K> &operator*=(device coherent(device) vec<T, K> &a, const thread  matrix<T, K, K> &b)
+{
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Rows, Cols> transpose(matrix<T, Cols, Rows> x)
+{
+}
+"""
+
+
+def test_metal_header_parse_skips_operators_and_helpers():
+    # Neither operator* nor an underscore helper is read as a function named after a parameter's coherent(device).
+    assert list(metal.declarations("metal_matrix", METAL_MATRIX_HEADER)) == [
+        ("transpose", "float3x3", ["float3x3"])
+    ]
+
+
 METAL_ATOMIC_HEADER = """
 template <typename T, typename U, thread_scope S>
 METAL_FUNC enable_if_t<_valid_fetch_add_sub_type<device T *>::value &&
