@@ -14,12 +14,17 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics import DxrRayInterfaceUnsupportedError
+from tests.spirv_friendly_names import friendly_spirv
 
 
 def _translate(tmp_path, source, name, backend="opengl"):
     path = tmp_path / f"{name}.hlsl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, source_backend="directx")
+    # Unformatted, so the assertions do not depend on clang-format or SPIRV-Tools being installed.
+    code = crosstl.translate(
+        str(path), backend=backend, source_backend="directx", format_output=False
+    )
+    return friendly_spirv(code) if backend == "vulkan" else code
 
 
 def _glslang(tmp_path, code, stage):

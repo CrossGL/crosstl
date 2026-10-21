@@ -17,12 +17,17 @@ import crosstl
 from crosstl.translator.codegen.builtin_variable_types import (
     crossgl_builtin_variable_type,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 
 def _translate(tmp_path, source, name, source_backend, backend="vulkan"):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, source_backend=source_backend)
+    # Unformatted, so the assertions do not depend on clang-format or SPIRV-Tools being installed.
+    code = crosstl.translate(
+        str(path), backend=backend, source_backend=source_backend, format_output=False
+    )
+    return friendly_spirv(code) if backend == "vulkan" else code
 
 
 def _spirv_val(tmp_path, assembly):
