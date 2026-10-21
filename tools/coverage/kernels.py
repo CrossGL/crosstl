@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .dialect import Buffer, Dialect, ProbeError
 from .model import Type
 
@@ -11,6 +13,7 @@ class CUDA(Dialect):
     suffix = ".cu"
     entry = "probe"
     wide_integers = True
+    string = "const char*"
     _SCALARS = {
         "uint": "unsigned int",
         "int64": "long long",
@@ -74,12 +77,15 @@ class Mojo(Dialect):
     language = "mojo"
     suffix = ".mojo"
     entry = "probe"
+    # Mojo's 64-bit integer scalar is the word-sized Int, which its integer functions take.
+    wide_integers = True
     _SCALARS = {
         "float": "Float32",
         "double": "Float64",
         "int": "Int32",
         "uint": "UInt32",
         "bool": "Bool",
+        "int64": "Int",
     }
     _DTYPES = {
         "float": "float32",
@@ -87,10 +93,21 @@ class Mojo(Dialect):
         "int": "int32",
         "uint": "uint32",
         "bool": "bool",
+        "int64": "int64",
     }
+    # A pair of values, as Mojo's frexp, modf and divmod return; the probe reads the first.
+    _PAIR = re.compile(r"Tuple\[(\w+), \1\]|StaticTuple\[(\w+), 2\]")
 
     def scalar(self, scalar: str) -> str:
         return self._SCALARS[scalar]
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        pair = self._PAIR.fullmatch(opaque)
+        element = pair and (pair.group(1) or pair.group(2))
+        scalars = {name: scalar for scalar, name in self._SCALARS.items()}
+        if element not in scalars:
+            return None
+        return Type(scalars[element]), "{}[0]"
 
     def vector(self, scalar: str, size: int) -> str:
         return f"SIMD[DType.{self._DTYPES[scalar]}, {size}]"
@@ -104,7 +121,9 @@ class Mojo(Dialect):
     def literal(self, kind: Type) -> str:
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "False", "int": "0", "uint": "0"}.get(kind.scalar, "0.0")
+        return {"bool": "False", "int": "0", "uint": "0", "int64": "0"}.get(
+            kind.scalar, "0.0"
+        )
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         initial = f" = {value}" if value else ""

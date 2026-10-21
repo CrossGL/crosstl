@@ -14,6 +14,7 @@ import re
 
 from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
+from .common import prototype
 
 _EXPORTS = re.compile(r"^from\s+(\S+)\s+import\s+(\([^)]*\)|[^\n]+)", re.M)
 _DEFINITION = re.compile(r"^def\s+(\w+)\s*", re.M)
@@ -26,17 +27,24 @@ _DTYPES = {
     "bool": "bool",
 }
 _DTYPE_OF = {scalar: dtype for dtype, scalar in _DTYPES.items()}
+# ``Int`` is the machine word, 64 bits wide on the 64-bit hosts and GPUs Mojo targets.
 _NAMED = {
     "Float32": "float",
     "Float64": "double",
     "Int32": "int",
     "UInt32": "uint",
     "Bool": "bool",
+    "Int": "int64",
 }
+_SPELLED = {scalar: name for name, scalar in _NAMED.items()}
 # Argument conventions a probe can pass a local to; ``mut`` makes the argument read-modify-write.
 _CONVENTIONS = frozenset({"mut", "read", "var", "ref", "owned"})
 # Compile-time parameter kinds a probe can fill in with a constant, and the constant it uses.
 _LITERALS = {"Int": "1", "SIMDLength": "1", "Bool": "True"}
+# Operations CrossGL has no spelling for, with the reason.
+UNSPELLED = {
+    "divmod": "no CrossGL function returns a quotient and a remainder together"
+}
 
 Definition = tuple[str, str, str, str]
 
@@ -122,6 +130,9 @@ def mojo_type(
         return Type(_NAMED[spelling])
     if spelling in generics:
         return Type(element)
+    pair = _pair(spelling, element, generics, arguments)
+    if pair:
+        return pair
     simd = re.fullmatch(r"(?:SIMD|Scalar)(?:\[(.*)\])?", spelling)
     if simd:
         dtype = _split(simd.group(1) or "")[:1]
@@ -131,6 +142,27 @@ def mojo_type(
         if bare in _DTYPES:
             return Type(_DTYPES[bare])
     return Type.other(spelling)
+
+
+def _pair(
+    spelling: str, element: str, generics: set[str], arguments: dict[str, Type]
+) -> Type | None:
+    """Two values of one scalar type, as ``frexp``, ``modf`` and ``divmod`` return: the opaque type spelled with the
+    scalar, as ``Tuple[Float32, Float32]`` or ``StaticTuple[Float32, 2]``, which a probe reads the first value of.
+    """
+    match = re.fullmatch(r"(Tuple|StaticTuple)\[(.*)\]", spelling)
+    if not match:
+        return None
+    parts = _split(match.group(2))
+    if match.group(1) == "StaticTuple":
+        parts = [parts[0]] * 2 if len(parts) == 2 and parts[1] == "2" else []
+    kinds = {mojo_type(part, element, generics, arguments) for part in parts}
+    kind = kinds.pop() if len(parts) == 2 and len(kinds) == 1 else None
+    if kind is None or kind.opaque or kind.shape:
+        return None
+    name = _SPELLED[kind.scalar]
+    second = "2" if match.group(1) == "StaticTuple" else name
+    return Type.other(f"{match.group(1)}[{name}, {second}]")
 
 
 _ASSERT = re.compile(r"comptime assert\s*(\([^\"]*?\)|[^,\n]*)")
@@ -242,6 +274,11 @@ def parse(
             )
             if name in defined:
                 found, spelling, note = signature(name, defined[name], default)
+            crossgl, counterpart = spellings.spelling("mojo", name, glsl_names), None
+            if name in spellings.COUNTERPARTS["mojo"]:
+                crossgl, counterpart = prototype(spellings.COUNTERPARTS["mojo"][name])
+            if name in UNSPELLED:
+                crossgl, note = "", UNSPELLED[name]
             features.append(
                 Feature(
                     "mojo",
@@ -249,9 +286,10 @@ def parse(
                     name,
                     found,
                     group=group,
-                    crossgl=spellings.spelling("mojo", name, glsl_names),
+                    crossgl=crossgl,
                     note=note,
                     spelling=spelling,
+                    counterpart=counterpart,
                 )
             )
     return sorted(features, key=lambda f: (f.group, f.name))
