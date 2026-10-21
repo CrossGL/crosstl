@@ -188,10 +188,10 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
             "x": int(match.group("x")),
             "y": int(match.group("y")),
             # ``float<2>`` fixes the size; ``$match`` then only matches scalar, vector or matrix and the component.
-            "sized": bool(layout and all(p.strip().isdigit() for p in layout.split(","))),
-        }
-        if match.group("x") is not None
-        else None
+            "sized": bool(
+                layout and all(p.strip().isdigit() for p in layout.split(","))
+            ),
+        } if match.group("x") is not None else None
     )
     if base == "void":
         return reference, Type.other("void")
