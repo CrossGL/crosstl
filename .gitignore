@@ -44,6 +44,7 @@ build
 
 # Python
 crosstl.egg-info
+/coverage.json
 .vscode/settings.json
 .github/.DS_Store
 dist/
