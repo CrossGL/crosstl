@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""CrossGL example conversion smoke test."""
+"""Translate every example to every backend its category supports.
+
+A translation passes when it writes non-trivial output with no leaked AST node
+names, or, for a pair listed in EXPECTED_REJECTIONS, when the backend refuses
+it. Any other outcome fails the run, including a listed pair that now
+translates: delete its entry so the pair is tested from then on.
+"""
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -12,8 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import crosstl
 
 EXAMPLES_ROOT = Path(__file__).resolve().parent
-KNOWN_FAILURE_BUDGET = 2
-MIN_SUCCESS_RATE = 90.0
 EXAMPLES_BY_CATEGORY = {
     "graphics": ["SimpleShader.cgl", "PerlinNoise.cgl", "ComplexShader.cgl"],
     "advanced": ["ArrayTest.cgl", "GenericPatternMatching.cgl"],
@@ -92,7 +95,7 @@ BACKEND_COMPATIBILITY = {
     ],
     "gpu_computing": ["cuda", "hip", "mojo", "rust", "webgl", "wgsl"],
 }
-EXAMPLE_BACKEND_SKIPS = {
+EXPECTED_REJECTIONS = {
     (
         "advanced",
         "GenericPatternMatching",
@@ -144,83 +147,25 @@ EXAMPLE_BACKEND_SKIPS = {
     ): (
         "WebGL codegen intentionally rejects compute stages; use WebGPU/WGSL for compute."
     ),
+    (
+        "gpu_computing",
+        "MatrixMultiplication",
+        "wgsl",
+    ): (
+        "WGSL allows workgroup barriers only in uniform control flow (WGSL "
+        "section 15.2), and the warp shuffle inside the divergent branch needs one."
+    ),
 }
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--summary-json",
-        type=Path,
-        help="Optional path for a machine-readable test summary JSON file.",
-    )
-    parser.add_argument(
         "--output-root",
         type=Path,
-        help=(
-            "Optional output directory for generated shader files. Defaults to "
-            "examples/output."
-        ),
+        help="Directory for the generated files. Defaults to examples/output.",
     )
     return parser.parse_args(argv)
-
-
-def stable_json(data):
-    return json.dumps(data, indent=2, sort_keys=True) + "\n"
-
-
-def build_summary(
-    total_tests,
-    successful_tests,
-    failed_tests,
-    skipped_tests=None,
-    consistency_summary=None,
-):
-    skipped_tests = skipped_tests or []
-    success_rate = (successful_tests / total_tests) * 100 if total_tests else 0.0
-    return {
-        "schema_version": 1,
-        "total": total_tests,
-        "successful": successful_tests,
-        "failed": len(failed_tests),
-        "skipped": len(skipped_tests),
-        "success_rate": round(success_rate, 1),
-        "known_failure_budget": KNOWN_FAILURE_BUDGET,
-        "minimum_success_rate": MIN_SUCCESS_RATE,
-        "within_regression_budget": (
-            len(failed_tests) <= KNOWN_FAILURE_BUDGET
-            and round(success_rate, 1) >= MIN_SUCCESS_RATE
-        ),
-        "failures": [
-            {
-                "example": example,
-                "backend": backend,
-                "error": error,
-            }
-            for example, backend, error in failed_tests
-        ],
-        "skips": [
-            {
-                "example": example,
-                "backend": backend,
-                "reason": reason,
-            }
-            for example, backend, reason in skipped_tests
-        ],
-        "consistency": consistency_summary or {},
-    }
-
-
-def write_summary_json(summary, path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(stable_json(summary), encoding="utf-8")
-
-
-def display_path(path):
-    try:
-        return path.relative_to(EXAMPLES_ROOT).as_posix()
-    except ValueError:
-        return path.as_posix()
 
 
 def validate_generated_output(output_file):
@@ -234,157 +179,55 @@ def validate_generated_output(output_file):
     return None
 
 
-def main(argv=None):
-    """Test comprehensive translation functionality across all example categories."""
-    args = parse_args(argv)
-
-    print("[CROSSGL] CrossGL Comprehensive Translation Test")
-    print("=" * 60)
-
-    output_root = args.output_root or EXAMPLES_ROOT / "output"
-    for backend in BACKENDS:
-        (output_root / backend).mkdir(parents=True, exist_ok=True)
-
-    total_tests = 0
-    successful_tests = 0
-    failed_tests = []
-    skipped_tests = []
-
+def scheduled_cases():
     for category, examples in EXAMPLES_BY_CATEGORY.items():
-        print(f"\n[TESTING] {category.upper()} examples:")
-        print("-" * 40)
-
         for example in examples:
-            example_path = EXAMPLES_ROOT / category / example
-            example_name = Path(example).stem
+            for backend in BACKEND_COMPATIBILITY[category]:
+                yield category, Path(example).stem, backend
 
-            if not example_path.exists():
-                print(f"[WARNING] Skipping {example} (not found)")
-                continue
 
-            print(f"\n[TRANSLATING] {example_name}:")
+def run_case(category, name, backend, output_root):
+    """Return None when the case behaves as expected, else the reason it failed."""
+    source = EXAMPLES_ROOT / category / f"{name}.cgl"
+    output_file = output_root / backend / category / f"{name}{BACKENDS[backend]}"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    rejected = (category, name, backend) in EXPECTED_REJECTIONS
+    try:
+        crosstl.translate(str(source), backend=backend, save_shader=str(output_file))
+    except Exception as exc:
+        return None if rejected else f"{type(exc).__name__}: {exc}"
+    if rejected:
+        return "translates now; delete its EXPECTED_REJECTIONS entry"
+    return validate_generated_output(output_file)
 
-            # Get compatible backends for this category
-            compatible_backends = BACKEND_COMPATIBILITY.get(
-                category, list(BACKENDS.keys())
-            )
 
-            for backend in compatible_backends:
-                if backend not in BACKENDS:
-                    continue
+def main(argv=None):
+    args = parse_args(argv)
+    output_root = args.output_root or EXAMPLES_ROOT / "output"
+    failures = []
+    rejections = 0
+    total = 0
+    for category, name, backend in scheduled_cases():
+        total += 1
+        error = run_case(category, name, backend, output_root)
+        if error:
+            failures.append((category, name, backend, error))
+            status = "FAILED"
+        elif (category, name, backend) in EXPECTED_REJECTIONS:
+            rejections += 1
+            status = "rejected"
+        else:
+            status = "ok"
+        print(f"{status:8} {backend:8} {category}/{name}")
 
-                skip_reason = EXAMPLE_BACKEND_SKIPS.get(
-                    (category, example_name, backend)
-                )
-                if skip_reason:
-                    print(f"  [SKIPPED] {backend:8} -> {skip_reason}")
-                    skipped_tests.append((example_name, backend, skip_reason))
-                    continue
-
-                total_tests += 1
-                try:
-                    backend_output_dir = output_root / backend / category
-                    backend_output_dir.mkdir(parents=True, exist_ok=True)
-                    output_file = (
-                        backend_output_dir / f"{example_name}{BACKENDS[backend]}"
-                    )
-
-                    result = crosstl.translate(
-                        str(example_path),
-                        backend=backend,
-                        save_shader=str(output_file),
-                    )
-
-                    validation_error = validate_generated_output(output_file)
-                    if validation_error is None:
-                        print(f"  [SUCCESS] {backend:8} -> {display_path(output_file)}")
-                        successful_tests += 1
-                    else:
-                        print(f"  [WARNING] {backend:8} -> {validation_error}")
-                        failed_tests.append((example_name, backend, validation_error))
-
-                except Exception as e:
-                    print(f"  [ERROR] {backend:8} -> Error: {str(e)[:50]}...")
-                    failed_tests.append((example_name, backend, str(e)))
-
-    print("\n" + "=" * 60)
-    print("[SUMMARY] TRANSLATION TEST SUMMARY")
-    print("=" * 60)
-    print(f"Total tests: {total_tests}")
-    print(f"Successful: {successful_tests}")
-    print(f"Failed: {len(failed_tests)}")
-    print(f"Skipped: {len(skipped_tests)}")
-    summary = build_summary(total_tests, successful_tests, failed_tests, skipped_tests)
-    print(f"Success rate: {summary['success_rate']:.1f}%")
-
-    if failed_tests:
-        print(f"\n[FAILED] Failed translations:")
-        for example, backend, error in failed_tests:
-            print(f"  - {example} -> {backend}: {error[:60]}...")
-
-    print(f"\n[TESTING] Testing cross-backend consistency...")
-    consistency_summary = test_cross_backend_consistency()
-    summary = build_summary(
-        total_tests,
-        successful_tests,
-        failed_tests,
-        skipped_tests,
-        consistency_summary,
-    )
-    if args.summary_json:
-        write_summary_json(summary, args.summary_json)
-        print(f"[SUMMARY_JSON] {args.summary_json}")
-
-    print(f"\n[COMPLETE] Translation test complete!")
+    passed = total - rejections - len(failures)
     print(
-        f"[OUTPUT] Check output/ directory for organized results by backend and category."
+        f"\n{total} translations: {passed} passed, {rejections} rejected as "
+        f"expected, {len(failures)} failed"
     )
-    if not summary["within_regression_budget"]:
-        print(
-            "[ERROR] Example regression budget exceeded: "
-            f"failed={summary['failed']}, success_rate={summary['success_rate']:.1f}%",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
-
-
-def test_cross_backend_consistency():
-    """Test that the same shader produces valid output across multiple backends."""
-    test_shader = EXAMPLES_ROOT / "graphics" / "SimpleShader.cgl"
-    test_shader_display = display_path(test_shader)
-    if not test_shader.exists():
-        print("[WARNING] SimpleShader.cgl not found for consistency test")
-        return {
-            "shader": test_shader_display,
-            "backends": [],
-            "outputs": {},
-            "successful": 0,
-            "total": 0,
-        }
-
-    consistency_backends = ["metal", "directx", "opengl", "webgl", "wgsl", "vulkan"]
-    outputs = {}
-
-    for backend in consistency_backends:
-        try:
-            result = crosstl.translate(str(test_shader), backend=backend)
-            outputs[backend] = len(result) if result else 0
-        except Exception:
-            outputs[backend] = 0
-
-    print(f"  Output sizes: {outputs}")
-    non_zero_outputs = [k for k, v in outputs.items() if v > 100]
-    print(
-        f"  [SUCCESS] {len(non_zero_outputs)}/{len(consistency_backends)} backends produced substantial output"
-    )
-    return {
-        "shader": test_shader_display,
-        "backends": consistency_backends,
-        "outputs": outputs,
-        "successful": len(non_zero_outputs),
-        "total": len(consistency_backends),
-    }
+    for category, name, backend, error in failures:
+        print(f"{category}/{name} -> {backend}: {error}", file=sys.stderr)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
