@@ -5820,7 +5820,7 @@ class HLSLToCrossGLConverter(
                 args = ", ".join(
                     arg.strip() for arg in access_args.split(",") if arg.strip()
                 )
-                payload_access.append(f"@ hlsl_{access_name}({args})")
+                payload_access.append(f"@ ray_payload_{access_name}({args})")
         if payload_access:
             return " ".join(payload_access)
         if self.is_fragment_position_input_parameter(

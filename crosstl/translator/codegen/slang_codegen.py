@@ -2910,6 +2910,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             if str(getattr(attr, "name", "")).lower() == "precise":
                 # A modifier of the declaration, rendered before its type.
                 continue
+            if str(getattr(attr, "name", "")).lower() in (
+                "ray_payload_read",
+                "ray_payload_write",
+            ):
+                # HLSL shader model 6.7 payload access qualifiers; Slang declares a ray payload as a plain struct.
+                continue
             if (
                 self.is_resource_format_attribute(attr)
                 or str(getattr(attr, "name", "")).lower() == "maybe_unused"
