@@ -3807,14 +3807,16 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 116,561-byte GLSL artifact with
+The current FFT source now also emits a 120,044-byte GLSL artifact with
 SHA-256
-`3c39d68f34a60890fca97c2f705cc4e3f9590f0e38b0c895a2074c54d07b5c06`.
+`ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c`.
 Resource-aggregate lowering currently retains one file-level source mapping,
 not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
 the original source path but do not yet identify individual rewritten lines.
 OpenGL keeps the 21 reachable function constants
-as 21 deferred specialization constants and uses the same `[1, 1, 64]`
+as 21 deferred specialization constants, each guarded by
+`#if defined(GL_SPIRV) || defined(VULKAN)` so that a direct GLSL compile
+without specialization stops at `#error`, and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds
 `batch_idx + index + r`. A sixth assertion bounds the resource helper's
 `reference.offset + index` to `[0,255]` for this exact fixture: buffers are
