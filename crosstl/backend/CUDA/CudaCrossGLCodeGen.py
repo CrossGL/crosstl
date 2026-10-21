@@ -2,6 +2,7 @@
 
 import re
 
+from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -278,7 +279,9 @@ class CudaToCrossGLConverter:
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.visit(ast_node)
+        self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
 
     def visit(self, node):
@@ -4055,8 +4058,20 @@ class CudaToCrossGLConverter:
         else:
             self.emit(f"// {node.directive} {node.content}")
 
+    def cuda_kernel_buffer_element_type(self, cuda_type):
+        """The CrossGL element type of the buffer a kernel pointer parameter binds."""
+        element_type = self.convert_cuda_pointer_element_type(cuda_type)
+        return self.crossgl_safe_generic_type_argument(element_type)
+
     def visit_StructNode(self, node):
         struct_name = self.convert_cuda_record_name_to_crossgl(node.name)
+        layouts = getattr(self, "emitted_buffer_layouts", None)
+        if layouts is not None:
+            layouts.struct(
+                struct_name,
+                getattr(node, "attributes", None),
+                getattr(node, "is_union", False),
+            )
         self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
@@ -4065,6 +4080,9 @@ class CudaToCrossGLConverter:
                 node.name, member.vtype, member.name
             )
             member_name = self.sanitize_identifier_name(member.name)
+            if layouts is not None:
+                # CUDA stores a three-component vector member at its scalar alignment; see buffer_layout_import.
+                layouts.member(struct_name, member_type, member_name, len(self.output))
             self.emit(f"{member_type} {member_name};")
 
         self.indent_level -= 1
@@ -4184,6 +4202,9 @@ class CudaToCrossGLConverter:
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
+        buffer_params = (
+            {}
+        )  # index in params -> (context, element type) of a buffer parameter
         self.push_resource_object_hint_scope(
             self.collect_resource_object_type_hints(
                 kernel, self.collect_declared_variable_names(kernel)
@@ -4196,12 +4217,15 @@ class CudaToCrossGLConverter:
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
                 if "*" in param.vtype:
-                    element_type = self.convert_cuda_pointer_element_type(param.vtype)
-                    element_type = self.crossgl_safe_generic_type_argument(element_type)
+                    element_type = self.cuda_kernel_buffer_element_type(param.vtype)
                     storage_type = self.format_crossgl_type_syntax(
                         f"array<{element_type}>"
                     )
                     binding = self.global_resource_binding_count + len(params)
+                    buffer_params[len(params)] = (
+                        f"CUDA kernel {kernel.name} parameter {param.name}",
+                        element_type,
+                    )
                     params.append(
                         f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
                     )
@@ -4214,7 +4238,10 @@ class CudaToCrossGLConverter:
 
             self.emit(f"fn {kernel.name}(")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
             for i, param in enumerate(params):
+                if layouts is not None and i in buffer_params:
+                    layouts.buffer(*buffer_params[i], len(self.output))
                 if i == len(params) - 1:
                     self.emit(f"{param}")
                 else:
@@ -6107,6 +6134,13 @@ class CudaToCrossGLConverter:
             alias_type = node.alias_type
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
+            layouts = getattr(self, "emitted_buffer_layouts", None)
+            if (
+                layouts is not None
+                and not getattr(node, "array_sizes", None)
+                and not getattr(node, "declarator_type_suffix", "")
+            ):
+                layouts.alias(node.name, alias_type)
         self.emit(f"// typedef {alias_type} {node.name};")
 
     def format_atomic_argument(self, arg, index):

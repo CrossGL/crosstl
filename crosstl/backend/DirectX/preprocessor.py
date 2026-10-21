@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 PRESERVED_SYSTEM_INCLUDE_SENTINEL = "__CROSSGL_HLSL_PRESERVED_INCLUDE__ "
+# ``\w`` on a str pattern is exactly ``str.isalnum()`` or ``_``.
+IDENTIFIER_CONTINUATION_RE = re.compile(r"\w*")
 
 
 @dataclass
@@ -474,10 +476,14 @@ class HLSLPreprocessor:
         return result
 
     def _read_identifier(self, text: str, start: int) -> Tuple[str, int]:
-        i = start
-        while i < len(text) and (text[i].isalnum() or text[i] == "_"):
-            i += 1
-        return text[start:i], i - start
+        if start < 0:
+            # A regex position cannot be negative; keep str indexing semantics.
+            i = start
+            while i < len(text) and (text[i].isalnum() or text[i] == "_"):
+                i += 1
+            return text[start:i], i - start
+        identifier = IDENTIFIER_CONTINUATION_RE.match(text, start).group()
+        return identifier, len(identifier)
 
     def _read_string(self, text: str, start: int) -> Tuple[str, int]:
         quote = text[start]

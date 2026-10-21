@@ -977,8 +977,9 @@ def _declared_layout(declaration):
 
 
 def _buffer_type(declaration):
-    """The ``(type slot, type, element type, source rules)`` of a structured-buffer declaration, buffer parameter
-    or buffer pointer parameter with a layout."""
+    """The ``(type slot, type, element type, source rules)`` of a structured-buffer declaration, buffer parameter,
+    buffer pointer parameter or bound runtime-array parameter (``var<storage> x: array<T>``) with a layout.
+    """
     slot = "param_type" if isinstance(declaration, A.ParameterNode) else "var_type"
     var_type = getattr(declaration, slot, None)
     source = _SOURCE_RULES.get(_declared_layout(declaration))
@@ -986,6 +987,12 @@ def _buffer_type(declaration):
         return None
     if slot == "param_type" and isinstance(var_type, A.PointerType):
         return slot, var_type, var_type.pointee_type, source
+    if (
+        slot == "param_type"
+        and isinstance(var_type, A.ArrayType)
+        and var_type.size is None
+    ):
+        return slot, var_type, var_type.element_type, source
     if (
         not isinstance(var_type, A.NamedType)
         or var_type.name not in _WRAPPERS
@@ -1006,6 +1013,8 @@ def _word_type(var_type):
             list(var_type.resource_qualifiers),
         )
         return word, var_type.address_space == "constant"
+    if isinstance(var_type, A.ArrayType):
+        return A.ArrayType(A.PrimitiveType("uint"), None), False
     word = A.NamedType(var_type.name, [A.PrimitiveType("uint")])
     return word, var_type.name == "StructuredBuffer"
 

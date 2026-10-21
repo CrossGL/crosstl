@@ -125,12 +125,13 @@ _REGISTERS = {"t": "t0", "u": "u8"}
 
 @dataclass(frozen=True)
 class Uniform:
-    """A sampler, texture, image or atomic counter a function probe declares at module scope; ``image_format`` is
-    GLSL's format qualifier for an image, and ``binding`` a binding the uniform must use.
+    """A sampler, texture, image, subpass input or atomic counter a function probe declares at module scope;
+    ``qualifier`` is the GLSL layout qualifier it needs besides its binding (an image's format, a subpass input's
+    attachment index), and ``binding`` a binding the uniform must use.
     """
 
     spelling: str
-    image_format: str = ""
+    qualifier: str = ""
     binding: int | None = None
 
 
@@ -144,6 +145,7 @@ _GLSL_UNIFORMS = {
     "image2DMS": Uniform("image2DMS", "rgba32f"),
     "iimage2D": Uniform("iimage2D", "r32i"),
     "uimage2D": Uniform("uimage2D", "r32ui"),
+    "subpassInput": Uniform("subpassInput", "input_attachment_index = 0"),
     # Atomic counters bind in a namespace of their own, and glslang's default limits allow only binding 0
     # (gl_MaxAtomicCounterBindings).
     "atomic_uint": Uniform("atomic_uint", binding=0),
@@ -209,7 +211,7 @@ class Uniforms:
             else uniform.binding
         )
         self.declarations.append(
-            self.dialect.uniform(uniform.spelling, name, binding, uniform.image_format)
+            self.dialect.uniform(uniform.spelling, name, binding, uniform.qualifier)
         )
         return name
 
@@ -224,6 +226,22 @@ def element(owner: str, method: str) -> Type | None:
     if kind is None or kind.element is None:
         return None
     return _ELEMENTS.get(method, kind.element)
+
+
+# What a probe does with a local object it passes, so that a live instruction uses it. DXC's validator counts a ray
+# query in the shader's flags even when the optimizer removes every use, then rejects the shader ("Flags must match
+# usage"), so a ray query is advanced once.
+_STARTS = {"RayQuery": "{name}.Proceed();"}
+
+
+def local_object(kind: Type, name: str = "obj") -> list[str]:
+    """The statements that declare ``name`` as the default-constructed local object a parameter of ``kind`` takes,
+    such as a ray query or a hit object; none when ``kind`` is no such object."""
+    found = OBJECTS.get(kind.opaque)
+    if found is None or found.register or found.parameter or found.element:
+        return []
+    start = _STARTS.get(kind.opaque)
+    return [f"{found.spelling} {name};", *([start.format(name=name)] if start else [])]
 
 
 class Receiver:

@@ -170,6 +170,8 @@ def test_slang_names_the_hull_stage_on_its_entry_point():
         ("mesh", "!air.mesh = !{!9}\n", True),
         ("task", "!air.mesh = !{!9}\n", False),
         ("task", "!air.object = !{!9}\n", True),
+        ("intersection", "!air.kernel = !{!9}\n", False),
+        ("intersection", "!air.intersection = !{!9}\n", True),
     ],
 )
 def test_a_metal_probe_needs_an_entry_point_of_its_stage(
@@ -186,6 +188,12 @@ def test_a_metal_probe_needs_an_entry_point_of_its_stage(
     assert accepted or f"no {stage} entry point" in verdict.log
 
 
+def test_a_metal_intersection_probe_is_a_bounding_box_intersection_function():
+    probe = probes.build(_feature("metal", "intersection"), "metal")
+    assert "using namespace raytracing;" in probe.source
+    assert "[[intersection(bounding_box)]]\nBoxResult probe(" in probe.source
+
+
 def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
     commands = []
 
@@ -198,10 +206,12 @@ def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
     validators.validate("glsl", "", "miss")
     validators.validate("glsl", "", "mesh")
     validators.validate("glsl", "", "fragment")
+    validators.validate("glsl", "", "fragment", target="vulkan")
     assert commands == [
         ["glslangValidator", "--target-env", "vulkan1.2", "probe.rmiss"],
         ["glslangValidator", "--target-env", "vulkan1.2", "probe.mesh"],
         ["glslangValidator", "probe.frag"],
+        ["glslangValidator", "--target-env", "vulkan1.1", "probe.frag"],
     ]
 
 

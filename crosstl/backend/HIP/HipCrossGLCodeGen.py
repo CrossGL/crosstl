@@ -3,6 +3,7 @@
 import hashlib
 import re
 
+from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -572,7 +573,9 @@ class HipToCrossGLConverter:
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
         self.visit(ast_node)
+        self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
 
     def reset_function_local_record_materializations(self):
@@ -5204,6 +5207,9 @@ class HipToCrossGLConverter:
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
+        buffer_params = (
+            {}
+        )  # index in params -> (context, element type) of a buffer parameter
         self.push_resource_object_hint_scope(
             self.collect_resource_object_type_hints(
                 kernel, self.collect_declared_variable_names(kernel)
@@ -5246,6 +5252,10 @@ class HipToCrossGLConverter:
                             if self.is_readonly_pointer_type(raw_type)
                             else "read_write"
                         )
+                        buffer_params[len(params)] = (
+                            f"HIP kernel {kernel.name} parameter {param_name}",
+                            element_type,
+                        )
                         params.append(
                             f"@group(0) @binding({len(params)}) "
                             f"var<storage, {access}> "
@@ -5269,7 +5279,10 @@ class HipToCrossGLConverter:
             kernel_name = self.format_function_declaration_name(kernel.name)
             self.emit(f"fn {kernel_name}(")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
             for i, param in enumerate(params):
+                if layouts is not None and i in buffer_params:
+                    layouts.buffer(*buffer_params[i], len(self.output))
                 if i == len(params) - 1:
                     self.emit(f"{param}")
                 else:
@@ -5413,6 +5426,13 @@ class HipToCrossGLConverter:
 
             self.emit(f"struct {materialized.name} {{")
             self.indent_level += 1
+            layouts = getattr(self, "emitted_buffer_layouts", None)
+            if layouts is not None:
+                layouts.struct(
+                    materialized.name,
+                    getattr(node, "attributes", None),
+                    getattr(node, "is_union", False),
+                )
             for member in materialized.members:
                 if not isinstance(member, VariableNode) or "static" in set(
                     getattr(member, "qualifiers", []) or []
@@ -5425,6 +5445,11 @@ class HipToCrossGLConverter:
                         getattr(member, "vtype", "int")
                     )
                 )
+                if layouts is not None:
+                    # HIP stores a three-component vector member at its scalar alignment; see buffer_layout_import.
+                    layouts.member(
+                        materialized.name, member_type, member.name, len(self.output)
+                    )
                 self.emit(f"{member_type} {member.name};")
             self.indent_level -= 1
             self.emit("};")
