@@ -226,6 +226,7 @@ from .glsl_stage_distances import (
     distance_private_output_declaration,
 )
 from .glsl_stage_output_values import (
+    builtin_output_value,
     flattened_stage_output_assignment,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
@@ -23594,9 +23595,9 @@ class GLSLCodeGen(
             output_name = self.current_stage_output_member_map.get(member.name)
             if output_name is None:
                 continue
-            value = self.generate_expression_with_expected(
-                value_expr, self.member_type_name(member)
-            )
+            member_type = self.member_type_name(member)
+            value = self.generate_expression_with_expected(value_expr, member_type)
+            value = builtin_output_value(self, output_name, value, member_type)
             code += f"{indent_str}{output_name} = {value};\n"
         code += distance_output_epilogue(self, indent_str)
         code += f"{indent_str}return;\n"
@@ -38183,6 +38184,9 @@ complex64_t crossgl_complex64_mod_assign(
                 if op == "="
                 else self.glsl_source_expression_type(right_node)
             ),
+        )
+        right = builtin_output_value(
+            self, left, right, self.glsl_source_expression_type(right_node)
         )
         return f"{left} {op} {right}"
 
