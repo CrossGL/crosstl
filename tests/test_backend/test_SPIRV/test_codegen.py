@@ -6269,7 +6269,7 @@ def test_spirv_cross_block_name_alias_global_codegen_reparse():
     parse_crossgl(generated_code)
     assert "struct A_C1 {" in generated_code
     assert "RWStructuredBuffer<A_C1> C1 @set(0) @binding(1);" in generated_code
-    assert "cbuffer A_C2 @set(0) @binding(2) {" in generated_code
+    assert "cbuffer A_C2 @set(0) @binding(2) @buffer_layout(std430) {" in generated_code
     assert generated_code.count("struct A {") == 1
 
 
@@ -6320,7 +6320,10 @@ def test_spirv_cross_block_name_namespace_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "struct VertexInput {" in generated_code
-    assert "cbuffer VertexInput_ubo @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer VertexInput_ubo @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "struct VertexInput_ssbo {" in generated_code
     assert "RWStructuredBuffer<VertexInput_ssbo> ssbo @set(0) @binding(1);" in (
         generated_code
@@ -6350,7 +6353,10 @@ def test_glslang_layout_nested_member_private_global_collision_codegen_reparse()
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer Block140 @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer Block140 @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "S s;" in generated_code
     assert "S s_private_s;" in generated_code
     assert "s_private_s = s_private_s;" in generated_code
@@ -6868,7 +6874,10 @@ def test_spirv_assembly_push_constant_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer PushConstants @push_constant {" in generated_code
+    assert (
+        "cbuffer PushConstants @push_constant @buffer_layout(std430) {"
+        in generated_code
+    )
     assert "float4x4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
@@ -6879,7 +6888,9 @@ def test_spirv_assembly_uniform_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer Camera @set(0) @binding(2) {" in generated_code
+    assert (
+        "cbuffer Camera @set(0) @binding(2) @buffer_layout(std140) {" in generated_code
+    )
     assert "float4x4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
@@ -6891,8 +6902,8 @@ def test_spirv_duplicate_push_constant_member_names_are_aliased_for_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer PushA @push_constant {" in generated_code
-    assert "cbuffer PushB @push_constant {" in generated_code
+    assert "cbuffer PushA @push_constant @buffer_layout(std430) {" in generated_code
+    assert "cbuffer PushB @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint bank0_data;" in generated_code
     assert "uint bank1_data;" in generated_code
     assert "uint data;" not in generated_code
@@ -6906,8 +6917,8 @@ def test_spirv_duplicate_uniform_and_push_constant_member_names_are_aliased():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer UBO @set(0) @binding(1) {" in generated_code
-    assert "cbuffer PC @push_constant {" in generated_code
+    assert "cbuffer UBO @set(0) @binding(1) @buffer_layout(std140) {" in generated_code
+    assert "cbuffer PC @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint ubo_v5;" in generated_code
     assert "uint ubo_v7;" in generated_code
     assert "uint pc_v5;" in generated_code
@@ -6975,7 +6986,10 @@ def test_spirv_tools_anonymous_resource_block_codegen_reparse():
     assert (
         "RWStructuredBuffer<BufferOut> value_19 @set(0) @binding(1);" in generated_code
     )
-    assert "cbuffer BufferIn @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer BufferIn @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "uint i;" in generated_code
     assert "uint result @output @location(0);" in generated_code
     assert "value_19[0].o = i;" in generated_code
@@ -6991,7 +7005,7 @@ def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer var_ @set(0) @binding(0) {" in generated_code
+    assert "cbuffer var_ @set(0) @binding(0) @buffer_layout(std140) {" in generated_code
     assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
     assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
     assert "cbuffer var @set" not in generated_code

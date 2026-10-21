@@ -1256,6 +1256,8 @@ class VulkanToCrossGLConverter:
             attributes.append(f"@input_attachment_index({input_attachment_index})")
         if getattr(node, "push_constant", False):
             attributes.append("@push_constant")
+        if getattr(node, "buffer_layout", None):
+            attributes.append(f"@buffer_layout({node.buffer_layout})")
         return f" {' '.join(attributes)}" if attributes else ""
 
     def spirv_input_attachment_index(self, node):

@@ -7,6 +7,7 @@ import struct
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
+from .block_layout_import import spirv_block_buffer_layout
 from .function_structure import SpirvFunctionStructure
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
@@ -5999,7 +6000,7 @@ class VulkanParser:
             struct_decorations + variable_decorations
         )
 
-        return LayoutNode(
+        node = LayoutNode(
             qualifiers,
             layout_type=layout_type,
             push_constant=storage_class == "PushConstant",
@@ -6011,6 +6012,19 @@ class VulkanParser:
             spirv_decorations=struct_decorations + variable_decorations,
             spirv_storage_class=storage_class,
         )
+        if storage_class in {"Uniform", "PushConstant"} and layout_type == "UNIFORM":
+            node.buffer_layout = spirv_block_buffer_layout(
+                block_name,
+                struct_type_id,
+                storage_class == "PushConstant",
+                types,
+                decorations,
+                member_decorations,
+                lambda length_id: self.spirv_integer_constant_operand(
+                    length_id, constants
+                ),
+            )
+        return node
 
     def spirv_has_decoration(self, decorations, target_decoration):
         return any(decoration == target_decoration for decoration, _ in decorations)
