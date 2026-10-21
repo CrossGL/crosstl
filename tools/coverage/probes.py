@@ -282,7 +282,12 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         )
     if feature.stage in _STAGE_PROGRAMS:
         program = getattr(dialect, _STAGE_PROGRAMS[feature.stage])
-        source = program(buffers, body, declarations=declarations)
+        if receiver and receiver.parameter:
+            source = program(
+                buffers, body, declarations=declarations, stream=receiver.parameter
+            )
+        else:
+            source = program(buffers, body, declarations=declarations)
         suffix = dialect.geometry_suffix if feature.stage == "geometry" else ""
         return Probe(language, source, dialect.entry, suffix or dialect.suffix)
     if feature.stage in RAYTRACING_STAGES:

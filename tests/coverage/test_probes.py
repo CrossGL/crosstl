@@ -190,8 +190,56 @@ def test_geometry_features_get_a_point_geometry_shader():
     crossgl = probes.build(EMIT_STREAM_VERTEX, "crossgl").source
     assert "    geometry {\n        layout(points) in;" in crossgl
     assert "            EmitStreamVertex(0);" in crossgl
-    with pytest.raises(probes.ProbeError, match="no geometry-stage probe for hlsl"):
-        probes.build(EMIT_STREAM_VERTEX, "hlsl")
+    assert "PointStream" not in crossgl
+
+
+STREAM_APPEND = Feature(
+    "hlsl",
+    "method",
+    "Stream.Append",
+    Signature(VOID, (Param(Type.other("Vertex")),)),
+    group="Stream",
+    crossgl="Append",
+    spelling="Append",
+    stage="geometry",
+)
+STREAM_RESTART = replace(
+    STREAM_APPEND,
+    name="Stream.RestartStrip",
+    signature=Signature(VOID, ()),
+    crossgl="RestartStrip",
+    spelling="RestartStrip",
+)
+
+
+def test_stream_methods_are_called_on_the_geometry_shaders_output_stream():
+    hlsl = probes.build(STREAM_APPEND, "hlsl").source
+    assert (
+        "void main(point float4 position[1] : POSITION, inout PointStream<Vertex> obj) {"
+        in hlsl
+    )
+    assert "    emitted.value = position[0];\n    obj.Append(emitted);" in hlsl
+    crossgl = probes.build(STREAM_APPEND, "crossgl").source
+    assert "    struct Vertex {\n        vec4 value @ TEXCOORD0;\n    }" in crossgl
+    assert (
+        "void main(point vec4 position[1] @ POSITION, inout PointStream<Vertex> obj)"
+        in crossgl
+    )
+    assert "            obj.Append(emitted);" in crossgl
+    assert "layout(points)" not in crossgl
+    # A stream's methods need the stream the entry point takes; nothing else declares it.
+    assert "PointStream<Vertex> obj;" not in crossgl
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize(
+    "probe_feature", [STREAM_APPEND, STREAM_RESTART], ids=lambda f: f.name
+)
+def test_stream_probes_are_valid_hlsl(probe_feature):
+    for baseline in (False, True):
+        probe = probes.build(probe_feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, "geometry", probe.entry)
+        assert verdict.accepted, verdict.log
 
 
 def test_geometry_probes_are_valid():

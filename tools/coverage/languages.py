@@ -8,6 +8,7 @@ from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
 from .model import RAYTRACING_STAGES, Type
+from .objects import STREAM, VERTEX
 
 
 class GLSL(Dialect):
@@ -147,6 +148,25 @@ class HLSL(Dialect):
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    return float4(0.0, 0.0, 0.0, 0.0);", "}"]) + "\n"
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        # A Direct3D geometry shader always takes an output stream. Its vertex has no system value, which the
+        # validator would require every path to write, so a probe that appends nothing is valid.
+        stream = parts.get("stream", STREAM)
+        lines = [
+            f"struct {VERTEX} {{",
+            "    float4 value : TEXCOORD0;",
+            "};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("geometry", ()),
+            "[maxvertexcount(1)]",
+            f"void main(point float4 position[1] : POSITION, inout {stream} obj) {{",
+            "    uint i = 0u;",
+            f"    {VERTEX} {self.vertex};",
+            f"    {self.vertex}.value = position[0];",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
 
     # Hit shaders take the ray payload, which shader model 6.7 and later require to declare who reads and writes each
     # field, and the triangle's barycentrics.
@@ -473,6 +493,7 @@ class Slang(HLSL):
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
     stage_attributes = {
+        "geometry": ('[shader("geometry")]',),
         "tessellation-control": ('[shader("hull")]',),
         "mesh": ('[shader("mesh")]',),
         "task": ('[shader("amplification")]',),
