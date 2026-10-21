@@ -602,10 +602,12 @@ class VulkanParser:
         "MatrixInverse": "inverse",
         "Modf": "modf",
         "ModfStruct": "modf",
-        "NClamp": "clamp",
+        # NMin, NMax and NClamp return the non-NaN operand (GLSL.std.450 sections 79-81),
+        # which is the C99 fmin/fmax rule; FMin and FMax leave that case undefined.
+        "NClamp": "fmin",
         "Normalize": "normalize",
-        "NMax": "max",
-        "NMin": "min",
+        "NMax": "fmax",
+        "NMin": "fmin",
         "PackDouble2x32": "packDouble2x32",
         "PackHalf2x16": "packHalf2x16",
         "PackSnorm2x16": "packSnorm2x16",
@@ -2287,6 +2289,19 @@ class VulkanParser:
                         for operand in operands[3:]
                     ],
                 )
+                if (
+                    extended_instruction_imports.get(operands[1]) == "GLSL.std.450"
+                    and self.SPIRV_GLSL_STD_450_EXT_INST_IDS.get(
+                        str(operands[2]), operands[2]
+                    )
+                    == "NClamp"
+                    and len(call.args) == 3
+                ):
+                    # NClamp(x, lo, hi) is NMin(NMax(x, lo), hi).
+                    call = FunctionCallNode(
+                        "fmin",
+                        [FunctionCallNode("fmax", call.args[:2]), call.args[2]],
+                    )
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
