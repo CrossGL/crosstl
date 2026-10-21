@@ -5650,16 +5650,28 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         assert invalid_token not in generated_code
 
 
+def test_metal_refuses_double_precision_vectors():
+    # MSL has no double type (Metal Shading Language Specification, section 2.1).
+    shader = """
+    shader GenericDoubleVector {
+        vec2<f64> precisePair(vec2<f64> input) {
+            vec2<f64> inc = vec2<f64>(1.0, 2.0);
+            return input + inc;
+        }
+    }
+    """
+
+    with pytest.raises(
+        MetalLoweringRefused, match=r"double-precision value: .*uses double2"
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_metal_generic_vector_constructors_emit_metal_names():
     shader = """
     shader GenericVectorAliasSmoke {
         vec2<f16> halfPair(vec2<f16> input) {
             vec2<f16> inc = vec2<f16>(1.0, 2.0);
-            return input + inc;
-        }
-
-        vec2<f64> precisePair(vec2<f64> input) {
-            vec2<f64> inc = vec2<f64>(1.0, 2.0);
             return input + inc;
         }
 
@@ -5704,8 +5716,6 @@ def test_metal_generic_vector_constructors_emit_metal_names():
 
     assert "half2 halfPair(half2 input)" in generated_code
     assert "half2 inc = half2(1.0, 2.0);" in generated_code
-    assert "double2 precisePair(double2 input)" in generated_code
-    assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
     assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code

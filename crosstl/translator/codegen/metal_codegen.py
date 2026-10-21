@@ -357,6 +357,7 @@ from .metal_array_copies import (
     generate_metal_array_initializer,
     render_metal_split_member_constructor_arguments,
 )
+from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
 from .metal_hlsl_matrix import (
@@ -1936,8 +1937,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         """
         lower_relational_builtins(ast)
         return merge_adjacent_metal_barriers(
-            self.refusals.run(self.render_program, ast, target_stage)
+            self.refusals.run(self.render_checked_program, ast, target_stage)
         )
+
+    def render_checked_program(self, ast, target_stage=None):
+        """Render the program and refuse the types the Metal language does not have."""
+        output = self.render_program(ast, target_stage)
+        refuse_metal_double_values(output, self.refuse_lowering)
+        return output
 
     def refuse_lowering(self, reason, fallback=""):
         """Record a construct with no faithful Metal lowering and return ``fallback`` in its place.
