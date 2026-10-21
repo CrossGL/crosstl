@@ -155,12 +155,11 @@ def test_spirv_lays_out_matrix_buffers_and_lowers_the_others(tmp_path):
     (
         # half3: 8 bytes in MSL, 6 in an HLSL structured buffer, and 16-bit words cannot be split into 32-bit ones.
         (_kernel("half3"), "cannot be split into 32-bit words"),
-        # A helper receives the buffer itself, which the word rewrite cannot follow.
+        # The buffer escapes into a local pointer, which the word rewrite cannot follow.
         (
             PRELUDE
-            + "float get(device const float3* v, uint i) { return v[i].y; }\n"
             + "kernel void k(device const float3* v [[buffer(0)]], device float* o [[buffer(1)]], "
-            + "uint i [[thread_position_in_grid]]) { o[i] = get(v, i); }\n",
+            + "uint i [[thread_position_in_grid]]) { device const float3* w = v + 1u; o[i] = w[i].y; }\n",
             "used other than through an element",
         ),
     ),

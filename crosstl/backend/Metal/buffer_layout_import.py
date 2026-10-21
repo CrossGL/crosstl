@@ -177,6 +177,23 @@ class MetalBufferLayoutImport:
         )
         return None
 
+    def metal_device_pointer_element_type(self, parameter):
+        """The element type of a ``device`` or ``constant`` pointer parameter of a helper function, or ``None``.
+
+        A helper that takes a buffer pointer reads and writes the caller's buffer, so its element layout is the
+        buffer's (MSL 3.2 section 4.2): the parameter gets the same ``@buffer_layout`` as a buffer parameter of a
+        kernel.
+        """
+        qualifiers = set(self.effective_declaration_qualifiers(parameter))
+        if not qualifiers & {"device", "constant"}:
+            return None
+        raw = str(self.resolve_type_alias(getattr(parameter, "vtype", None)) or "")
+        raw = raw.strip()
+        if raw.count("*") != 1 or "&" in raw:
+            return None
+        element = self.pointer_element_type(raw)
+        return self.resolve_type_alias(element) if element else None
+
     def metal_layout_type(self, type_text, resolving):
         text = self.resolve_type_alias(type_text.strip())
         text = re.sub(r"^(?:(?:const|volatile)\s+)+", "", str(text)).strip()

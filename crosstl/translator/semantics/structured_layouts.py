@@ -400,10 +400,12 @@ def _product(left, right):
 
 
 class _Rewriter:
-    def __init__(self, program, buffers, target):
+    def __init__(self, program, buffers, target, parameter_plans=None):
         self.program = program
         self.buffers = buffers
         self.target = target
+        # Function name -> the plan of each parameter of each overload (a :class:`_Buffer` where lowered).
+        self.parameter_plans = parameter_plans or {}
         self.helpers = {}
         self.functions = {
             function.name: function
@@ -743,6 +745,10 @@ class _Rewriter:
                 return self.atomic(node, name, place, arguments)
         out_positions = self.out_positions(name, len(arguments))
         for index, argument in enumerate(arguments):
+            passed = self.passed_buffer(name, index, argument)
+            if passed is not None:
+                arguments[index] = passed
+                continue
             if index in out_positions and self.access(argument) is not None:
                 self.refuse(
                     f"a structured-buffer element passed to an out parameter of {name}"
@@ -750,6 +756,39 @@ class _Rewriter:
             arguments[index] = self.expression(argument)
         node.arguments[:] = arguments
         return node
+
+    def passed_buffer(self, name, index, argument):
+        """The argument that passes a lowered buffer, or a pointer into it, to buffer parameter ``index`` of the
+        function ``name``, or ``None`` when ``argument`` is not such a buffer.
+
+        The parameter must have been lowered to the same words, so the function reads the caller's words; an
+        element offset becomes a word offset.
+        """
+        base, offset = argument, None
+        if isinstance(argument, A.BinaryOpNode) and argument.operator in ("+", "-"):
+            base, offset = argument.left, argument.right
+        if not (isinstance(base, A.IdentifierNode) and base.name in self.buffers):
+            return None
+        buffer = self.buffers[base.name]
+        plans = [
+            parameters[index] if index < len(parameters) else None
+            for parameters in self.parameter_plans.get(name, [])
+        ]
+        if not plans or not all(
+            isinstance(plan, _Buffer) and plan.shape == buffer.shape for plan in plans
+        ):
+            self.refuse(
+                f"the structured buffer {base.name} is passed to {name}, whose parameter does not take its "
+                "layout"
+            )
+        if any(buffer.readonly and not plan.readonly for plan in plans):
+            self.refuse(
+                f"the read-only structured buffer {base.name} is passed to a writable parameter of {name}"
+            )
+        if offset is None:
+            return base
+        words = _product(_uint(self.expression(offset)), _literal(buffer.shape.words))
+        return A.BinaryOpNode(base, argument.operator, words)
 
     def out_positions(self, name, count):
         function = self.functions.get(name)
@@ -919,33 +958,56 @@ def _declared_layout(declaration):
 
 
 def _buffer_type(declaration):
-    """The ``(type slot, type, source rules)`` of a structured-buffer declaration or parameter with a layout."""
+    """The ``(type slot, type, element type, source rules)`` of a structured-buffer declaration, buffer parameter
+    or buffer pointer parameter with a layout."""
     slot = "param_type" if isinstance(declaration, A.ParameterNode) else "var_type"
     var_type = getattr(declaration, slot, None)
     source = _SOURCE_RULES.get(_declared_layout(declaration))
+    if source is None:
+        return None
+    if slot == "param_type" and isinstance(var_type, A.PointerType):
+        return slot, var_type, var_type.pointee_type, source
     if (
-        source is None
-        or not isinstance(var_type, A.NamedType)
+        not isinstance(var_type, A.NamedType)
         or var_type.name not in _WRAPPERS
         or len(var_type.generic_args) != 1
     ):
         return None
-    return slot, var_type, source
+    return slot, var_type, var_type.generic_args[0], source
 
 
-def _plan_buffer(declaration, shapes, target, inline):
+def _word_type(var_type):
+    """``var_type`` with ``uint`` elements, and whether it is read-only."""
+    if isinstance(var_type, A.PointerType):
+        word = A.PointerType(
+            A.PrimitiveType("uint"),
+            var_type.is_mutable,
+            var_type.address_space,
+            var_type.access_mode,
+            list(var_type.resource_qualifiers),
+        )
+        return word, var_type.address_space == "constant"
+    word = A.NamedType(var_type.name, [A.PrimitiveType("uint")])
+    return word, var_type.name == "StructuredBuffer"
+
+
+def _plan_buffer(declaration, shapes, target, inline, passed=False):
     """A :class:`_Buffer` for a declaration whose layout must change, ``False`` when the generator keeps it, or
-    ``None`` when the target's buffer rules already have the declared layout."""
+    ``None`` when the target's buffer rules already have the declared layout.
+
+    A global buffer ``passed`` to a function is lowered here even where the generator keeps others, so that the
+    function's buffer parameter and its argument have the same words.
+    """
     found = _buffer_type(declaration)
     if found is None:
         return None
-    slot, var_type, source = found
+    slot, var_type, element_type, source = found
     target_rules = "hlsl" if target in HLSL_TARGETS else "std430"
     if source == target_rules:
         return None
     kind = "buffer parameter" if inline else "structured buffer"
     context = f"{kind} {declaration.name}"
-    shape = shapes[source].of(var_type.generic_args[0], context)
+    shape = shapes[source].of(element_type, context)
     if _same_layout(shape, target_rules) and not (
         target_rules == "std430" and _holds_bool(shape)
     ):
@@ -955,6 +1017,7 @@ def _plan_buffer(declaration, shapes, target, inline):
         and shape.form == "struct"
         and target in _GENERATOR_LOWERS_STRUCTS
         and not inline
+        and not passed
     ):
         return False
     if not shape.lowerable:
@@ -964,14 +1027,34 @@ def _plan_buffer(declaration, shapes, target, inline):
             "split into 32-bit words",
             target=target,
         )
-    buffer = _Buffer(
-        declaration.name, shape, var_type.name == "StructuredBuffer", inline
-    )
-    new_type = A.NamedType(var_type.name, [A.PrimitiveType("uint")])
+    new_type, readonly = _word_type(var_type)
+    qualifiers = {str(q) for q in getattr(declaration, "qualifiers", None) or []}
+    buffer = _Buffer(declaration.name, shape, readonly or "const" in qualifiers, inline)
     setattr(declaration, slot, new_type)
     if slot == "var_type":
         declaration.vtype = new_type
+    # 32-bit words have one layout under every rule set, so the declaration keeps no layout to reproduce.
+    declaration.attributes = [
+        attribute
+        for attribute in getattr(declaration, "attributes", None) or []
+        if str(getattr(attribute, "name", "")).lower() != "buffer_layout"
+    ]
     return buffer
+
+
+def _passed_names(node, functions, names):
+    """Add to ``names`` the identifiers passed to one of ``functions``, alone or offset by ``+`` or ``-``."""
+    if isinstance(node, A.FunctionCallNode) and call_name(node) in functions:
+        for argument in node.arguments or []:
+            if isinstance(argument, A.BinaryOpNode) and argument.operator in ("+", "-"):
+                argument = argument.left
+            if isinstance(argument, A.IdentifierNode):
+                names.add(argument.name)
+    for slot_field, key in child_slots(node):
+        child = get_child(node, slot_field, key)
+        if isinstance(child, A.ASTNode):
+            _passed_names(child, functions, names)
+    return names
 
 
 def _lowered_buffers(program, shapes, target):
@@ -981,8 +1064,20 @@ def _lowered_buffers(program, shapes, target):
     A parameter maps to its :class:`_Buffer`, or to ``False`` when the generator keeps its layout itself.
     """
     buffers, canonical = {}, set()
+    functions = list(iter_functions(program))
+    names = {getattr(function, "name", None) for function in functions}
+    passed = set()
+    for function in functions:
+        if getattr(function, "body", None) is not None:
+            _passed_names(function.body, names, passed)
     for declaration in getattr(program, "global_variables", None) or []:
-        plan = _plan_buffer(declaration, shapes, target, inline=False)
+        plan = _plan_buffer(
+            declaration,
+            shapes,
+            target,
+            inline=False,
+            passed=getattr(declaration, "name", None) in passed,
+        )
         if plan is not None:
             canonical.add(declaration.name)
         if plan:
@@ -1067,7 +1162,16 @@ def legalize_structured_layouts(program, target) -> int:
     buffers, scopes, canonical = _lowered_buffers(program, shapes, target)
     if not canonical and not any(parameters for parameters, _names in scopes.values()):
         return 0
-    rewriter = _Rewriter(program, {}, target)
+    parameter_plans = {}
+    for function in iter_functions(program):
+        parameters, _names = scopes.get(id(function), ({}, set()))
+        parameter_plans.setdefault(getattr(function, "name", None), []).append(
+            [
+                parameters.get(getattr(parameter, "name", None))
+                for parameter in getattr(function, "parameters", None) or []
+            ]
+        )
+    rewriter = _Rewriter(program, {}, target, parameter_plans)
     count = len(buffers)
     for function in list(iter_functions(program)):
         parameters, names = scopes.get(id(function), ({}, set()))

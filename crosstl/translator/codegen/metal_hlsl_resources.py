@@ -16,6 +16,7 @@ from ..ast import (
     LiteralNode,
     MemberAccessNode,
     PointerAccessNode,
+    PointerType,
     PrimitiveType,
     TernaryOpNode,
     UnaryOpNode,
@@ -150,6 +151,7 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_cbuffer_plans = {}
         self.metal_hlsl_struct_plans = {}
         self.metal_hlsl_structured_buffers = {}
+        self.metal_hlsl_pointer_parameters = {}
         self.metal_hlsl_cbuffer_array_members = {}
         planner = MetalHlslBufferLayouts(self.metal_hlsl_layout_type_resolver)
         self.metal_hlsl_layout_planner = planner
@@ -184,6 +186,12 @@ class MetalHlslResourceMixin:
                 "var_type",
                 getattr(node, "vtype", getattr(node, "param_type", None)),
             )
+            if isinstance(vtype, PointerType):
+                # A helper's buffer pointer: its pointee gets the storage of the buffers passed to it.
+                self.metal_hlsl_pointer_parameters[id(node)] = (
+                    self.metal_hlsl_pointer_storage(planner, node, vtype)
+                )
+                continue
             type_name = str(self.resource_base_type(vtype))
             if "<" not in type_name or not type_name.endswith(">"):
                 continue
@@ -203,6 +211,17 @@ class MetalHlslResourceMixin:
                 )
             self.metal_hlsl_structured_buffers[node.name] = storage
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
+
+    def metal_hlsl_pointer_storage(self, planner, node, pointer_type):
+        """The Metal storage of the pointee of a pointer parameter marked ``@buffer_layout(hlsl_structured)``."""
+        element_type = self.convert_type_node_to_string(pointer_type.pointee_type)
+        try:
+            return planner.plan_structured_element(str(element_type))
+        except HlslLayoutError as exc:
+            raise ValueError(
+                f"Cannot reproduce the HLSL layout of pointer parameter "
+                f"'{node.name}' in Metal: {exc}"
+            ) from exc
 
     @staticmethod
     def metal_hlsl_structured_declarations(ast):
