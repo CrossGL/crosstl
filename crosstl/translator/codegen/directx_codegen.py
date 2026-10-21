@@ -220,7 +220,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
-from .hlsl_buffer_layout import HlslLayoutError
+from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
@@ -4349,7 +4349,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         cbuffer_registers = {}
         used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
-            global_vars, used_resource_registers
+            global_vars, used_resource_registers, cbuffers
         )
         for i, node in enumerate(global_vars):
             resource_count = 1
@@ -12598,7 +12598,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """
         layout = declared_buffer_layout(getattr(node, "attributes", None))
         if layout not in BLOCK_LAYOUTS:
-            return {}
+            return self.hlsl_cbuffer_explicit_packoffsets(ast, node)
         structs = {
             struct.name: struct
             for struct in getattr(ast, "structs", []) or []
@@ -12645,6 +12645,85 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name: packoffset_text(offset)
             for (name, _member_type), offset in zip(layout_type.members, offsets)
         }
+
+    def hlsl_cbuffer_explicit_packoffsets(self, ast, node):
+        """``packoffset`` arguments for the ``@ offset(N)`` members of a constant buffer packed by HLSL rules.
+
+        A constant buffer imported from SPIR-V (``@ buffer_layout(hlsl_cbuffer)`` with ``@ offset`` on its
+        members) or written in CrossGL can move a member past the byte HLSL packing gives it. Each member keeps
+        its offset; a member without one follows the previous member by the packing rules, as GLSL's
+        ``layout(offset = N)`` places the members after it (GLSL 4.60 section 4.4.5). Returns ``{}`` when no
+        member names an offset or HLSL packing already agrees.
+        """
+        members = [
+            member
+            for member in getattr(node, "members", []) or []
+            if getattr(member, "name", None) and not isinstance(member, FunctionNode)
+        ]
+        if not any(member_explicit_offset(member) is not None for member in members):
+            return {}
+        structs = {
+            struct.name: struct
+            for struct in getattr(ast, "structs", []) or []
+            if getattr(struct, "name", None)
+        }
+
+        def struct_members(name):
+            struct = structs.get(name)
+            if struct is None:
+                return None
+            return [
+                self.hlsl_block_member(member)
+                for member in getattr(struct, "members", []) or []
+                if getattr(member, "name", None)
+                and not isinstance(member, FunctionNode)
+            ]
+
+        try:
+            layout_type = crossgl_struct_layout_type(
+                node.name,
+                [self.hlsl_block_member(member) for member in members],
+                struct_members,
+                (node.name,),
+                self.hlsl_constant_int_value,
+            )
+            offsets = []
+            natural = []
+            cursor = natural_cursor = 0
+            for (name, member_type), explicit in zip(
+                layout_type.members, layout_type.offsets
+            ):
+                natural_start, natural_size = cbuffer_placement(
+                    member_type, natural_cursor
+                )
+                natural.append(natural_start)
+                natural_cursor = natural_start + natural_size
+                if explicit is None:
+                    start, size = cbuffer_placement(member_type, cursor)
+                else:
+                    if explicit < cursor:
+                        raise HlslLayoutError(
+                            f"member '{name}' at byte {explicit} overlaps the member before it"
+                        )
+                    start, size = cbuffer_placement(member_type, explicit)
+                    if start != explicit:
+                        raise HlslLayoutError(
+                            f"member '{name}' at byte {explicit} breaks the constant-buffer "
+                            f"packing of its type, which starts at byte {start}"
+                        )
+                offsets.append(start)
+                cursor = start + size
+            if offsets == natural:
+                return {}
+            return {
+                name: packoffset_text(offset)
+                for (name, _member_type), offset in zip(layout_type.members, offsets)
+            }
+        except HlslLayoutError as exc:
+            raise ValueError(
+                f"Cannot reproduce the explicit member offsets of constant buffer "
+                f"'{node.name}' in HLSL: {exc}"
+            ) from exc
 
     def hlsl_block_member(self, member):
         """``(name, type, row_major, offset, alignment, packed)`` of a uniform-block or struct member."""
@@ -43988,11 +44067,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.directx_resource_register_allocator = allocator
         return allocator
 
-    def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
+    def reserve_explicit_global_resource_registers(
+        self, global_vars, used_registers, cbuffers=()
+    ):
         self.directx_resource_register_overrides = {}
         relocatable_metadata = []
-        for node in global_vars:
-            metadata = self.global_resource_register_metadata(node)
+        # Fixed cbuffer registers are emitted after the globals, but an implicitly bound global resource must not
+        # take them first, so they are reserved here too (generate_cbuffers re-reserves them idempotently).
+        fixed_cbuffers = [
+            (node, self.cbuffer_resource_register_metadata(node))
+            for node in cbuffers
+            if not self.directx_binding_allows_register_relocation(node)
+        ]
+        candidates = [
+            (node, self.global_resource_register_metadata(node)) for node in global_vars
+        ] + fixed_cbuffers
+        for node, metadata in candidates:
             if metadata is None:
                 continue
             if self.directx_binding_allows_register_relocation(node):

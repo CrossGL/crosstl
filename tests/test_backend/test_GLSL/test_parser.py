@@ -1200,6 +1200,26 @@ def test_parse_ternary_and_bitwise_expressions():
     parse_ok(code, "vertex")
 
 
+def test_ternary_false_branch_stops_at_the_next_argument(tmp_path):
+    # GLSL 4.60 grammar: conditional_expression is "logical_or QUESTION expression COLON assignment_expression",
+    # so "vec4(c ? 1.0 : 0.0, x, 0.0, 1.0)" has four arguments, not one ternary over a comma expression.
+    import crosstl
+
+    source = tmp_path / "shader.frag"
+    source.write_text(textwrap.dedent("""
+        #version 450
+        layout(location = 0) in float x;
+        layout(location = 0) out vec4 o;
+        void main() {
+            o = vec4(x > 0.5 ? 1.0 : 0.0, x, 0.0, 1.0);
+        }
+        """))
+
+    crossgl = crosstl.translate(str(source), backend="cgl", format_output=False)
+
+    assert "o = vec4(((input.x > 0.5) ? 1.0 : 0.0), input.x, 0.0, 1.0);" in crossgl
+
+
 def test_parse_logical_xor_precedence():
     code = textwrap.dedent("""
         #version 450 core

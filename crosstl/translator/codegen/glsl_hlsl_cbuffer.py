@@ -417,13 +417,18 @@ class GLSLHlslConstantBuffers:
         if not hasattr(self, "glsl_hlsl_cbuffer_loaders"):
             self.reset_glsl_hlsl_cbuffers()
         source_layout = declared_buffer_layout(getattr(node, "attributes", None))
-        if source_layout != HLSL_CBUFFER_LAYOUT and source_layout not in BLOCK_LAYOUTS:
-            return None
         members = [
             member
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
+        if source_layout is None and any(
+            member_explicit_offset(member) is not None for member in members
+        ):
+            # A block without a declared layout is declared std140 here; its ``@ offset`` members keep their bytes.
+            source_layout = "std140"
+        if source_layout != HLSL_CBUFFER_LAYOUT and source_layout not in BLOCK_LAYOUTS:
+            return None
         # The GLSL block layouts (std140, std430, scalar) are their own labels.
         if source_layout == HLSL_CBUFFER_LAYOUT:
             label = "HLSL"
@@ -432,41 +437,41 @@ class GLSLHlslConstantBuffers:
         else:
             label = source_layout
         try:
-            layout_type = struct_type(
-                node.name,
-                [
-                    (
-                        member.name,
-                        self.glsl_hlsl_cbuffer_member_layout_type(node, member),
+            try:
+                placed = self.glsl_hlsl_cbuffer_placements(node, members, source_layout)
+            except HlslLayoutError:
+                # An array sized by a specialization constant has no literal size. A std140 block without offset
+                # or align qualifiers is placed by the same rules as the std140 declaration written here at every
+                # array count, so checking it at the constants' default values (for packed members and nested
+                # orientation) settles it, and the declaration keeps the constant. Any other block would need its
+                # count fixed, so it is refused.
+                defaults = getattr(
+                    self, "glsl_specialization_default_int_constants", None
+                )
+                if (
+                    source_layout != "std140"
+                    or not defaults
+                    or defaults == getattr(self, "literal_int_constants", None)
+                    or any(
+                        member_explicit_offset(member) is not None
+                        or member_explicit_alignment(member) is not None
+                        for member in members
                     )
-                    for member in members
-                ],
-                [member_explicit_offset(member) for member in members],
-                [member_explicit_alignment(member) for member in members],
-            )
-            if source_layout == HLSL_CBUFFER_LAYOUT:
-                placements, size = cbuffer_struct_placements(layout_type)
-            else:
-                placements, size = block_struct_placements(
-                    layout_type, source_layout, root=True
-                )
-            # The declaration this generator writes has no offset or align qualifiers.
-            std140_offsets, _std140_size, _alignment = std140_struct_offsets(
-                layout_type
-            )
-            # GLSL orients a whole block member, not the members of its struct.
-            nested_orientation = any(
-                member_type.kind != "matrix" and contains_row_major_matrix(member_type)
-                for _name, member_type in layout_type.members
-            )
-            if not nested_orientation and all(
-                layout_scalar_offsets(
-                    placement.layout_type, source_layout, placement.offset
-                )
-                == std140_scalar_offsets(placement.layout_type, std140_offset)
-                for placement, std140_offset in zip(placements, std140_offsets)
-            ):
+                ):
+                    raise
+                literal_int_constants = self.literal_int_constants
+                self.literal_int_constants = defaults
+                try:
+                    placed = self.glsl_hlsl_cbuffer_placements(
+                        node, members, source_layout
+                    )
+                finally:
+                    self.literal_int_constants = literal_int_constants
+                if placed is not None:
+                    raise
+            if placed is None:
                 return None
+            placements, size = placed
             return self.glsl_hlsl_cbuffer_register_block(
                 node, layout, block_name, members, placements, size, source_layout
             )
@@ -485,6 +490,44 @@ class GLSLHlslConstantBuffers:
                     )
                 ),
             ) from exc
+
+    def glsl_hlsl_cbuffer_placements(self, node, members, source_layout):
+        """The ``(placements, size)`` of ``node``'s members under ``source_layout``, or ``None`` when the
+        std140 declaration this generator writes already places every scalar there."""
+        layout_type = struct_type(
+            node.name,
+            [
+                (
+                    member.name,
+                    self.glsl_hlsl_cbuffer_member_layout_type(node, member),
+                )
+                for member in members
+            ],
+            [member_explicit_offset(member) for member in members],
+            [member_explicit_alignment(member) for member in members],
+        )
+        if source_layout == HLSL_CBUFFER_LAYOUT:
+            placements, size = cbuffer_struct_placements(layout_type)
+        else:
+            placements, size = block_struct_placements(
+                layout_type, source_layout, root=True
+            )
+        # The declaration this generator writes has no offset or align qualifiers.
+        std140_offsets, _std140_size, _alignment = std140_struct_offsets(layout_type)
+        # GLSL orients a whole block member, not the members of its struct.
+        nested_orientation = any(
+            member_type.kind != "matrix" and contains_row_major_matrix(member_type)
+            for _name, member_type in layout_type.members
+        )
+        if not nested_orientation and all(
+            layout_scalar_offsets(
+                placement.layout_type, source_layout, placement.offset
+            )
+            == std140_scalar_offsets(placement.layout_type, std140_offset)
+            for placement, std140_offset in zip(placements, std140_offsets)
+        ):
+            return None
+        return placements, size
 
     def glsl_hlsl_cbuffer_register_block(
         self,

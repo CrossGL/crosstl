@@ -991,13 +991,18 @@ class VulkanToCrossGLConverter:
                 self.record_flattened_uniform_block_instance(node, field_aliases)
                 attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    cbuffer {block_name}{attributes} {{\n"
-                for field_type, field_name in node.struct_fields:
+                member_offsets = getattr(node, "member_offsets", None) or ()
+                for index, (field_type, field_name) in enumerate(node.struct_fields):
                     generated_field_name = self.flattened_uniform_block_field_name(
                         field_name, field_aliases
                     )
+                    offset = (
+                        member_offsets[index] if index < len(member_offsets) else None
+                    )
+                    placement = "" if offset is None else f" @offset({offset})"
                     code += (
                         f"        {self.map_type(field_type)} "
-                        f"{generated_field_name};\n"
+                        f"{generated_field_name}{placement};\n"
                     )
                 code += "    }\n\n"
             else:
