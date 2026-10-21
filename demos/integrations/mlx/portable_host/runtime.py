@@ -36,6 +36,8 @@ from demos.integrations.mlx.portable_host import (
     gather_dispatch,
     gemm_dispatch,
     gemm_layout,
+    gemm_splitk_dispatch,
+    gemm_splitk_layout,
     gemv_dispatch,
     gemv_layout,
     half_storage,
@@ -60,6 +62,10 @@ from demos.integrations.mlx.portable_host.gemm_packages import (
     CACHE_DIRECTORY as GEMM_CACHE,
 )
 from demos.integrations.mlx.portable_host.gemm_packages import GemmPackageCache
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import (
+    CACHE_DIRECTORY as SPLITK_GEMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import SplitKPackageCache
 from demos.integrations.mlx.portable_host.gemv_packages import (
     CACHE_DIRECTORY as GEMV_CACHE,
 )
@@ -327,6 +333,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.splitk_gemms = (
+            SplitKPackageCache(
+                mlx_root, self.directory / SPLITK_GEMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -494,6 +507,12 @@ class HostRuntime:
                 gemm_layout.signature(name)
                 return 1
             if (
+                name.startswith(gemm_splitk_layout.ENTRY_PREFIXES)
+                and self.splitk_gemms is not None
+            ):
+                gemm_splitk_layout.signature(name)
+                return 1
+            if (
                 name.startswith(quantization_layout.ENTRY_PREFIXES)
                 and self.quantization is not None
             ):
@@ -552,6 +571,10 @@ class HostRuntime:
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gemm_layout.ENTRY_PREFIXES):
             return gemm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(gemm_splitk_layout.ENTRY_PREFIXES):
+            return gemm_splitk_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

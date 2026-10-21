@@ -8,8 +8,8 @@ compares against the split-K threshold of 1,024 tiles and otherwise dispatches
 ``steel_gemm_fused`` with ``GEMM_TPARAM_MACRO``'s medium-device tile: 64x64x16
 with 2x2 simdgroups. ``Matmul`` never reads ``C``, so ``use_out_source`` and
 ``do_axpby`` stay false; the entry names carry the remaining function
-constants as matmul.cpp's hash name does. Split-K products fail with an
-explicit error.
+constants as matmul.cpp's hash name does. Split-K products take
+``gemm_splitk_layout``'s route.
 """
 
 import ctypes
@@ -147,7 +147,7 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
         raise ValueError("Matrix-vector products take the gemv route")
     batches = prepared["batches"]
     if split_k(m, n, k, batches):
-        raise ValueError("Split-K matrix products are not routed")
+        raise ValueError("Split-K matrix products take the split-K route")
     batch_shape = prepared["batchShape"]
     a_batch, b_batch = prepared["aBatchStride"], prepared["bBatchStride"]
     ta, tb = prepared["transposeA"], prepared["transposeB"]
@@ -182,11 +182,17 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
 
 
 def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
-    """The gemv or steel GEMM route Matmul::eval_gpu takes, with its family."""
+    """The gemv, steel GEMM or split-K route Matmul::eval_gpu takes, by family."""
+    from demos.integrations.mlx.portable_host import gemm_splitk_layout
+
+    operands = (dtype, a_shape, a_strides, b_shape, b_strides)
     prepared = gemv_layout.operands(a_shape, a_strides, b_shape, b_strides)
-    if prepared["dot"] or min(prepared["M"], prepared["N"]) == 1:
-        return "gemv", gemv_layout.route(dtype, a_shape, a_strides, b_shape, b_strides)
-    return "gemm", route(dtype, a_shape, a_strides, b_shape, b_strides)
+    m, n, k = prepared["M"], prepared["N"], prepared["K"]
+    if prepared["dot"] or min(m, n) == 1:
+        return "gemv", gemv_layout.route(*operands)
+    if split_k(m, n, k, prepared["batches"]):
+        return "splitk", gemm_splitk_layout.route(*operands)
+    return "gemm", route(*operands)
 
 
 def parameter_type(entry, name):
@@ -347,16 +353,20 @@ def loader_access_assertions(entry):
     ``loader.h`` distributes adjacent elements of a tile row to each thread,
     and ``gemm.h`` pads every threadgroup row by 16 bytes.
     """
-    info = signature(entry)
+    return model_loader_assertions(signature(entry)["model"], SOURCE)
+
+
+def model_loader_assertions(model_entry, source):
+    """``loader_access_assertions`` for one ``GEMMKernel`` model entry."""
     assertions = []
-    for loader in info["model"].loaders:
+    for loader in model_entry.loaders:
         slots = [slot for lane in loader.slots() for slot in lane]
         if len(set(slots)) != loader.rows * loader.columns:
             raise ValueError("Steel GEMM loader slots overlap")
         assertions.append(
             {
-                "source": SOURCE,
-                "entryPoint": info["source"],
+                "source": source,
+                "entryPoint": model_entry.name,
                 "function": loader.function,
                 "parameter": "self.dst",
                 "minimum": min(slots),

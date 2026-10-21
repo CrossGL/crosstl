@@ -383,8 +383,8 @@ lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
 match MLX's CPU backend. The unchanged upstream `test_qmv` and `test_qvm` also
 need the floating-point `Matmul` route below for their reference products;
-`test_qmv`'s unbatched references are matrix-matrix products; those MLX
-sends to split-K are not routed yet.
+`test_qmv`'s unbatched references are matrix-matrix products, which take the
+steel GEMM or split-K route.
 
 ## Floating-Point Matrix-Vector Products
 
@@ -411,8 +411,8 @@ cases reach ten of the twelve instantiated tiles in all three element types,
 both batch variants, transposed and strided operands, broadcast and
 `as_strided` batches, and the batch fold. Each output must match an exact
 float64 reference bit for bit, float32 outputs must also match MLX's CPU
-backend, and a split-K product and a single dot product must fail with the
-host's error without dispatching.
+backend, and a single dot product must fail with the host's error without
+dispatching.
 
 ## Floating-Point Matrix-Matrix Products
 
@@ -424,8 +424,7 @@ against the split-K case with its 1,024-tile threshold and otherwise selects
 with 2x2 simdgroups. The host names each entry by matmul.cpp's hash name, so
 the translation freezes the kernel's `has_batch` and `align_M`/`N`/`K`
 function constants; `Matmul` never reads `C`, so `use_out_source` and
-`do_axpby` stay false. Split-K products, which need `steel_gemm_splitk` and its
-accumulation kernel, fail with an explicit error.
+`do_axpby` stay false. Split-K products take the route in the next section.
 
 `gemm_layout.py` rejects a launch unless its entry, constants, `GEMMParams`,
 grid and workgroup are what matmul.cpp would bind for the sizes and strides,
@@ -438,6 +437,22 @@ routed entries with `python -m demos.integrations.mlx.portable_host.gemm_package
 every transposition and element type, partial and whole tiles, several tiles
 per axis, batches with and without `has_batch`, a batch folded into `M` and a
 copied operand, with the same exact references.
+
+A single product whose `M x N` output has at most 1,024 tiles of 16, with
+`K / 16 >= 8` and `K >= max(M, N)`, follows `steel_gemm_splitk_axpby`: the
+host allocates the float32 `C_split` temporary of matmul.cpp's partition
+count, runs the `gemm_splitk` entry for its tile (16 or 32 per axis) and
+alignment, then `gemm_splitk_accum` over the partitions. matmul.cpp launches
+the accumulation with `dispatch_threads` over exactly `N x M` threads; the
+kernel reads only `thread_position_in_grid` and has no bounds check, so the
+host covers the same threads with one-thread workgroups. `gemm_splitk_layout.py`
+checks `GEMMSpiltKParams`, the grid and each buffer extent against
+matmul.cpp's plan, and `gemm_splitk_packages` translates both kernels with the
+options and range assertions of `test_current_gemm_splitk.py`. The split-K
+cases of `verify_matmul.py` cover every transposition, element type and tile,
+aligned and unaligned `M x N` and `K`, 4 to 32 partitions, partitions without
+a whole `K` tile, a batch folded into `M` and a copied operand; the trace must
+show each accumulation reading exactly the partitions its product wrote.
 
 ## Block Quantization
 

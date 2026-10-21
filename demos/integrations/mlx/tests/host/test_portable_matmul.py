@@ -568,7 +568,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         "} else if (K >= 16 * out_vector_len) {",
         '(batch_shape.size() == 1 ? "0" : "1") + "_axpby0"',
         "{32, uint32_t(bn), uint32_t(bm)}",
-        "does not route split-K matrix products yet",
+        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
         "does not route single dot products yet",
     ):
         assert text in backend, text
@@ -591,8 +591,32 @@ def test_case_data_is_exact_and_rounded():
         assert np.any(data["expected"] != 0)
 
 
+def trace_events(record, target):
+    """The trace events the dispatches of ``record`` write."""
+    route = record["route"]
+    if record["family"] == "splitk":
+        keys = ("M", "N", "K", "partitions")
+        return [
+            {
+                "entry": record["entry"],
+                "target": target,
+                "splitkMetadata": {key: route[key] for key in keys},
+                "parameters": {"params": dict(route["params"])},
+                "outputHash": f"partitions-{record['name']}",
+            },
+            {
+                "entry": route["accum"],
+                "target": target,
+                "splitkMetadata": {"partitions": route["partitions"]},
+                "parameters": dict(route["accumParams"]),
+                "inputHashes": {"C_split": f"partitions-{record['name']}"},
+            },
+        ]
+    return [trace_event(record, target)]
+
+
 def trace_event(record, target):
-    """The trace event a dispatch of ``record`` writes."""
+    """The trace event a dispatch of a single-kernel ``record`` writes."""
     route = record["route"]
     if record["family"] == "gemm":
         return {
@@ -623,7 +647,9 @@ def trace_event(record, target):
 
 
 def test_trace_validation_requires_the_routed_entries():
-    trace = [trace_event(record, "opengl") for record in ALL_RECORDS]
+    trace = [
+        event for record in ALL_RECORDS for event in trace_events(record, "opengl")
+    ]
     copy = {"entry": "ggn2_dynamic_copyfloat16float16", "target": "opengl"}
     verify.validate_trace([copy, *trace], ALL_RECORDS, "opengl")
     with pytest.raises(RuntimeError):
@@ -642,12 +668,26 @@ def test_trace_validation_requires_the_routed_entries():
         verify.validate_trace(trace, ALL_RECORDS, "opengl")
     trace[gemm]["parameters"]["params"]["lda"] -= 1
     verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    # The accumulation must read the partitions its product wrote.
+    accum = next(
+        index
+        for index, event in enumerate(trace)
+        if event["entry"].startswith("steel_gemm_splitk_accum_")
+    )
+    trace[accum]["inputHashes"]["C_split"] = "other"
+    with pytest.raises(RuntimeError, match="launch differs"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[accum]["inputHashes"]["C_split"] = trace[accum - 1]["outputHash"]
+    verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    # A split-K product without its accumulation is not the routed sequence.
+    with pytest.raises(RuntimeError, match="routed entries"):
+        verify.validate_trace(trace[:accum] + trace[accum + 1 :], ALL_RECORDS, "opengl")
     # Each family must cover its routes on its own.
-    for family in ("gemv", "gemm"):
+    for family in ("gemv", "gemm", "splitk"):
         kept = [record for record in ALL_RECORDS if record["family"] != family] + [
             record for record in ALL_RECORDS if record["family"] == family
         ][:3]
-        events = [trace_event(record, "opengl") for record in kept]
+        events = [event for record in kept for event in trace_events(record, "opengl")]
         with pytest.raises(RuntimeError, match="cover"):
             verify.validate_trace(events, kept, "opengl")
 
@@ -666,14 +706,19 @@ def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
     steps = dict(zip(names, job["steps"]))
     translate = steps["Translate floating-point matrix-vector packages"]
     gemm = steps["Translate steel GEMM packages"]
+    splitk = steps["Translate split-K GEMM packages"]
     execute = steps["Execute floating-point matrix products through MLX"]
-    for item in (translate, gemm, execute):
+    assert names.index("Translate split-K GEMM packages") < names.index(
+        "Execute floating-point matrix products through MLX"
+    )
+    for item in (translate, gemm, splitk, execute):
         assert "if" not in item and "continue-on-error" not in item
         assert "set -euo pipefail" in item["run"]
         assert "--packages .mlx-portable-quantized/base/packages" in item["run"]
     assert "portable_host.gemv_packages" in translate["run"]
     assert "portable_host.gemm_packages" in gemm["run"]
-    for item in (translate, gemm):
+    assert "portable_host.gemm_splitk_packages" in splitk["run"]
+    for item in (translate, gemm, splitk):
         assert "--verification" in item["run"] and "--jobs 3" in item["run"]
     assert "portable_host.verify_matmul" in execute["run"]
     assert "tee .mlx-portable-quantized/matmul.log" in execute["run"]

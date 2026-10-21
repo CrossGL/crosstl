@@ -7104,6 +7104,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         entry=False,
         offset_names=frozenset(),
         metadata_bounds=None,
+        unreachable_calls=None,
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -7429,6 +7430,18 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                         taken = (
                             statement.then_branch if fixed else statement.else_branch
                         )
+                        skipped = (
+                            statement.else_branch if fixed else statement.then_branch
+                        )
+                        if unreachable_calls is not None and skipped is not None:
+                            # Helper calls there never run, so they contribute
+                            # no argument facts to their callees.
+                            unreachable_calls.update(
+                                id(node)
+                                for node in self.walk_ast(skipped)
+                                if isinstance(node, FunctionCallNode)
+                                and id(node) in dependent_calls
+                            )
                         if taken is not None:
                             validate_statements(
                                 taken, set(names), dict(components), work_after
@@ -8091,8 +8104,21 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         uniform_parameters = {}
         # Checked metadata bounds every call passes to a helper parameter.
         parameter_bounds = {}
+        # Calls in branches a constant guard never selects, and the helpers
+        # only such calls reach: neither runs, so neither constrains a proof.
+        unreachable_calls = set()
+        called_ids = {target for edges in call_edges.values() for _c, target in edges}
         for function_id in ordered_ids:
             function = functions_by_id[function_id]
+            if (
+                function is not entry_function
+                and function_id in called_ids
+                and function_id not in uniform_parameters
+            ):
+                unreachable_calls.update(
+                    id(call) for call, _target in call_edges[function_id]
+                )
+                continue
             parameters = getattr(function, "parameters", []) or []
             analysis = self.hlsl_software_subgroup_uniform_returns
             declarations = [
@@ -8241,8 +8267,11 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 entry=function is entry_function,
                 offset_names=offset_names,
                 metadata_bounds=metadata_bounds,
+                unreachable_calls=unreachable_calls,
             )
             for call, target in call_edges[function_id]:
+                if id(call) in unreachable_calls:
+                    continue
                 facts = uniform_call_arguments.get(id(call), set())
                 if target not in uniform_parameters:
                     uniform_parameters[target] = set(facts)

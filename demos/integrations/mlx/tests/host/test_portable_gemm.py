@@ -548,7 +548,7 @@ def test_backend_mirrors_steel_matmul():
     for text in (
         "void dispatch_steel_gemm(",
         "split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)",
-        "does not route split-K matrix products yet",
+        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
         "constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;",
         '"_use_out_source_n_do_axpby_n_align_M_"',
         "A_batch_stride.back(),",

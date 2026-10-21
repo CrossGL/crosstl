@@ -3049,7 +3049,7 @@ jobs:
     name: MLX quantized host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 270
     strategy:
       fail-fast: false
       matrix:
@@ -3191,6 +3191,13 @@ jobs:
             python -m demos.integrations.mlx.portable_host.gemm_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/gemm-translation.log
+      - name: Translate split-K GEMM packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX split-K GEMM translation" -- \
+            python -m demos.integrations.mlx.portable_host.gemm_splitk_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/gemm-splitk-translation.log
       - name: Execute floating-point matrix products through MLX
         env:
           EGL_PLATFORM: surfaceless

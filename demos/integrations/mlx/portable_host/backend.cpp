@@ -18,6 +18,7 @@
 #include "mlx/backend/no_gpu/crosstl_dispatch.h"
 #include "mlx/fast_primitives.h"
 #include "mlx/primitives.h"
+#include "mlx/utils.h"
 
 namespace {
 std::atomic<CrosstlMlxDispatch> dispatch_callback{nullptr};
@@ -2196,6 +2197,111 @@ std::tuple<bool, int64_t, array> gemv_operand(const array& in, bool is_vector) {
   return std::make_tuple(false, int64_t(in.shape(-1)), contiguous_copy(in));
 }
 
+// Run one translated split-K kernel; ``threads`` is its output extent.
+void dispatch_splitk_kernel(
+    const std::string& entry,
+    std::vector<CrosstlMlxBuffer>& buffers,
+    uint64_t threads,
+    const CrosstlMlxLaunch& launch) {
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()), threads, &launch,
+      error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native split-K matmul failed: ") + error);
+  }
+}
+
+// matmul.cpp steel_gemm_splitk_axpby without C: gemm_splitk writes one float32
+// partial product per K partition into C_split and gemm_splitk_accum sums them
+// into the output. matmul.cpp launches the accumulation with dispatch_threads
+// over exactly N x M threads; the kernel reads only thread_position_in_grid,
+// so one-thread workgroups cover the same threads.
+void dispatch_steel_gemm_splitk(
+    const array& a,
+    const array& b,
+    array& out,
+    int M,
+    int N,
+    int K,
+    int64_t lda,
+    int64_t ldb,
+    bool transpose_a,
+    bool transpose_b) {
+  const int _tm = (M + 32 - 1) / 32;
+  const int _tn = (N + 32 - 1) / 32;
+  const int _tk = K / 16;
+  const int bm = M < 40 ? 16 : 32;
+  const int bn = N < 40 ? 16 : 32;
+  constexpr int bk = 16, wm = 2, wn = 2;
+  const int split_k_partitions = std::min(std::max(2, next_power_of_2(_tk / (_tm * _tn))), 32);
+  const int64_t split_k_partition_stride = int64_t(M) * N;
+  const int gemm_k_iterations = (K / bk) / split_k_partitions;
+  const int split_k_partition_size = gemm_k_iterations * bk;
+  const int tn = (N + bn - 1) / bn;
+  const int tm = (M + bm - 1) / bm;
+  if (split_k_partition_stride * split_k_partitions > int64_t(max_matmul_elements) ||
+      lda < 0 || lda > int64_t(max_matmul_elements) || ldb < 0 ||
+      ldb > int64_t(max_matmul_elements) || N > 65535 || M > 65535) {
+    throw std::invalid_argument("CrossTL split-K matmul launch exceeds its bounds.");
+  }
+  const bool mn_aligned = M % bm == 0 && N % bn == 0;
+  const bool k_aligned = K % bk == 0;
+  const char* storage = matmul_storage(out.dtype());
+  const std::string entry = std::string("steel_gemm_splitk_") + (transpose_a ? "t" : "n") +
+      (transpose_b ? "t" : "n") + "_" + storage + "_float32_bm" + std::to_string(bm) + "_bn" +
+      std::to_string(bn) + "_bk" + std::to_string(bk) + "_wm" + std::to_string(wm) + "_wn" +
+      std::to_string(wn) + "_MN_" + (mn_aligned ? "t" : "n") + "aligned_K_" +
+      (k_aligned ? "t" : "n") + "aligned";
+  const std::string accum = std::string("steel_gemm_splitk_accum_") + storage + "_float32";
+  require_entry(entry);
+  require_entry(accum);
+  array C_split({split_k_partitions, M, N}, float32, nullptr, {});
+  C_split.set_data(allocator::malloc(C_split.nbytes()));
+  out.set_data(allocator::malloc(out.nbytes()));
+  // GEMMSpiltKParams in params.h order.
+  std::vector<int32_t> params = {
+      M,
+      N,
+      K,
+      int32_t(lda),
+      int32_t(ldb),
+      N,
+      tn,
+      tm,
+      split_k_partitions,
+      int32_t(split_k_partition_stride),
+      split_k_partition_size,
+      0,
+      gemm_k_iterations};
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"A", storage, data(a), matmul_span(a), 0},
+      {"B", storage, data(b), matmul_span(b), 0},
+      {"C", "float32", C_split.data<void>(), C_split.size(), 1},
+      {"params", "int32", params.data(), params.size(), 0},
+  };
+  dispatch_splitk_kernel(
+      entry, buffers, C_split.size(),
+      CrosstlMlxLaunch{
+          {uint32_t(tn), uint32_t(tm), uint32_t(split_k_partitions)},
+          {32, uint32_t(wn), uint32_t(wm)}});
+  int32_t k_partitions = split_k_partitions;
+  int32_t partition_stride = int32_t(split_k_partition_stride);
+  int32_t ldd = N;
+  std::vector<CrosstlMlxBuffer> accum_buffers = {
+      {"C_split", "float32", C_split.data<void>(), C_split.size(), 0},
+      {"D", storage, out.data<void>(), out.size(), 1},
+      {"k_partitions", "int32", &k_partitions, 1, 0},
+      {"partition_stride", "int32", &partition_stride, 1, 0},
+      {"ldd", "int32", &ldd, 1, 0},
+  };
+  dispatch_splitk_kernel(
+      accum, accum_buffers, out.size(),
+      CrosstlMlxLaunch{{uint32_t(N), uint32_t(M), 1}, {1, 1, 1}});
+}
+
 // matmul.cpp steel_matmul_axpby without C. The host reports no Apple GPU
 // architecture and no NAX unit, so GEMM_TPARAM_MACRO takes its medium-device
 // tile and the split-K case uses the threshold of 1024 tiles.
@@ -2216,7 +2322,8 @@ void dispatch_steel_gemm(
     const Strides& B_batch_stride) {
   const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
   if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
-    throw std::invalid_argument("CrossTL matmul does not route split-K matrix products yet.");
+    dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);
+    return;
   }
   constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;
   const bool has_batch = batch_shape.size() > 1;
