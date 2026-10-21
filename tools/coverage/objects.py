@@ -19,15 +19,21 @@ from .model import Type
 class Object:
     """``spelling`` names the type, with ``{element}`` for its element type; ``register`` is the register class it
     binds to, empty for an object that is a local variable; ``stage`` is the stage its methods are probed in.
+    ``parameter`` marks an object the stage's entry point takes, which the dialect's stage program declares.
     """
 
     spelling: str
     element: Type | None = None
     register: str = ""
     stage: str = "compute"
+    parameter: bool = False
 
 
 _FLOAT4 = Type("float", (4,))
+# The vertex type a geometry probe's output stream holds. DXC's table writes the type of the vertex ``Append`` takes
+# as the stream's own element type; a probe appends the vertex its geometry program fills in.
+VERTEX = "Vertex"
+STREAM = f"PointStream<{VERTEX}>"
 
 
 def _textures(spelling: str, register: str, *names: str) -> dict[str, Object]:
@@ -79,6 +85,8 @@ OBJECTS: dict[str, Object] = {
     # A default-constructed hit object is a NOP hit object (HLSL shader execution reordering), which a ray-generation
     # shader can query.
     "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
+    # A geometry shader's output stream is a parameter of its entry point.
+    "Stream": Object(STREAM, stage="geometry", parameter=True),
     # A feedback texture records which mips of its paired texture a sample would touch; it binds as a UAV.
     "FeedbackTexture2D": Object(
         "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"
@@ -216,19 +224,24 @@ class Receiver:
         spelling = kind.spelling.format(element=dialect.type(held) if held else "")
         self.declarations: list[str] = []
         self.locals: list[str] = []
+        # The type of the entry-point parameter the stage program declares as the object, if it is one.
+        self.parameter = spelling if kind.parameter else ""
         if kind.register:
             self.declarations.append(
                 dialect.resource(spelling, self.name, _REGISTERS[kind.register])
             )
-        else:
+        elif not kind.parameter:
             self.locals.append(f"{spelling} {self.name};")
         self._samplers: set[str] = set()
 
     def takes(self, kind: Type) -> bool:
-        return kind.opaque in SAMPLERS
+        return kind.opaque in SAMPLERS or bool(self.parameter and kind.opaque == VERTEX)
 
     def argument(self, kind: Type) -> str:
-        """The sampler or texture to pass for a parameter of ``kind``, declared the first time it is used."""
+        """The sampler or texture to pass for a parameter of ``kind``, declared the first time it is used, or the
+        vertex the geometry program fills in."""
+        if kind.opaque == VERTEX:
+            return self.dialect.vertex
         spelling, name, register = SAMPLERS[kind.opaque]
         if name not in self._samplers:
             self._samplers.add(name)

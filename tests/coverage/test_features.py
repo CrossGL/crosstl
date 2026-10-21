@@ -10,7 +10,7 @@ from tools.coverage.features import (
     spirv,
     wgsl,
 )
-from tools.coverage.model import Param, Signature, Type
+from tools.coverage.model import VOID, Param, Signature, Type
 
 GLSL_EXCERPT = """
 == Common Functions
@@ -264,6 +264,11 @@ namespace NodeOutputMethods {
     bool [[]] IsValid();
 } namespace
 
+namespace StreamMethods {
+void [[]] Append(in $match<-1, 1> void x) : stream_append;
+void [[]] RestartStrip() : stream_restart;
+} namespace
+
 namespace DxIntrinsics {
     void [[min_sm=6.9]] MaybeReorderThread(in uint CoherenceHint, in uint NumCoherenceHintBitsFromLSB);
 } namespace
@@ -339,6 +344,15 @@ def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():
     is_miss = features["DxHitObject.IsMiss"]
     assert (is_miss.stage, is_miss.signature.result) == ("ray-generation", Type("bool"))
     assert features["DxHitObject.MakeNop"].stage == "ray-generation"
+
+
+def test_hlsl_stream_methods_are_probed_in_a_geometry_shader():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    append, restart = features["Stream.Append"], features["Stream.RestartStrip"]
+    assert (append.stage, restart.stage) == ("geometry", "geometry")
+    # Append takes a vertex of the stream's element type: the one the geometry probe fills in.
+    assert append.signature.params == (Param(Type.other("Vertex")),)
+    assert restart.signature == Signature(VOID, ())
 
 
 def test_hlsl_resolves_generic_layouts_and_matched_types():

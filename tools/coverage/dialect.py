@@ -44,6 +44,8 @@ class Dialect:
     geometry_suffix = ""
     # The task payload a task-stage probe declares and hands to the mesh workgroups it launches.
     payload = "payload"
+    # The vertex a geometry probe fills in from its input point, for a stream's ``Append``.
+    vertex = "emitted"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
@@ -189,7 +191,9 @@ class Dialect:
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A geometry shader that takes and emits points and runs ``body`` with ``i`` set to 0, for a feature only
-        that stage has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        that stage has; the buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``stream``, the type of the
+        output stream the entry point takes as ``obj``, for a probe of the stream's methods; the probe then fills in
+        :attr:`vertex` before ``body``."""
         raise ProbeError(f"no geometry-stage probe for {self.language} yet")
 
     def raytracing(

@@ -22,7 +22,7 @@ from ..model import (
     Type,
     raytracing_stage,
 )
-from ..objects import OBJECTS, SAMPLERS, element
+from ..objects import OBJECTS, SAMPLERS, VERTEX, element
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
@@ -267,13 +267,14 @@ def declarations(text: str):
 
 def _concrete(text: str, held: Type | None) -> str:
     """``text`` with an object's generic types made concrete: ``$classT`` is its element type ``held``, ``$funcT``
-    (the type a templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that
-    layout.
+    (the type a templated load returns) ``uint``, ``$match<0, -1> void<n>`` the element's component type in that
+    layout, and ``$match<-1, 1> void``, the vertex a stream's ``Append`` takes, the geometry probe's vertex type.
     """
     held = held or Type("uint")
     spelled = held.scalar + (f"<{held.shape[0]}>" if held.shape else "")
     text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", held.scalar, text)
     text = re.sub(r"\$match<\s*-1\s*,\s*0\s*>\s*void\b", spelled, text)
+    text = re.sub(r"\$match<\s*-1\s*,\s*1\s*>\s*void\b", VERTEX, text)
     text = re.sub(r"\bany_sampler\b", "sampler", text)
     return text.replace("$classT", spelled).replace("$funcT", "uint")
 
