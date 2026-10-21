@@ -11014,9 +11014,9 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7"
+        "d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9"
     )
-    assert opengl["size_bytes"] == 10257
+    assert opengl["size_bytes"] == 10414
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
@@ -11352,9 +11352,9 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8"
+        "0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0"
     )
-    assert opengl["size_bytes"] == 10245
+    assert opengl["size_bytes"] == 10402
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )

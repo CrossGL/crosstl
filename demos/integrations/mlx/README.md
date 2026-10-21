@@ -4353,8 +4353,8 @@ Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
 lane-varying `SV_GroupIndex / WaveGetLaneCount()` derivation remains. The
-12,412-byte explicit software-subgroup GLSL artifact has SHA-256
-`6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268`.
+13,385-byte explicit software-subgroup GLSL artifact has SHA-256
+`002b7dcfdcbd65057ded11ded56a348d6f067b63fbd29d3933d20420c9dc614b`.
 It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
 source subgroup-ID-strided runtime loop across every workgroup round. Inactive
 subgroups contribute typed collective identities, so all generated barriers
@@ -4819,8 +4819,8 @@ its four divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
-software-subgroup GLSL is 10,245 bytes with SHA-256
-`9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8`.
+software-subgroup GLSL is 10,402 bytes with SHA-256
+`0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0`.
 It retains deferred OpenGL specialization constant `20`, emits eight control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
@@ -6074,9 +6074,9 @@ The generated HLSL is 10,398 bytes with SHA-256
 its divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes
+`-enable-16bit-types`. The generated software-subgroup GLSL is 10,414 bytes
 with SHA-256
-`ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7`.
+`d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9`.
 It retains deferred OpenGL specialization constant `20`, emits six control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
