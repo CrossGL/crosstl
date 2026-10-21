@@ -1580,6 +1580,8 @@ jobs:
           CROSTL_REQUIRE_SUBGROUP_BRANCH_REASSIGNMENTS: "1"
           CROSTL_REQUIRE_IMMUTABLE_STORAGE: "1"
           CROSTL_REQUIRE_WORKGROUP_IDENTITY_REINTERPRET: "1"
+          CROSTL_REQUIRE_RESOURCE_STORAGE_VIEWS: "1"
+          CROSTL_REQUIRE_BINARY16_ALIAS_AGGREGATES: "1"
           CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
@@ -1659,6 +1661,8 @@ jobs:
               tests/test_translator/test_subgroup_branch_reassignments.py \
               tests/test_translator/test_immutable_storage.py \
               tests/test_translator/test_workgroup_identity_reinterpret.py \
+              tests/test_translator/test_resource_storage_views.py \
+              tests/test_translator/test_binary16_alias_aggregates.py \
               tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
@@ -1697,6 +1701,7 @@ jobs:
               tests/test_translator/test_helper_local_returns.py \
               tests/test_translator/test_helper_array_returns.py \
               tests/test_translator/test_loop_guard_bounds.py \
+              tests/test_translator/test_metadata_call_bounds.py \
               tests/test_translator/test_pointer_index_bounds.py \
               tests/test_translator/test_frozen_specializations.py \
               tests/test_translator/test_storage_record_runtime.py \
