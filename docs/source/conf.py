@@ -23,13 +23,6 @@ extensions = [
     "sphinx_copybutton",
 ]
 
-try:
-    import breathe  # noqa: F401
-except Exception:
-    breathe = None
-else:
-    extensions.append("breathe")
-
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -46,11 +39,6 @@ napoleon_numpy_docstring = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
 }
-
-breathe_projects = {
-    "crossgl-translator": str(ROOT / "docs" / "doxygen" / "build" / "xml"),
-}
-breathe_default_project = "crossgl-translator"
 
 html_theme = "furo"
 html_title = "CrossGL Translator"

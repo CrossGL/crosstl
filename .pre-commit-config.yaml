@@ -22,7 +22,6 @@ exclude: |
     crosstl\.egg-info/|
     dist/|
     docs/_build/|
-    docs/doxygen/|
     examples/output/|
     worktrees/
   )

@@ -46,4 +46,4 @@ norecursedirs = [".git", ".venv", "build", "dist", "worktrees"]
 
 [tool.flit.sdist]
 include = ["CHANGELOG.md", "CITATION.cff", ".zenodo.json", "examples/", "docs/"]
-exclude = ["docs/_build/", "docs/doxygen/build/", "examples/output/", "**/__pycache__/", "**/*.py[cod]"]
+exclude = ["docs/_build/", "examples/output/", "**/__pycache__/", "**/*.py[cod]"]
