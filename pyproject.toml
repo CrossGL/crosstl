@@ -5,7 +5,7 @@ build-backend = "flit_core.buildapi"
 [project]
 name = "crosstl"
 version = "3.4.0"
-description = "CrossGL shader and compute translator"
+description = "Translate GPU shaders and compute kernels between languages through the CrossGL IR"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -28,7 +28,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://crossgl.net/"
-Documentation = "https://crossgl.github.io/crossgl-docs/"
+Documentation = "https://docs.crossgl.net/products/crossgl-translator/index.html"
 Source = "https://github.com/CrossGL/crosstl"
 Issues = "https://github.com/CrossGL/crosstl/issues"
 Changelog = "https://github.com/CrossGL/crosstl/blob/main/CHANGELOG.md"
