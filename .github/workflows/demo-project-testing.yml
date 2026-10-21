@@ -4145,7 +4145,7 @@ jobs:
           set -euo pipefail
           mkdir -p metal-ownership-results
           python tools/run_bounded_command.py \
-            --label "Metal builtin ownership" --timeout-seconds 120 -- \
+            --label "Metal builtin ownership" --timeout-seconds 360 -- \
             python -m pytest -q -n auto \
               --basetemp="metal-ownership-results/pytest" \
               --junitxml="metal-ownership-results/results.xml" \

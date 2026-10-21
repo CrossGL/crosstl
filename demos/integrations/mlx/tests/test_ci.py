@@ -1347,7 +1347,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting, "tests/test_translator/test_metal_builtin_ownership.py"
     )
     assert 'CROSTL_REQUIRE_METAL_BUILTIN_OWNERSHIP: "1"' in ownership
-    assert "--timeout-seconds 120 --" in ownership
+    assert "--timeout-seconds 360 --" in ownership
     assert "pytest -q -n auto" in ownership
     assert "if: runner.os" not in ownership
     ownership_upload = _load_ci_coverage_module().workflow_step_section(
