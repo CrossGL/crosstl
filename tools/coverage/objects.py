@@ -226,6 +226,22 @@ def element(owner: str, method: str) -> Type | None:
     return _ELEMENTS.get(method, kind.element)
 
 
+# What a probe does with a local object it passes, so that a live instruction uses it. DXC's validator counts a ray
+# query in the shader's flags even when the optimizer removes every use, then rejects the shader ("Flags must match
+# usage"), so a ray query is advanced once.
+_STARTS = {"RayQuery": "{name}.Proceed();"}
+
+
+def local_object(kind: Type, name: str = "obj") -> list[str]:
+    """The statements that declare ``name`` as the default-constructed local object a parameter of ``kind`` takes,
+    such as a ray query or a hit object; none when ``kind`` is no such object."""
+    found = OBJECTS.get(kind.opaque)
+    if found is None or found.register or found.parameter or found.element:
+        return []
+    start = _STARTS.get(kind.opaque)
+    return [f"{found.spelling} {name};", *([start.format(name=name)] if start else [])]
+
+
 class Receiver:
     """The object a method probe calls its method on, and the samplers the call takes."""
 

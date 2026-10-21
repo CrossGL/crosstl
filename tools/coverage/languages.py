@@ -184,12 +184,15 @@ class HLSL(Dialect):
         self, stage: str, buffers: list[Buffer], body: list[str], **parts
     ) -> str:
         hit = stage in ("any-hit", "closest-hit")
+        # A ray-generation probe that traces declares its payload as a local.
+        traced = parts.get("traced", False)
         lines = [
-            *(self._PAYLOAD if hit else ()),
+            *(self._PAYLOAD if hit or traced else ()),
             *self._globals(buffers, parts),
             f'[shader("{RAYTRACING_STAGES[stage]}")]',
             f"void main({self._HIT_PARAMETERS if hit else ''}) {{",
             "    uint i = 0u;",
+            *([f"    Payload {self.payload};"] if traced else ()),
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"

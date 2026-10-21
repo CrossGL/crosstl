@@ -126,9 +126,11 @@ class CrossGL(Dialect):
         self, stage: str, buffers: list[Buffer], body: list[str], **parts
     ) -> str:
         hit = stage in ("any-hit", "closest-hit")
+        # A ray-generation probe that traces declares its payload as a local.
+        traced = parts.get("traced", False)
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
-        if hit:
+        if hit or traced:
             lines += ["    struct Payload {", "        vec4 color;", "    }"]
         lines += [f"    {_RAYTRACING_BLOCKS[stage]} {{"]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
@@ -136,6 +138,7 @@ class CrossGL(Dialect):
         lines += [
             f"        void main({self._HIT_PARAMETERS if hit else ''}) {{",
             "            uint i = 0u;",
+            *([f"            Payload {self.payload};"] if traced else ()),
         ]
         lines += [f"            {line}" for line in body]
         lines += ["        }", "    }", "}"]

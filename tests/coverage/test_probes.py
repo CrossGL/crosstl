@@ -551,10 +551,79 @@ def test_a_hit_object_writes_its_attributes_to_a_local():
         assert "obj.GetAttributes(a0);" in source
 
 
-def test_a_user_defined_inout_parameter_outside_a_payload_stage_stays_untested():
-    invoke = replace(GET_ATTRIBUTES, signature=Signature(VOID, (Param(UDT, "inout"),)))
+def test_a_user_defined_inout_parameter_where_no_ray_starts_stays_untested():
+    swapped = Signature(Type("bool"), (Param(UDT, "inout"),))
     with pytest.raises(probes.ProbeError, match="parameters of type udt"):
-        probes.build(invoke, "hlsl")
+        probes.build(replace(REPORT_HIT, signature=swapped), "hlsl")
+
+
+def hit_object(name, result, *params):
+    return Feature(
+        "hlsl",
+        "method",
+        f"DxHitObject.{name}",
+        Signature(result, params),
+        group="DxHitObject",
+        crossgl=name,
+        spelling=f"dx::HitObject::{name}",
+        stage="ray-generation",
+    )
+
+
+HIT = Type.other("DxHitObject")
+INVOKE = hit_object("Invoke", VOID, Param(HIT), Param(UDT, "inout"))
+TRACE_FROM_HIT_OBJECT = hit_object(
+    "TraceRay",
+    HIT,
+    *(Param(t) for t in (Type.other("acceleration_struct"), *[UINT] * 5)),
+    Param(Type.other("ray_desc")),
+    Param(UDT, "inout"),
+)
+FROM_RAY_QUERY = hit_object("FromRayQuery", HIT, Param(Type.other("RayQuery")))
+
+
+@pytest.mark.parametrize(
+    ("language", "struct", "call"),
+    [
+        ("hlsl", "struct [raypayload] Payload", "dx::HitObject::Invoke(a0, payload);"),
+        ("crossgl", "    struct Payload {", "obj.Invoke(a0, payload);"),
+    ],
+)
+def test_a_ray_generation_shader_passes_a_local_payload(language, struct, call):
+    source = probes.build(INVOKE, language).source
+    assert struct in source
+    assert "Payload payload;" in source
+    assert "dx::HitObject a0;" in source
+    assert call in source
+    traced = probes.build(TRACE_FROM_HIT_OBJECT, language).source
+    assert "Payload payload;" in traced
+    assert "TraceRay(u0, a1, a2, a3, a4, a5, a6, payload);" in traced
+
+
+def test_a_ray_generation_shader_declares_a_payload_only_when_it_traces():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(FROM_RAY_QUERY, language).source
+        assert "Payload" not in source
+
+
+def test_a_hit_object_is_made_from_a_ray_query_that_has_run():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(FROM_RAY_QUERY, language).source
+        assert "RayQuery<RAY_FLAG_NONE> a0;\n" in source
+        assert "a0.Proceed();\n" in source
+        assert "FromRayQuery(a0);" in source
+
+
+@pytest.mark.parametrize(
+    "feature", [INVOKE, TRACE_FROM_HIT_OBJECT, FROM_RAY_QUERY], ids=lambda f: f.name
+)
+def test_hit_object_constructor_probes_are_valid(feature):
+    if not validators.available("hlsl"):
+        pytest.skip("no hlsl validator")
+    for baseline in (False, True):
+        probe = probes.build(feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, feature.stage, probe.entry)
+        assert verdict.accepted, verdict.log
 
 
 @pytest.mark.parametrize("feature", [REPORT_HIT, GET_ATTRIBUTES])

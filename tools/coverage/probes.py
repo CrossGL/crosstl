@@ -15,7 +15,7 @@ from . import constructs
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type
-from .objects import Receiver, Uniforms
+from .objects import Receiver, Uniforms, local_object
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
 _BUFFERS = {"float": "fin", "int": "iin", "uint": "uin"}
@@ -38,6 +38,8 @@ _STAGE_PROGRAMS = {
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
 # payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
 _PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
+# The stage that starts rays: its probe passes a user-defined inout parameter a ray payload it declares as a local.
+_TRACING_STAGE = "ray-generation"
 # A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.
 _RAY_DESCRIPTIONS = frozenset({"ray_desc", "RayDesc"})
 # The hit attributes a probe passes for a user-defined type outside the payload stages: those ``ReportHit`` reports
@@ -82,12 +84,16 @@ class _Builder:
         receiver: Receiver | None = None,
         interpolant: str = "",
         payload: bool = False,
+        tracing: bool = False,
     ):
         self.dialect = dialect
         self.receiver = receiver
         self.interpolant = interpolant
         # Whether the probe declares a payload (:data:`_PAYLOAD_STAGES`).
         self.payload = payload
+        # Whether the probe can declare a payload local (:data:`_TRACING_STAGE`), and whether a call passes one.
+        self.tracing = tracing
+        self.traced = False
         self.uniforms = Uniforms(dialect)
         self.offsets: dict[str, int] = {}
         self.lines: list[str] = list(receiver.locals) if receiver else []
@@ -123,9 +129,9 @@ class _Builder:
         return objects + self.uniforms.declarations
 
     def _resource(self, kind: Type) -> bool:
-        if self.payload and kind.opaque == "udt":
+        if (self.payload or self.tracing) and kind.opaque == "udt":
             return True
-        if kind.opaque in _RAY_DESCRIPTIONS:
+        if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind):
             return True
         return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
             kind
@@ -178,6 +184,16 @@ class _Builder:
                 param.type.opaque == "udt" or param.direction == "inout"
             ):
                 arguments.append(dialect.payload)
+            elif (
+                self.tracing
+                and param.type.opaque == "udt"
+                and param.direction == "inout"
+            ):
+                self.traced = True
+                arguments.append(dialect.payload)
+            elif local_object(param.type):
+                self.lines += local_object(param.type, local)
+                arguments.append(local)
             elif self._attributes(param):
                 self.lines += self._hit_attributes(local, param.direction == "in")
                 arguments.append(
@@ -311,7 +327,11 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         "flat" if feature.name in _FLAT else "smooth"
     )
     builder = _Builder(
-        dialect, receiver, interpolant or "", feature.stage in _PAYLOAD_STAGES
+        dialect,
+        receiver,
+        interpolant or "",
+        feature.stage in _PAYLOAD_STAGES,
+        feature.stage == _TRACING_STAGE,
     )
     signature = feature.signature
     if crossgl and feature.counterpart:
@@ -344,7 +364,11 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         return Probe(language, source, dialect.entry, suffix or dialect.suffix)
     if feature.stage in RAYTRACING_STAGES:
         source = dialect.raytracing(
-            feature.stage, buffers, body, declarations=declarations
+            feature.stage,
+            buffers,
+            body,
+            declarations=declarations,
+            traced=builder.traced,
         )
         return Probe(language, source, dialect.entry, dialect.suffix)
     source = dialect.kernel(buffers, body, declarations=declarations)
