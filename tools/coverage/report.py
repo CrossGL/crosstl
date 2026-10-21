@@ -1,4 +1,10 @@
-"""The ``coverage.json`` report and its plain-text summary."""
+"""The ``coverage.json`` report and its plain-text summary.
+
+In memory every backend lists its features as dictionaries. ``coverage.json`` stores them as rows instead: a backend's
+``columns`` names the fields of each row, and its ``details`` lists each diagnostic once, so the ``detail`` field
+holds an index into it. That keeps the published file under a megabyte. :func:`load` and :func:`dumps` convert
+between the two forms.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,9 @@ from . import ir, upstream, validators
 from .features import metal
 from .model import DIRECTIONS, OUTCOMES, Result, Score
 
-SCHEMA = 1
+SCHEMA = 2
+# The fields of a feature row in the order coverage.json stores them; any other field follows in sorted order.
+COLUMNS = ("name", "category", "group", "outcome", "detail")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {("wgsl", "input"): "CrossTL has no WGSL source frontend"}
 
@@ -84,6 +92,7 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
                     "language": language,
                     "direction": direction,
                     "offered": True,
+                    "validator": validators.TOOLS[language],
                     "score": None if score.percent is None else round(score.percent, 1),
                     "counts": score.counts,
                     "features": [
@@ -93,7 +102,6 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
                             "group": r.feature.group,
                             "outcome": r.outcome,
                             **({"detail": r.detail} if r.detail else {}),
-                            **({"validator": r.validator} if r.validator else {}),
                             **({"semantic": r.semantic} if r.semantic else {}),
                             **(
                                 {"crossgl": r.feature.crossgl}
@@ -173,8 +181,53 @@ def merge(reports: list[dict]) -> dict:
     return merged
 
 
+def _rows(backend: dict) -> dict:
+    features = backend["features"]
+    fields = {name for feature in features for name in feature}
+    columns = [c for c in COLUMNS if c in fields] + sorted(fields - set(COLUMNS))
+    details = sorted({f["detail"] for f in features if f.get("detail")})
+    index = {detail: number for number, detail in enumerate(details)}
+    rows = [
+        [index.get(f.get(c)) if c == "detail" else f.get(c) for c in columns]
+        for f in features
+    ]
+    return {**backend, "columns": columns, "details": details, "features": rows}
+
+
+def _features(backend: dict) -> dict:
+    columns, details = backend["columns"], backend["details"]
+    features = []
+    for row in backend["features"]:
+        feature = {c: v for c, v in zip(columns, row, strict=True) if v is not None}
+        if "detail" in feature:
+            feature["detail"] = details[feature["detail"]]
+        features.append(feature)
+    rest = {k: v for k, v in backend.items() if k not in ("columns", "details")}
+    return {**rest, "features": features}
+
+
+def dumps(report: dict) -> str:
+    """``report`` as the text of ``coverage.json``, with its features stored as rows."""
+    stored = {
+        **report,
+        "backends": [_rows(b) if "features" in b else b for b in report["backends"]],
+    }
+    return json.dumps(stored, separators=(",", ":"), sort_keys=True) + "\n"
+
+
+def loads(text: str) -> dict:
+    """The report in ``text``, with each backend's features as dictionaries again."""
+    data = json.loads(text)
+    backends = [_features(b) if "columns" in b else b for b in data["backends"]]
+    return {**data, "backends": backends}
+
+
+def load(path: Path) -> dict:
+    return loads(path.read_text(encoding="utf-8"))
+
+
 def write(report: dict, path: Path) -> None:
-    path.write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
+    path.write_text(dumps(report), encoding="utf-8")
 
 
 def summary(report: dict) -> str:
