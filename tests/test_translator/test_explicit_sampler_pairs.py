@@ -279,8 +279,21 @@ def test_webgl_splits_pairs_without_a_leading_header(tmp_path):
             Texture2D albedo : register(t0);
             SamplerState samplers[2] : register(s0);
             int index;
+            float4 viaParameter(SamplerState s, float2 uv) { return albedo.Sample(s, uv); }
             float4 main(float2 uv : TEXCOORD0) : SV_Target {
-                return albedo.Sample(samplers[index], uv);
+                return viaParameter(samplers[index], uv);
+            }
+            """,
+            "texture 'albedo' is sampled through a sampler selected at run time",
+        ),
+        (
+            """
+            Texture2D albedo[2] : register(t0);
+            SamplerState samplers[2] : register(s0);
+            int layer;
+            int index;
+            float4 main(float2 uv : TEXCOORD0) : SV_Target {
+                return albedo[layer].Sample(samplers[index], uv);
             }
             """,
             "texture 'albedo' is sampled through a sampler selected at run time",
@@ -290,6 +303,80 @@ def test_webgl_splits_pairs_without_a_leading_header(tmp_path):
 def test_opengl_refuses_pairs_it_cannot_bind_statically(tmp_path, source, reason):
     with pytest.raises(OpenGLLoweringRefused, match=re.escape(reason)):
         _translate(tmp_path, source, ".hlsl", "opengl")
+
+
+RUNTIME_SELECTED_HLSL = """
+Texture2D albedo : register(t0);
+Texture2D detail : register(t1);
+Texture2D shadowMap : register(t2);
+SamplerState states[3] : register(s0);
+SamplerComparisonState compares[2] : register(s3);
+cbuffer Params : register(b0) { int which; int cmpIndex; };
+float4 main(float2 uv : TEXCOORD0) : SV_Target {
+    float4 a = albedo.Sample(states[which], uv);
+    float4 b = albedo.Sample(states[1], uv) + detail.Sample(states[0], uv);
+    float lit = shadowMap.SampleCmp(compares[cmpIndex], uv, 0.5);
+    float raw = shadowMap.Load(int3(0, 0, 0)).x;
+    return a + b + float4(lit, raw, 0.0, 0.0);
+}
+"""
+
+
+def test_opengl_indexes_one_combined_uniform_per_runtime_selected_sampler(tmp_path):
+    glsl = _translate(tmp_path, RUNTIME_SELECTED_HLSL, ".hlsl", "opengl")
+
+    # Element i of each array is the texture combined with sampler i; arrays take free units after the source's.
+    assert "layout(binding = 0) uniform sampler2D albedo;" in glsl
+    assert "layout(binding = 2) uniform sampler2D shadowMap;" in glsl
+    assert "layout(binding = 3) uniform sampler2D albedo_states[3];" in glsl
+    assert "layout(binding = 6) uniform sampler2DShadow shadowMap_compares[2];" in glsl
+    assert "texture(albedo_states[which], uv)" in glsl
+    assert "texture(albedo, uv) + texture(detail, uv)" in glsl
+    assert "texture(shadowMap_compares[cmpIndex], vec3(uv, 0.5))" in glsl
+    assert "texelFetch(shadowMap, ivec2(0, 0), 0)" in glsl
+    assert {
+        (pair["uniform"], pair["sampler"], pair.get("samplerArray", False))
+        for pair in _pairs(glsl)
+    } == {
+        ("albedo", "states", False),
+        ("albedo_states", "states", True),
+        ("shadowMap", None, False),
+        ("shadowMap_compares", "compares", True),
+    }
+    _validate_glsl(glsl)
+
+
+def test_webgl_selects_runtime_selected_samplers_with_constant_indices(tmp_path):
+    glsl = _translate(tmp_path, RUNTIME_SELECTED_HLSL, ".hlsl", "webgl")
+
+    # GLSL ES 3.00 indexes sampler arrays only with constant-index-expressions (section 4.1.7.1).
+    assert "uniform sampler2D albedo_states[3];" in glsl
+    assert "switch (which)" in glsl
+    assert "texture(albedo_states[2], uv)" in glsl
+    assert "switch (cmpIndex)" in glsl
+    assert "texture(shadowMap_compares[1], vec3(uv, 0.5))" in glsl
+    assert "states[" not in glsl.replace("albedo_states[", "")
+    _validate_glsl(glsl)
+
+
+def test_webgl_elementwise_texture_and_sampler_arrays_drop_the_sampler(tmp_path):
+    source = """
+    shader ElementwisePairs {
+        sampler2D textures[4];
+        sampler samplers[4];
+        uniform int layer;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(textures[layer], samplers[layer], uv);
+            }
+        }
+    }
+    """
+    glsl = _translate(tmp_path, source, ".cgl", "webgl")
+
+    assert "texture(textures[3], uv)" in glsl
+    assert "samplers" not in glsl
+    _validate_glsl(glsl)
 
 
 def test_opengl_keeps_elementwise_texture_and_sampler_arrays(tmp_path):

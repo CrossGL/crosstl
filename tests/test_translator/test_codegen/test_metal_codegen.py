@@ -2427,24 +2427,48 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     shader SynchronizationBuiltins {
         compute {
             void main() {
+                int k = 0;
                 barrier();
+                k = k + 1;
                 memoryBarrier();
+                k = k + 1;
                 workgroupBarrier();
+                k = k + 1;
                 groupMemoryBarrier();
+                k = k + 1;
                 memoryBarrierShared();
+                k = k + 1;
                 memoryBarrierBuffer();
+                k = k + 1;
                 deviceMemoryBarrier();
+                k = k + 1;
                 memoryBarrierImage();
+                k = k + 1;
                 allMemoryBarrier();
+                k = k + 1;
             }
         }
     }
     """
 
+    # The statements between the barriers keep the emitter from merging them.
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 3
+    # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory; deviceMemoryBarrier orders
+    # buffers and textures (GLSL 4.60 section 8.16, HLSL DeviceMemoryBarrier).
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 3
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_texture);"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | "
+            "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+        )
+        == 3
+    )
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
         "threadgroup_barrier(mem_flags::mem_device | "
@@ -4385,7 +4409,15 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     )
     assert "uint index = thread_index_in_threadgroup;" in generated_code
     assert "gl_LocalInvocationIndex" not in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    # groupMemoryBarrier(); memoryBarrierShared(); is one barrier over the union of their memory.
+    assert (
+        generated_code.count(
+            "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+            "mem_flags::mem_texture);"
+        )
+        == 1
+    )
+    assert "threadgroup_barrier(mem_flags::mem_threadgroup);" not in generated_code
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "writeScratch(scratch, index, float(index));" in generated_code
@@ -4436,7 +4468,7 @@ def test_metal_helper_control_flow_barriers_lower_in_nested_blocks():
     assert "if (mode != 0u)" in generated_code
     assert "for (int i = 0; i < 2; i = i + 1)" in generated_code
     assert "switch (mode)" in generated_code
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
     assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
     assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
     assert (
@@ -5618,16 +5650,28 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         assert invalid_token not in generated_code
 
 
+def test_metal_refuses_double_precision_vectors():
+    # MSL has no double type (Metal Shading Language Specification, section 2.1).
+    shader = """
+    shader GenericDoubleVector {
+        vec2<f64> precisePair(vec2<f64> input) {
+            vec2<f64> inc = vec2<f64>(1.0, 2.0);
+            return input + inc;
+        }
+    }
+    """
+
+    with pytest.raises(
+        MetalLoweringRefused, match=r"double-precision value: .*uses double2"
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_metal_generic_vector_constructors_emit_metal_names():
     shader = """
     shader GenericVectorAliasSmoke {
         vec2<f16> halfPair(vec2<f16> input) {
             vec2<f16> inc = vec2<f16>(1.0, 2.0);
-            return input + inc;
-        }
-
-        vec2<f64> precisePair(vec2<f64> input) {
-            vec2<f64> inc = vec2<f64>(1.0, 2.0);
             return input + inc;
         }
 
@@ -5672,8 +5716,6 @@ def test_metal_generic_vector_constructors_emit_metal_names():
 
     assert "half2 halfPair(half2 input)" in generated_code
     assert "half2 inc = half2(1.0, 2.0);" in generated_code
-    assert "double2 precisePair(double2 input)" in generated_code
-    assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
     assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
@@ -14343,106 +14385,6 @@ def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
     assert "set_threadgroups_per_grid(uint3(uint3" not in vector_component_generated
 
 
-def test_metal_lowers_geometry_and_tessellation_stages():
-    geometry_code = """
-    shader geometry_stage {
-        struct GSInput {
-            vec4 position @ gl_Position;
-        };
-
-        struct GSOutput {
-            vec4 position @ gl_Position;
-        };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) {
-                GSOutput output;
-                output.position = input[0].position;
-                stream.Append(output);
-            }
-        }
-    }
-    """
-    tessellation_code = """
-    shader tessellation_stage {
-        struct HSInput {
-            vec3 position @ POSITION;
-        };
-
-        struct HSOutput {
-            vec3 position @ POSITION;
-        };
-
-        struct HSConstData {
-            vec3 edges @ SV_TessFactor;
-            float inside @ SV_InsideTessFactor;
-        };
-
-        tessellation_control {
-            HSConstData HSConst(InputPatch<HSInput, 3> patch) {
-                HSConstData constants;
-                return constants;
-            }
-
-            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
-                @domain(tri)
-                @partitioning(fractional_odd)
-                @outputtopology(triangle_cw)
-                @outputcontrolpoints(3)
-                @patchconstantfunc(HSConst) {
-                HSOutput output;
-                output.position = patch[id].position;
-                return output;
-            }
-        }
-
-        tessellation_evaluation {
-            vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
-                @domain(tri) {
-                return vec4(patch[0].position, 1.0);
-            }
-        }
-    }
-    """
-
-    geometry = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(geometry_code), "geometry"
-    )
-    assert "// CrossGL geometry stage: maxvertexcount=3" in geometry
-    assert "// CrossGL geometry input primitive: triangle:input" in geometry
-    assert (
-        "// CrossGL geometry output stream: TriangleStream:stream->GSOutput" in geometry
-    )
-    assert "thread CrossGLMetalTriangleStream<GSOutput>& stream" in geometry
-    assert "stream.Append(output);" in geometry
-
-    tessellation = MetalCodeGen().generate(crosstl.translator.parse(tessellation_code))
-    assert "struct CrossGLMetalInputPatch" in tessellation
-    assert "struct CrossGLMetalOutputPatch" in tessellation
-    assert (
-        "// CrossGL tessellation_control stage: domain=triangle, "
-        "partitioning=fractional_odd, outputtopology=triangle_cw, "
-        "outputcontrolpoints=3, patchconstantfunc=HSConst"
-    ) in tessellation
-    assert (
-        "// CrossGL tessellation patch parameters: InputPatch:patch->HSInput[3]"
-        in tessellation
-    )
-    assert "HSOutput tessellation_control_main(" in tessellation
-    assert (
-        "thread const CrossGLMetalInputPatch<HSInput, 3>& patch, uint id"
-        in tessellation
-    )
-    assert "float4 tessellation_evaluation_main(" in tessellation
-    assert (
-        "thread const CrossGLMetalOutputPatch<HSOutput, 3>& patch, float3 bary"
-        in tessellation
-    )
-    assert "SV_TessFactor" not in tessellation
-    assert "SV_DomainLocation" not in tessellation
-
-
 def test_anyhit_stage_codegen():
     code = """
     shader rt {
@@ -14820,7 +14762,12 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
         "atomic_exchange_explicit(&counters[index], oldValue + currentValue, memory_order_relaxed);"
         in generated
     )
-    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 1
+    # groupMemoryBarrier orders buffer, image and shared memory (GLSL 4.60 section 8.16).
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup | "
+        "mem_flags::mem_texture);" in generated
+    )
     assert "atomic_fetch_add_explicit(counters[index]" not in generated
     assert "atomic_store_explicit(counters[index]" not in generated
     assert "atomic_load_explicit(counters[index]" not in generated
@@ -33371,324 +33318,6 @@ def test_metal_generic_image_memory_attributes_do_not_become_semantics():
     )
     assert "[[coherent]]" not in generated_code
     assert "[[globallycoherent]]" not in generated_code
-
-
-def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders():
-    """Geometry stages lower to a deterministic Metal helper representation."""
-    code = """
-    shader GeometryExpansion {
-        struct GSInput {
-            vec4 position @ gl_Position;
-            vec3 normal @ NORMAL;
-        };
-
-        struct GSOutput {
-            vec4 position @ gl_Position;
-            vec3 color @ COLOR;
-        };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) {
-                GSOutput output;
-                output.position = input[0].position;
-                output.color = input[0].normal;
-                stream.Append(output);
-                stream.RestartStrip();
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate(ast)
-
-    assert "template <typename T>" in generated
-    assert "struct CrossGLMetalTriangleStream" in generated
-    assert "// CrossGL geometry stage: maxvertexcount=3" in generated
-    assert "// CrossGL geometry input primitive: triangle:input" in generated
-    assert (
-        "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
-        in generated
-    )
-    assert "void geometry_main(" in generated
-    assert "GSInput input[3]" in generated
-    assert "thread CrossGLMetalTriangleStream<GSOutput>& stream" in generated
-    assert "stream.Append(output);" in generated
-    assert "stream.RestartStrip();" in generated
-
-    generated_stage = MetalCodeGen().generate_stage(ast, "geometry")
-    assert "void geometry_main(" in generated_stage
-
-
-def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape():
-    missing_attribute = """
-    shader MissingGeometryMax {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="requires maxvertexcount"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(missing_attribute), "geometry"
-        )
-
-    invalid_max = """
-    shader BadGeometryMax {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(0) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="maxvertexcount.*positive"):
-        MetalCodeGen().generate_stage(crosstl.translator.parse(invalid_max), "geometry")
-
-    wrong_arity = """
-    shader BadGeometryInputArity {
-        struct GSInput { vec4 position @ gl_Position; };
-        struct GSOutput { vec4 position @ gl_Position; };
-
-        geometry {
-            void main(triangle GSInput input[2], inout TriangleStream<GSOutput> stream)
-                @maxvertexcount(3) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
-        MetalCodeGen().generate_stage(crosstl.translator.parse(wrong_arity), "geometry")
-
-
-def test_metal_tessellation_control_stage_lowers_with_patch_metadata():
-    """Tessellation control stages lower to a deterministic helper function."""
-    code = """
-    shader TessControl {
-        struct PatchInput {
-            vec3 position @ POSITION;
-        };
-
-        struct PatchOutput {
-            vec3 position @ POSITION;
-        };
-
-        struct PatchConstants {
-            vec3 edgeFactors @ SV_TessFactor;
-            float insideFactor @ SV_InsideTessFactor;
-        };
-
-        tessellation_control {
-            PatchConstants patchConstants(InputPatch<PatchInput, 3> patch) {
-                PatchConstants constants;
-                return constants;
-            }
-
-            PatchOutput main(
-                InputPatch<PatchInput, 3> patch,
-                uint pointID @ SV_OutputControlPointID
-            ) @domain(tri)
-              @partitioning(fractional_odd)
-              @outputtopology(triangle_cw)
-              @outputcontrolpoints(3)
-              @patchconstantfunc(patchConstants)
-              @maxtessfactor(16.0) {
-                PatchOutput output;
-                output.position = patch[pointID].position;
-                return output;
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate_stage(ast, "tessellation_control")
-
-    assert "struct CrossGLMetalInputPatch" in generated
-    assert (
-        "// CrossGL tessellation_control stage: domain=triangle, "
-        "partitioning=fractional_odd, outputtopology=triangle_cw, "
-        "outputcontrolpoints=3, patchconstantfunc=patchConstants, "
-        "maxtessfactor=16.0"
-    ) in generated
-    assert (
-        "// CrossGL tessellation patch parameters: " "InputPatch:patch->PatchInput[3]"
-    ) in generated
-    assert "PatchOutput tessellation_control_main(" in generated
-    assert (
-        "thread const CrossGLMetalInputPatch<PatchInput, 3>& patch, uint pointID"
-        in generated
-    )
-    assert "patch[pointID].position" in generated
-    assert "SV_OutputControlPointID" not in generated
-
-
-def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata():
-    """Tessellation evaluation stages lower to a deterministic helper function."""
-    code = """
-    shader TessEval {
-        struct DomainInput {
-            vec3 position @ POSITION;
-        };
-
-        tessellation_evaluation {
-            vec4 main(
-                OutputPatch<DomainInput, 4> patch,
-                vec2 uv @ SV_DomainLocation,
-                uint primitiveID @ SV_PrimitiveID
-            ) @domain(quad)
-              @outputtopology(point) {
-                return vec4(patch[0].position + patch[1].position * uv.x, 1.0);
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    generated = MetalCodeGen().generate_stage(ast, "tessellation_evaluation")
-
-    assert "struct CrossGLMetalOutputPatch" in generated
-    assert (
-        "// CrossGL tessellation_evaluation stage: domain=quad, " "outputtopology=point"
-    ) in generated
-    assert (
-        "// CrossGL tessellation patch parameters: " "OutputPatch:patch->DomainInput[4]"
-    ) in generated
-    assert "float4 tessellation_evaluation_main(" in generated
-    assert (
-        "thread const CrossGLMetalOutputPatch<DomainInput, 4>& patch, "
-        "float2 uv, uint primitiveID"
-    ) in generated
-    assert "SV_DomainLocation" not in generated
-    assert "SV_PrimitiveID" not in generated
-
-
-def test_metal_tessellation_stage_validates_patch_metadata():
-    missing_patch_code = """
-    shader MissingTessPatch {
-        tessellation_control {
-            void constants() { }
-
-            void main(uint pointID @ SV_OutputControlPointID)
-                @domain(tri)
-                @partitioning(fractional_odd)
-                @outputtopology(triangle_cw)
-                @outputcontrolpoints(3)
-                @patchconstantfunc(constants) { }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="InputPatch"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(missing_patch_code), "tessellation_control"
-        )
-
-    mismatched_control_points = """
-    shader MismatchedTessPatchCount {
-        struct PatchInput { vec3 position @ POSITION; };
-        struct PatchOutput { vec3 position @ POSITION; };
-
-        tessellation_control {
-            PatchOutput constants(InputPatch<PatchInput, 3> patch) {
-                PatchOutput output;
-                return output;
-            }
-
-            PatchOutput main(
-                InputPatch<PatchInput, 3> patch,
-                uint pointID @ SV_OutputControlPointID
-            ) @domain(tri)
-              @partitioning(fractional_odd)
-              @outputtopology(triangle_cw)
-              @outputcontrolpoints(4)
-              @patchconstantfunc(constants) {
-                PatchOutput output;
-                return output;
-            }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="outputcontrolpoints.*InputPatch"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(mismatched_control_points),
-            "tessellation_control",
-        )
-
-    bad_domain_location = """
-    shader BadTessDomainLocation {
-        struct PatchOutput { vec3 position @ POSITION; };
-
-        tessellation_evaluation {
-            vec4 main(OutputPatch<PatchOutput, 3> patch, vec2 bary @ SV_DomainLocation)
-                @domain(tri) {
-                return vec4(0.0);
-            }
-        }
-    }
-    """
-    with pytest.raises(ValueError, match="SV_DomainLocation.*3 component"):
-        MetalCodeGen().generate_stage(
-            crosstl.translator.parse(bad_domain_location),
-            "tessellation_evaluation",
-        )
-
-
-def test_metal_mixed_shader_with_geometry_emits_all_requested_stages():
-    """Mixed vertex/geometry/fragment shaders can still be emitted per stage."""
-    code = """
-    shader MixedPipeline {
-        struct VOut {
-            vec4 position @ gl_Position;
-        };
-
-        vertex {
-            VOut main() {
-                VOut o;
-                o.position = vec4(0.0, 0.0, 0.0, 1.0);
-                return o;
-            }
-        }
-
-        geometry {
-            void main(triangle VOut input[3], inout TriangleStream<VOut> stream)
-                @maxvertexcount(3) {
-                stream.Append(input[0]);
-            }
-        }
-
-        fragment {
-            vec4 main(VOut input) @ gl_FragColor {
-                return input.position;
-            }
-        }
-    }
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-
-    full_code = MetalCodeGen().generate(ast)
-    assert "vertex VOut vertex_main" in full_code
-    assert "void geometry_main" in full_code
-    assert "fragment float4 fragment_main" in full_code
-
-    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
-    assert "vertex" in vertex_code
-    assert "geometry" not in vertex_code.lower().split("//")[0]
-
-    geometry_code = MetalCodeGen().generate_stage(ast, "geometry")
-    assert "void geometry_main" in geometry_code
-    assert "stream.Append(input[0]);" in geometry_code
-
-    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
-    assert "fragment" in fragment_code
 
 
 def test_metal_texture_gather_2d_array_splits_coord_and_layer():

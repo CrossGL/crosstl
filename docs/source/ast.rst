@@ -33,7 +33,8 @@ The type system is represented with ``TypeNode`` subclasses:
    * - ``CooperativeMatrixType``
      - Matrix values distributed across a subgroup or other execution scope
    * - ``ArrayType``
-     - Static or dynamic arrays
+     - Static or dynamic arrays. ``T a[2][3]`` is an array of 2 arrays of 3 ``T``,
+       ``ArrayType(ArrayType(T, 3), 2)``: the first suffix is the outermost dimension
    * - ``NamedType``
      - User-defined and backend resource types
    * - ``GenericType``

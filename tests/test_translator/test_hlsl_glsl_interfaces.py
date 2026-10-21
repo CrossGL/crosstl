@@ -1,5 +1,6 @@
 """HLSL interface declarations that GLSL spells differently: constant buffers named like their member, and
-tessellation patch functions and parameters GLSL has no declaration for."""
+tessellation patch-constant functions and patch parameters, which GLSL has no declaration for.
+"""
 
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
+from crosstl.translator.semantics import TessellationPatchUnsupportedError
 
 NAMED_LIKE_MEMBER_HLSL = """
 struct UBO { float4x4 projection; float4x4 model; };
@@ -84,16 +85,24 @@ def test_constant_buffer_named_like_its_member_gets_another_block_name(
         assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize(
-    "source, name, detail",
-    [
-        (DOMAIN_HLSL, "shader.tese.hlsl", "control-point patch parameter 'patch'"),
-        (HULL_HLSL, "shader.tesc.hlsl", "patchconstantfunc 'ConstantsHS'"),
-    ],
-)
-def test_hlsl_tessellation_patch_interfaces_are_typed_opengl_refusals(
-    tmp_path, source, name, detail
-):
-    with pytest.raises(OpenGLLoweringRefused) as refused:
-        _translate(tmp_path, source, name, "opengl")
-    assert detail in str(refused.value)
+def test_hlsl_domain_without_its_hull_is_a_typed_opengl_refusal(tmp_path):
+    # GLSL declares spacing and winding on the evaluation shader; HLSL only on the hull.
+    with pytest.raises(TessellationPatchUnsupportedError) as refused:
+        _translate(tmp_path, DOMAIN_HLSL, "shader.tese.hlsl", "opengl")
+    assert refused.value.reason_code == "domain-without-hull"
+
+
+def test_hlsl_hull_patch_constant_function_lowers_for_opengl(tmp_path):
+    glsl = _translate(tmp_path, HULL_HLSL, "shader.tesc.hlsl", "opengl")
+
+    assert "patchconstantfunc" not in glsl and "InputPatch" not in glsl
+    assert "ConstantsHSOutput hs_patch = ConstantsHS();" in glsl
+    assert "gl_TessLevelInner[0] = hs_patch.TessLevelInner;" in glsl
+    if shutil.which("glslangValidator") is not None:
+        result = subprocess.run(
+            ["glslangValidator", "--stdin", "-S", "tesc"],
+            input=glsl,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

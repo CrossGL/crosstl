@@ -1515,7 +1515,7 @@ class GLSLParser:
 
             name = self.parse_identifier_name()
 
-            array_sizes = list(type_array_sizes) + self.parse_array_suffixes()
+            array_sizes = self.parse_array_suffixes() + list(type_array_sizes)
             is_array = bool(array_sizes)
             array_size = array_sizes[0] if array_sizes else None
 
@@ -1937,7 +1937,7 @@ class GLSLParser:
                     array_sizes = type_array_sizes
                 else:
                     param_name = self.parse_identifier_name("parameter name")
-                    array_sizes = type_array_sizes + self.parse_array_suffixes()
+                    array_sizes = self.parse_array_suffixes() + type_array_sizes
 
                 default_value = None
                 if self.current_token[0] == "EQUALS":

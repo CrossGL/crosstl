@@ -6269,7 +6269,7 @@ def test_spirv_cross_block_name_alias_global_codegen_reparse():
     parse_crossgl(generated_code)
     assert "struct A_C1 {" in generated_code
     assert "RWStructuredBuffer<A_C1> C1 @set(0) @binding(1);" in generated_code
-    assert "cbuffer A_C2 @set(0) @binding(2) {" in generated_code
+    assert "cbuffer A_C2 @set(0) @binding(2) @buffer_layout(std430) {" in generated_code
     assert generated_code.count("struct A {") == 1
 
 
@@ -6320,7 +6320,10 @@ def test_spirv_cross_block_name_namespace_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "struct VertexInput {" in generated_code
-    assert "cbuffer VertexInput_ubo @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer VertexInput_ubo @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "struct VertexInput_ssbo {" in generated_code
     assert "RWStructuredBuffer<VertexInput_ssbo> ssbo @set(0) @binding(1);" in (
         generated_code
@@ -6350,7 +6353,10 @@ def test_glslang_layout_nested_member_private_global_collision_codegen_reparse()
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer Block140 @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer Block140 @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "S s;" in generated_code
     assert "S s_private_s;" in generated_code
     assert "s_private_s = s_private_s;" in generated_code
@@ -6536,7 +6542,9 @@ def test_glslang_precise_dot_codegen_reparse():
     parse_crossgl(generated_code)
     assert "float outValue @output @location(0);" in generated_code
     assert "float4 inputVec @input @location(0);" in generated_code
-    assert "outValue = dot(inputVec, inputVec);" in generated_code
+    # The NoContraction result is a precise local; named after its id, it must not hide dot().
+    assert "float value_dot @precise = dot(inputVec, inputVec);" in generated_code
+    assert "outValue = value_dot;" in generated_code
     assert "outValue = dot;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -6612,7 +6620,9 @@ def test_spirv_tools_array_return_composite_construct_codegen_reparse():
         "return {float4(0.0, 0.0, 0.0, 0.0), "
         "float4(1.0, 1.0, 1.0, 1.0)};" in generated_code
     )
-    assert "outValue = ff()[1][2];" in generated_code
+    # The call is evaluated once, into a local, rather than where its element is read.
+    assert "float4 call[2] = ff();" in generated_code
+    assert "outValue = call[1][2];" in generated_code
     assert "%array_v4" not in generated_code
     assert "OpCompositeConstruct" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -6864,7 +6874,10 @@ def test_spirv_assembly_push_constant_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer PushConstants @push_constant {" in generated_code
+    assert (
+        "cbuffer PushConstants @push_constant @buffer_layout(std430) {"
+        in generated_code
+    )
     assert "float4x4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
@@ -6875,7 +6888,9 @@ def test_spirv_assembly_uniform_block_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "cbuffer Camera @set(0) @binding(2) {" in generated_code
+    assert (
+        "cbuffer Camera @set(0) @binding(2) @buffer_layout(std140) {" in generated_code
+    )
     assert "float4x4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
@@ -6887,8 +6902,8 @@ def test_spirv_duplicate_push_constant_member_names_are_aliased_for_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer PushA @push_constant {" in generated_code
-    assert "cbuffer PushB @push_constant {" in generated_code
+    assert "cbuffer PushA @push_constant @buffer_layout(std430) {" in generated_code
+    assert "cbuffer PushB @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint bank0_data;" in generated_code
     assert "uint bank1_data;" in generated_code
     assert "uint data;" not in generated_code
@@ -6902,8 +6917,8 @@ def test_spirv_duplicate_uniform_and_push_constant_member_names_are_aliased():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer UBO @set(0) @binding(1) {" in generated_code
-    assert "cbuffer PC @push_constant {" in generated_code
+    assert "cbuffer UBO @set(0) @binding(1) @buffer_layout(std140) {" in generated_code
+    assert "cbuffer PC @push_constant @buffer_layout(std430) {" in generated_code
     assert "uint ubo_v5;" in generated_code
     assert "uint ubo_v7;" in generated_code
     assert "uint pc_v5;" in generated_code
@@ -6971,7 +6986,10 @@ def test_spirv_tools_anonymous_resource_block_codegen_reparse():
     assert (
         "RWStructuredBuffer<BufferOut> value_19 @set(0) @binding(1);" in generated_code
     )
-    assert "cbuffer BufferIn @set(0) @binding(0) {" in generated_code
+    assert (
+        "cbuffer BufferIn @set(0) @binding(0) @buffer_layout(std140) {"
+        in generated_code
+    )
     assert "uint i;" in generated_code
     assert "uint result @output @location(0);" in generated_code
     assert "value_19[0].o = i;" in generated_code
@@ -6987,7 +7005,7 @@ def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "cbuffer var_ @set(0) @binding(0) {" in generated_code
+    assert "cbuffer var_ @set(0) @binding(0) @buffer_layout(std140) {" in generated_code
     assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
     assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
     assert "cbuffer var @set" not in generated_code
@@ -7080,9 +7098,11 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
         "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7) in;"
         in generated_code
     )
-    assert "spirvControlBarrier(2, 2, 264);" in generated_code
-    assert "spirvMemoryBarrier(1, 3400);" in generated_code
-    assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "groupMemoryBarrier();" in generated_code
+    assert "spirvControlBarrier" not in generated_code
+    assert "spirvMemoryBarrier" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -7927,7 +7947,7 @@ def test_spirv_cross_integer_bitcast_codegen_reparse():
     assert (
         "output[0].unsignedValue = asuint(gl_GlobalInvocationID[0]);" in generated_code
     )
-    assert "output[0].signedValue = asint(4294967295);" in generated_code
+    assert "output[0].signedValue = asint(4294967295u);" in generated_code
     assert "spirvBitcast_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -8072,9 +8092,15 @@ def test_glsl_std450_struct_extinst_codegen_reparse():
     assert "struct FrexpResult" in generated_code
     assert "float significand;" in generated_code
     assert "int exponent;" in generated_code
+    assert "float modf_parts_fract = modf(inputValue, modf_parts_whole);" in (
+        generated_code
+    )
     assert (
-        "outputValue = (modf(inputValue).fractional + frexp(inputValue).significand);"
+        "float frexp_parts_significand = frexp(inputValue, frexp_parts_exponent);"
         in generated_code
+    )
+    assert "outputValue = (modf_parts_fract + frexp_parts_significand);" in (
+        generated_code
     )
     assert "spirv_GLSL_std_450_ModfStruct" not in generated_code
     assert "spirv_GLSL_std_450_instruction_52" not in generated_code
@@ -8512,10 +8538,14 @@ def test_spirv_tools_extended_arithmetic_codegen_reparse():
     assert "uint outCarry @output @location(1);" in generated_code
     assert "int outLow @output @location(2);" in generated_code
     assert "int outHigh @output @location(3);" in generated_code
-    assert "outSum = spirvIAddCarry(0, 1)[0];" in generated_code
-    assert "outCarry = spirvIAddCarry(0, 1)[1];" in generated_code
-    assert "outLow = spirvSMulExtended(2, 3)[0];" in generated_code
-    assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
+    # The struct members become the result and the out operands of GLSL's built-ins (GLSL 4.60 section 8.8).
+    assert "uint add_sum = uaddCarry(0, 1, add_carry);" in generated_code
+    assert "outSum = add_sum;" in generated_code
+    assert "outCarry = add_carry;" in generated_code
+    assert "imulExtended(2, 3, mul_msb, mul_lsb);" in generated_code
+    assert "outLow = mul_lsb;" in generated_code
+    assert "outHigh = mul_msb;" in generated_code
+    assert "spirv" not in generated_code.lower().replace("spirv_", "")
     assert "OpIAddCarry" not in generated_code
     assert "OpSMulExtended" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -8559,10 +8589,13 @@ def test_spirv_loop_phi_complex_incoming_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert len(generated_code) < 2000
-    assert 'spirvPhi(seed, "entry", next, "body")' in generated_code
-    assert 'spirvPhi((inputValue + inputValue), "entry", next, "body")' not in (
-        generated_code
-    )
+    # The loop-carried phi is a variable assigned on the entry edge and on the back edge.
+    assert "float carry;" in generated_code
+    assert "carry = (inputValue + inputValue);" in generated_code
+    assert "while ((carry < 1.0)) {" in generated_code
+    assert "carry = ((carry + carry) + 1.0);" in generated_code
+    assert "outColor = float4(carry, carry, carry, 1.0);" in generated_code
+    assert "spirvPhi" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

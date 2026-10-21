@@ -1,35 +1,32 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 64
+; Bound: 60
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint Vertex %18 "main" %21 %23 %24 %29
-OpName %12 "buf"
-OpMemberName %12 0 "MVP"
-OpMemberName %12 1 "position"
-OpMemberName %12 2 "attr"
-OpName %13 "VertexOutput"
-OpMemberName %13 0 "texcoord"
-OpMemberName %13 1 "frag_pos"
-OpMemberName %13 2 "gl_Position"
-OpName %14 "Uniforms"
-OpMemberName %14 0 "ubuf"
-OpName %16 "Uniforms"
+OpName %9 "VertexOutput"
+OpMemberName %9 0 "texcoord"
+OpMemberName %9 1 "frag_pos"
+OpMemberName %9 2 "gl_Position"
+OpName %14 "buf"
+OpMemberName %14 0 "MVP"
+OpMemberName %14 1 "position"
+OpMemberName %14 2 "attr"
+OpName %16 "buf"
 OpName %21 "CrossGL_vertex_output_main_texcoord"
 OpName %23 "CrossGL_vertex_output_main_frag_pos"
 OpName %24 "gl_Position"
 OpName %26 "output"
 OpName %29 "gl_VertexIndex"
 OpDecorate %14 Block
+OpDecorate %13 ArrayStride 16
 OpMemberDecorate %14 0 Offset 0
-OpMemberDecorate %12 0 Offset 0
-OpMemberDecorate %12 0 ColMajor
-OpMemberDecorate %12 0 MatrixStride 16
-OpMemberDecorate %12 1 Offset 64
-OpDecorate %10 ArrayStride 16
-OpMemberDecorate %12 2 Offset 640
+OpMemberDecorate %14 0 ColMajor
+OpMemberDecorate %14 0 MatrixStride 16
+OpMemberDecorate %14 1 Offset 64
+OpMemberDecorate %14 2 Offset 640
 OpDecorate %16 DescriptorSet 0
 OpDecorate %16 Binding 0
 OpDecorate %21 Location 0
@@ -43,28 +40,27 @@ OpDecorate %29 BuiltIn VertexIndex
 %6 = OpTypeVector %5 2
 %7 = OpTypeVector %5 3
 %8 = OpTypeVector %5 4
-%9 = OpTypeMatrix %8 4
-%11 = OpConstant %4 36
-%10 = OpTypeArray %8 %11
-%12 = OpTypeStruct %9 %10 %10
-%13 = OpTypeStruct %8 %7 %8
-%14 = OpTypeStruct %12
+%9 = OpTypeStruct %8 %7 %8
+%10 = OpTypeMatrix %8 4
+%12 = OpConstant %4 36
+%11 = OpTypeArray %8 %12
+%13 = OpTypeArray %8 %12
+%14 = OpTypeStruct %10 %13 %13
 %15 = OpTypePointer Uniform %14
 %17 = OpTypeFunction %2
 %20 = OpTypePointer Output %8
 %22 = OpTypePointer Output %7
-%25 = OpTypePointer Function %13
+%25 = OpTypePointer Function %9
 %27 = OpTypeInt 32 0
 %28 = OpTypePointer Input %27
-%31 = OpConstant %4 0
-%32 = OpTypePointer Uniform %12
-%34 = OpConstant %4 2
-%35 = OpTypePointer Uniform %10
-%37 = OpTypePointer Uniform %8
-%40 = OpTypePointer Function %8
-%43 = OpTypePointer Uniform %9
-%48 = OpConstant %4 1
-%58 = OpTypePointer Function %7
+%31 = OpConstant %4 2
+%32 = OpTypePointer Uniform %13
+%34 = OpTypePointer Uniform %8
+%37 = OpConstant %4 0
+%38 = OpTypePointer Function %8
+%40 = OpTypePointer Uniform %10
+%44 = OpConstant %4 1
+%54 = OpTypePointer Function %7
 %16 = OpVariable %15 Uniform
 %21 = OpVariable %20 Output
 %23 = OpVariable %22 Output
@@ -75,34 +71,31 @@ OpDecorate %29 BuiltIn VertexIndex
 %26 = OpVariable %25 Function
 %30 = OpLoad %27 %29
 %33 = OpAccessChain %32 %16 %31
-%36 = OpAccessChain %35 %33 %34
-%38 = OpAccessChain %37 %36 %30
-%39 = OpLoad %8 %38
-%41 = OpAccessChain %40 %26 %31
-OpStore %41 %39
-%42 = OpAccessChain %32 %16 %31
-%44 = OpAccessChain %43 %42 %31
-%45 = OpLoad %9 %44
-%46 = OpLoad %27 %29
-%47 = OpAccessChain %32 %16 %31
-%49 = OpAccessChain %35 %47 %48
-%50 = OpAccessChain %37 %49 %46
-%51 = OpLoad %8 %50
-%52 = OpMatrixTimesVector %8 %45 %51
-%53 = OpAccessChain %40 %26 %34
-OpStore %53 %52
-%54 = OpAccessChain %40 %26 %34
-%55 = OpAccessChain %40 %26 %34
-%56 = OpLoad %8 %55
-%57 = OpVectorShuffle %7 %56 %56 0 1 2
-%59 = OpAccessChain %58 %26 %48
-OpStore %59 %57
-%60 = OpLoad %13 %26
-%61 = OpCompositeExtract %8 %60 0
-OpStore %21 %61
-%62 = OpCompositeExtract %7 %60 1
-OpStore %23 %62
-%63 = OpCompositeExtract %8 %60 2
-OpStore %24 %63
+%35 = OpAccessChain %34 %33 %30
+%36 = OpLoad %8 %35
+%39 = OpAccessChain %38 %26 %37
+OpStore %39 %36
+%41 = OpAccessChain %40 %16 %37
+%42 = OpLoad %10 %41
+%43 = OpLoad %27 %29
+%45 = OpAccessChain %32 %16 %44
+%46 = OpAccessChain %34 %45 %43
+%47 = OpLoad %8 %46
+%48 = OpMatrixTimesVector %8 %42 %47
+%49 = OpAccessChain %38 %26 %31
+OpStore %49 %48
+%50 = OpAccessChain %38 %26 %31
+%51 = OpAccessChain %38 %26 %31
+%52 = OpLoad %8 %51
+%53 = OpVectorShuffle %7 %52 %52 0 1 2
+%55 = OpAccessChain %54 %26 %44
+OpStore %55 %53
+%56 = OpLoad %9 %26
+%57 = OpCompositeExtract %8 %56 0
+OpStore %21 %57
+%58 = OpCompositeExtract %7 %56 1
+OpStore %23 %58
+%59 = OpCompositeExtract %8 %56 2
+OpStore %24 %59
 OpReturn
 OpFunctionEnd

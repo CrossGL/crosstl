@@ -1,0 +1,14 @@
+#version 450
+// Packing built-ins (GLSL 4.60 section 8.4): the first component occupies the least significant bits.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { float a[]; };
+layout(std430, binding = 1) buffer Outp { uint o[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    vec4 v = vec4(a[4u * i], a[4u * i + 1u], a[4u * i + 2u], a[4u * i + 3u]);
+    o[5u * i] = packUnorm4x8(v);
+    o[5u * i + 1u] = packSnorm4x8(v);
+    o[5u * i + 2u] = packUnorm2x16(v.xy);
+    o[5u * i + 3u] = packSnorm2x16(v.zw);
+    o[5u * i + 4u] = packHalf2x16(v.yz);
+}

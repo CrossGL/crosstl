@@ -314,7 +314,7 @@ class HLSLToCrossGLConverter(
             "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
-            "RaytracingAccelerationStructure": "accelerationStructure",
+            "RaytracingAccelerationStructure": "accelerationStructureEXT",
             "RayQuery": "rayQuery",
             "InputPatch": "inputPatch",
             "OutputPatch": "outputPatch",
@@ -359,18 +359,25 @@ class HLSLToCrossGLConverter(
             "EvaluateAttributeSnapped": "interpolateAtOffset",
             "EvaluateAttributeCentroid": "interpolateAtCentroid",
             "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
-            "GroupMemoryBarrier": "groupMemoryBarrier",
+            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
+            # which orders buffer and image accesses as well.
+            "GroupMemoryBarrier": "memoryBarrierShared",
             "DeviceMemoryBarrier": "deviceMemoryBarrier",
             "AllMemoryBarrier": "allMemoryBarrier",
         }
+        # A barrier with group sync that orders device memory releases the writes before it and acquires them
+        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
+        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
         self.function_statement_sequences = {
             "DeviceMemoryBarrierWithGroupSync": (
                 "deviceMemoryBarrier",
-                "workgroupBarrier",
+                "workgroupExecutionBarrier",
+                "deviceMemoryBarrier",
             ),
             "AllMemoryBarrierWithGroupSync": (
                 "allMemoryBarrier",
                 "workgroupBarrier",
+                "allMemoryBarrier",
             ),
         }
         self.interlocked_map = {
@@ -1002,6 +1009,13 @@ class HLSLToCrossGLConverter(
 
     def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
         member = self.templated_method_base(member)
+        if self.raw_type_base(resource_type) in {
+            "PointStream",
+            "LineStream",
+            "TriangleStream",
+        }:
+            # Geometry stream Append/RestartStrip stay stream methods in CrossGL.
+            return None
         if (
             member == "SubpassLoad"
             and self.raw_type_base(resource_type) == "SubpassInput"
@@ -1760,6 +1774,9 @@ class HLSLToCrossGLConverter(
 
     def crossgl_attribute_name(self, attr_name):
         """Return a CrossGL-lexer-safe identifier for HLSL/DXC attributes."""
+        if str(attr_name) == "vk::push_constant":
+            # CrossGL spells a push-constant block '@push_constant' whatever its source language.
+            return "push_constant"
         safe_name = re.sub(r"\W+", "_", str(attr_name)).strip("_")
         if not safe_name:
             return "attribute"
@@ -2247,13 +2264,24 @@ class HLSLToCrossGLConverter(
             return None
         return f"{constructor_type}({rendered_object})"
 
+    def member_owner_type(self, object_type):
+        """The struct whose members ``value.member`` names, for a value of ``object_type``."""
+        object_base = str(object_type).strip()
+        if "[" in object_base:
+            object_base = object_base.split("[", 1)[0]
+        wrapper, _, element = object_base.partition("<")
+        if wrapper.strip() in {"ConstantBuffer", "TextureBuffer"} and element.endswith(
+            ">"
+        ):
+            # ConstantBuffer<T> and TextureBuffer<T> name T's members directly.
+            object_base = element[:-1].strip()
+        return object_base
+
     def member_access_raw_type(self, object_type, member):
         if not object_type:
             return None
 
-        object_base = str(object_type).strip()
-        if "[" in object_base:
-            object_base = object_base.split("[", 1)[0]
+        object_base = self.member_owner_type(object_type)
 
         struct_members = self.struct_member_types.get(object_base)
         if struct_members and member in struct_members:
@@ -2296,7 +2324,9 @@ class HLSLToCrossGLConverter(
             expr = expr.array
         if not isinstance(expr, MemberAccessNode):
             return None
-        owner_base = self.raw_type_base(self.expression_raw_type(expr.object))
+        owner_base = self.raw_type_base(
+            self.member_owner_type(self.expression_raw_type(expr.object))
+        )
         return self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
 
     def raw_type_base(self, type_name):
@@ -3981,6 +4011,12 @@ class HLSLToCrossGLConverter(
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
         variable_type = self.map_variable_type(node)
+        if self.is_vk_push_constant_global(node) and str(
+            getattr(node, "vtype", "")
+        ) in getattr(self, "struct_type_names", set()):
+            # DXC reads '[[vk::push_constant]] T name;' as one push-constant buffer holding a T, which CrossGL
+            # spells 'ConstantBuffer<T> name @push_constant'.
+            variable_type = f"ConstantBuffer<{variable_type}>"
         variable_name = self.render_identifier(node.name)
         if storage_prefix == "const " and array_suffix:
             variable_type = f"{variable_type}{array_suffix}"
@@ -4002,6 +4038,7 @@ class HLSLToCrossGLConverter(
             and not declaration_prefix
             and str(getattr(node, "vtype", ""))
             in getattr(self, "struct_type_names", set())
+            and not variable_type.startswith("ConstantBuffer<")
         ):
             declaration_prefix = "var "
         return (
@@ -4009,8 +4046,17 @@ class HLSLToCrossGLConverter(
             f"{variable_name}{array_suffix}{initializer};\n"
         )
 
+    def is_vk_push_constant_global(self, node):
+        """Whether a global carries DXC's ``[[vk::push_constant]]``, which binds it outside ``$Globals``."""
+        return any(
+            str(getattr(attr, "name", "")) == "vk::push_constant"
+            for attr in getattr(node, "attributes", None) or []
+        )
+
     def is_hlsl_program_constant_global(self, node):
         if getattr(node, "value", None) is not None:
+            return False
+        if self.is_vk_push_constant_global(node):
             return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if getattr(node, "is_const", False) or qualifiers & {
@@ -4032,6 +4078,8 @@ class HLSLToCrossGLConverter(
             or self.is_crossgl_resource_type(mapped_base_type)
             or base_type.startswith(("Texture", "FeedbackTexture"))
             or base_type in {
+                # A ConstantBuffer<T> binds a constant buffer of its own, outside $Globals.
+                "ConstantBuffer",
                 "Sampler",
                 "SamplerState",
                 "SamplerComparisonState",
@@ -4057,7 +4105,7 @@ class HLSLToCrossGLConverter(
         return base_type in {
             "sampler",
             "comparison_sampler",
-            "accelerationStructure",
+            "accelerationStructureEXT",
         } or base_type.startswith(
             (
                 "sampler",
@@ -4369,6 +4417,12 @@ class HLSLToCrossGLConverter(
                 code += "break;\n"
             elif isinstance(stmt, ContinueNode):
                 code += "continue;\n"
+            elif isinstance(stmt, ScopedBlockNode):
+                code += "{\n"
+                code += self.generate_function_body(
+                    stmt.statements, indent + 1, is_main
+                )
+                code += "    " * indent + "}\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:

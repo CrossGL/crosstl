@@ -252,7 +252,15 @@ class MetalHlslFunctionMixin:
                 prologue += f"{indent_str}{declared_type} {name} = {source};\n"
             else:
                 prologue += f"{indent_str}{declared_type} {name};\n"
-            epilogue += f"{indent_str}{source} = {name};\n"
+            target, value = source, name
+            layout_store = self.metal_hlsl_layout_store_target(argument)
+            if layout_store is not None:
+                # Buffer storage whose reads convert (packed vectors, booleans held as uints) is stored back
+                # through its own type.
+                target, write_conversion = layout_store
+                if write_conversion:
+                    value = f"{write_conversion}({name})"
+            epilogue += f"{indent_str}{target} = {value};\n"
             substitutions[id(argument)] = name
         previous = self.metal_argument_substitutions
         self.metal_argument_substitutions = {**previous, **substitutions}

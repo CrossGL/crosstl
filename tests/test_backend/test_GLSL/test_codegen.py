@@ -660,8 +660,8 @@ def test_codegen_interface_block_nested_struct_member_from_glsl_460_grammar():
     output = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
 
     assert "struct Light" in output
-    assert "struct Scene" in output
-    assert output.index("struct Light") < output.index("struct Scene")
+    assert "cbuffer Scene @binding(0)" in output
+    assert output.index("struct Light") < output.index("cbuffer Scene")
     assert "Light light;" in output
     assert "gl_Position = light.position;" in output
 
@@ -2539,8 +2539,9 @@ def test_codegen_interface_block_roundtrip():
     output = assert_roundtrip(INTERFACE_BLOCK_GLSL, "vertex", ShaderStage.VERTEX)
     assert "struct VertexIn" in output
     assert "struct VertexOut" in output
-    assert "struct Globals" in output
-    assert "cbuffer Uniforms" in output
+    # The uniform block is its own constant buffer, with its name and binding.
+    assert "cbuffer Globals @binding(0)" in output
+    assert "cbuffer Uniforms" not in output
 
 
 def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
@@ -2564,10 +2565,10 @@ def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
     parse_crossgl(crossgl)
 
 
-def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslang():
+def test_codegen_uniform_blocks_keep_their_names_from_glslang():
     # Reduced from KhronosGroup/glslang Test/spv.int16.frag, where an
-    # interface block named Uniforms collides with the fallback loose-uniform
-    # CrossGL cbuffer name.
+    # interface block is named Uniforms like the fallback loose-uniform
+    # CrossGL cbuffer.
     code = textwrap.dedent("""
         #version 450
 
@@ -2589,9 +2590,10 @@ def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslan
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "struct Uniforms" in crossgl
-    assert "cbuffer GlobalUniforms" in crossgl
-    assert "cbuffer Uniforms" not in crossgl
+    # Each uniform block keeps its own name and binding, so no fallback block is needed.
+    assert "cbuffer Uniforms @binding(0)" in crossgl
+    assert "cbuffer Block @binding(1)" in crossgl
+    assert "GlobalUniforms" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -2691,7 +2693,7 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
 
     crossgl = generate_crossgl(code, "vertex")
 
-    assert "cbuffer MVPUniform @push_constant {" in crossgl
+    assert "cbuffer MVPUniform @push_constant @buffer_layout(std430) {" in crossgl
     assert "mat4 model;" in crossgl
     assert "mat4 view_proj;" in crossgl
     assert "cbuffer Uniforms" not in crossgl
@@ -2716,7 +2718,7 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
     crossgl = generate_crossgl(code, "vertex")
     wgsl = WGSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "cbuffer Material @push_constant {" in crossgl
+    assert "cbuffer Material @push_constant @buffer_layout(std430) {" in crossgl
     assert "float fa[3];" in crossgl
     assert (
         "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
@@ -2850,7 +2852,9 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
 
     shader_ast = parse_crossgl(crossgl)
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "AllMemoryBarrier();" in hlsl
+    # memoryBarrier(); barrier(); is one HLSL barrier over all memory with group sync.
+    assert "AllMemoryBarrierWithGroupSync();" in hlsl
+    assert "GroupMemoryBarrierWithGroupSync();" not in hlsl
     assert "memoryBarrierAtomicCounter(" not in hlsl
 
 

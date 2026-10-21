@@ -289,8 +289,9 @@ def test_fenced_execution_barriers_package_and_compile(tmp_path, target, nested)
         assert "atomic_thread_fence(" in generated
     else:
         assert "subgroupExecutionBarrier" not in generated
+        # HLSL folds the threadgroup fence into the adjacent group sync.
         assert (
-            "GroupMemoryBarrier();" in generated
+            "GroupMemoryBarrierWithGroupSync();" in generated
             if target == "directx"
             else "memoryBarrierShared();" in generated
         )
