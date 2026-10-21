@@ -476,6 +476,12 @@ from .resource_arrays import (
     is_private_pointer_parameter,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .software_quad_reductions import (
+    QUAD_BUILTIN_OPERATORS,
+    SOFTWARE_QUAD_REDUCTIONS,
+    hlsl_quad_sum_body,
+    quad_builtin_expression,
+)
 from .stage_distance_layout import distance_semantic
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
@@ -2056,6 +2062,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         "QuadReadLaneAt": 2,
         "QuadAny": 1,
         "QuadAll": 1,
+        "QuadActiveSum": 1,
     }
     HLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
         "WaveShuffleAndFillUp": (3, 4),
@@ -2081,6 +2088,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         "WavePrefixInclusiveProduct",
         "WaveMultiPrefixSum",
         "WaveMultiPrefixProduct",
+        "QuadActiveSum",
     }
     # HLSL has no native inclusive scan; an inclusive scan is the exclusive scan
     # combined with the lane's own value. Maps the canonical inclusive op to the
@@ -2216,6 +2224,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "gl_SubgroupSize",
             "gl_SubgroupID",
             "gl_NumSubgroups",
+            *QUAD_BUILTIN_OPERATORS,
             # Metal [[threads_per_grid]] has no GLSL canonical form (it is kept as
             # the raw Metal name) and no HLSL system value; on a non-entry helper it
             # must likewise be emitted as a plain parameter, never a ": ..." semantic.
@@ -2302,6 +2311,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             *HLSL_SOFTWARE_SUBGROUP_BARRIERS,
             *HLSL_SOFTWARE_SUBGROUP_REDUCTIONS,
             *HLSL_SOFTWARE_SUBGROUP_SCANS,
+            *SOFTWARE_QUAD_REDUCTIONS,
         }
     )
     # Relative shuffles: helper name, source-lane validity and source lane.
@@ -8285,6 +8295,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             operation_name = self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES[operation][0]
         elif operation == "WaveShuffleAndFillUp":
             operation_name = "shuffle_and_fill_up"
+        elif operation == "QuadActiveSum":
+            operation_name = "quad_sum"
         return self.hlsl_software_subgroup_identifier(
             ("helper", operation, value_type),
             f"__crossgl_software_subgroup_{operation_name}_{suffix}",
@@ -8335,8 +8347,10 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             valid_type = True
         narrow_wrap = None
         if (
-            operation == "WaveActiveProduct" and not binary16_product
-        ) or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS:
+            (operation == "WaveActiveProduct" and not binary16_product)
+            or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
+            or operation in SOFTWARE_QUAD_REDUCTIONS
+        ):
             layout = scalar_storage_layout(self.type_name_string(value_type))
             scan = operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
             if (
@@ -8598,6 +8612,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 code += self.hlsl_software_subgroup_reduction_body(
                     operation, value_type, scratch
                 )
+            elif operation in SOFTWARE_QUAD_REDUCTIONS:
+                code += hlsl_quad_sum_body(value_type, scratch, invocation_count)
             else:
                 active_count = "activeCount" if partial else f"{width}u"
                 if operation == "WaveReadLaneAt":
@@ -28921,7 +28937,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """
         canonical_semantic = semantic.strip() if isinstance(semantic, str) else semantic
         intrinsic = None
-        if self.software_subgroup_width is not None:
+        if canonical_semantic in QUAD_BUILTIN_OPERATORS:
+            # Quads are four consecutive linear invocations of the group.
+            intrinsic = quad_builtin_expression(
+                canonical_semantic,
+                self.hlsl_compute_group_index_dependency_name(param_list),
+            )
+        elif self.software_subgroup_width is not None:
             intrinsic = self.hlsl_software_subgroup_builtin_expression(
                 canonical_semantic,
                 execution_config,
@@ -30339,14 +30361,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 operation, value_type, value, lane
             )
             return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
+        if (
+            operation in SOFTWARE_QUAD_REDUCTIONS
+            and self.software_subgroup_width is None
+        ):
+            # Native HLSL quads follow lane or thread-ID layouts that differ
+            # from four consecutive linear invocations.
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' requires software subgroup "
+                "lowering, which defines quads as four consecutive invocations"
+            )
         if self.software_subgroup_width is not None and operation in (
             self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS.keys()
             | self.HLSL_SOFTWARE_SUBGROUP_SCANS.keys()
+            | SOFTWARE_QUAD_REDUCTIONS
         ):
             value_type = (
                 self.hlsl_source_expression_type(args[0])
                 if operation == "WaveActiveProduct"
                 or operation in self.HLSL_SOFTWARE_SUBGROUP_SCANS
+                or operation in SOFTWARE_QUAD_REDUCTIONS
                 else self.expression_result_type(args[0])
             )
             value = self.generate_expression_with_expected(args[0], value_type)

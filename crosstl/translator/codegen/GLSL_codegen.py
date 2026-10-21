@@ -482,6 +482,7 @@ from .scalar_return_bounds import (
     scalar_return_interval,
     vector_return_intervals,
 )
+from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -2121,6 +2122,7 @@ class GLSLCodeGen(
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
+            *SOFTWARE_QUAD_REDUCTIONS,
         }
     )
     # Relative shuffles: source-lane validity and source lane. A source lane
@@ -42653,6 +42655,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WavePrefixProduct": "PrefixProduct",
             "WavePrefixInclusiveSum": "PrefixInclusiveSum",
             "WavePrefixInclusiveProduct": "PrefixInclusiveProduct",
+            "QuadActiveSum": "QuadSum",
         }[operation]
         type_suffix = self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[value_type]
         return self.glsl_generated_module_identifier(
@@ -42765,6 +42768,7 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveShuffleAndFillUp": 12,
             "WaveShuffleUp": 13,
             "WaveShuffleXor": 14,
+            "QuadActiveSum": 15,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -42840,6 +42844,11 @@ complex64_t crossgl_complex64_mod_assign(
             if operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
                 code += self.glsl_software_subgroup_scan_helper(
                     operation, value_type, helper, scratch, binary16=half_sum
+                )
+                continue
+            if operation in SOFTWARE_QUAD_REDUCTIONS:
+                code += glsl_quad_sum_helper(
+                    value_type, helper, scratch, invocation_count
                 )
                 continue
             if invocation_count == self.software_subgroup_width:
@@ -43280,6 +43289,7 @@ complex64_t crossgl_complex64_mod_assign(
         if (
             operation == "WaveActiveProduct"
             or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
+            or operation in SOFTWARE_QUAD_REDUCTIONS
             or (operation == "WaveReadLaneAt" and vector_shuffle_type is None)
         ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
