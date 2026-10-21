@@ -116,6 +116,21 @@ def stage_of(name: str) -> str:
 _IMMEDIATE = {"GetAttributeAtVertex": (1,), "Barrier": (0, 1)}
 
 
+# Intrinsics whose table declaration admits more types than the operation has. DXC declares
+# ``NonUniformResourceIndex(in any<> index)``, but the function marks an index into a resource array, so the HLSL
+# reference declares it ``uint NonUniformResourceIndex(uint index)`` (Resource binding in HLSL, shader model 5.1)
+# and Slang deprecates every other type as having no effect. The probe passes the documented type.
+_DOCUMENTED = {"NonUniformResourceIndex": ("uint", "in uint index")}
+
+
+def _documented(name: str, declared: list) -> list:
+    """``declared`` with the result and parameters ``_DOCUMENTED`` gives for ``name``; attributes stay the table's."""
+    if name not in _DOCUMENTED:
+        return declared
+    result, params = _DOCUMENTED[name]
+    return [(attributes, result, params) for attributes, _, _ in declared]
+
+
 def _immediate(name: str, signature: Signature | None) -> Signature | None:
     """``signature`` with the parameters ``_IMMEDIATE`` names for ``name`` marked ``const``."""
     positions = _IMMEDIATE.get(name, ())
@@ -343,7 +358,7 @@ def parse(
             methods.setdefault((owner, name), []).append((attributes, result, params))
     features = []
     for name, declared in sorted(functions.items()):
-        signatures, note = _overloads(declared)
+        signatures, note = _overloads(_documented(name, declared))
         features.append(
             Feature(
                 "hlsl",
