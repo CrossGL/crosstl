@@ -1,11 +1,19 @@
-"""Cache translated affine matrix-vector entries from the unchanged pinned source."""
+"""Cache translated affine matrix-vector entries from the unchanged pinned source.
 
+Run as a module, it translates entries into a host package directory's cache
+ahead of execution, several processes at a time.
+"""
+
+import argparse
 import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from crosstl.project import (
@@ -229,3 +237,78 @@ class QuantizedMatmulPackageCache:
                 raise ValueError(
                     f"Quantized matrix-vector packaging failed: {package['diagnostics']}"
                 )
+
+
+# The directory under a host package root that HostRuntime caches entries in.
+CACHE_DIRECTORY = "quantized-matmul"
+
+
+def _build_one(root, directory, target, entry):
+    start = time.monotonic()
+    descriptor, package = QuantizedMatmulPackageCache(root, directory, target).get(
+        entry
+    )
+    return {
+        "entry": entry,
+        "target": target,
+        "package": str(package),
+        "artifact": descriptor["artifact"],
+        "seconds": round(time.monotonic() - start, 1),
+    }
+
+
+def build_entries(root, packages, target, entries, jobs):
+    """Translate ``entries`` into ``packages``' cache, ``jobs`` at a time.
+
+    Returns one record per entry in sorted order. The cache publishes each
+    entry by renaming a complete staging directory, so builders may overlap.
+    """
+    entries = sorted(set(entries))
+    if not entries or type(jobs) is not int or jobs < 1:
+        raise ValueError("Quantized matrix-vector packaging needs entries and jobs")
+    for entry in entries:
+        signature(entry)
+    directory = Path(packages).resolve() / CACHE_DIRECTORY
+    with ProcessPoolExecutor(max_workers=min(jobs, len(entries))) as pool:
+        futures = [
+            pool.submit(_build_one, str(root), str(directory), target, entry)
+            for entry in entries
+        ]
+        return [future.result() for future in futures]
+
+
+def verification_entries():
+    from demos.integrations.mlx.portable_host import verify_quantized_matmul
+
+    return [
+        verify_quantized_matmul.case_record(case)["entry"]
+        for case in verify_quantized_matmul.CASES
+    ]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mlx-root", type=Path, required=True)
+    parser.add_argument("--packages", type=Path, required=True)
+    parser.add_argument(
+        "--target", choices=("metal", "directx", "opengl"), required=True
+    )
+    parser.add_argument("--entry", action="append", default=[])
+    parser.add_argument(
+        "--verification",
+        action="store_true",
+        help="add every entry the host verification routes",
+    )
+    parser.add_argument("--jobs", type=int, default=2)
+    args = parser.parse_args(argv)
+    entries = list(args.entry) + (verification_entries() if args.verification else [])
+    records = build_entries(
+        args.mlx_root, args.packages, args.target, entries, args.jobs
+    )
+    for record in records:
+        print(json.dumps(record), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

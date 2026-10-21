@@ -39,26 +39,28 @@ def span(shape, strides):
 def native_binding(record):
     """What backend.cpp binds for one verification case: counts and parameters."""
     k, n, m, batches = record["K"], record["N"], record["M"], record["batches"]
-    words, groups = k * record["bits"] // 32, k // record["groupSize"]
+    # w holds (N, K) codes when transposed and (K, N) otherwise.
+    rows, columns = (n, k) if record["transpose"] else (k, n)
+    words, groups = columns * record["bits"] // 32, columns // record["groupSize"]
     x_shape = list(record["xShape"])
     x_strides = contiguous(x_shape)
     if record["layout"] == "strided":
         x_strides[0] *= 2
     w_batch = record["wBatchShape"]
     out_batch = x_shape[:-2] if w_batch else []
-    w_shape = [*out_batch, n, words]
+    w_shape = [*out_batch, rows, words]
     strides = {}
-    for name, columns in (("w", words), ("s", groups), ("b", groups)):
-        dense = contiguous([*w_batch, n, columns])
+    for name, width in (("w", words), ("s", groups), ("b", groups)):
+        dense = contiguous([*w_batch, rows, width])
         strides[name] = [
             0 if extent == 1 and target > 1 else stride
             for extent, target, stride in zip(w_batch, out_batch, dense)
         ] + dense[len(w_batch) :]
     counts = {
         "x": span(x_shape, x_strides),
-        "w": math.prod(w_batch) * n * words,
-        "scales": math.prod(w_batch) * n * groups,
-        "biases": math.prod(w_batch) * n * groups,
+        "w": math.prod(w_batch) * rows * words,
+        "scales": math.prod(w_batch) * rows * groups,
+        "biases": math.prod(w_batch) * rows * groups,
         "y": batches * m * n,
     }
     parameters = {"in_vec_size": k, "out_vec_size": n}
@@ -90,7 +92,7 @@ RECORDS = [verify.case_record(case) for case in verify.CASES]
 def test_signature_accepts_exactly_the_dispatched_specializations(dtype, group, bits):
     stem = f"{dtype}_gs_{group}_b_{bits}"
     for batch in (0, 1):
-        for kernel in ("qmv", "qmv_fast"):
+        for kernel in ("qmv", "qmv_fast", "qvm"):
             info = layout.signature(f"affine_{kernel}_{stem}_batch_{batch}")
             assert (info["kernel"], info["batched"], info["D"]) == (
                 kernel,
@@ -110,6 +112,9 @@ def test_signature_accepts_exactly_the_dispatched_specializations(dtype, group, 
         f"affine_qmv_quad_{stem}_batch_0",
         f"affine_gather_qmv_{stem}",
         f"affine_qmv_{stem}_batch_0_hgs",
+        f"affine_qvm_{stem}_d_64_batch_0",
+        f"affine_qvm_split_k_{stem}_spk_8",
+        f"affine_qvm_{stem}_batch_1_hgs",
     ):
         with pytest.raises(ValueError):
             layout.signature(entry)
@@ -143,13 +148,54 @@ def test_selection_follows_dispatch_qmv_for_upstream_qmv_shapes(group, bits):
     ]
 
 
+@pytest.mark.parametrize("group", (128, 64, 32))
+@pytest.mark.parametrize("bits", (2, 3, 4, 5, 6, 8))
+def test_selection_follows_quantized_matmul_for_upstream_qvm_shapes(group, bits):
+    # test_quantized.py test_qvm: (B, 1, K) vectors times (B, K, N) weights,
+    # with MLX's names M for the outputs and N for the reduction.
+    for outputs in (32, 128, 256):
+        if outputs < group:
+            continue
+        for k in (128, 256, 67):
+            for batches in (0, 1, 3, 8):
+                entry = layout.select(
+                    "float32", group, bits, 1, outputs, k, max(batches, 1), False
+                )
+                assert entry == (
+                    f"affine_qvm_float_gs_{group}_b_{bits}" f"_batch_{int(batches > 1)}"
+                )
+                assert not layout.transposed(entry)
+                assert layout.tile_rows(entry) == 64
+                assert layout.workgroup_size(entry) == (32, 2, 1)
+    # Longer reductions go to qvm_split_k, and four vectors to qmm_n.
+    with pytest.raises(ValueError, match="Split-K"):
+        layout.select("float32", group, bits, 1, 128, 1024, 1, False)
+    with pytest.raises(ValueError, match="matrix-matrix"):
+        layout.select("float32", group, bits, 4, 128, 256, 1, False)
+    assert layout.select("float32", group, 4, 3, 128, 1023, 1, False).startswith(
+        "affine_qvm_"
+    )
+    # Transposed weights keep get_qmv_batch_limit's bound.
+    assert [layout.vector_limit(k, k, True) for k in (2048, 4096, 4097)] == [18, 12, 10]
+    with pytest.raises(ValueError, match="matrix-matrix"):
+        layout.select("float32", group, bits, 18, 128, 256, 1)
+
+
 def test_verification_cases_cover_every_route_and_batch_layout():
     infos = [layout.signature(record["entry"]) for record in RECORDS]
     assert {(info["kernel"], info["batched"]) for info in infos} == {
         (kernel, batched)
-        for kernel in ("qmv_quad", "qmv_fast", "qmv")
+        for kernel in ("qmv_quad", "qmv_fast", "qmv", "qvm")
         for batched in (False, True)
     }
+    qvm = [record for record in RECORDS if not record["transpose"]]
+    assert {record["bits"] for record in qvm} == {2, 3, 4, 5, 6, 8}
+    assert {record["dtype"] for record in qvm} == {"float32", "float16", "bfloat16"}
+    # A K tail, a K below one 32-row block, and a half-empty last tile.
+    assert any(record["K"] % 32 for record in qvm)
+    assert any(record["K"] < 32 for record in qvm)
+    assert any(record["N"] % 64 for record in qvm)
+    assert all(record["M"] < 4 and record["K"] < 1024 for record in qvm)
     assert {info["dtype"] for info in infos} == {"float32", "float16", "bfloat16"}
     assert {record["layout"] for record in RECORDS} == {"dense", "strided"}
     assert any(len(record["wBatchShape"]) == 2 for record in RECORDS)
@@ -227,8 +273,9 @@ def mutate(fault, counts, parameters, execution):
         "dimension",
     ),
 )
-def test_plan_rejects_launches_that_differ_from_mlx(fault):
-    record = next(item for item in RECORDS if item["name"] == "qmv-two-batch-axes")
+@pytest.mark.parametrize("name", ("qmv-two-batch-axes", "qvm-two-batch-axes"))
+def test_plan_rejects_launches_that_differ_from_mlx(fault, name):
+    record = next(item for item in RECORDS if item["name"] == name)
     counts, parameters, execution = native_binding(record)
     mutate(fault, counts, parameters, execution)
     with pytest.raises(ValueError):
@@ -246,6 +293,27 @@ def test_plan_rejects_entries_mlx_would_not_select():
     parameters["x_batch_ndims"] = 0
     with pytest.raises(ValueError, match="batched"):
         layout.plan(unbatched["entry"], counts, parameters, counts["y"], execution)
+
+
+def test_plan_rejects_vector_matrix_launches_mlx_routes_elsewhere():
+    record = next(item for item in RECORDS if item["name"] == "qvm-tail-rows")
+    counts, parameters, execution = native_binding(record)
+    # Four vectors make a qmm_n product.
+    execution["workgroupCount"][0] = 4
+    counts["y"] = 4 * record["N"]
+    counts["x"] = 4 * record["K"]
+    with pytest.raises(ValueError, match="matrix-matrix"):
+        layout.plan(record["entry"], counts, parameters, counts["y"], execution)
+    # The transposed kernels read w as (N, K): the same buffers do not fit.
+    counts, parameters, execution = native_binding(record)
+    transposed = record["entry"].replace("affine_qvm_", "affine_qmv_")
+    with pytest.raises(ValueError):
+        layout.plan(transposed, counts, parameters, counts["y"], execution)
+    # qvm groups run along N, so N must hold whole groups.
+    counts, parameters, execution = native_binding(record)
+    parameters["out_vec_size"] += 1
+    with pytest.raises(ValueError, match="dimensions"):
+        layout.plan(record["entry"], counts, parameters, counts["y"], execution)
 
 
 def native_buffers(record, data=None):
@@ -325,7 +393,10 @@ def physical_layout(target, dtype):
 @pytest.mark.parametrize(
     "fault", (None, "guard", "missing", "shape", "trace", "unbound", "readonly")
 )
-@pytest.mark.parametrize("name", ("quad-d128-stacked", "fast-stacked", "fast-rows"))
+@pytest.mark.parametrize(
+    "name",
+    ("quad-d128-stacked", "fast-stacked", "fast-rows", "qvm-stacked", "qvm-tail-rows"),
+)
 def test_dispatch_commits_the_output_only_after_validation(
     tmp_path, monkeypatch, target, fault, name
 ):
@@ -448,6 +519,58 @@ def test_package_configs_scope_target_options_and_assertions(tmp_path):
         assert config.entry_points == {matmul_packages.SOURCE: (unbatched,)}
 
 
+def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
+    import concurrent.futures
+
+    entries = matmul_packages.verification_entries()
+    assert entries == [record["entry"] for record in RECORDS]
+    calls = []
+
+    def build(root, directory, target, entry):
+        calls.append((Path(directory), target, entry))
+        return {"entry": entry}
+
+    # Threads stand in for processes so the stub is visible to the workers.
+    monkeypatch.setattr(
+        matmul_packages, "ProcessPoolExecutor", concurrent.futures.ThreadPoolExecutor
+    )
+    monkeypatch.setattr(matmul_packages, "_build_one", build)
+    records = matmul_packages.build_entries(
+        tmp_path, tmp_path / "packages", "opengl", [*entries, entries[0]], 3
+    )
+    assert [record["entry"] for record in records] == sorted(set(entries))
+    assert {call[:2] for call in calls} == {
+        ((tmp_path / "packages" / matmul_packages.CACHE_DIRECTORY).resolve(), "opengl")
+    }
+    for entries, jobs in (([], 2), (entries, 0)):
+        with pytest.raises(ValueError, match="entries and jobs"):
+            matmul_packages.build_entries(tmp_path, tmp_path, "opengl", entries, jobs)
+    with pytest.raises(ValueError):
+        matmul_packages.build_entries(
+            tmp_path,
+            tmp_path,
+            "opengl",
+            ["affine_qvm_split_k_float_gs_32_b_4_spk_8"],
+            1,
+        )
+    calls.clear()
+    assert (
+        matmul_packages.main(
+            [
+                "--mlx-root",
+                str(tmp_path),
+                "--packages",
+                str(tmp_path),
+                "--target",
+                "metal",
+            ]
+            + ["--entry", entries[0], "--jobs", "1"]
+        )
+        == 0
+    )
+    assert [call[1:] for call in calls] == [("metal", entries[0])]
+
+
 def test_runtime_routes_matmul_entries_before_quantization(monkeypatch):
     host = object.__new__(runtime.HostRuntime)
     host.descriptors, host.scans, host.gathers = {}, None, None
@@ -490,6 +613,10 @@ def test_preparation_replaces_the_quantized_matmul_stub(monkeypatch):
         "(K == 64 || K == 128) && power_of_two",
         "pack_factor * (bits_ == 2 ? 1 : 2) * 32",
         "{32, quad ? 1u : 2u, 1}",
+        '"affine_qvm_"',
+        "!transpose_ ? 4",
+        "!transpose_ && K >= 1024",
+        "!transpose_ ? 2 * std::min(group_size_, 32)",
     ):
         assert text in backend
 
@@ -526,6 +653,35 @@ def test_reference_rounding_and_exact_case_data():
     assert np.array_equal(data["expected"], verify.rounded(expected, "float16"))
 
 
+@pytest.mark.parametrize("name", ("qvm-shared-weights", "qvm-two-batch-axes"))
+def test_untransposed_case_data_packs_groups_along_the_outputs(name):
+    import numpy as np
+
+    record = next(item for item in RECORDS if item["name"] == name)
+    data = verify.case_data(record, 3)
+    k, n, group, bits = record["K"], record["N"], record["groupSize"], record["bits"]
+    w_batch = tuple(record["wBatchShape"])
+    assert data["w"].shape == (*w_batch, k, n * bits // 32)
+    assert data["scales"].shape == data["biases"].shape == (*w_batch, k, n // group)
+    codes = np.array(
+        [
+            [
+                (int.from_bytes(row.astype("<u4").tobytes(), "little") >> (bits * i))
+                & ((1 << bits) - 1)
+                for i in range(n)
+            ]
+            for row in data["w"].reshape(-1, n * bits // 32)
+        ]
+    ).reshape(*w_batch, k, n)
+    weights = codes * np.repeat(data["scales"], group, axis=-1) + np.repeat(
+        data["biases"], group, axis=-1
+    )
+    x = data["x"][::2] if record["layout"] == "strided" else data["x"]
+    expected = np.matmul(x, weights)
+    assert data["expected"].shape == (*x.shape[:-1], n)
+    assert np.array_equal(data["expected"], verify.rounded(expected, record["dtype"]))
+
+
 def test_trace_validation_requires_the_routed_entries():
     trace = [
         {
@@ -543,27 +699,60 @@ def test_trace_validation_requires_the_routed_entries():
         verify.validate_trace(trace, RECORDS, "metal")
 
 
-def test_ci_runs_the_routing_on_every_half_host_platform():
+def test_ci_runs_the_routing_on_every_quantized_host_platform():
+    import re
+
     import yaml
 
     root = Path(__file__).resolve().parents[5]
     workflow = yaml.safe_load(
         (root / ".github/workflows/demo-project-testing.yml").read_text()
     )
-    job = workflow["jobs"]["half-host"]
-    assert {item["target"] for item in job["strategy"]["matrix"]["include"]} == {
-        "metal",
-        "opengl",
-        "directx",
-    }
+    job = workflow["jobs"]["quantized-host"]
+    assert {
+        item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
+    } == {"metal": "macos-26", "directx": "windows-2025", "opengl": "ubuntu-24.04"}
+    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["needs"] == ["ci-plan", "portable-host"]
+    assert "continue-on-error" not in job
+    assert "quantized-host" in workflow["jobs"]["result"]["needs"]
     names = [item.get("name") for item in job["steps"]]
+    steps = dict(zip(names, job["steps"]))
+    translate = steps["Translate quantized matrix-vector packages"]
     name = "Execute affine quantized matrix-vector products through MLX"
-    step = job["steps"][names.index(name)]
-    assert "if" not in step and "continue-on-error" not in step
+    step = steps[name]
+    for item in (translate, step):
+        assert "if" not in item and "continue-on-error" not in item
+        assert "set -euo pipefail" in item["run"]
+        assert "--packages .mlx-portable-quantized/base/packages" in item["run"]
+    assert "portable_host.matmul_packages" in translate["run"]
+    assert "--verification" in translate["run"] and "--jobs 3" in translate["run"]
     assert "portable_host.verify_quantized_matmul" in step["run"]
-    assert "test_portable_quantized_matmul.py" in step["run"]
-    assert "--packages .mlx-portable-half/base/packages" in step["run"]
-    assert "tee .mlx-portable-half/quantized-matmul.log" in step["run"]
+    assert "tee .mlx-portable-quantized/quantized-matmul.log" in step["run"]
     assert step["env"]["CROSTL_DIRECTX_FORCE_WARP"] == "1"
-    assert names.index("Build adapted upstream MLX") < names.index(name)
-    assert names.index(name) < names.index("Retain half execution evidence")
+    assert (
+        "test_portable_quantized_matmul.py"
+        in steps["Validate quantized host contracts"]["run"]
+    )
+    order = [
+        "Build adapted upstream MLX",
+        "Translate quantized matrix-vector packages",
+        name,
+        "Retain quantized execution evidence",
+    ]
+    assert [names.index(item) for item in order] == sorted(
+        names.index(item) for item in order
+    )
+    retain = steps["Retain quantized execution evidence"]
+    assert retain["if"] == "always()"
+    assert retain["with"]["if-no-files-found"] == "error"
+    deadlines = [
+        int(value)
+        for item in job["steps"]
+        for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
+    ]
+    assert deadlines == [1800, 3600, 1800]
+    assert sum(deadlines) + 900 < job["timeout-minutes"] * 60
+    # The half host job no longer runs the products.
+    half = [item.get("name") for item in workflow["jobs"]["half-host"]["steps"]]
+    assert name not in half

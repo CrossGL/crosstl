@@ -51,6 +51,9 @@ from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
 )
 from demos.integrations.mlx.portable_host.matmul_packages import (
+    CACHE_DIRECTORY as QUANTIZED_MATMUL_CACHE,
+)
+from demos.integrations.mlx.portable_host.matmul_packages import (
     QuantizedMatmulPackageCache,
 )
 from demos.integrations.mlx.portable_host.packages import (
@@ -289,7 +292,7 @@ class HostRuntime:
         )
         self.quantized_matmuls = (
             QuantizedMatmulPackageCache(
-                mlx_root, self.directory / "quantized-matmul", self.target
+                mlx_root, self.directory / QUANTIZED_MATMUL_CACHE, self.target
             )
             if mlx_root is not None
             else None

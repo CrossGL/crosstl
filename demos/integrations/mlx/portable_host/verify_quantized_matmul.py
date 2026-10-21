@@ -1,5 +1,7 @@
 """Exercise MLX quantized_matmul through translated affine matrix-vector kernels.
 
+Transposed cases reach the qmv kernels and untransposed ones qvm.
+
 Every case routes one ``mx.quantized_matmul`` call to one translated entry and
 checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
@@ -17,24 +19,66 @@ from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_quantization import packed_reference
 
-# (name, dtype, group, bits, K, N, x shape before K, w batch shape, layout)
-# Layouts: "dense" binds x as given, "strided" takes every other x batch.
+# (name, dtype, group, bits, K, N, x shape before K, w batch shape, layout,
+# transpose). Layouts: "dense" binds x as given, "strided" takes every other x
+# batch.
 CASES = (
-    ("quad-d64-partial-tile", "float32", 64, 4, 64, 72, (1,), (), "dense"),
-    ("quad-d128-rows", "float16", 32, 2, 128, 64, (3, 1), (), "dense"),
-    ("quad-d128-stacked", "bfloat16", 128, 8, 128, 100, (2, 1), (2,), "dense"),
-    ("fast-rows", "float32", 128, 4, 512, 16, (2,), (), "dense"),
-    ("fast-stacked", "float16", 64, 6, 256, 24, (3, 1), (3,), "dense"),
-    ("qmv-unaligned-rows", "bfloat16", 32, 3, 256, 67, (1,), (), "dense"),
-    ("qmv-broadcast-weights", "float32", 32, 5, 96, 40, (2, 2, 1), (2, 1), "dense"),
-    ("qmv-shared-weights", "float16", 64, 8, 192, 33, (3, 1), (), "strided"),
-    ("qmv-two-batch-axes", "float32", 128, 6, 384, 16, (2, 3, 1), (2, 3), "dense"),
+    ("quad-d64-partial-tile", "float32", 64, 4, 64, 72, (1,), (), "dense", True),
+    ("quad-d128-rows", "float16", 32, 2, 128, 64, (3, 1), (), "dense", True),
+    ("quad-d128-stacked", "bfloat16", 128, 8, 128, 100, (2, 1), (2,), "dense", True),
+    ("fast-rows", "float32", 128, 4, 512, 16, (2,), (), "dense", True),
+    ("fast-stacked", "float16", 64, 6, 256, 24, (3, 1), (3,), "dense", True),
+    ("qmv-unaligned-rows", "bfloat16", 32, 3, 256, 67, (1,), (), "dense", True),
+    (
+        "qmv-broadcast-weights",
+        "float32",
+        32,
+        5,
+        96,
+        40,
+        (2, 2, 1),
+        (2, 1),
+        "dense",
+        True,
+    ),
+    ("qmv-shared-weights", "float16", 64, 8, 192, 33, (3, 1), (), "strided", True),
+    (
+        "qmv-two-batch-axes",
+        "float32",
+        128,
+        6,
+        384,
+        16,
+        (2, 3, 1),
+        (2, 3),
+        "dense",
+        True,
+    ),
+    # qvm: a K tail with a half-empty last tile, a K shorter than one block
+    # over broadcast weights, whole blocks, shared weights and two batch axes.
+    ("qvm-tail-rows", "float32", 32, 3, 67, 96, (3,), (), "dense", False),
+    (
+        "qvm-short-k-broadcast",
+        "bfloat16",
+        128,
+        6,
+        20,
+        256,
+        (3, 1),
+        (1,),
+        "dense",
+        False,
+    ),
+    ("qvm-stacked", "float16", 64, 4, 256, 128, (2, 1), (2,), "dense", False),
+    ("qvm-two-bit-rows", "bfloat16", 64, 2, 512, 64, (2,), (), "dense", False),
+    ("qvm-shared-weights", "float32", 32, 8, 128, 64, (2, 1), (), "strided", False),
+    ("qvm-two-batch-axes", "float16", 32, 5, 96, 32, (2, 3, 2), (2, 3), "dense", False),
 )
 SCALES = (1.0, 0.5, 0.25, 0.125)
 
 
 def case_record(case):
-    name, dtype, group, bits, k, n, x_prefix, w_batch, layout = case
+    name, dtype, group, bits, k, n, x_prefix, w_batch, layout, transpose = case
     m = x_prefix[-1]
     batches = math.prod(x_prefix[:-1]) if len(x_prefix) > 1 else 1
     if not w_batch and layout == "dense":
@@ -50,9 +94,10 @@ def case_record(case):
         "xShape": [*x_prefix, k],
         "wBatchShape": list(w_batch),
         "layout": layout,
+        "transpose": transpose,
         "M": m,
         "batches": batches,
-        "entry": matmul_layout.select(dtype, group, bits, m, n, k, batches),
+        "entry": matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose),
     }
 
 
@@ -67,27 +112,30 @@ def case_data(record, seed):
     x_shape = tuple(record["xShape"])
     if record["layout"] == "strided":
         x_shape = (2 * x_shape[0], *x_shape[1:])
-    codes = rng.integers(0, bins + 1, size=(*w_batch, n, k))
-    scales = rng.choice(SCALES, size=(*w_batch, n, k // group)) * rng.choice(
-        (-1.0, 1.0), size=(*w_batch, n, k // group)
+    # Quantization groups run along w's last axis: K when transposed, N not.
+    rows, columns = (n, k) if record["transpose"] else (k, n)
+    codes = rng.integers(0, bins + 1, size=(*w_batch, rows, columns))
+    scales = rng.choice(SCALES, size=(*w_batch, rows, columns // group)) * rng.choice(
+        (-1.0, 1.0), size=(*w_batch, rows, columns // group)
     )
     biases = -rng.integers(0, bins + 1, size=scales.shape) * scales
     x = rng.integers(-4, 5, size=x_shape) / 4.0
-    rows = codes.reshape(-1, k)
     packed = np.stack(
         [
             np.frombuffer(packed_reference([int(c) for c in row], bits), dtype="<u4")
-            for row in rows
+            for row in codes.reshape(-1, columns)
         ]
-    ).reshape(*w_batch, n, k * bits // 32)
+    ).reshape(*w_batch, rows, columns * bits // 32)
     weights = codes * np.repeat(scales, group, axis=-1) + np.repeat(
         biases, group, axis=-1
     )
+    if record["transpose"]:
+        weights = np.swapaxes(weights, -1, -2)
     bound = np.abs(x).max() * k * (bins + bins)
     if bound >= 2**19:
         raise ValueError("Quantized matmul case exceeds the exact float32 budget")
     bound_x = x[::2] if record["layout"] == "strided" else x
-    total = np.matmul(bound_x, np.swapaxes(weights, -1, -2))
+    total = np.matmul(bound_x, weights)
     return {
         "w": packed.astype(np.uint32),
         "scales": scales,
@@ -138,7 +186,7 @@ def run_case(mx, np, host, record, seed):
         arrays["w"],
         arrays["scales"],
         arrays["biases"],
-        transpose=True,
+        transpose=record["transpose"],
         group_size=record["groupSize"],
         bits=record["bits"],
     )
@@ -169,7 +217,7 @@ def run_case(mx, np, host, record, seed):
             arrays["w"],
             arrays["scales"],
             arrays["biases"],
-            transpose=True,
+            transpose=record["transpose"],
             group_size=record["groupSize"],
             bits=record["bits"],
             stream=mx.cpu,
@@ -207,7 +255,7 @@ def validate_trace(trace, records, target):
             raise RuntimeError(f"Quantized matmul launch differs: {record['name']}")
     kernels = {matmul_layout.signature(entry)["kernel"] for entry in expected}
     batched = {matmul_layout.signature(entry)["batched"] for entry in expected}
-    if kernels != {"qmv_quad", "qmv_fast", "qmv"} or batched != {False, True}:
+    if kernels != {"qmv_quad", "qmv_fast", "qmv", "qvm"} or batched != {False, True}:
         raise RuntimeError("Quantized matmul cases do not cover every route")
 
 

@@ -1,11 +1,13 @@
 """Storage and launch contracts for the affine quantized matrix-vector kernels.
 
-``QuantizedMatmul::eval_gpu`` in ``backend.cpp`` routes transposed affine
-products with few input vectors to quantized.cpp's ``dispatch_qmv`` kernels:
-``affine_qmv_quad`` for ``K`` of 64 or 128 and power-of-two widths, then
-``affine_qmv_fast`` when ``N`` and ``K`` are aligned, otherwise
-``affine_qmv``. The portable host reports no Apple GPU generation, so it never
-selects ``affine_qmv_wide`` (MLX uses it from generation 15).
+``QuantizedMatmul::eval_gpu`` in ``backend.cpp`` routes affine products with
+few input vectors as quantized.cpp does. Transposed weights go to
+``dispatch_qmv``'s kernels: ``affine_qmv_quad`` for ``K`` of 64 or 128 and
+power-of-two widths, then ``affine_qmv_fast`` when ``N`` and ``K`` are aligned,
+otherwise ``affine_qmv``. The portable host reports no Apple GPU generation, so
+it never selects ``affine_qmv_wide`` (MLX uses it from generation 15).
+Untransposed weights go to ``affine_qvm`` while ``K`` is below 1024; MLX splits
+longer reductions over ``qvm_split_k`` and a sum, which the host does not route.
 """
 
 import ctypes
@@ -25,10 +27,13 @@ MAX_GROUPS = 65535
 SIMD_SIZE = 32
 QUAD_DIMENSIONS = (64, 128)
 PATTERN = re.compile(
-    r"affine_(qmv_quad|qmv_fast|qmv)_(float|float16_t|bfloat16_t)"
+    r"affine_(qmv_quad|qmv_fast|qmv|qvm)_(float|float16_t|bfloat16_t)"
     r"_gs_(32|64|128)_b_(2|3|4|5|6|8)(?:_d_(64|128))?_batch_(0|1)"
 )
-ENTRY_PREFIXES = ("affine_qmv_",)
+ENTRY_PREFIXES = ("affine_qmv_", "affine_qvm_")
+# QuantizedMatmul::eval_gpu sends untransposed products with K at or above
+# this through qvm_split_k.
+QVM_SPLIT_K = 1024
 MATRIX_PARAMETERS = ("w", "scales", "biases", "x", "y")
 SCALAR_PARAMETERS = ("in_vec_size", "out_vec_size")
 BATCH_SCALARS = ("x_batch_ndims", "w_batch_ndims")
@@ -93,15 +98,48 @@ def workgroup_size(entry):
     return (SIMD_SIZE, 1 if signature(entry)["kernel"] == "qmv_quad" else 2, 1)
 
 
+def transposed(entry):
+    """Whether the entry multiplies by transposed weights, ``w`` of ``(N, K)``."""
+    return signature(entry)["kernel"] != "qvm"
+
+
 def tile_rows(entry):
-    """Output rows per threadgroup: qmv_quad's 8 quads x 8, qmv's 2 x 4."""
-    return 64 if signature(entry)["kernel"] == "qmv_quad" else 8
+    """Outputs per threadgroup.
+
+    qmv_quad's 8 quads x 8 rows, qmv's 2 simdgroups x 4 rows, and qvm's 2
+    simdgroups x ``min(group_size, 32)`` columns.
+    """
+    info = signature(entry)
+    if info["kernel"] == "qvm":
+        return 2 * min(info["groupSize"], SIMD_SIZE)
+    return 64 if info["kernel"] == "qmv_quad" else 8
 
 
-def select(dtype, group, bits, m, n, k, batches):
-    """quantized.cpp dispatch_qmv's entry for one product, without qmv_wide."""
+def vector_limit(k, n, transpose):
+    """quantized.cpp's matrix-vector bound on ``M``.
+
+    get_qmv_batch_limit for a device without an Apple GPU generation when the
+    weights are transposed, and 4 otherwise.
+    """
+    if not transpose:
+        return 4
+    return 18 if k <= 2048 and n <= 2048 else 12 if k <= 4096 and n <= 4096 else 10
+
+
+def select(dtype, group, bits, m, n, k, batches, transpose=True):
+    """quantized.cpp QuantizedMatmul::eval_gpu's entry for one product.
+
+    Raises for the products MLX sends to kernels the host does not route: the
+    matrix-matrix kernels and qvm_split_k.
+    """
+    if m >= vector_limit(k, n, transpose):
+        raise ValueError("Quantized matrix-matrix products are not routed")
     stem = f"{SOURCE_TYPES[dtype]}_gs_{group}_b_{bits}"
     batch = "_batch_1" if batches > 1 else "_batch_0"
+    if not transpose:
+        if k >= QVM_SPLIT_K:
+            raise ValueError("Split-K quantized vector-matrix products are not routed")
+        return f"affine_qvm_{stem}{batch}"
     if k in QUAD_DIMENSIONS and bits in (2, 4, 8):
         return f"affine_qmv_quad_{stem}_d_{k}{batch}"
     fast = n % 8 == 0 and k % fast_alignment(bits) == 0
@@ -182,8 +220,12 @@ def _location(index, shape, strides):
     return location
 
 
-def _batch_offsets(parameters, m, n, k, words, groups, batches):
-    """Per ``tid.z`` element offsets of x, w, scales and biases."""
+def _batch_offsets(parameters, m, k, rows, words, groups, batches):
+    """Per ``tid.z`` element offsets of x, w, scales and biases.
+
+    ``rows`` is the weight matrices' row count: ``N`` for transposed weights,
+    ``K`` otherwise.
+    """
     x_shape, x_strides = parameters["x_shape"], parameters["x_strides"]
     w_shape, w_strides = parameters["w_shape"], parameters["w_strides"]
     s_strides, b_strides = parameters["s_strides"], parameters["b_strides"]
@@ -197,16 +239,16 @@ def _batch_offsets(parameters, m, n, k, words, groups, batches):
         or not len(w_strides) == len(s_strides) == len(b_strides) == len(w_shape)
     ):
         raise ValueError("Quantized matrix-vector batch ranks do not match")
-    if x_shape[-2:] != [m, k] or w_shape[-2:] != [n, words]:
+    if x_shape[-2:] != [m, k] or w_shape[-2:] != [rows, words]:
         raise ValueError("Quantized matrix-vector matrix shapes do not match")
     # ensure_row_contiguous_matrix: unit columns and dense rows.
-    for strides, rows, columns in (
+    for strides, extent, columns in (
         (x_strides, m, k),
-        (w_strides, n, words),
-        (s_strides, n, groups),
-        (b_strides, n, groups),
+        (w_strides, rows, words),
+        (s_strides, rows, groups),
+        (b_strides, rows, groups),
     ):
-        if strides[-1] != 1 or (rows > 1 and strides[-2] != columns):
+        if strides[-1] != 1 or (extent > 1 and strides[-2] != columns):
             raise ValueError("Quantized matrix-vector matrices are not row contiguous")
     if math.prod(x_shape[:x_batch]) != batches or (
         w_batch and math.prod(w_shape[:w_batch]) != batches
@@ -244,12 +286,14 @@ def plan(entry, counts, parameters, threads, execution):
     info = signature(entry)
     k, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
     group, bits = info["groupSize"], info["bits"]
+    transpose = transposed(entry)
+    # Groups run along the weights' rows: K when transposed, N otherwise.
+    grouped = k if transpose else n
     if (
         type(k) is not int
         or type(n) is not int
-        or not 1 <= n <= MAX_ELEMENTS
-        or not group <= k <= MAX_ELEMENTS
-        or k % group
+        or not 1 <= min(k, n) <= max(k, n) <= MAX_ELEMENTS
+        or grouped % group
     ):
         raise ValueError("Quantized matrix-vector dimensions are invalid")
     if not isinstance(execution, dict) or set(execution) != {
@@ -267,16 +311,17 @@ def plan(entry, counts, parameters, threads, execution):
         or tiles > MAX_GROUPS
     ):
         raise ValueError("Quantized matrix-vector launch does not match MLX's grid")
-    if select(info["dtype"], group, bits, m, n, k, batches) != entry:
+    if select(info["dtype"], group, bits, m, n, k, batches, transpose) != entry:
         raise ValueError("Quantized matrix-vector entry differs from MLX's routing")
     if threads != m * n * batches or counts["y"] != threads:
         raise ValueError("Quantized matrix-vector output extent differs")
-    words, groups = k * bits // 32, k // group
+    rows = n if transpose else k
+    words, groups = grouped * bits // 32, grouped // group
     supplied = set(parameters) - set(SCALAR_PARAMETERS)
     if info["batched"]:
         if supplied != set(BATCH_PARAMETERS):
             raise ValueError("Batched quantized matrix-vector parameters are missing")
-        offsets = _batch_offsets(parameters, m, n, k, words, groups, batches)
+        offsets = _batch_offsets(parameters, m, k, rows, words, groups, batches)
         values = dict(parameters)
     else:
         if supplied or batches != 1:
@@ -288,21 +333,26 @@ def plan(entry, counts, parameters, threads, execution):
             "x_shape": [m, k],
             "x_strides": [k, 1],
             "w_batch_ndims": 0,
-            "w_shape": [n, words],
+            "w_shape": [rows, words],
             "w_strides": [words, 1],
             "s_strides": [groups, 1],
             "b_strides": [groups, 1],
         }
-    extents = {"x": m * k, "w": n * words, "scales": n * groups, "biases": n * groups}
+    extents = {
+        "x": m * k,
+        "w": rows * words,
+        "scales": rows * groups,
+        "biases": rows * groups,
+    }
     for column, name in enumerate(("x", "w", "scales", "biases")):
         if max(offset[column] for offset in offsets) + extents[name] > counts[name]:
             raise ValueError(f"Quantized matrix-vector {name} batch exceeds its buffer")
     # qmv_quad loads one scale and bias per row of its last tile, past N.
     padding = {"scales": 0, "biases": 0}
     if info["kernel"] == "qmv_quad":
-        rows = tiles * tile_rows(entry)
+        covered = tiles * tile_rows(entry)
         for column, name in ((2, "scales"), (3, "biases")):
-            end = max(offset[column] for offset in offsets) + rows * groups
+            end = max(offset[column] for offset in offsets) + covered * groups
             padding[name] = max(0, end - counts[name])
     if any(counts[name] + padding.get(name, 0) > MAX_ELEMENTS for name in counts):
         raise ValueError("Quantized matrix-vector buffers exceed the index bound")

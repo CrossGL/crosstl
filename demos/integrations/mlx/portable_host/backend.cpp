@@ -1986,10 +1986,6 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       inputs[2].dtype() != dtype || inputs[3].dtype() != dtype) {
     throw std::invalid_argument("CrossTL quantized matmul requires matching floating types.");
   }
-  if (!transpose_) {
-    throw std::invalid_argument(
-        "CrossTL quantized matmul does not route non-transposed products yet.");
-  }
   array x = matmul_operand(inputs[0]);
   array w = matmul_operand(inputs[1]);
   array scales = matmul_operand(inputs[2]);
@@ -2007,26 +2003,39 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   const uint64_t B = out.size() / M / N;
   // get_qmv_batch_limit for a device without an Apple GPU generation.
-  const int vector_limit = K <= 2048 && N <= 2048 ? 18 : K <= 4096 && N <= 4096 ? 12 : 10;
+  const int vector_limit = !transpose_ ? 4
+      : K <= 2048 && N <= 2048        ? 18
+      : K <= 4096 && N <= 4096        ? 12
+                                      : 10;
   if (M >= vector_limit) {
     throw std::invalid_argument(
         "CrossTL quantized matmul does not route matrix-matrix products yet.");
   }
-  // dispatch_qmv without qmv_wide, which MLX selects from generation 15.
+  if (!transpose_ && K >= 1024) {
+    throw std::invalid_argument(
+        "CrossTL quantized matmul does not route split-K vector-matrix products yet.");
+  }
+  // dispatch_qmv without qmv_wide, which MLX selects from generation 15, and
+  // qvm for untransposed weights.
   const bool power_of_two = bits_ == 2 || bits_ == 4 || bits_ == 8;
-  const bool quad = (K == 64 || K == 128) && power_of_two;
+  const bool quad = transpose_ && (K == 64 || K == 128) && power_of_two;
   const int pack_factor = bits_ == 3 || bits_ == 5 ? 8 : bits_ == 6 ? 4 : 32 / bits_;
   const bool fast = N % 8 == 0 && K % (pack_factor * (bits_ == 2 ? 1 : 2) * 32) == 0;
+  const char* kernel = !transpose_ ? "affine_qvm_"
+      : quad                       ? "affine_qmv_quad_"
+      : fast                       ? "affine_qmv_fast_"
+                                   : "affine_qmv_";
   const char* source = dtype == float32 ? "float" : dtype == float16 ? "float16_t" : "bfloat16_t";
-  const std::string entry = std::string(quad ? "affine_qmv_quad_" : fast ? "affine_qmv_fast_" : "affine_qmv_") +
-      source + "_gs_" + std::to_string(group_size_) + "_b_" + std::to_string(bits_) +
+  const std::string entry = std::string(kernel) + source + "_gs_" +
+      std::to_string(group_size_) + "_b_" + std::to_string(bits_) +
       (quad ? "_d_" + std::to_string(K) : "") + (B > 1 ? "_batch_1" : "_batch_0");
   require_entry(entry);
   if (out.size() > max_matmul_elements || B > 65535 || uint32_t(M) > 65535) {
     throw std::invalid_argument("CrossTL quantized matmul launch exceeds its bounds.");
   }
   out.set_data(allocator::malloc(out.nbytes()));
-  const int rows = quad ? 64 : 8;
+  // qvm covers 2 simdgroups of min(group_size, 32) columns per threadgroup.
+  const int rows = !transpose_ ? 2 * std::min(group_size_, 32) : quad ? 64 : 8;
   const uint32_t tiles = (uint32_t(N) + rows - 1) / rows;
   const char* storage = matmul_storage(dtype);
   int32_t in_vec_size = K;

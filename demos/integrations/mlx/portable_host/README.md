@@ -350,14 +350,17 @@ arrays and quantized matrix multiplication remain separate work.
 
 ## Affine Quantized Matrix-Vector Products
 
-`QuantizedMatmul::eval_gpu` routes transposed affine products with fewer input
-vectors than `get_qmv_batch_limit` to the translated `dispatch_qmv` kernels of the
-unchanged `quantized.metal`: `affine_qmv_quad` when `K` is 64 or 128 and the width
-is a power of two, `affine_qmv_fast` when `N` and `K` are aligned, otherwise
-`affine_qmv`, each with its `batch_0` or `batch_1` variant. The host reports no
-Apple GPU generation, so it uses the lowest generation's batch limits and never
-selects `affine_qmv_wide`. Non-transposed products, matrix-matrix products,
-gathers and the floating-point modes still fail with an explicit error.
+`QuantizedMatmul::eval_gpu` routes affine products with few input vectors to the
+translated kernels of the unchanged `quantized.metal`, as quantized.cpp selects
+them. Transposed weights with fewer vectors than `get_qmv_batch_limit` go to the
+`dispatch_qmv` kernels: `affine_qmv_quad` when `K` is 64 or 128 and the width is
+a power of two, `affine_qmv_fast` when `N` and `K` are aligned, otherwise
+`affine_qmv`. Untransposed weights with fewer than four vectors and `K` below
+1024 go to `affine_qvm`. Each kernel has its `batch_0` and `batch_1` variants.
+The host reports no Apple GPU generation, so it uses the lowest generation's
+batch limits and never selects `affine_qmv_wide`. Split-K vector-matrix
+products (`qvm_split_k` and a sum), matrix-matrix products, gathers and the
+floating-point modes still fail with an explicit error.
 
 `matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound shapes, strides and buffer extents.
@@ -368,14 +371,19 @@ the host pads those buffers with poison elements and the output with guards, and
 copies the output back only after validating them. `batch_0` kernels reflect the
 batch parameters MLX does not bind; the host supplies inert unbatched values.
 
-The three-platform host jobs run `verify_quantized_matmul.py` through
-`mx.quantized_matmul`. Its nine cases cover every route and batch variant, all
-three element types, a partial `qmv_quad` tile, broadcast weights, a strided
-activation batch and two batch axes. Inputs lie on dyadic grids that keep every
-float32 partial sum exact, so each output must match an exact float64 reference
-bit for bit, and float32 results must also match MLX's CPU backend. The unchanged
-upstream `test_qmv` also needs the floating-point `Matmul` route for its
-reference products, which remains separate work.
+The three-platform `MLX quantized host` jobs translate every routed entry ahead
+of execution with `python -m demos.integrations.mlx.portable_host.matmul_packages
+--verification --jobs 3`, then run `verify_quantized_matmul.py` through
+`mx.quantized_matmul`. Its fifteen cases cover every route and batch variant,
+all three element types and every width. The transposed cases include a partial
+`qmv_quad` tile, broadcast weights, a strided activation batch and two batch
+axes; the untransposed ones a `K` tail, a `K` shorter than one 32-row block, a
+half-empty last tile, broadcast and shared weights and two batch axes. Inputs
+lie on dyadic grids that keep every float32 partial sum exact, so each output
+must match an exact float64 reference bit for bit, and float32 results must also
+match MLX's CPU backend. The unchanged upstream `test_qmv` and `test_qvm` also
+need the floating-point `Matmul` route for their reference products, which
+remains separate work.
 
 ## Block Quantization
 
