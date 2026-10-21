@@ -38,7 +38,7 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_typehints = "description"
-autodoc_mock_imports = ["gast", "jinja2", "numpy"]
+autodoc_mock_imports = ["gast", "numpy"]
 suppress_warnings = ["sphinx_autodoc_typehints.forward_reference"]
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True

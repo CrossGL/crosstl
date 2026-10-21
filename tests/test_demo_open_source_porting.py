@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -240,7 +241,12 @@ def test_demo_portable_checks_keep_all_cases_and_bounded_workers():
     tests = _workflow_step_block(workflow, "Run open-source porting demo tests")
     artifacts = _workflow_step_block(workflow, "Verify checked-in demo artifacts")
     assert 'PYTEST_XDIST_AUTO_NUM_WORKERS: "2"' in workflow
-    assert "pytest pytest-xdist" in _workflow_step_block(workflow, "Install CrossTL")
+    assert 'pip install -e ".[test]"' in _workflow_step_block(
+        workflow, "Install CrossTL"
+    )
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    test_extra = pyproject["project"]["optional-dependencies"]["test"]
+    assert "pytest-xdist" in test_extra
     assert "python -m pytest -q -n auto" in tests
     assert "find demos/open-source-porting/cases" in artifacts
     assert "--target" not in artifacts

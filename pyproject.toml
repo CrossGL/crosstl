@@ -35,6 +35,7 @@ Changelog = "https://github.com/CrossGL/crosstl/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 directx-runtime = ["compushady>=0.17.5,<0.18; platform_system=='Windows'"]
+test = ["hypothesis>=6.82", "numpy", "pytest", "pytest-xdist", "PyYAML>=6,<7"]
 
 [project.scripts]
 crosstl = "crosstl._crosstl:main"

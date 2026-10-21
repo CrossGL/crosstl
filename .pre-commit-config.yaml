@@ -115,7 +115,7 @@ repos:
         name: CrossTL CI workflow tests
         entry: python -m pytest -q tests/test_ci_workflows.py tests/test_workflow_text.py tests/test_metal_toolchain_setup.py tests/test_tool_cli.py tests/test_demo_layout.py tests/test_compile_artifact_bundle.py tests/test_ci_helpers.py tests/test_ci_native_selection.py demos/integrations/mlx/tests/test_ci.py
         language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2, "PyYAML>=6,<7"]
+        additional_dependencies: [pytest, hypothesis, numpy, "PyYAML>=6,<7"]
         pass_filenames: false
         files: ^(\.github/(workflows/.*\.ya?ml|actions/.*/action\.ya?ml|actionlint\.yaml)|tools/(ci_coverage|compile_artifact_bundle|ensure_metal_toolchain|refresh_artifact_contract|pytest_failure_summary)\.py|tests/(ci_helpers|workflow_text|test_ci_helpers|test_compile_artifact_bundle|test_metal_toolchain_setup|test_ci_workflows|test_ci_native_selection|test_workflow_text|test_tool_cli|test_demo_layout)\.py|demos/integrations/.*/tests/test_ci\.py)$
 
@@ -123,7 +123,7 @@ repos:
         name: CrossTL pytest failure summary tests
         entry: python -m pytest -q tests/test_pytest_failure_summary.py
         language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        additional_dependencies: [pytest, hypothesis, numpy]
         pass_filenames: false
         files: ^(tools/pytest_failure_summary\.py|tests/test_pytest_failure_summary\.py)$
 
@@ -131,7 +131,7 @@ repos:
         name: CrossTL examples script tests
         entry: python -m pytest -q tests/test_examples_test_script.py
         language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        additional_dependencies: [pytest, hypothesis, numpy]
         pass_filenames: false
         files: ^(examples/test\.py|tests/test_examples_test_script\.py|\.github/workflows/examples-test\.yml)$
 
