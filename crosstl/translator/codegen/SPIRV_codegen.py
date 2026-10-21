@@ -27035,6 +27035,11 @@ class VulkanSPIRVCodeGen(
         elif isinstance(target, MemberAccessNode):
             base_pointer = self.assignable_pointer_from_expression(target.object)
             if base_pointer is None:
+                # A member of a value with no storage (a call result, a temporary) is not an lvalue.
+                self.refuse_lowering(
+                    f"Cannot assign to member {target.member} of "
+                    f"{self.diagnostic_expression(target.object)}: it does not name storage"
+                )
                 return
 
             member_name = target.member

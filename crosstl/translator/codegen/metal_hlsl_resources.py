@@ -175,11 +175,15 @@ class MetalHlslResourceMixin:
                     member.element_suffix or member.read_conversion
                 ):
                     self.metal_hlsl_cbuffer_array_members[member.name] = member
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in self.metal_hlsl_structured_declarations(ast):
             layout = buffer_layout_from_attributes(getattr(node, "attributes", None))
             if layout != HLSL_STRUCTURED_LAYOUT:
                 continue
-            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            vtype = getattr(
+                node,
+                "var_type",
+                getattr(node, "vtype", getattr(node, "param_type", None)),
+            )
             type_name = str(self.resource_base_type(vtype))
             if "<" not in type_name or not type_name.endswith(">"):
                 continue
@@ -191,8 +195,27 @@ class MetalHlslResourceMixin:
                     f"Cannot reproduce the HLSL layout of structured buffer "
                     f"'{node.name}' in Metal: {exc}"
                 ) from exc
+            previous = self.metal_hlsl_structured_buffers.get(node.name)
+            if previous is not None and previous != storage:
+                raise ValueError(
+                    f"Cannot reproduce the HLSL layouts of the structured buffers named "
+                    f"'{node.name}' in Metal: they hold different element types"
+                )
             self.metal_hlsl_structured_buffers[node.name] = storage
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
+
+    @staticmethod
+    def metal_hlsl_structured_declarations(ast):
+        """Global structured buffers, then the parameters of every function, in program order."""
+        yield from getattr(ast, "global_variables", []) or []
+        functions = list(getattr(ast, "functions", []) or [])
+        stages = getattr(ast, "stages", None) or {}
+        for stage in stages.values() if isinstance(stages, dict) else stages:
+            functions.extend(getattr(stage, "local_functions", None) or [])
+            if getattr(stage, "entry_point", None) is not None:
+                functions.append(stage.entry_point)
+        for function in functions:
+            yield from getattr(function, "parameters", None) or []
 
     def metal_hlsl_layout_struct_code(self, plan):
         member_names = {member.name for member in plan.members}

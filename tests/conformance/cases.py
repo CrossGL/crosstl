@@ -1230,6 +1230,16 @@ CASES = [
         v1="m_packed_float3",
     ),
     Case(
+        "m_packed_struct",
+        "H16",
+        "struct with packed_float3 and packed_float2 members: 28-byte elements",
+        "MSL packed vector alignment",
+        np.arange(64 * 7, dtype=np.float32),
+        np.float32,
+        o_struct_stride,
+        compare="ulp:0",
+    ),
+    Case(
         "h_float3_stride",
         "H16",
         "StructuredBuffer<float3>: 12-byte stride",

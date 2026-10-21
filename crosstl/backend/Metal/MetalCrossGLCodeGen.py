@@ -38,6 +38,7 @@ from ...translator.semantics.sampler_states import (
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
+from .buffer_layout_import import MetalBufferLayoutImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -961,7 +962,7 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter(ImportRefusalMixin):
+class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     IMPORT_REFUSAL_TYPE = MetalImportRefused
@@ -1887,6 +1888,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
+        self.structured_buffer_lvalue_roots = set()
         self.struct_member_types = {}
         self.struct_member_name_maps = {}
         self.resolved_struct_member_types = {}
@@ -9626,6 +9628,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 for index, p in enumerate(func.params)
             ]
             parameter_names = [self.render_identifier(p.name) for p in func.params]
+            for index, parameter in enumerate(func.params):
+                layout = self.structured_buffer_parameter_layout(func, parameter)
+                if layout is not None:
+                    parameter_declarations[index] = (
+                        f"@buffer_layout({layout}) " + parameter_declarations[index]
+                    )
             if stage_entry and self.preserve_resource_origins:
                 for index, parameter in enumerate(func.params):
                     if self.is_stage_entry_buffer_resource_parameter(parameter):
@@ -11405,7 +11413,60 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             return None
         return f"{self.generate_expression(node.left, is_main)} = {call}"
 
+    def structured_buffer_lvalue_root(self, expr):
+        """The structured-buffer element a member, swizzle or index chain writes through, if any."""
+        node = expr
+        while isinstance(node, (MemberAccessNode, ArrayAccessNode)):
+            if isinstance(node, ArrayAccessNode) and (
+                self.is_structured_buffer_element_access(node)
+            ):
+                return node
+            node = node.object if isinstance(node, MemberAccessNode) else node.array
+        return None
+
+    def generate_with_structured_buffer_lvalue(self, target, generate):
+        """Run ``generate`` with ``target``'s structured-buffer element spelled as ``buffer[index]``.
+
+        ``buffer_load(b, i)`` is a value; ``buffer_load(b, i).m = v`` would assign to a copy, so the element an
+        assignment or increment writes through keeps CrossGL's indexing form, which names the storage.
+        """
+        root = self.structured_buffer_lvalue_root(target)
+        if root is None:
+            return generate()
+        roots = self.structured_buffer_lvalue_roots
+        roots.add(id(root))
+        try:
+            return generate()
+        finally:
+            roots.discard(id(root))
+
+    def structured_buffer_parameter_layout(self, func, parameter):
+        """The ``@buffer_layout`` a structured-buffer parameter needs to keep its Metal element layout."""
+        if not self.structured_buffer_pointer_type(parameter):
+            return None
+        element_type = self.structured_buffer_element_source_type(parameter)
+        return self.metal_buffer_element_layout(
+            element_type,
+            f"buffer parameter {parameter.name} of {getattr(func, 'name', 'a function')}",
+        )
+
+    def binds_reference_argument(self, function_name, expression, index):
+        """Whether argument ``index`` of a call binds a reference parameter of a source function."""
+        candidates = self.metal_user_function_overloads(
+            function_name, source_offset=self.alias_source_offset(expression)
+        )
+        return any(
+            index < len(getattr(candidate, "params", None) or [])
+            and self.reference_parameter(candidate.params[index])
+            for candidate in candidates
+        )
+
     def generate_assignment(self, node, is_main):
+        return self.generate_with_structured_buffer_lvalue(
+            node.left, lambda: self.generate_assignment_statement(node, is_main)
+        )
+
+    def generate_assignment_statement(self, node, is_main):
         contracted_assignment = self.generate_metal_contracted_assignment(node, is_main)
         if contracted_assignment is not None:
             return contracted_assignment
@@ -12379,6 +12440,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 )
             if (
                 not self.suppress_structured_buffer_index_lowering
+                and id(expr) not in self.structured_buffer_lvalue_roots
                 and self.is_structured_buffer_element_access(expr)
             ):
                 return self.generate_structured_buffer_load(expr, is_main)
@@ -12430,6 +12492,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     operand = f"{array}[{index}]"
                 else:
                     operand = self.generate_expression(expr.operand, is_main)
+            elif expr.op in {"++", "--"}:
+                operand = self.generate_with_structured_buffer_lvalue(
+                    expr.operand,
+                    lambda: self.generate_expression(expr.operand, is_main),
+                )
             else:
                 operand = self.generate_expression(expr.operand, is_main)
             if expr.op == "post...":
@@ -12452,7 +12519,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     getattr(expr, "source_location", None),
                     operation=expr.op,
                 )
-            operand = self.generate_postfix_operand(expr.operand, is_main)
+            operand = self.generate_with_structured_buffer_lvalue(
+                expr.operand,
+                lambda: self.generate_postfix_operand(expr.operand, is_main),
+            )
             return f"{operand}{expr.op}"
         elif isinstance(expr, TernaryOpNode):
             wide_vector = self.wide_vector_expression_info(
@@ -13872,7 +13942,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         self, source_name, mapped_name, expression, index, is_main=False
     ):
         argument = expression.args[index]
-        rendered = self.generate_expression(argument, is_main)
+        if self.binds_reference_argument(source_name, expression, index):
+            rendered = self.generate_with_structured_buffer_lvalue(
+                argument, lambda: self.generate_expression(argument, is_main)
+            )
+        else:
+            rendered = self.generate_expression(argument, is_main)
         source_name = str(source_name).lstrip(":")
         if source_name.startswith("metal::"):
             source_name = source_name[len("metal::") :]
@@ -22422,7 +22497,8 @@ float {scalar}(float value) {{
             next_binding += 1
         return snapshots
 
-    def structured_buffer_pointer_type(self, var):
+    def structured_buffer_element_source_type(self, var):
+        """The Metal element type of a buffer resource declaration that becomes a structured buffer."""
         if not (
             self.has_attribute(var, "buffer")
             or id(var) in self.current_stage_entry_resource_parameter_ids
@@ -22441,7 +22517,13 @@ float {scalar}(float value) {{
             element_type = array_element_type
         if not element_type:
             return None
-        element_type = self.resolve_type_alias(element_type)
+        return self.resolve_type_alias(element_type)
+
+    def structured_buffer_pointer_type(self, var):
+        element_type = self.structured_buffer_element_source_type(var)
+        if not element_type:
+            return None
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         buffer_type = (
             "StructuredBuffer"
             if qualifiers.intersection({"constant", "const"})

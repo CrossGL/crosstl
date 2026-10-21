@@ -21,8 +21,9 @@ def test_hazard_inventory_and_oracles():
     # orientation in values and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
     # built-ins, SPIR-V's FrexpStruct and ModfStruct, GLSL and SPIR-V extended integer arithmetic, and SPIR-V
     # integer instructions whose opcode signedness differs from their operand types, SPIR-V structured control
-    # flow with function variables and with phis, and an HLSL structured buffer of structs with vector members.
-    assert len(CASES) == len(BY_ID) == 95
+    # flow with function variables and with phis, an HLSL structured buffer of structs with vector members, and a
+    # Metal buffer of structs with packed vector members.
+    assert len(CASES) == len(BY_ID) == 96
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

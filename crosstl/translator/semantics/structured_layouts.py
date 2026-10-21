@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name, iter_functions, iter_structs, type_from_node
-from .rewrite import call, child_slots, get_child, is_pure, set_child
+from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 
 __all__ = [
     "TARGETS",
@@ -42,7 +42,8 @@ __all__ = [
 ]
 
 TARGETS = frozenset({"opengl", "glsl", "vulkan", "spirv"})
-# The OpenGL generator stores struct elements as scalarized struct copies itself (glsl_hlsl_structured).
+# The OpenGL generator stores the struct elements of global buffers as scalarized struct copies itself
+# (glsl_hlsl_structured); buffer parameters are lowered here.
 _GENERATOR_LOWERS_STRUCTS = frozenset({"opengl", "glsl"})
 _WRAPPERS = frozenset({"StructuredBuffer", "RWStructuredBuffer"})
 _KINDS = {"f": "float", "i": "int", "u": "uint", "b": "bool"}
@@ -63,6 +64,18 @@ _ATOMICS = frozenset(
 )
 _SIGNED_ORDER_ATOMICS = frozenset({"atomicMin", "atomicMax"})
 _OUT_PARAMETER_BUILTINS = frozenset({"modf", "frexp", "buffer_dimensions"})
+# Fields that hold a statement, where a block may replace it (the slot of a loop header holds an expression).
+_STATEMENT_SLOTS = frozenset(
+    {
+        "statements",
+        "then_branch",
+        "else_branch",
+        "if_body",
+        "else_body",
+        "else_if_bodies",
+        "body",
+    }
+)
 
 
 class StructuredLayoutUnsupportedError(TranslationDiagnostic):
@@ -289,6 +302,7 @@ class _Buffer:
     name: str
     shape: _Shape
     readonly: bool
+    inline: bool = False  # a parameter, which generated helper functions cannot name
 
 
 @dataclass
@@ -434,15 +448,66 @@ class _Rewriter:
         base = self.place_base(place)
         if place.shape.form == "scalar" and place.swizzle is None:
             return _from_word(place.shape.kind, self.word(place, base))
+        if place.buffer.inline:
+            return self.inline_read(place, base)
         return call(self.load_helper(place), [base])
 
     def write(self, place, value):
+        """The assignment, helper call or (for a parameter) block statement that stores ``value``."""
         base = self.place_base(place)
         if place.shape.form == "scalar" and place.swizzle is None:
+            if place.buffer.readonly:
+                self.refuse(f"{place.buffer.name} is a read-only structured buffer")
             return A.AssignmentNode(
                 self.word(place, base), _to_word(place.shape.kind, value)
             )
+        if place.buffer.inline:
+            return self.inline_write(place, base, value)
         return call(self.store_helper(place), [base, value])
+
+    # A helper function cannot name a buffer parameter, so parameter accesses are expanded in place: a read repeats
+    # its (side-effect free) first-word index, and a write becomes a block that evaluates the index and the value
+    # once into reserved temporaries.
+
+    def inline_read(self, place, base):
+        if not is_pure(base):
+            self.refuse(
+                f"a read of a vector or struct from the buffer parameter {place.buffer.name} at an index with side "
+                "effects is not supported"
+            )
+        if place.swizzle is not None:
+            words = _word_reads(place.buffer.name, place.shape.kind, place.swizzle)
+            text = f"{place.shape.type_text()}({words})"
+        else:
+            text = _value_text(place.buffer.name, place.shape, 0)
+        function = _parse_helpers(
+            [f"{place.shape.type_text()} __cgl_inline(uint base) {{ return {text}; }}"]
+        )[0]
+        statement = function.body.statements[0]
+        return _substitute(statement.value, {"base": base})
+
+    def inline_write(self, place, base, value):
+        if place.buffer.readonly:
+            self.refuse(f"{place.buffer.name} is a read-only structured buffer")
+        if place.swizzle is not None:
+            lines = [
+                f"{place.buffer.name}[__cgl_base + {offset}u] = "
+                f"{_word_write(place.shape.kind, f'__cgl_value[{lane}]')};"
+                for lane, offset in enumerate(place.swizzle)
+            ]
+        else:
+            lines = _store_lines(
+                place.buffer.name, place.shape, 0, "__cgl_value", "__cgl_base"
+            )
+        type_text = place.shape.type_text()
+        function = _parse_helpers(
+            [
+                f"void __cgl_inline() {{ {{ uint __cgl_base = __cgl_base_in; {type_text} __cgl_value = "
+                f"__cgl_value_in; {' '.join(lines)} }} }}"
+            ]
+        )[0]
+        block = function.body.statements[0]
+        return _substitute(block, {"__cgl_base_in": base, "__cgl_value_in": value})
 
     def helper_name(self, verb, place):
         if place.swizzle is not None:
@@ -494,7 +559,13 @@ class _Rewriter:
         if place is not None:
             return self.read(place)
         if isinstance(node, A.FunctionCallNode):
-            return self.function_call(node)
+            result = self.function_call(node)
+            if isinstance(result, A.BlockNode):
+                self.refuse(
+                    "buffer_dimensions with count and stride outputs on a buffer parameter is supported only as "
+                    "a statement"
+                )
+            return result
         if isinstance(node, A.AssignmentNode):
             self.refuse(
                 "an assignment to a structured-buffer element used as a value is not supported"
@@ -519,9 +590,13 @@ class _Rewriter:
 
     def statement(self, node):
         if isinstance(node, A.ExpressionStatementNode):
-            set_child(
-                node, "expression", None, self.statement_expression(node.expression)
-            )
+            replacement = self.statement_expression(node.expression)
+            if isinstance(replacement, A.BlockNode):
+                self.refuse(
+                    "a store to a buffer parameter in a statement position that cannot hold a block is not "
+                    "supported"
+                )
+            set_child(node, "expression", None, replacement)
             return
         if isinstance(node, A.VariableNode):
             if node.initial_value is not None:
@@ -531,8 +606,23 @@ class _Rewriter:
             return
         for slot_field, key in list(child_slots(node)):
             child = get_child(node, slot_field, key)
-            if isinstance(child, A.AssignmentNode):
-                set_child(node, slot_field, key, self.statement_expression(child))
+            holds_statements = isinstance(node, A.BlockNode) or (
+                slot_field in _STATEMENT_SLOTS
+            )
+            if isinstance(child, A.ExpressionStatementNode) and holds_statements:
+                replacement = self.statement_expression(child.expression)
+                if isinstance(replacement, A.BlockNode):
+                    set_child(node, slot_field, key, replacement)
+                else:
+                    set_child(child, "expression", None, replacement)
+            elif isinstance(child, A.AssignmentNode):
+                replacement = self.statement_expression(child)
+                if isinstance(replacement, A.BlockNode) and not holds_statements:
+                    self.refuse(
+                        "a store to a buffer parameter in a loop header or other expression position is not "
+                        "supported"
+                    )
+                set_child(node, slot_field, key, replacement)
             elif isinstance(child, (A.StatementNode, A.VariableNode)):
                 self.statement(child)
             elif isinstance(child, A.ASTNode):
@@ -556,6 +646,8 @@ class _Rewriter:
                     A.PrimitiveType(_KINDS.get(place.shape.kind, "int")),
                 )
                 return self.update(place, node.operator[0], one)
+        if isinstance(node, A.FunctionCallNode):
+            return self.function_call(node)
         return self.expression(node)
 
     def update(self, place, operator, value):
@@ -631,6 +723,14 @@ class _Rewriter:
         )
         if len(arguments) == 1:
             return count
+        if len(arguments) == 3 and buffer.inline:
+            stride = _literal(4 * buffer.shape.words)
+            return A.BlockNode(
+                [
+                    A.AssignmentNode(arguments[1], count),
+                    A.AssignmentNode(arguments[2], stride),
+                ]
+            )
         name = f"__cgl_{buffer.name}_dimensions"
         if name not in self.helpers:
             self.helpers[name] = (
@@ -655,8 +755,8 @@ def _to_word(kind, value):
     return call("asuint", [value]) if kind in _READ else _uint(value)
 
 
-def _word_read(buffer, kind, offset):
-    word = f"{buffer}[base + {offset}u]"
+def _word_read(buffer, kind, offset, base="base"):
+    word = f"{buffer}[{base} + {offset}u]"
     if kind == "b":
         return f"({word} != 0u)"
     return f"{_READ[kind]}({word})" if kind in _READ else word
@@ -666,18 +766,19 @@ def _word_write(kind, value):
     return f"asuint({value})" if kind in _READ else f"uint({value})"
 
 
-def _word_reads(buffer, kind, offsets):
-    return ", ".join(_word_read(buffer, kind, offset) for offset in offsets)
+def _word_reads(buffer, kind, offsets, base="base"):
+    return ", ".join(_word_read(buffer, kind, offset, base) for offset in offsets)
 
 
-def _value_text(buffer, shape, offset):
+def _value_text(buffer, shape, offset, base="base"):
     if shape.form == "scalar":
-        return _word_read(buffer, shape.kind, offset)
+        return _word_read(buffer, shape.kind, offset, base)
     if shape.form == "vector":
-        return f"{shape.type_text()}({_word_reads(buffer, shape.kind, range(offset, offset + shape.lanes))})"
+        offsets = range(offset, offset + shape.lanes)
+        return f"{shape.type_text()}({_word_reads(buffer, shape.kind, offsets, base)})"
     if shape.form == "struct":
         members = [
-            _value_text(buffer, member, offset + start)
+            _value_text(buffer, member, offset + start, base)
             for _name, member, start in shape.members
         ]
         return f"{shape.name}({', '.join(members)})"
@@ -687,25 +788,25 @@ def _value_text(buffer, shape, offset):
             "a structured-buffer member that is an array of arrays cannot be read whole"
         )
     elements = [
-        _value_text(buffer, element, offset + index * element.words)
+        _value_text(buffer, element, offset + index * element.words, base)
         for index in range(shape.count)
     ]
     return f"{element.type_text()}[{shape.count}]({', '.join(elements)})"
 
 
-def _store_lines(buffer, shape, offset, value):
+def _store_lines(buffer, shape, offset, value, base="base"):
     if shape.form == "scalar":
-        return [f"{buffer}[base + {offset}u] = {_word_write(shape.kind, value)};"]
+        return [f"{buffer}[{base} + {offset}u] = {_word_write(shape.kind, value)};"]
     if shape.form == "vector":
         return [
-            f"{buffer}[base + {offset + lane}u] = {_word_write(shape.kind, f'{value}[{lane}]')};"
+            f"{buffer}[{base} + {offset + lane}u] = {_word_write(shape.kind, f'{value}[{lane}]')};"
             for lane in range(shape.lanes)
         ]
     if shape.form == "struct":
         lines = []
         for name, member, start in shape.members:
             lines.extend(
-                _store_lines(buffer, member, offset + start, f"{value}.{name}")
+                _store_lines(buffer, member, offset + start, f"{value}.{name}", base)
             )
         return lines
     lines = []
@@ -716,6 +817,7 @@ def _store_lines(buffer, shape, offset, value):
                 shape.element,
                 offset + index * shape.element.words,
                 f"{value}[{index}]",
+                base,
             )
         )
     return lines
@@ -734,36 +836,106 @@ def _declared_layout(declaration):
     return None
 
 
-def _lowered_buffers(program, shapes, target):
-    buffers = {}
-    for declaration in getattr(program, "global_variables", None) or []:
-        var_type = getattr(declaration, "var_type", None)
-        if (
-            _declared_layout(declaration) != "hlsl_structured"
-            or not isinstance(var_type, A.NamedType)
-            or var_type.name not in _WRAPPERS
-            or len(var_type.generic_args) != 1
-        ):
-            continue
-        element = var_type.generic_args[0]
-        context = f"structured buffer {declaration.name}"
-        shape = shapes.of(element, context)
-        if _same_layout(shape) and not _holds_bool(shape):
-            continue
-        if shape.form == "struct" and target in _GENERATOR_LOWERS_STRUCTS:
-            continue
-        if not shape.lowerable:
-            raise StructuredLayoutUnsupportedError(
-                f"{context}: its element type is laid out differently by HLSL structured buffers and std430, and "
-                "holds a matrix, boolean, 16-bit or 64-bit value that cannot be split into 32-bit words",
-                target=target,
-            )
-        buffers[declaration.name] = _Buffer(
-            declaration.name, shape, var_type.name == "StructuredBuffer"
+def _buffer_type(declaration):
+    """The ``(attribute holder, type slot, type)`` of a structured-buffer declaration or parameter."""
+    slot = "param_type" if isinstance(declaration, A.ParameterNode) else "var_type"
+    var_type = getattr(declaration, slot, None)
+    if (
+        _declared_layout(declaration) != "hlsl_structured"
+        or not isinstance(var_type, A.NamedType)
+        or var_type.name not in _WRAPPERS
+        or len(var_type.generic_args) != 1
+    ):
+        return None
+    return slot, var_type
+
+
+def _plan_buffer(declaration, shapes, target, inline):
+    """A :class:`_Buffer` for a declaration whose layout must change, ``False`` when the generator keeps it, or
+    ``None`` when std430 already has the HLSL layout."""
+    found = _buffer_type(declaration)
+    if found is None:
+        return None
+    slot, var_type = found
+    kind = "buffer parameter" if inline else "structured buffer"
+    context = f"{kind} {declaration.name}"
+    shape = shapes.of(var_type.generic_args[0], context)
+    if _same_layout(shape) and not _holds_bool(shape):
+        return None
+    if shape.form == "struct" and target in _GENERATOR_LOWERS_STRUCTS and not inline:
+        return False
+    if not shape.lowerable:
+        raise StructuredLayoutUnsupportedError(
+            f"{context}: its element type is laid out differently by HLSL structured buffers and std430, and "
+            "holds a matrix, boolean, 16-bit or 64-bit value that cannot be split into 32-bit words",
+            target=target,
         )
-        declaration.var_type = A.NamedType(var_type.name, [A.PrimitiveType("uint")])
-        declaration.vtype = declaration.var_type
-    return buffers
+    buffer = _Buffer(
+        declaration.name, shape, var_type.name == "StructuredBuffer", inline
+    )
+    new_type = A.NamedType(var_type.name, [A.PrimitiveType("uint")])
+    setattr(declaration, slot, new_type)
+    if slot == "var_type":
+        declaration.vtype = new_type
+    return buffer
+
+
+def _lowered_buffers(program, shapes, target):
+    """The lowered global buffers, each function's buffer parameters and parameter names, and the global buffers
+    whose element calls are spelled as indexing.
+
+    A parameter maps to its :class:`_Buffer`, or to ``False`` when the generator keeps its layout itself.
+    """
+    buffers, canonical = {}, set()
+    for declaration in getattr(program, "global_variables", None) or []:
+        plan = _plan_buffer(declaration, shapes, target, inline=False)
+        if plan is not None:
+            canonical.add(declaration.name)
+        if plan:
+            buffers[declaration.name] = plan
+    scopes = {}
+    for function in iter_functions(program):
+        parameters, names = {}, set()
+        for parameter in getattr(function, "parameters", None) or []:
+            name = getattr(parameter, "name", None)
+            if not isinstance(name, str):
+                continue
+            names.add(name)
+            plan = _plan_buffer(parameter, shapes, target, inline=True)
+            if plan is not None:
+                parameters[name] = plan
+        scopes[id(function)] = (parameters, names)
+    return buffers, scopes, canonical
+
+
+def _buffer_call(node, name, count, names):
+    """Whether ``node`` is ``name(buffer, ...)`` with ``count`` arguments on one of ``names``."""
+    arguments = getattr(node, "arguments", None) or []
+    return (
+        isinstance(node, A.FunctionCallNode)
+        and call_name(node) == name
+        and len(arguments) == count
+        and isinstance(arguments[0], A.IdentifierNode)
+        and arguments[0].name in names
+    )
+
+
+def _canonicalize_buffer_calls(node, names):
+    """Spell ``buffer_load(b, i)`` as ``b[i]`` and a ``buffer_store(b, i, v)`` statement as ``b[i] = v``."""
+    if not names:
+        return
+    for slot_field, key in list(child_slots(node)):
+        child = get_child(node, slot_field, key)
+        if isinstance(child, A.ExpressionStatementNode) and _buffer_call(
+            child.expression, "buffer_store", 3, names
+        ):
+            buffer, index, value = child.expression.arguments
+            child.expression = A.AssignmentNode(A.ArrayAccessNode(buffer, index), value)
+        elif _buffer_call(child, "buffer_load", 2, names):
+            child = A.ArrayAccessNode(*child.arguments)
+            set_child(node, slot_field, key, child)
+        if isinstance(child, A.ASTNode):
+            _canonicalize_buffer_calls(child, names)
 
 
 def _holds_bool(shape):
@@ -772,6 +944,16 @@ def _holds_bool(shape):
     if shape.form == "array":
         return _holds_bool(shape.element)
     return any(_holds_bool(member) for _name, member, _offset in shape.members)
+
+
+def _substitute(node, replacements):
+    """``node`` with each identifier named in ``replacements`` replaced by a copy of its expression."""
+    if isinstance(node, A.IdentifierNode) and node.name in replacements:
+        return clone(replacements[node.name])
+    for slot_field, key in list(child_slots(node)):
+        child = get_child(node, slot_field, key)
+        set_child(node, slot_field, key, _substitute(child, replacements))
+    return node
 
 
 def _parse_helpers(texts):
@@ -788,12 +970,22 @@ def legalize_structured_layouts(program, target) -> int:
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
     shapes = _Shapes(program)
-    buffers = _lowered_buffers(program, shapes, target)
-    if not buffers:
+    buffers, scopes, canonical = _lowered_buffers(program, shapes, target)
+    if not canonical and not any(parameters for parameters, _names in scopes.values()):
         return 0
-    rewriter = _Rewriter(program, buffers, target)
+    rewriter = _Rewriter(program, {}, target)
+    count = len(buffers)
     for function in list(iter_functions(program)):
-        if getattr(function, "body", None) is not None:
+        parameters, names = scopes.get(id(function), ({}, set()))
+        scope = {name: buffer for name, buffer in buffers.items() if name not in names}
+        scope.update((name, buffer) for name, buffer in parameters.items() if buffer)
+        count += sum(1 for buffer in parameters.values() if buffer)
+        kept = {name for name in canonical if name not in names} | set(parameters)
+        if getattr(function, "body", None) is None:
+            continue
+        _canonicalize_buffer_calls(function.body, kept)
+        if scope:
+            rewriter.buffers = scope
             rewriter.statement(function.body)
     if rewriter.helpers:
         functions = getattr(program, "functions", None)
@@ -805,4 +997,4 @@ def legalize_structured_layouts(program, target) -> int:
         functions[0:0] = _parse_helpers(
             [rewriter.helpers[name] for name in sorted(rewriter.helpers)]
         )
-    return len(buffers)
+    return count
