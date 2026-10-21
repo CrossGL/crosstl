@@ -35,6 +35,7 @@ _SHARED = (
     ".github/actions/install-linux-dxc/**",
     ".github/actions/install-shader-validators/**",
     "pyproject.toml",
+    "requirements.txt",
 )
 
 PATHS = {
