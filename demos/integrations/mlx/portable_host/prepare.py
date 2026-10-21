@@ -51,6 +51,7 @@ def adapted_sources(original, primitives, events):
         "RandomBits",
         "Scan",
         "Quantize",
+        "QuantizedMatmul",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",

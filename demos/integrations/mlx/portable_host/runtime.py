@@ -33,6 +33,8 @@ from demos.integrations.mlx.portable_host import (
     copy_layout,
     gather_dispatch,
     half_storage,
+    matmul_dispatch,
+    matmul_layout,
     quantization_dispatch,
     quantization_layout,
     random_dispatch,
@@ -47,6 +49,9 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
+)
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    QuantizedMatmulPackageCache,
 )
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
@@ -282,6 +287,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.quantized_matmuls = (
+            QuantizedMatmulPackageCache(
+                mlx_root, self.directory / "quantized-matmul", self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -425,6 +437,12 @@ class HostRuntime:
                 gather_signature(name)
                 return 1
             if (
+                name.startswith(matmul_layout.ENTRY_PREFIXES)
+                and self.quantized_matmuls is not None
+            ):
+                matmul_layout.signature(name)
+                return 1
+            if (
                 name.startswith(quantization_layout.ENTRY_PREFIXES)
                 and self.quantization is not None
             ):
@@ -475,6 +493,10 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(matmul_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

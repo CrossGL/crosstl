@@ -40,6 +40,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "RandomBits",
                     "Scan",
                     "Quantize",
+                    "QuantizedMatmul",
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",

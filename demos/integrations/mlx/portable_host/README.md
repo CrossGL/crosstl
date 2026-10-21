@@ -348,6 +348,35 @@ copy path, with its size and dtype restrictions; in particular, strided bfloat16
 copies are not implemented. Other upstream-test prerequisites such as large random
 arrays and quantized matrix multiplication remain separate work.
 
+## Affine Quantized Matrix-Vector Products
+
+`QuantizedMatmul::eval_gpu` routes transposed affine products with fewer input
+vectors than `get_qmv_batch_limit` to the translated `dispatch_qmv` kernels of the
+unchanged `quantized.metal`: `affine_qmv_quad` when `K` is 64 or 128 and the width
+is a power of two, `affine_qmv_fast` when `N` and `K` are aligned, otherwise
+`affine_qmv`, each with its `batch_0` or `batch_1` variant. The host reports no
+Apple GPU generation, so it uses the lowest generation's batch limits and never
+selects `affine_qmv_wide`. Non-transposed products, matrix-matrix products,
+gathers and the floating-point modes still fail with an explicit error.
+
+`matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
+ones MLX's routing would choose for the bound shapes, strides and buffer extents.
+Every batch offset must name an element of its buffer and every buffer holds at
+most 2^28 - 1 elements, which the OpenGL translation asserts for its 32-bit batch
+offsets. `qmv_quad` reads one scale and bias per row of its last tile, past `N`;
+the host pads those buffers with poison elements and the output with guards, and
+copies the output back only after validating them. `batch_0` kernels reflect the
+batch parameters MLX does not bind; the host supplies inert unbatched values.
+
+The three-platform host jobs run `verify_quantized_matmul.py` through
+`mx.quantized_matmul`. Its nine cases cover every route and batch variant, all
+three element types, a partial `qmv_quad` tile, broadcast weights, a strided
+activation batch and two batch axes. Inputs lie on dyadic grids that keep every
+float32 partial sum exact, so each output must match an exact float64 reference
+bit for bit, and float32 results must also match MLX's CPU backend. The unchanged
+upstream `test_qmv` also needs the floating-point `Matmul` route for its
+reference products, which remains separate work.
+
 ## Block Quantization
 
 The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization
