@@ -452,6 +452,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metadata_call_bounds import (
+    call_parameter_bounds,
+    inherited_metadata_bindings,
+    join_parameter_bounds,
+)
 from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -4869,6 +4874,7 @@ class GLSLCodeGen(
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_function_metadata = {}
         self.glsl_software_subgroup_modular_stride_loops = set()
 
         functions = self.glsl_software_subgroup_functions(ast)
@@ -5268,11 +5274,23 @@ class GLSLCodeGen(
         # Intersect caller facts before inspecting a callee. A parameter is not
         # uniform merely because one invocation supplies a constant argument.
         uniform_parameters = {}
+        # Checked metadata bounds every call passes to a helper parameter.
+        parameter_bounds = {}
 
         def propagate(function_id, arguments):
+            bounds = self.glsl_software_subgroup_function_metadata.get(function_id)
             for call, target_id in edges.get(function_id, ()):
                 if target_id not in approved or id(call) in dead_ids:
                     continue
+                parameter_bounds[target_id] = join_parameter_bounds(
+                    parameter_bounds.get(target_id),
+                    call_parameter_bounds(
+                        getattr(functions_by_id[target_id], "parameters", ()) or (),
+                        getattr(call, "arguments", ()) or (),
+                        bounds,
+                        self.type_name_string,
+                    ),
+                )
                 if id(call) not in arguments:
                     operation, operation_node = first_operation(target_id)
                     raise self.glsl_software_subgroup_error(
@@ -5309,7 +5327,10 @@ class GLSLCodeGen(
             )
             self.glsl_software_subgroup_function_uniform_seeds[function_id] = seeds
             arguments = self.glsl_software_subgroup_uniform_arguments(
-                function, seeds, entry=False
+                function,
+                seeds,
+                entry=False,
+                inherited_bounds=parameter_bounds.get(function_id),
             )
             propagate(function_id, arguments)
 
@@ -5912,6 +5933,7 @@ class GLSLCodeGen(
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_function_metadata = {}
         self.glsl_software_subgroup_modular_stride_loops = set()
         self.glsl_software_subgroup_call_mutations = {}
         self.glsl_software_subgroup_uniform_call_ids = set()
@@ -6484,14 +6506,23 @@ class GLSLCodeGen(
             "redeclared_names": redeclared,
         }
 
-    def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
+    def glsl_software_subgroup_uniform_arguments(
+        self, function, seeds, *, entry, inherited_bounds=None
+    ):
         facts = self.glsl_software_subgroup_exit_facts(function, seeds, entry)
-        metadata_bounds = metadata_loop_bindings(
-            function,
-            self.metadata_preconditions if entry else (),
-            facts["mutable_names"],
-            self.walk_ast,
+        metadata_bounds = (
+            metadata_loop_bindings(
+                function,
+                self.metadata_preconditions,
+                facts["mutable_names"],
+                self.walk_ast,
+            )
+            if entry
+            else inherited_metadata_bindings(
+                function, inherited_bounds, facts["mutable_names"], self.walk_ast
+            )
         )
+        self.glsl_software_subgroup_function_metadata[id(function)] = metadata_bounds
         self.glsl_software_subgroup_loop_metadata.update(
             (id(node), metadata_bounds)
             for node in self.walk_ast(function.body)

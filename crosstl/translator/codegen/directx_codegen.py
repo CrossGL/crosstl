@@ -455,6 +455,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metadata_call_bounds import (
+    call_parameter_bounds,
+    inherited_metadata_bindings,
+    join_parameter_bounds,
+)
 from .operator_spellings import map_c_family_operator
 from .pack_builtins import PACK_FUNCTIONS, emit_hlsl_pack_helpers, hlsl_pack_call
 from .pointer_reinterpret import (
@@ -7088,6 +7093,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         *,
         entry=False,
         offset_names=frozenset(),
+        metadata_bounds=None,
     ):
         body = getattr(function, "body", None)
         operation_records = self.hlsl_software_subgroup_operation_records(body)
@@ -7103,12 +7109,13 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             mutable_names,
             self.type_name_string,
         )
-        metadata_bounds = metadata_loop_bindings(
-            function,
-            self.metadata_preconditions if entry else (),
-            mutable_names,
-            self.walk_ast,
-        )
+        if metadata_bounds is None:
+            metadata_bounds = metadata_loop_bindings(
+                function,
+                self.metadata_preconditions if entry else (),
+                mutable_names,
+                self.walk_ast,
+            )
         self.hlsl_software_subgroup_modular_stride_loops.update(
             modular_stride_loops(function, self.type_name_string, self.walk_ast)
         )
@@ -8072,6 +8079,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         if invocation_count <= self.software_subgroup_width:
             uniform_semantics.add("gl_SubgroupID")
         uniform_parameters = {}
+        # Checked metadata bounds every call passes to a helper parameter.
+        parameter_bounds = {}
         for function_id in ordered_ids:
             function = functions_by_id[function_id]
             parameters = getattr(function, "parameters", []) or []
@@ -8199,6 +8208,18 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 if name not in mutable_names
             }
             uniform_call_arguments = {}
+            metadata_bounds = (
+                metadata_loop_bindings(
+                    function, self.metadata_preconditions, mutable_names, self.walk_ast
+                )
+                if function is entry_function
+                else inherited_metadata_bindings(
+                    function,
+                    parameter_bounds.get(function_id),
+                    mutable_names,
+                    self.walk_ast,
+                )
+            )
             self.validate_hlsl_software_subgroup_control_flow(
                 function,
                 dependent_calls,
@@ -8209,6 +8230,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 uniform_call_arguments,
                 entry=function is entry_function,
                 offset_names=offset_names,
+                metadata_bounds=metadata_bounds,
             )
             for call, target in call_edges[function_id]:
                 facts = uniform_call_arguments.get(id(call), set())
@@ -8216,6 +8238,15 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                     uniform_parameters[target] = set(facts)
                 else:
                     uniform_parameters[target].intersection_update(facts)
+                parameter_bounds[target] = join_parameter_bounds(
+                    parameter_bounds.get(target),
+                    call_parameter_bounds(
+                        getattr(functions_by_id[target], "parameters", ()) or (),
+                        getattr(call, "arguments", ()) or (),
+                        metadata_bounds,
+                        self.type_name_string,
+                    ),
+                )
 
     def hlsl_software_subgroup_identifier(self, key, base_name):
         existing = self.hlsl_software_subgroup_helper_names.get(key)
