@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 from ..objects import UNIFORMS
 from .common import pick, prototype, split
@@ -234,9 +234,9 @@ def parse(
             sorted((o[3] for o in overloads), key=_scalar_only), UNIFORMS["wgsl"]
         )
         group, stage, template, _ = next(o for o in overloads if o[3] is chosen)
-        spelling, counterpart = crossgl.spelling("wgsl", name, glsl_names), None
-        if name in crossgl.COUNTERPARTS["wgsl"]:
-            spelling, counterpart = prototype(crossgl.COUNTERPARTS["wgsl"][name])
+        spelling, counterpart = spellings.spelling("wgsl", name, glsl_names), None
+        if name in spellings.COUNTERPARTS["wgsl"]:
+            spelling, counterpart = prototype(spellings.COUNTERPARTS["wgsl"][name])
         features.append(
             Feature(
                 "wgsl",

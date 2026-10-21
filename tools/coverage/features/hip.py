@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import Feature, Signature, Type
 from .cuda import crossgl_name, cuda_type, parameter
 
@@ -136,7 +136,7 @@ def parse(
                 name,
                 signature,
                 group=group,
-                crossgl=crossgl.spelling(
+                crossgl=spellings.spelling(
                     "hip", crossgl_name(name, signature, double_names), glsl_names
                 ),
             )

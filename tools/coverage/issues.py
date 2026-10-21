@@ -22,7 +22,8 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 
-from . import chart, crossgl, ir, publish
+from . import chart, ir, publish
+from .causes import Causes, causes_of, diagnostic, grouped, headline
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -38,20 +39,6 @@ _UNSAFE = re.compile(r"[^\w.:+-]")
 TITLE_LIMIT = 120
 # A bug issue names this many of the features that share its cause.
 LISTED = 40
-# Numbers on their own, such as line and column numbers; the digits of a name such as ``float4`` stay.
-_DIGITS = re.compile(r"(?<!\w)\d+(?!\w)")
-# The buffers, locals and entry points of the generated probes (:mod:`.probes`), quoted in a diagnostic.
-_PLUMBING = re.compile(
-    r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
-)
-# A cause writes the feature's own name as FEATURE. An input row's diagnostics start with _ROUND_TRIP, whose words
-# are never the name of a feature such as ``round``.
-FEATURE = "<feature>"
-_ROUND_TRIP = "after the round trip: "
-# The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``.
-_LOCATION = re.compile(
-    r"^(?:after the round trip: )?(?:\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
-)
 
 TOOLS = {
     "cuda": "nvcc",
@@ -176,47 +163,6 @@ def tracking_key(row: dict) -> str:
     return key("tracking", row["language"], row["direction"])
 
 
-def _diagnostic(feature: dict) -> str:
-    """The first line of a wrong result's diagnostic without its line and column numbers and the names every probe
-    uses."""
-    detail = (feature.get("detail") or "no diagnostic was recorded").splitlines()[0]
-    detail = _PLUMBING.sub(lambda m: m.group(1) + "<probe>" + m.group(1), detail)
-    return _DIGITS.sub("N", detail).strip()
-
-
-def cause(feature: dict, language: str = "") -> str:
-    """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
-    names every probe uses, and the feature's own name or CrossGL spelling, including the name CrossGL gives a
-    ``language`` built-in (:data:`.crossgl.RENAMES`). Wrong results with one cause are one bug, so a generator that
-    emits twenty builtins unchanged has one issue rather than twenty.
-    """
-    detail = _diagnostic(feature)
-    prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
-    rest = detail[len(prefix) :]
-    names = {feature.get("name"), feature.get("crossgl")} - {None, ""}
-    renames = crossgl.RENAMES.get(language, {})
-    names |= {renames[name] for name in names if name in renames}
-    for name in sorted(names, key=lambda n: (-len(n), n)):
-        rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
-    return prefix + rest
-
-
-def causes_of(row: dict) -> dict[str, str]:
-    """The cause of each wrong result of ``row`` by feature name.
-
-    A diagnostic that names one feature but is shared by another that it does not name is the cause of both as it
-    stands, so the ``geometry`` stage that fails with "Rust geometry stage requires ..." stays with the functions that
-    fail that way. Any other wrong result has its :func:`cause`.
-    """
-    wrong = [f for f in row["features"] if f["outcome"] == "wrong"]
-    named = {f["name"]: cause(f, row["language"]) for f in wrong}
-    literal = {_diagnostic(f) for f in wrong if named[f["name"]] == _diagnostic(f)}
-    return {
-        f["name"]: _diagnostic(f) if _diagnostic(f) in literal else named[f["name"]]
-        for f in wrong
-    }
-
-
 def _covered(body: str | None) -> list[str]:
     found = _FEATURES.search(body or "")
     return found.group(1).split(",") if found and found.group(1) else []
@@ -328,8 +274,7 @@ def _fence(text: str) -> str:
 def bug_title(row: dict, text: str, features: list[dict]) -> str:
     """The title of the bug for ``features``, whose cause is ``text``; one feature's title keeps its name."""
     first = features[0]
-    summary = _diagnostic(first) if len(features) == 1 else text
-    summary = _LOCATION.sub("", summary, count=1).strip()
+    summary = headline(diagnostic(first) if len(features) == 1 else text)
     if len(summary) > TITLE_LIMIT:
         summary = summary[: TITLE_LIMIT - 1].rstrip() + "…"
     return f"{_name(row)}: {summary}"
@@ -416,20 +361,6 @@ def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
             plan.actions.append(
                 Action("edit", issue.key, title, body, (), issue.number)
             )
-
-
-# A row's wrong results grouped by cause, as (cause, features) pairs.
-Causes = list[tuple[str, list[dict]]]
-
-
-def _causes(row: dict) -> Causes:
-    """The row's wrong results grouped by :func:`causes_of`, the cause shared by most features first."""
-    causes = causes_of(row)
-    groups: dict[str, list[dict]] = {}
-    for feature in sorted(row["features"], key=lambda f: f["name"]):
-        if feature["outcome"] == "wrong":
-            groups.setdefault(causes[feature["name"]], []).append(feature)
-    return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
 
 
 def _stale(
@@ -529,7 +460,7 @@ def plan(
             managed.setdefault(issue.key, issue)
     state = _Plan(managed, repository)
     rows = _rows(report)
-    measured = [(row, _causes(row)) for row in rows if row["language"] != ir.LANGUAGE]
+    measured = [(row, grouped(row)) for row in rows if row["language"] != ir.LANGUAGE]
     for row, causes in measured:
         _adopt(state, row, causes)
     bugs = {k: i.number for k, i in state.managed.items() if k.startswith("wrong/")}

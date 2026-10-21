@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 
 # Definitions in the headers that are not CUDA device functions a kernel calls: the pre-Volta warp votes CUDA 9
@@ -124,7 +124,7 @@ def parse(
                 name,
                 signature,
                 group=group,
-                crossgl=crossgl.spelling(
+                crossgl=spellings.spelling(
                     "cuda", crossgl_name(name, signature, double_names), glsl_names
                 ),
             )
