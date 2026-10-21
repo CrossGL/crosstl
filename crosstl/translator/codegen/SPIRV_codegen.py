@@ -5799,12 +5799,17 @@ class VulkanSPIRVCodeGen(
             return self.default_value_for_buffer_atomic_failure(function_name, args)
 
         metadata = self.storage_buffer_access_metadata_for_pointer(target_pointer)
-        if metadata is None:
+        # Group-shared integers are atomic at workgroup scope (Vulkan 1.3 appendix
+        # "SPIR-V Environment": atomics on Workgroup storage).
+        workgroup = (
+            metadata is None and target_pointer.type.storage_class == "Workgroup"
+        )
+        if metadata is None and not workgroup:
             self.refuse_lowering(f"{function_name} requires a storage buffer target")
             return self.default_value_for_buffer_atomic_failure(
                 function_name, args, target_type
             )
-        if metadata.get("readonly") or metadata.get("writeonly"):
+        if metadata and (metadata.get("readonly") or metadata.get("writeonly")):
             self.refuse_lowering(
                 f"{function_name} requires a read-write storage buffer"
             )
@@ -5861,7 +5866,7 @@ class VulkanSPIRVCodeGen(
         if atomic_operation is None and function_name == "atomicMax":
             atomic_operation = "OpAtomicSMax" if type_name == "int" else "OpAtomicUMax"
 
-        scope = self.spirv_scope_constant("Device")
+        scope = self.spirv_scope_constant("Workgroup" if workgroup else "Device")
         semantics = self.spirv_memory_semantics_constant()
         id_value = self.get_id()
         if function_name == "atomicCompSwap":

@@ -357,6 +357,7 @@ from .metal_array_copies import (
     generate_metal_array_initializer,
     render_metal_split_member_constructor_arguments,
 )
+from .metal_atomic_addresses import metal_vector_component_address
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
@@ -14940,9 +14941,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 func_name, target, "requires writable storage"
             )
 
-        target_expr = self.generate_expression(target)
-        if not self.is_metal_address_expression(target, target_expr):
-            target_expr = f"&{target_expr}"
+        target_expr = metal_vector_component_address(
+            self, target, address_space, mapped_target_type
+        )
+        if target_expr is None:
+            target_expr = self.generate_expression(target)
+            if not self.is_metal_address_expression(target, target_expr):
+                target_expr = f"&{target_expr}"
         if operation == "compare_exchange":
             compare = self.generate_expression_with_expected(
                 args[1], mapped_target_type
