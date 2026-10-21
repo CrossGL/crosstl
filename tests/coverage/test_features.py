@@ -1308,9 +1308,13 @@ def test_mojo_reads_the_functions_the_packages_export():
     assert features["isnan"].signature.result == Type("bool")
     assert features["pop_count"].signature.result == Type("int")
     assert features["pop_count"].crossgl == "bitCount"
-    assert features["gcd"].signature.params[0].type == Type.other("Int")
-    assert (
-        features["frexp"].signature.unsupported == "StaticTuple[SIMD[dtype, width], 2]"
+    assert features["gcd"].signature == Signature(
+        Type("int64"), (Param(Type("int64")), Param(Type("int64")))
+    )
+    # frexp returns a pair the probe reads the first value of, and CrossGL writes it the way GLSL does.
+    assert features["frexp"].signature.result == Type.other("StaticTuple[Float32, 2]")
+    assert features["frexp"].counterpart == Signature(
+        Type("float"), (Param(Type("float")), Param(Type("int"), "out"))
     )
 
 

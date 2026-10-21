@@ -1381,7 +1381,23 @@ MOJO_SIGNATURES = [
     feature("isnan", Type("bool"), Type("float")),
     feature("pop_count", Type("int"), Type("int")),
     feature("ldexp", Type("double"), Type("double"), Type("int")),
+    feature("gcd", Type("int64"), Type("int64"), Type("int64")),
+    feature("frexp", Type.other("StaticTuple[Float32, 2]"), Type("float")),
+    feature(
+        "divmod", Type.other("Tuple[Float32, Float32]"), Type("float"), Type("float")
+    ),
 ]
+
+
+def test_mojo_probe_spells_the_word_sized_int_and_reads_the_first_of_a_pair():
+    source = probes.build(MOJO_SIGNATURES[4], "mojo").source
+    assert "    var a0: Int = Int(iin[i + 0])\n" in source
+    assert "    var r: Int = gcd(a0, a1)\n    outp[i] = Int32(r)\n" in source
+    source = probes.build(MOJO_SIGNATURES[5], "mojo").source
+    assert "    var r: Float32 = frexp(a0)[0]\n    outp[i] = r\n" in source
+    # Only Mojo reads a pair.
+    with pytest.raises(probes.ProbeError, match="Tuple"):
+        probes.build(MOJO_SIGNATURES[6], "cuda")
 
 
 def test_mojo_probe_is_a_gpu_kernel_over_pointers():
