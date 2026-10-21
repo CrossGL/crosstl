@@ -44,6 +44,8 @@ CAPABILITIES = (
     "Float16",
     "Float64",
     "Int64Atomics",
+    "DerivativeControl",
+    "DemoteToHelperInvocation",
     "GroupNonUniform",
     "GroupNonUniformVote",
     "GroupNonUniformArithmetic",
@@ -58,6 +60,7 @@ CAPABILITIES = (
     "VulkanMemoryModelDeviceScope",
 )
 EXTENSIONS = (
+    "SPV_EXT_demote_to_helper_invocation",
     "SPV_EXT_shader_atomic_float_add",
     "SPV_EXT_shader_atomic_float_min_max",
     "SPV_KHR_shader_clock",

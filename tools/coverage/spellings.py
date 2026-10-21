@@ -219,9 +219,9 @@ COUNTERPARTS = {
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
 }
-# Metal functions whose overloads take a pointer or return an opaque type (atomic compare-exchange takes the expected
-# value through a pointer, a ballot returns a simd_vote) are measured in the output direction only, through the
-# CrossGL operation that translates to them.
+# Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a
+# pointer and returns whether it swapped, where CrossGL's atomicCompSwap, like GLSL's, takes it by value and returns
+# the old value; a ballot returns a simd_vote mask, where CrossGL's returns a uvec4.
 COUNTERPARTS["metal"].update(
     {
         "atomic_compare_exchange_weak": "int atomicCompSwap(inout int, int, int)",

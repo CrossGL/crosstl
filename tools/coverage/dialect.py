@@ -44,6 +44,8 @@ class Dialect:
     geometry_suffix = ""
     # The task payload a task-stage probe declares and hands to the mesh workgroups it launches.
     payload = "payload"
+    # The vertex a geometry probe fills in from its input point, for a stream's ``Append``.
+    vertex = "emitted"
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
@@ -53,6 +55,8 @@ class Dialect:
     packed_bytes = False
 
     def type(self, kind: Type) -> str:
+        if kind.count:
+            raise ProbeError(f"no probe for {self.language} array parameters yet")
         if kind.opaque:
             if kind.opaque == "void":
                 return "void"
@@ -113,9 +117,32 @@ class Dialect:
             return self.construct(kind, [zero] * kind.shape[0])
         return zero
 
+    def constant_array(self, kind: Type, name: str) -> str:
+        """A local constant ``name`` of the array type ``kind``, for an argument that must be a constant
+        expression."""
+        element = self.type(kind.element)
+        values = ", ".join([self.literal(kind.element)] * kind.count)
+        return (
+            f"const {element} {name}[{kind.count}] = {element}[{kind.count}]({values});"
+        )
+
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
         return self.type(kind)
+
+    def absent(self, stage: str) -> str:
+        """Why the language has no ``stage`` at all, or an empty string when it has one or a probe is missing."""
+        return ""
+
+    def holding(self, opaque: str) -> str:
+        """The spelling of a local that holds a result of the opaque type ``opaque``, for a call whose result must be
+        kept, or an empty string when the probe only makes the call."""
+        return ""
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        """How a probe reads a result of the opaque type ``opaque`` as a value: the value's type and an expression
+        with ``{}`` for the call, or ``None`` when the probe only makes the call."""
+        return None
 
     def stored(self, kind: Type, value: str) -> str:
         """``value``, of type ``kind``, as the output buffer's element type holds it."""
@@ -142,6 +169,10 @@ class Dialect:
 
     def out_argument(self, name: str) -> str:
         return name
+
+    def address(self, name: str) -> str:
+        """A pointer to the local ``name``, for a parameter that takes one."""
+        raise ProbeError(f"no probe passes {self.language} a pointer yet")
 
     def inout_argument(self) -> str:
         return "outp[i]"
@@ -189,7 +220,9 @@ class Dialect:
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A geometry shader that takes and emits points and runs ``body`` with ``i`` set to 0, for a feature only
-        that stage has; the buffers and ``parts`` are :meth:`kernel`'s."""
+        that stage has; the buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``parameter``, the type of
+        the output stream the entry point takes as ``obj``, for a probe of the stream's methods; the probe then fills
+        in :attr:`vertex` before ``body``."""
         raise ProbeError(f"no geometry-stage probe for {self.language} yet")
 
     def raytracing(
@@ -216,3 +249,9 @@ class Dialect:
         ``body`` hands to the mesh workgroups it launches; the buffers and ``parts`` are :meth:`kernel`'s.
         """
         raise ProbeError(f"no task-stage probe for {self.language} yet")
+
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        """A work-graph node shader of one thread, launched once, that runs ``body`` with ``i`` set to 0; the
+        buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``parameter``, the type of the node input or
+        output the entry point takes as ``obj``, for a probe of its methods."""
+        raise ProbeError(f"no node-stage probe for {self.language} yet")

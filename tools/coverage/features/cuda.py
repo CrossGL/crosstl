@@ -15,9 +15,12 @@ from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
 
 # Definitions in the headers that are not CUDA device functions a kernel calls: the pre-Volta warp votes CUDA 9
-# removed, a helper of those votes, the debugger trap and profiler counters, and C library functions.
+# removed, a helper of those votes, the debugger trap and profiler counters, and C library functions. The last four
+# wrap libdevice functions under names that only Clang's headers give them: nvcc on Linux, where the probes are
+# validated, rejects a kernel that calls them as using an undefined identifier.
 LEFT_OUT = frozenset(
-    "__all __any __ballot __bool2mask __brkpt __trap __pm0 __pm1 __pm2 __pm3 memcpy memset".split()
+    "__all __any __ballot __bool2mask __brkpt __trap __pm0 __pm1 __pm2 __pm3 memcpy memset"
+    " __isfinited __signbitd powi powif".split()
 )
 # ``long`` is 64 bits wide in device code on Linux, where the headers are read and nvcc validates the probes.
 _SCALARS = {
@@ -43,6 +46,8 @@ _ATOMIC = re.compile(r"__(i|u|ll|ull|ill|us|f|d)Atomic(\w+?)(_block|_system)?")
 # Which typed helper stands for the public atomic function: the first of these the header has.
 _ATOMIC_PREFERENCE = ("i", "u", "f", "ll", "ull", "ill", "d", "us")
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\([^)]*\)\)")
+# Block comments, such as the ``/* clock_t= */`` before clock's result type.
+_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 
 
 def cuda_type(spelling: str) -> Type:
@@ -60,8 +65,12 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
     if not text.endswith("*"):
         return Param(cuda_type(text))
     pointee = text.rstrip("*").strip()
-    if pointee.startswith("const ") or text.count("*") > 1:
+    if text.count("*") > 1:
         return Param(Type.other(text))
+    if pointee.startswith("const "):
+        # A pointer to constant values, such as the vector norm reads, takes the address of a local.
+        kind = cuda_type(pointee)
+        return Param(kind, "address") if not kind.opaque else Param(Type.other(text))
     if atomic and first:
         return Param(cuda_type(pointee), "inout")
     return Param(cuda_type(pointee), "out")
@@ -70,7 +79,7 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
 def definitions(text: str, group: str) -> list[tuple[str, str, Signature, str]]:
     """``(name, group, signature, helper)`` for every function the header defines, first definition of a name only.
     ``helper`` is the typed atomic helper's own name, or empty."""
-    text = _ATTRIBUTE.sub("", text)
+    text = _ATTRIBUTE.sub("", _COMMENT.sub("", text))
     found: dict[str, tuple[str, str, Signature, str]] = {}
     for result, name, params in _DEFINITION.findall(text):
         if name in LEFT_OUT:

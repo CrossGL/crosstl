@@ -8,6 +8,7 @@ from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
 from .model import RAYTRACING_STAGES, Type
+from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
 
 
 class GLSL(Dialect):
@@ -148,6 +149,25 @@ class HLSL(Dialect):
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["    return float4(0.0, 0.0, 0.0, 0.0);", "}"]) + "\n"
 
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        # A Direct3D geometry shader always takes an output stream. Its vertex has no system value, which the
+        # validator would require every path to write, so a probe that appends nothing is valid.
+        stream = parts.get("parameter", STREAM)
+        lines = [
+            f"struct {VERTEX} {{",
+            "    float4 value : TEXCOORD0;",
+            "};",
+            *self._globals(buffers, parts),
+            *self.stage_attributes.get("geometry", ()),
+            "[maxvertexcount(1)]",
+            f"void main(point float4 position[1] : POSITION, inout {stream} obj) {{",
+            "    uint i = 0u;",
+            f"    {VERTEX} {self.vertex};",
+            f"    {self.vertex}.value = position[0];",
+        ]
+        lines += [f"    {line}" for line in body]
+        return "\n".join(lines + ["}"]) + "\n"
+
     # Hit shaders take the ray payload, which shader model 6.7 and later require to declare who reads and writes each
     # field, and the triangle's barycentrics.
     _PAYLOAD = (
@@ -252,6 +272,48 @@ class HLSL(Dialect):
         ]
         return "\n".join(lines) + "\n"
 
+    # Node inputs that make a node a coalescing one, which runs a thread group per batch of input records; any other
+    # node is a broadcasting one with a fixed dispatch grid. A records object is requested from a node output.
+    _COALESCING = ("EmptyNodeInput", "GroupNodeInputRecords")
+    _RECORDS = {
+        "ThreadNodeOutputRecords": "GetThreadNodeOutputRecords",
+        "GroupNodeOutputRecords": "GetGroupNodeOutputRecords",
+    }
+
+    def holding(self, opaque: str) -> str:
+        if opaque == HIT_OBJECT:
+            return OBJECTS[HIT_OBJECT].spelling
+        return f"{opaque}<{RECORD}>" if opaque in self._RECORDS else ""
+
+    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        parameter = parts.get("parameter", "")
+        kind = parameter.split("<")[0]
+        # Only a record whose type tracks it can signal FinishedCrossGroupSharing.
+        shared = kind == "RWDispatchNodeInputRecord"
+        declared, opening = f"[MaxRecords(1)] {parameter} obj", []
+        if kind in self._RECORDS:
+            declared = f"[MaxRecords(1)] NodeOutput<{RECORD}> output"
+            opening = [f"    {parameter} obj = output.{self._RECORDS[kind]}(1);"]
+        elif shared:
+            declared = f"globallycoherent {parameter} obj"
+        coalescing = kind in self._COALESCING
+        lines = [
+            f"struct {'[NodeTrackRWInputSharing] ' if shared else ''}{RECORD} {{",
+            "    uint value;",
+            "};",
+            *self._globals(buffers, parts),
+            '[Shader("node")]',
+            f'[NodeLaunch("{"coalescing" if coalescing else "broadcasting"}")]',
+            *(() if coalescing else ("[NodeDispatchGrid(1, 1, 1)]",)),
+            "[NumThreads(1, 1, 1)]",
+            f"void main({declared if parameter else ''}) {{",
+            "    uint i = 0u;",
+            *opening,
+            *(f"    {line}" for line in body),
+            "}",
+        ]
+        return "\n".join(lines) + "\n"
+
 
 class Metal(Dialect):
     language = "metal"
@@ -271,11 +333,20 @@ class Metal(Dialect):
         "memory_order": "memory_order_relaxed",
         "mem_flags": "mem_flags::mem_none",
     }
+    # A ballot's mask converts to its vote_t integer only explicitly: a 64-bit simd_vote::vote_t and a 16-bit
+    # quad_vote::vote_t, which the probe stores as ulong and uint.
+    _VOTES = {
+        "simd_vote": (Type("uint64"), "static_cast<simd_vote::vote_t>({})"),
+        "quad_vote": (Type("uint"), "static_cast<quad_vote::vote_t>({})"),
+    }
 
     def type(self, kind: Type) -> str:
         if kind.opaque in self._ENUMERATORS:
             return kind.opaque
         return super().type(kind)
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        return self._VOTES.get(opaque)
 
     def scalar(self, scalar: str) -> str:
         if scalar == "double":
@@ -292,6 +363,9 @@ class Metal(Dialect):
 
     def inout_argument(self) -> str:
         return "&outp[i]"
+
+    def address(self, name: str) -> str:
+        return f"&{name}"
 
     def keep(self, atomic: bool) -> str:
         # An atomic buffer element can only be used through atomic functions.
@@ -473,6 +547,7 @@ class Slang(HLSL):
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
     stage_attributes = {
+        "geometry": ('[shader("geometry")]',),
         "tessellation-control": ('[shader("hull")]',),
         "mesh": ('[shader("mesh")]',),
         "task": ('[shader("amplification")]',),
