@@ -254,7 +254,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     dialect = DIALECTS[language]
     # A method is called on an object of its type, which the feature's group names.
     receiver = (
-        Receiver(feature.group, dialect) if feature.category == "method" else None
+        Receiver(feature.group, dialect, feature.spelling)
+        if feature.category == "method"
+        else None
     )
     interpolant = feature.name in _INTERPOLANTS and (
         "flat" if feature.name in _FLAT else "smooth"

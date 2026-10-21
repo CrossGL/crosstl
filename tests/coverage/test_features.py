@@ -239,6 +239,12 @@ float [[ro]] CalculateLevelOfDetail(in any_sampler s, in float<2> x) : tex2d_t_c
 $match<0, -1> void<4> [[ro]] GatherCmp(in sampler_cmp s, in float<2> x, in float compareValue) : tex2d_t_gather_comp;
 $classT [[]] Load(in int<3> x, in int<2> o, out uint_only status) : tex2d_t_load_o_s;
 $classT [[ro]] Load(in int<3> x) : tex2d_t_load;
+$match<0, -1> void<4> [[ro]] GatherRaw(in sampler s, in float<2> x);
+} namespace
+
+namespace FeedbackTexture2DMethods {
+void [[]] WriteSamplerFeedback(in Texture2D t, in sampler s, in float<2> x);
+void [[]] WriteSamplerFeedbackLevel(in Texture2D t, in sampler s, in float<2> x, in float lod);
 } namespace
 
 namespace ByteAddressBufferMethods {
@@ -305,6 +311,21 @@ def test_hlsl_methods_take_the_element_type_of_their_object():
     assert load.signature == Signature(Type("float", (4,)), (Param(Type("int", (3,))),))
     assert (load.group, load.spelling, load.crossgl) == ("Texture2D", "Load", "Load")
     assert features["ByteAddressBuffer.Load"].signature.result == Type("uint")
+
+
+def test_hlsl_gather_raw_returns_the_raw_bits_of_a_uint_texture():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    assert features["Texture2D.GatherRaw"].signature.result == Type("uint", (4,))
+    assert features["Texture2D.GatherCmp"].signature.result == Type("float", (4,))
+
+
+def test_hlsl_feedback_methods_take_the_texture_they_record():
+    features = by_name(hlsl.parse(HLSL_TABLE))
+    implicit = features["FeedbackTexture2D.WriteSamplerFeedback"]
+    level = features["FeedbackTexture2D.WriteSamplerFeedbackLevel"]
+    assert implicit.signature.params[0].type == Type.other("Texture2D")
+    # Only the implicit level of detail needs derivatives, so a fragment shader.
+    assert (implicit.stage, level.stage) == ("fragment", "compute")
 
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():

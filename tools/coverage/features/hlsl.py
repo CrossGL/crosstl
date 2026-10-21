@@ -22,7 +22,7 @@ from ..model import (
     Type,
     raytracing_stage,
 )
-from ..objects import OBJECTS, SAMPLERS, Object
+from ..objects import OBJECTS, SAMPLERS, element
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
@@ -43,7 +43,8 @@ _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
 _LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
-    "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped".split()
+    "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
+    " WriteSamplerFeedback WriteSamplerFeedbackBias".split()
 )
 SCALAR = {
     "bool": "bool",
@@ -257,13 +258,14 @@ def declarations(text: str):
             )
 
 
-def _concrete(text: str, kind: Object) -> str:
-    """``text`` with an object's generic types made concrete: ``$classT`` is its element type, ``$funcT`` (the type a
-    templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that layout.
+def _concrete(text: str, held: Type | None) -> str:
+    """``text`` with an object's generic types made concrete: ``$classT`` is its element type ``held``, ``$funcT``
+    (the type a templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that
+    layout.
     """
-    element = kind.element or Type("uint")
-    spelled = element.scalar + (f"<{element.shape[0]}>" if element.shape else "")
-    text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", element.scalar, text)
+    held = held or Type("uint")
+    spelled = held.scalar + (f"<{held.shape[0]}>" if held.shape else "")
+    text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", held.scalar, text)
     text = re.sub(r"\$match<\s*-1\s*,\s*0\s*>\s*void\b", spelled, text)
     text = re.sub(r"\bany_sampler\b", "sampler", text)
     return text.replace("$classT", spelled).replace("$funcT", "uint")
@@ -296,7 +298,7 @@ def _overloads(
 def _method(owner: str, name: str, declared: list) -> Feature:
     kind = OBJECTS.get(owner)
     signatures, note = _overloads(
-        declared, (lambda text: _concrete(text, kind)) if kind else str
+        declared, (lambda text: _concrete(text, element(owner, name))) if kind else str
     )
     if kind is None and not note.startswith("needs"):
         signatures, note = [], f"no probe for {owner} objects yet"

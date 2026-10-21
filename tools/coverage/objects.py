@@ -79,11 +79,21 @@ OBJECTS: dict[str, Object] = {
     # A default-constructed hit object is a NOP hit object (HLSL shader execution reordering), which a ray-generation
     # shader can query.
     "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
+    # A feedback texture records which mips of its paired texture a sample would touch; it binds as a UAV.
+    "FeedbackTexture2D": Object(
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"
+    ),
+    "FeedbackTexture2DArray": Object(
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"
+    ),
 }
-# Sampler parameters, by the opaque type a feature list gives them: the sampler type, its name and its register.
+# The samplers a method takes, and the texture a feedback texture's methods sample, by the opaque type a feature
+# list gives them: the declared type, its name and its register.
 SAMPLERS = {
     "sampler": ("SamplerState", "smp", "s0"),
     "sampler_cmp": ("SamplerComparisonState", "cmp", "s1"),
+    "Texture2D": ("Texture2D<float4>", "tex", "t0"),
+    "Texture2DArray": ("Texture2DArray<float4>", "tex", "t0"),
 }
 # The probe's buffers take the first registers of their class; resources bind after them.
 _REGISTERS = {"t": "t0", "u": "u8"}
@@ -178,18 +188,30 @@ class Uniforms:
         return name
 
 
+# Methods whose object must hold another element type: GatherRaw returns raw texel bits, so its texture holds uint.
+_ELEMENTS = {"GatherRaw": Type("uint")}
+
+
+def element(owner: str, method: str) -> Type | None:
+    """The element type of the object ``method`` is probed on."""
+    kind = OBJECTS.get(owner)
+    if kind is None or kind.element is None:
+        return None
+    return _ELEMENTS.get(method, kind.element)
+
+
 class Receiver:
     """The object a method probe calls its method on, and the samplers the call takes."""
 
     name = "obj"
 
-    def __init__(self, owner: str, dialect: Dialect):
+    def __init__(self, owner: str, dialect: Dialect, method: str = ""):
         kind = OBJECTS.get(owner)
         if kind is None:
             raise ProbeError(f"no probe for {owner} objects yet")
         self.dialect = dialect
-        element = dialect.type(kind.element) if kind.element else ""
-        spelling = kind.spelling.format(element=element)
+        held = element(owner, method)
+        spelling = kind.spelling.format(element=dialect.type(held) if held else "")
         self.declarations: list[str] = []
         self.locals: list[str] = []
         if kind.register:
@@ -200,16 +222,11 @@ class Receiver:
             self.locals.append(f"{spelling} {self.name};")
         self._samplers: set[str] = set()
 
-    @staticmethod
-    def element(owner: str) -> Type | None:
-        kind = OBJECTS.get(owner)
-        return kind.element if kind else None
-
     def takes(self, kind: Type) -> bool:
         return kind.opaque in SAMPLERS
 
     def argument(self, kind: Type) -> str:
-        """The sampler to pass for a parameter of ``kind``, declared the first time it is used."""
+        """The sampler or texture to pass for a parameter of ``kind``, declared the first time it is used."""
         spelling, name, register = SAMPLERS[kind.opaque]
         if name not in self._samplers:
             self._samplers.add(name)

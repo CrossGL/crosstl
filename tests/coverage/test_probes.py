@@ -620,8 +620,50 @@ def test_method_probe_needs_an_object_it_can_declare():
         probes.build(SAMPLE_LEVEL, "metal")
 
 
+GATHER_RAW = method(
+    "Texture2D",
+    "GatherRaw",
+    Type("uint", (4,)),
+    Type.other("sampler"),
+    Type("float", (2,)),
+)
+FEEDBACK_LEVEL = method(
+    "FeedbackTexture2DArray",
+    "WriteSamplerFeedbackLevel",
+    Type.other("void"),
+    Type.other("Texture2DArray"),
+    Type.other("sampler"),
+    Type("float", (3,)),
+    Type("float"),
+)
+
+
+def test_gather_raw_reads_a_uint_texture():
+    source = probes.build(GATHER_RAW, "hlsl").source
+    assert "Texture2D<uint> obj : register(t0);" in source
+    assert "Texture2D<uint> obj;" in probes.build(GATHER_RAW, "crossgl").source
+
+
+def test_feedback_probe_declares_the_texture_it_records():
+    source = probes.build(FEEDBACK_LEVEL, "hlsl").source
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP> obj : register(u8);" in source
+    )
+    assert "Texture2DArray<float4> tex : register(t0);" in source
+    assert "obj.WriteSamplerFeedbackLevel(tex, smp, a2, a3);" in source
+
+
+# DXC cannot lower a feedback texture to SPIR-V, so this probe is only checked as DXIL.
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+def test_feedback_probe_is_valid_hlsl():
+    probe = probes.build(FEEDBACK_LEVEL, "hlsl")
+    verdict = validators.validate("hlsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 HLSL_METHODS = [
     SAMPLE_LEVEL,
+    GATHER_RAW,
     method(
         "TextureCUBE",
         "GatherCmp",
