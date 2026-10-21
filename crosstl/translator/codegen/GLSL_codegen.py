@@ -447,6 +447,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .private_vector_views import lower_private_vector_views
+from .ray_builtin_types import GLSL_RAY_BUILTIN_TYPES
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
@@ -45002,7 +45003,9 @@ complex64_t crossgl_complex64_mod_assign(
                 builtin_type = builtin_call_result_type(
                     function_name,
                     [
-                        self.type_name_string(self.glsl_source_expression_type(argument))
+                        self.type_name_string(
+                            self.glsl_source_expression_type(argument)
+                        )
                         for argument in expression.arguments or []
                     ],
                     GLSL_FAMILY,

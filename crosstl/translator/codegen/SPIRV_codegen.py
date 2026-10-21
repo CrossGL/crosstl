@@ -135,11 +135,6 @@ from .spirv_per_vertex_builtins import (
     per_vertex_builtin_info,
     sized_per_vertex_interface_type,
 )
-from .spirv_ray_builtins import (
-    ray_builtin_info,
-    ray_constant_value,
-    transposed_ray_builtin,
-)
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
     decorate_placed_uniform_block,
@@ -152,6 +147,11 @@ from .spirv_push_constants import (
     declare_push_constant_variable,
     is_push_constant_block,
     uniform_block_storage_layout,
+)
+from .spirv_ray_builtins import (
+    ray_builtin_info,
+    ray_constant_value,
+    transposed_ray_builtin,
 )
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (

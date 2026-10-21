@@ -90,7 +90,12 @@ _TRANSFORMS = {
     "WorldToObject4x3": ("gl_WorldToObjectEXT", True),
 }
 TARGETS = GLSL_TARGETS | SPIRV_TARGETS
-_TARGET_LABELS = {"opengl": "OpenGL", "glsl": "OpenGL", "vulkan": "Vulkan", "spirv": "Vulkan"}
+_TARGET_LABELS = {
+    "opengl": "OpenGL",
+    "glsl": "OpenGL",
+    "vulkan": "Vulkan",
+    "spirv": "Vulkan",
+}
 _DXR_CONSTANTS = {dxr: glsl for glsl, dxr in _CONSTANTS.items()}
 _RAY_DESC_MEMBERS = (
     ("Origin", A.VectorType(A.PrimitiveType("float"), 3)),
@@ -210,6 +215,8 @@ class _Lowering:
         self.outgoing = {}  # (storage, struct name) -> module variable name
         self.locations = {"rayPayloadEXT": 0, "callableDataEXT": 0}
         self.hit_attributes = None
+        # Calls already in the GLSL or SPIR-V form; a SPIR-V CallShader still has two operands afterwards.
+        self.lowered_calls = set()
 
     def refuse(self, capability, detail):
         raise DxrRayInterfaceUnsupportedError(
@@ -349,6 +356,7 @@ class _Lowering:
             call.arguments[0],
             self.payload_operand(name, location),
         ]
+        self.lowered_calls.add(id(call))
         return self.copied_call(call, data, "callableDataEXT", "callable data")
 
     def report_hits(self, statement):
@@ -463,7 +471,11 @@ class _Lowering:
         self.add_builtin_structs()
         for function in _functions(self.program):
             for node in _walk(function):
-                if isinstance(node, A.RayTracingOpNode) and _is_dxr_call(node):
+                if (
+                    isinstance(node, A.RayTracingOpNode)
+                    and id(node) not in self.lowered_calls
+                    and _is_dxr_call(node)
+                ):
                     self.refuse(
                         "ray-call-position",
                         f"{node.operation} is not a statement of its own or an operand of one",
@@ -473,9 +485,7 @@ class _Lowering:
 def lower_dxr_ray_interfaces(program, target) -> int:
     """Rewrite DXR-style ray tracing stages of ``program`` for GLSL or SPIR-V; returns how many stages changed."""
     target = str(target or "").lower()
-    if target not in TARGETS or not isinstance(
-        program, A.ShaderNode
-    ):
+    if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
     stages = _dxr_stages(program)
     if not stages:
