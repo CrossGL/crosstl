@@ -2585,7 +2585,9 @@ class GLSLParser:
             true_expr = self.parse_expression()
             self.skip_newlines()
             self.eat("COLON")
-            false_expr = self.parse_expression()
+            # GLSL 4.60 section 9 (grammar): logical_or_expression QUESTION expression COLON
+            # assignment_expression. The false branch stops at a comma, which separates the next argument.
+            false_expr = self.parse_assignment_expression()
             return TernaryOpNode(expr, true_expr, false_expr)
         return expr
 

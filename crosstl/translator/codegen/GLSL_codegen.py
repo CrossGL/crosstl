@@ -201,6 +201,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -2767,6 +2768,7 @@ class GLSLCodeGen(
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
         self.literal_int_constants = {}
+        self.glsl_specialization_default_int_constants = {}
         self.glsl_constant_types = {}
         self.glsl_specialization_constant_names = set()
         self.glsl_global_specialization_constants = []
@@ -8514,6 +8516,13 @@ class GLSLCodeGen(
                 not in self.glsl_specialization_constant_names
             ]
         )
+        # The same constants with every specialization constant at its default value, for checks whose answer
+        # cannot depend on the value.
+        self.glsl_specialization_default_int_constants = (
+            collect_literal_int_constants(constants)
+            if self.glsl_specialization_constant_names
+            else self.literal_int_constants
+        )
         self.literal_int_vector_constants = (
             self.collect_literal_int_vector_constants_from_variables(
                 getattr(ast, "global_variables", []),
@@ -9999,6 +10008,7 @@ class GLSLCodeGen(
             code = require_shadow_lod_extension(code)
         code = self.ensure_glsl_formatted_image_load_support(code)
         code = self.ensure_glsl_precise_support(code)
+        code = require_builtin_extensions(code)
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):

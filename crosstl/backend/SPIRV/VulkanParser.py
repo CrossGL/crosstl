@@ -7,7 +7,7 @@ import struct
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
-from .block_layout_import import spirv_block_buffer_layout
+from .block_layout_import import spirv_block_layout
 from .function_structure import SpirvFunctionStructure
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
@@ -5964,6 +5964,7 @@ class VulkanParser:
             return None
 
         struct_fields = []
+        struct_field_indices = []
         for member_index, member_type_id in enumerate(
             struct_type.get("member_types", [])
         ):
@@ -5972,6 +5973,7 @@ class VulkanParser:
             )
             if data_type is None:
                 continue
+            struct_field_indices.append(member_index)
 
             member_key = str(member_index)
             field_name = variable.get("flattened_member_aliases", {}).get(
@@ -6013,7 +6015,7 @@ class VulkanParser:
             spirv_storage_class=storage_class,
         )
         if storage_class in {"Uniform", "PushConstant"} and layout_type == "UNIFORM":
-            node.buffer_layout = spirv_block_buffer_layout(
+            block_layout = spirv_block_layout(
                 block_name,
                 struct_type_id,
                 storage_class == "PushConstant",
@@ -6024,6 +6026,14 @@ class VulkanParser:
                     length_id, constants
                 ),
             )
+            if block_layout is not None:
+                node.buffer_layout = block_layout.layout
+                if block_layout.member_offsets is not None:
+                    # One explicit offset per emitted field, in struct_fields order.
+                    node.member_offsets = tuple(
+                        block_layout.member_offsets[index]
+                        for index in struct_field_indices
+                    )
         return node
 
     def spirv_has_decoration(self, decorations, target_decoration):

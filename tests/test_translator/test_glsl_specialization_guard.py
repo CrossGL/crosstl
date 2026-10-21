@@ -70,3 +70,51 @@ def test_guarded_glsl_es_compiles(tmp_path):
     assert "#else\nconst int taps = 5;\n#endif" in essl
     result = glslang(tmp_path, essl)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Source shape: SaschaWillems/Vulkan glsl/ssao/ssao.frag, whose kernel uniform block is sized by a spec constant.
+SIZED_BLOCK_SOURCE = """#version 450
+layout(constant_id = 0) const int KERNEL_SIZE = 64;
+layout(binding = 3) uniform UBOKernel { vec4 samples[KERNEL_SIZE]; } kernel;
+layout(location = 0) out vec4 color;
+void main() {
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < KERNEL_SIZE; i++) { sum += kernel.samples[i]; }
+    color = sum;
+}
+"""
+
+# std430 places a float array at stride 4 and the std140 declaration at stride 16: register storage would have to
+# fix the array's count, so a spec-constant-sized array cannot be declared.
+SIZED_STD430_BLOCK_CROSSGL = """
+shader main {
+    const int COUNT @constant_id(0) = 4;
+    cbuffer Weights @binding(0) @buffer_layout(std430) { float weights[COUNT]; };
+    fragment {
+        vec4 main() @location(0) { return vec4(weights[1]); }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["opengl", "webgl"])
+def test_std140_block_array_sized_by_spec_constant_keeps_the_constant(
+    tmp_path, backend
+):
+    path = tmp_path / "shader.frag"
+    path.write_text(SIZED_BLOCK_SOURCE)
+    glsl = crosstl.translate(str(path), backend=backend, source_backend="opengl")
+
+    assert "vec4 samples[KERNEL_SIZE];" in glsl
+    assert "#else\nconst int KERNEL_SIZE = 64;\n#endif" in glsl
+    if GLSLANG is not None:
+        result = glslang(tmp_path, glsl)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_non_std140_block_array_sized_by_spec_constant_is_refused(tmp_path):
+    path = tmp_path / "shader.cgl"
+    path.write_text(SIZED_STD430_BLOCK_CROSSGL)
+
+    with pytest.raises(Exception, match="needs a constant size"):
+        crosstl.translate(str(path), backend="opengl")

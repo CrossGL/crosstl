@@ -99,11 +99,41 @@ def test_block_decorations_select_the_rule_set_that_reproduces_them(
     ), code
 
 
-@pytest.mark.parametrize(("stride", "offset"), [(16, 24), (8, 16), (4, 12)])
+# An 8-byte float stride belongs to no rule set, and b at byte 8 or 4 lies inside a under every rule set.
+@pytest.mark.parametrize(("stride", "offset"), [(8, 16), (16, 8), (4, 4)])
 def test_block_decorations_no_rule_set_reproduces_are_refused(tmp_path, stride, offset):
     with pytest.raises(SpirvBlockLayoutUnsupportedError, match="Params") as raised:
         _crossgl(_module(tmp_path, stride, offset))
     assert raised.value.code.endswith("spirv-block-layout-unsupported")
+
+
+@pytest.mark.parametrize(
+    ("stride", "offset", "layout", "packoffset"),
+    [(16, 24, "hlsl_cbuffer", "c1.z"), (4, 12, "std430", None)],
+)
+def test_block_offsets_past_the_rule_set_import_as_explicit_offsets(
+    tmp_path, stride, offset, layout, packoffset
+):
+    """A member placed past the byte its rule set gives it (GLSL ``layout(offset = N)``, HLSL ``packoffset``)
+    keeps that offset as ``@ offset(N)`` and lands there on every target."""
+    path = _module(tmp_path, stride, offset)
+
+    code = _crossgl(path)
+    assert re.search(
+        rf"cbuffer Params [^{{]*@buffer_layout\({layout}\) \{{", code
+    ), code
+    assert f"float b @offset({offset});" in code
+
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    assert re.search(rf"OpMemberDecorate %\w+ 1 Offset {offset}\b", spirv)
+    assert f"ArrayStride {stride}" in spirv
+
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    if packoffset is not None:
+        assert f"float b : packoffset({packoffset});" in hlsl
+    else:
+        # A 4-byte float stride has no packoffset form: the block is read through its registers.
+        assert "b = asfloat(__crossgl_Params_registers[0].w);" in hlsl
 
 
 def test_blocks_without_offsets_keep_the_default_layout(tmp_path):

@@ -14,14 +14,22 @@ The HLSL importer keeps a resource's bindings as ``@ register(t3, space1)`` and 
   binding with ``k`` descriptors.
 
 Exact bindings (``@ binding``, ``@ buffer``, ``vk_binding``) are reserved before any register is placed. Two
-resources of one class and space that claim the same register are rejected, as Direct3D rejects them.
+resources of one class and space that claim the same register are rejected, as Direct3D rejects them. Two
+``vk_binding`` resources may share one slot only as the halves of a combined image sampler: one sampled image and
+one sampler. Vulkan lets separate ``OpTypeImage`` (Sampled 1) and ``OpTypeSampler`` variables with the same set and
+binding consume one ``VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`` descriptor (the Vulkan specification, "Shader
+Resource and Descriptor Type Correspondence"), and DXC emits that layout for this source.
 """
 
 from __future__ import annotations
 
 from .glsl_hlsl_resources import HlslRegisterOverlapError
 
-__all__ = ["HLSL_REGISTER_CLASS_ORDER", "reserve_hlsl_descriptor_slots"]
+__all__ = [
+    "HLSL_REGISTER_CLASS_ORDER",
+    "reserve_exact_binding",
+    "reserve_hlsl_descriptor_slots",
+]
 
 HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
 EXACT_BINDING_ATTRIBUTES = {"binding", "buffer", "texture", "sampler"}
@@ -106,12 +114,46 @@ def _register_count(codegen, node):
     return count if count is not None and count > 0 else 1
 
 
-def _reserve(codegen, key, name):
+SEPARATE_SAMPLER_TYPES = {"sampler", "samplershadow"}
+NON_COMBINABLE_IMAGE_SUFFIXES = ("buffer", "ms", "msarray")
+
+
+def _combined_sampler_half(node):
+    """``"sampler"`` or ``"image"`` when ``node`` can be one half of a combined image sampler, else ``None``."""
+    var_type = getattr(node, "var_type", getattr(node, "vtype", None))
+    while getattr(var_type, "element_type", None) is not None:
+        var_type = var_type.element_type
+    name = str(getattr(var_type, "name", var_type) or "").strip().lower()
+    if name in SEPARATE_SAMPLER_TYPES:
+        return "sampler"
+    if name.startswith(("sampler", "texture")) and not name.endswith(
+        NON_COMBINABLE_IMAGE_SUFFIXES
+    ):
+        return "image"
+    return None
+
+
+def reserve_exact_binding(codegen, key, node, name):
+    """Reserve the exact ``(set, binding)`` slot ``key`` for ``node``.
+
+    A second claimant is accepted only as the other half of a combined image sampler; both claimants are then
+    recorded in ``codegen.shared_binding_nodes`` so the slot can be handed out to each of them.
+    """
+    occupants = codegen.binding_occupants
+    shared = codegen.shared_binding_nodes
+    half = _combined_sampler_half(node)
     if key in codegen.reserved_resource_bindings:
-        raise ValueError(
-            f"Duplicate SPIR-V resource binding set {key[0]} binding {key[1]} ({name})"
-        )
+        claim = occupants.get(key)
+        halves = [] if claim is None else [occupant_half for occupant_half, _ in claim]
+        if half is None or not halves or None in halves or half in halves:
+            raise ValueError(
+                f"Duplicate SPIR-V resource binding set {key[0]} binding {key[1]} ({name})"
+            )
+        claim.append((half, id(node)))
+        shared.update(node_id for _, node_id in claim)
+        return
     codegen.reserved_resource_bindings.add(key)
+    occupants[key] = [(half, id(node))]
 
 
 def _next_free_binding(codegen, descriptor_set, start):
@@ -151,7 +193,7 @@ def reserve_hlsl_descriptor_slots(codegen, nodes, skip=lambda node: False):
         exact = _vk_binding(codegen, node, register[2] if register else 0)
         name = getattr(node, "name", "resource")
         if exact is not None:
-            _reserve(codegen, exact, name)
+            reserve_exact_binding(codegen, exact, node, name)
             slots[id(node)] = exact
         elif register is not None:
             deferred.append((register, order, node, name))

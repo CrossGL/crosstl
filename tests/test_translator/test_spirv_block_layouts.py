@@ -101,6 +101,61 @@ shader main {
 }
 """
 
+# A push-constant range shared between stages starts this stage's members past byte 0 (GLSL 4.60 section 4.4.5,
+# layout(offset = N); the shape of Sascha Willems' pbrbasic/pbr.frag).
+PUSH_CONSTANT_OFFSET_GLSL = """#version 450
+layout(push_constant) uniform PushConsts {
+    layout(offset = 12) float roughness;
+    layout(offset = 16) float metallic;
+    layout(offset = 64) vec4 tint;
+} material;
+layout(location = 0) out vec4 outColor;
+void main() { outColor = material.tint * (material.roughness + material.metallic); }
+"""
+
+# glslangValidator -V output for the same kind of block (roughness at offset 12, tint at offset 64).
+PUSH_CONSTANT_OFFSET_SPIRV = """
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %4 "main" %9
+               OpExecutionMode %4 OriginUpperLeft
+               OpName %4 "main"
+               OpName %9 "outColor"
+               OpName %10 "PushConsts"
+               OpMemberName %10 0 "roughness"
+               OpMemberName %10 1 "tint"
+               OpName %12 "material"
+               OpDecorate %9 Location 0
+               OpDecorate %10 Block
+               OpMemberDecorate %10 0 Offset 12
+               OpMemberDecorate %10 1 Offset 64
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeFloat 32
+          %7 = OpTypeVector %6 4
+          %8 = OpTypePointer Output %7
+          %9 = OpVariable %8 Output
+         %10 = OpTypeStruct %6 %7
+         %11 = OpTypePointer PushConstant %10
+         %12 = OpVariable %11 PushConstant
+         %13 = OpTypeInt 32 1
+         %14 = OpConstant %13 1
+         %15 = OpTypePointer PushConstant %7
+         %18 = OpConstant %13 0
+         %19 = OpTypePointer PushConstant %6
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+         %16 = OpAccessChain %15 %12 %14
+         %17 = OpLoad %7 %16
+         %20 = OpAccessChain %19 %12 %18
+         %21 = OpLoad %6 %20
+         %22 = OpVectorTimesScalar %7 %17 %21
+               OpStore %9 %22
+               OpReturn
+               OpFunctionEnd
+"""
+
 FIXED_ARRAY_BUFFER_GLSL = """#version 450
 layout(local_size_x = 1) in;
 layout(std430, binding = 0) buffer Fixed { float d[4]; } fixedb;
@@ -276,3 +331,46 @@ def test_glsl_fixed_and_nested_array_buffer_blocks_keep_their_block_form(tmp_pat
 
     spirv = _translate(tmp_path, FIXED_ARRAY_BUFFER_GLSL, "vulkan", "shader.comp")
     _validate_spirv(tmp_path, spirv)
+
+
+def test_glsl_push_constant_member_offsets_are_kept(tmp_path):
+    spirv = _translate(tmp_path, PUSH_CONSTANT_OFFSET_GLSL, "vulkan", "shader.frag")
+
+    block = _pointee_types(spirv, "PushConstant") & set(
+        re.findall(r"OpDecorate %(\w+) Block\b", spirv)
+    )
+    assert len(block) == 1
+    # glslang places the members at their layout(offset) bytes; std430 alone would give 0, 4 and 16.
+    assert _member_offsets(spirv, block.pop()) == [12, 16, 64]
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_spirv_push_constant_member_offsets_import_as_crossgl_offsets(tmp_path):
+    crossgl = _translate(tmp_path, PUSH_CONSTANT_OFFSET_SPIRV, "cgl", "shader.spvasm")
+
+    assert "float roughness @offset(12);" in crossgl
+    assert re.search(r"(vec4|float4) tint @offset\(64\);", crossgl)
+
+    spirv = _translate(tmp_path, PUSH_CONSTANT_OFFSET_SPIRV, "vulkan", "shader.spvasm")
+
+    block = _pointee_types(spirv, "PushConstant") & set(
+        re.findall(r"OpDecorate %(\w+) Block\b", spirv)
+    )
+    assert _member_offsets(spirv, block.pop()) == [12, 64]
+    _validate_spirv(tmp_path, spirv)
+
+
+def test_spirv_push_constant_offsets_still_need_a_rule_set_for_array_strides(tmp_path):
+    # Explicit member offsets cannot account for an ArrayStride no rule set gives a float array.
+    source = PUSH_CONSTANT_OFFSET_SPIRV.replace(
+        "OpMemberDecorate %10 1 Offset 64",
+        "OpMemberDecorate %10 1 Offset 64\n               OpMemberDecorate %10 2 Offset 80\n"
+        "               OpDecorate %30 ArrayStride 8",
+    ).replace(
+        "%10 = OpTypeStruct %6 %7",
+        "%31 = OpTypeInt 32 0\n         %32 = OpConstant %31 2\n"
+        "         %30 = OpTypeArray %6 %32\n         %10 = OpTypeStruct %6 %7 %30",
+    )
+
+    with pytest.raises(Exception, match="no std140, std430, scalar or HLSL"):
+        _translate(tmp_path, source, "cgl", "shader.spvasm")
