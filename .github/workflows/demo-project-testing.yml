@@ -3594,16 +3594,19 @@ jobs:
             target: opengl
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: windows-2025
             target: directx
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: macos-26
             target: metal
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: ubuntu-24.04
             target: opengl
@@ -3734,7 +3737,7 @@ jobs:
         if: matrix.family != 'row'
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 10800 --label "MLX reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
       - name: Select same-run row shards
