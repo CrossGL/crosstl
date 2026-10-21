@@ -604,7 +604,7 @@ def test_preparation_replaces_the_quantized_matmul_stub(monkeypatch):
     monkeypatch.setattr(prepare, "replace_once", record)
     prepare.adapted_sources("", "", "")
     assert "NO_GPU(QuantizedMatmul)" in replaced
-    assert "NO_GPU(GatherQMM)" not in replaced and "NO_GPU(Matmul)" not in replaced
+    assert "NO_GPU(GatherQMM)" not in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void QuantizedMatmul::eval_gpu(" in backend
     for text in (
@@ -751,7 +751,7 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         for item in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
     ]
-    assert deadlines == [1800, 3600, 1800]
+    assert deadlines == [1800, 3600, 1800, 1200, 1200]
     assert sum(deadlines) + 900 < job["timeout-minutes"] * 60
     # The half host job no longer runs the products.
     half = [item.get("name") for item in workflow["jobs"]["half-host"]["steps"]]

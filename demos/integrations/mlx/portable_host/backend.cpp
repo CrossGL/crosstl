@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include "mlx/allocator.h"
+#include "mlx/backend/common/matmul.h"
 #include "mlx/backend/common/reduce.h"
 #include "mlx/backend/common/slicing.h"
 #include "mlx/backend/common/unary.h"
@@ -1958,14 +1959,14 @@ uint64_t matmul_span(const array& in) {
     const uint64_t extent = in.shape(axis);
     if (stride < 0 || extent == 0 ||
         (stride && extent - 1 > (max_matmul_elements - span) / uint64_t(stride))) {
-      throw std::invalid_argument("CrossTL quantized matmul operand exceeds its bounds.");
+      throw std::invalid_argument("CrossTL matmul operand exceeds its bounds.");
     }
     span += (extent - 1) * uint64_t(stride);
   }
   if (in.offset() < 0 || in.offset() % in.itemsize() != 0 ||
       uint64_t(in.offset()) > in.buffer_size() ||
       span * in.itemsize() > in.buffer_size() - uint64_t(in.offset())) {
-    throw std::invalid_argument("CrossTL quantized matmul operand exceeds its allocation.");
+    throw std::invalid_argument("CrossTL matmul operand exceeds its allocation.");
   }
   return span;
 }
@@ -2083,6 +2084,159 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native quantized matmul failed: ") + error);
+  }
+}
+
+namespace {
+// A row-major copy, as contiguous_copy_gpu makes.
+array contiguous_copy(const array& in) {
+  array copy(in.shape(), in.dtype(), nullptr, {});
+  dispatch_copy(in, copy);
+  return copy;
+}
+
+// matmul.cpp check_transpose. The host also copies views with negative
+// strides, which it never binds.
+std::tuple<bool, int64_t, array> gemv_operand(const array& in, bool is_vector) {
+  const auto stx = in.strides()[in.ndim() - 2];
+  const auto sty = in.strides()[in.ndim() - 1];
+  const bool nonnegative = std::all_of(
+      in.strides().begin(), in.strides().end(), [](int64_t stride) { return stride >= 0; });
+  if (nonnegative && sty == 1 && (!is_vector || stx == in.shape(-1))) {
+    return std::make_tuple(false, stx, in);
+  }
+  if (nonnegative && stx == 1 && (!is_vector || sty == in.shape(-2))) {
+    return std::make_tuple(true, sty, in);
+  }
+  return std::make_tuple(false, int64_t(in.shape(-1)), contiguous_copy(in));
+}
+} // namespace
+
+void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  const auto dtype = out.dtype();
+  if (inputs.size() != 2 || (dtype != float32 && dtype != float16 && dtype != bfloat16) ||
+      inputs[0].dtype() != dtype || inputs[1].dtype() != dtype) {
+    throw std::invalid_argument("CrossTL matmul supports float32, float16 and bfloat16 only.");
+  }
+  const auto& a_pre = inputs[0];
+  const auto& b_pre = inputs[1];
+  if (a_pre.ndim() < 2 || a_pre.ndim() != b_pre.ndim() || out.ndim() != a_pre.ndim()) {
+    throw std::invalid_argument("CrossTL matmul operand ranks are invalid.");
+  }
+  // matmul.cpp fills the output with zeros when either input is empty.
+  if (a_pre.size() == 0 || b_pre.size() == 0) {
+    if (out.size() == 0) {
+      out.set_data(allocator::malloc(out.nbytes()));
+      return;
+    }
+    array zero(0, dtype);
+    array zeros(out.shape(), dtype, nullptr, {});
+    const bool single = out.size() == 1;
+    zeros.copy_shared_buffer(zero, Strides(out.ndim(), 0), {single, single, single}, 1);
+    dispatch_copy(zeros, out);
+    return;
+  }
+  int M = a_pre.shape(-2);
+  const int N = b_pre.shape(-1);
+  const int K = a_pre.shape(-1);
+  auto [a_transposed, a_cols, a] = gemv_operand(a_pre, M == 1);
+  auto [b_transposed, b_cols, b] = gemv_operand(b_pre, N == 1);
+  auto [batch_shape, A_batch_stride, B_batch_stride] = collapse_batches(a, b);
+  auto batch_size_out = out.size() / (size_t(M) * size_t(N));
+  // Collapse batches into M as matmul.cpp does.
+  if (batch_size_out > 1 && !a_transposed && batch_shape.size() == 1 &&
+      a.strides()[a.ndim() - 2] == K && A_batch_stride.back() == M * K &&
+      B_batch_stride.back() == 0) {
+    M *= batch_shape.back();
+    batch_size_out = 1;
+    A_batch_stride = {0};
+    B_batch_stride = {0};
+    batch_shape = {1};
+  }
+  if (M == 1 && N == 1 && batch_size_out == 1 && a.flags().row_contiguous &&
+      b.flags().row_contiguous) {
+    throw std::invalid_argument("CrossTL matmul does not route single dot products yet.");
+  }
+  // MLX takes gemv_wide only from Apple GPU generation 15, which the host
+  // does not report.
+  if (std::min(M, N) != 1) {
+    throw std::invalid_argument("CrossTL matmul does not route matrix-matrix products yet.");
+  }
+  // gemv_axbpy without axpby.
+  const bool is_b_matrix = N != 1;
+  const array& mat = is_b_matrix ? b : a;
+  const array& vec = is_b_matrix ? a : b;
+  const bool transpose_mat = is_b_matrix ? !b_transposed : a_transposed;
+  const int out_vector_len = is_b_matrix ? N : M;
+  const int64_t mat_ld = is_b_matrix ? b_cols : a_cols;
+  auto& vector_batch_stride = is_b_matrix ? A_batch_stride : B_batch_stride;
+  auto& matrix_batch_stride = is_b_matrix ? B_batch_stride : A_batch_stride;
+  int tm = 4, tn = 4, sm = 1, sn = 32, bm = 1, bn = 1, n_out_per_tgp;
+  if (transpose_mat) {
+    if (K >= 8192 && out_vector_len >= 2048) {
+      sm = 4;
+      sn = 8;
+    } else {
+      sm = 8;
+      sn = 4;
+    }
+    bn = out_vector_len >= 2048 ? 16 : out_vector_len >= 512 ? 4 : 2;
+    tn = out_vector_len < tn ? 1 : tn;
+    n_out_per_tgp = bn * sn * tn;
+  } else {
+    bm = out_vector_len >= 4096 ? 8 : 4;
+    if (K <= 64) {
+      bm = 1;
+      sm = 8;
+      sn = 4;
+    } else if (K >= 16 * out_vector_len) {
+      bm = 1;
+      bn = 8;
+    }
+    tm = out_vector_len < tm ? 1 : tm;
+    n_out_per_tgp = bm * sm * tm;
+  }
+  const char* storage = matmul_storage(dtype);
+  const std::string entry = std::string(transpose_mat ? "gemv_t_" : "gemv_") + storage +
+      "_bm" + std::to_string(bm) + "_bn" + std::to_string(bn) + "_sm" + std::to_string(sm) +
+      "_sn" + std::to_string(sn) + "_tm" + std::to_string(tm) + "_tn" + std::to_string(tn) +
+      "_nc" + (batch_shape.size() == 1 ? "0" : "1") + "_axpby0";
+  require_entry(entry);
+  const uint64_t n_tgp = (uint64_t(out_vector_len) + n_out_per_tgp - 1) / n_out_per_tgp;
+  if (out.size() > max_matmul_elements || batch_size_out > 65535 || n_tgp > 65535 ||
+      mat_ld < 0 || mat_ld > int64_t(max_matmul_elements) || batch_shape.size() > 16) {
+    throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  int32_t in_vec_size = K;
+  int32_t out_vec_size = out_vector_len;
+  int32_t marix_ld = int32_t(mat_ld);
+  int32_t batch_ndim = int32_t(batch_shape.size());
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"mat", storage, data(mat), matmul_span(mat), 0},
+      {"in_vec", storage, data(vec), matmul_span(vec), 0},
+      {"out_vec", storage, out.data<void>(), out.size(), 1},
+      {"in_vec_size", "int32", &in_vec_size, 1, 0},
+      {"out_vec_size", "int32", &out_vec_size, 1, 0},
+      {"marix_ld", "int32", &marix_ld, 1, 0},
+      {"batch_ndim", "int32", &batch_ndim, 1, 0},
+      {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
+      {"vector_batch_stride", "int64", vector_batch_stride.data(),
+       vector_batch_stride.size(), 0},
+      {"matrix_batch_stride", "int64", matrix_batch_stride.data(),
+       matrix_batch_stride.size(), 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {uint32_t(n_tgp), 1, uint32_t(batch_size_out)}, {32, uint32_t(bn), uint32_t(bm)}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()), out.size(),
+      &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
   }
 }
 } // namespace mlx::core

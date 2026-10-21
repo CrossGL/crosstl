@@ -27,9 +27,8 @@ STRIDES = {"uint8": 1, "uint16": 2, "uint32": 4, "float16": 2}
 STRIDES.update(bfloat16=2, float32=4, int32=4, int64=8)
 
 
-def _value(entry, name, words, host_target, layout, kind):
-    """The runtime value of one reflected binding."""
-    dtype = matmul_layout.parameter_type(entry, name)
+def encode_binding(dtype, words, host_target, layout, kind):
+    """The runtime value of one reflected binding holding ``dtype`` words."""
     physical = layout["elementType"]
     if dtype in ("float32", "float16", "bfloat16"):
         storage = "float16" if dtype == "float16" and physical == "uint16" else physical
@@ -39,15 +38,22 @@ def _value(entry, name, words, host_target, layout, kind):
             )
             != physical
         ):
-            raise ValueError("Quantized matrix-vector reflected encoding differs")
+            raise ValueError("Matrix-vector reflected encoding differs")
         value = encode(words, dtype, storage)
     else:
         if physical != dtype:
-            raise ValueError("Quantized matrix-vector reflected integer type differs")
+            raise ValueError("Matrix-vector reflected integer type differs")
         value = {"dtype": dtype, "shape": [len(words)], "values": list(words)}
     if layout["elementStrideBytes"] != STRIDES.get(physical):
-        raise ValueError("Quantized matrix-vector reflected element stride differs")
+        raise ValueError("Matrix-vector reflected element stride differs")
     return value
+
+
+def _value(entry, name, words, host_target, layout, kind):
+    """The runtime value of one reflected binding."""
+    return encode_binding(
+        matmul_layout.parameter_type(entry, name), words, host_target, layout, kind
+    )
 
 
 def _words(buffer, dtype):

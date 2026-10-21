@@ -382,8 +382,38 @@ half-empty last tile, broadcast and shared weights and two batch axes. Inputs
 lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
 match MLX's CPU backend. The unchanged upstream `test_qmv` and `test_qvm` also
-need the floating-point `Matmul` route for their reference products, which
-remains separate work.
+need the floating-point `Matmul` route below for their reference products;
+`test_qmv`'s unbatched references are matrix-matrix products, which are not
+routed yet.
+
+## Floating-Point Matrix-Vector Products
+
+`Matmul::eval_gpu` routes float32, float16 and bfloat16 products with one
+output row or column to the translated `gemv` and `gemv_t` kernels of the
+unchanged `gemv.metal`, as matmul.cpp selects them: `check_transpose` on both
+operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
+`gemv_axbpy`'s kernel and tile shape. The host reports no Apple GPU generation,
+so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
+copies the operands MLX would copy and, in addition, views with negative
+strides. Empty inputs produce zeros through the translated copy. Single dot
+products, which MLX sends to `dot_product` and an all-reduce, and
+matrix-matrix products, which go to the steel GEMM kernels, fail with an
+explicit error.
+
+`gemv_layout.py` rejects a launch unless its entry, grid and workgroup are the
+ones MLX's routing would choose for the bound sizes, leading dimension and batch
+strides, and every batch's matrix and vector lie inside their buffers of at most
+2^28 - 1 elements, which bounds the offsets the OpenGL translation asserts. The
+kernels reflect the `axpby` bindings `gemv_axbpy` leaves unbound; the host binds
+inert values for them. The `MLX quantized host` jobs translate every routed
+entry with `python -m demos.integrations.mlx.portable_host.gemv_packages
+--verification --jobs 3`, then run `verify_matmul.py` through `mx.matmul`. Its
+cases reach ten of the twelve instantiated tiles in all three element types,
+both batch variants, transposed and strided operands, broadcast and
+`as_strided` batches, and the batch fold. Each output must match an exact
+float64 reference bit for bit, float32 outputs must also match MLX's CPU
+backend, and a matrix-matrix product and a single dot product must fail with
+the host's error without dispatching.
 
 ## Block Quantization
 

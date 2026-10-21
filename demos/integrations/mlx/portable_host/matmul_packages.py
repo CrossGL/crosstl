@@ -93,10 +93,32 @@ def project_config(root, output_dir, target, entry):
     )
 
 
-class QuantizedMatmulPackageCache:
+class TranslatedEntryCache:
+    """Translate and package single entries of one unchanged pinned source.
+
+    Subclasses name the source and supply each entry's validation, workgroup
+    size, translation config and recipe hashes.
+    """
+
+    LABEL = "Translated entry"
+    SOURCE = None
+    PREFIX = "entry"
+
+    def signature(self, entry):
+        raise NotImplementedError
+
+    def workgroup_size(self, entry):
+        raise NotImplementedError
+
+    def project_config(self, output_dir, entry):
+        raise NotImplementedError
+
+    def recipe_hashes(self):
+        raise NotImplementedError
+
     def __init__(self, root, directory, target):
         if target not in {"metal", "directx", "opengl"}:
-            raise ValueError("Unsupported quantized matrix-vector target")
+            raise ValueError(f"Unsupported {self.LABEL.lower()} target")
         self.root, self.directory = Path(root).resolve(), Path(directory).resolve()
         self.target = target
         self._lock = threading.RLock()
@@ -111,25 +133,27 @@ class QuantizedMatmulPackageCache:
         )
         if dirty.strip():
             raise ValueError(
-                "Quantized matrix-vector translation requires unchanged pinned kernels"
+                f"{self.LABEL} translation requires unchanged pinned kernels"
             )
 
     def _identity(self, entry):
         return {
             "schemaVersion": 1,
             "revision": COMMIT,
-            "source": SOURCE,
-            "sourceHash": hashlib.sha256((self.root / SOURCE).read_bytes()).hexdigest(),
+            "source": self.SOURCE,
+            "sourceHash": (
+                hashlib.sha256((self.root / self.SOURCE).read_bytes()).hexdigest()
+            ),
             "target": self.target,
             "entry": entry,
             "maximumElements": MAX_ELEMENTS,
-            "workgroupSize": list(workgroup_size(entry)),
+            "workgroupSize": list(self.workgroup_size(entry)),
             "implementationHash": translation_implementation_hash(),
-            **_recipe_hashes(),
+            **self.recipe_hashes(),
         }
 
     def get(self, entry):
-        signature(entry)
+        self.signature(entry)
         with self._lock:
             self._require_source()
             identity = self._identity(entry)
@@ -140,7 +164,7 @@ class QuantizedMatmulPackageCache:
             if not destination.exists():
                 self.directory.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(
-                    prefix=".quantized-matmul-", dir=self.directory
+                    prefix=f".{self.PREFIX}-", dir=self.directory
                 ) as temporary:
                     staging = Path(temporary) / "entry"
                     staging.mkdir()
@@ -148,14 +172,14 @@ class QuantizedMatmulPackageCache:
                     self._require_source()
                     if self._identity(entry) != identity:
                         raise ValueError(
-                            "Quantized matrix-vector implementation changed while packaging"
+                            f"{self.LABEL} implementation changed while packaging"
                         )
                     loader = build_runtime_loader_manifest(
                         staging / "package/runtime-package.json"
                     )
                     if not loader["success"] or len(loader["loadUnits"]) != 1:
                         raise ValueError(
-                            f"Invalid quantized matrix-vector package: {loader['diagnostics']}"
+                            f"Invalid {self.LABEL.lower()} package: {loader['diagnostics']}"
                         )
                     descriptor = build_native_loader_abi_descriptor(loader)
                     (staging / "index.json").write_text(
@@ -173,16 +197,16 @@ class QuantizedMatmulPackageCache:
     def _load(self, directory, identity):
         record = json.loads((directory / "index.json").read_text())
         if record.get("identity") != identity:
-            raise ValueError("Quantized matrix-vector cache identity differs")
+            raise ValueError(f"{self.LABEL} cache identity differs")
         loader = build_runtime_loader_manifest(
             directory / "package/runtime-package.json"
         )
         if not loader["success"] or len(loader["loadUnits"]) != 1:
             raise ValueError(
-                f"Invalid quantized matrix-vector runtime package: {loader['diagnostics']}"
+                f"Invalid {self.LABEL.lower()} runtime package: {loader['diagnostics']}"
             )
         if loader["loadUnits"][0]["entryPoint"]["source"] != identity["entry"]:
-            raise ValueError("Quantized matrix-vector package selects another entry")
+            raise ValueError(f"{self.LABEL} package selects another entry")
         descriptor = build_native_loader_abi_descriptor(loader)
         if (
             descriptor != record.get("descriptor")
@@ -198,83 +222,113 @@ class QuantizedMatmulPackageCache:
             }
         ):
             raise ValueError(
-                "Quantized matrix-vector cache descriptor does not match its package"
+                f"{self.LABEL} cache descriptor does not match its package"
             )
         return descriptor, directory / "package"
 
     def _build(self, entry, output):
         with tempfile.TemporaryDirectory(
-            prefix=".quantized-matmul-translate-", dir=self.root
+            prefix=f".{self.PREFIX}-translate-", dir=self.root
         ) as temporary:
             work = Path(temporary)
-            config = project_config(self.root, f"{work.name}/out", self.target, entry)
+            config = self.project_config(f"{work.name}/out", entry)
             report = translate_project(config, format_output=False)
             report.write_json(work / "report.json")
             payload = report.to_json()
             shutil.copytree(work, output / "translation")
             if payload["summary"]["failedCount"] or len(payload["artifacts"]) != 1:
                 raise ValueError(
-                    f"Quantized matrix-vector translation failed: {payload['diagnostics']}"
+                    f"{self.LABEL} translation failed: {payload['diagnostics']}"
                 )
             (artifact,) = payload["artifacts"]
             if artifact["entryPoint"]["source"] != entry:
-                raise ValueError(
-                    "Quantized matrix-vector translation selected another entry"
-                )
+                raise ValueError(f"{self.LABEL} translation selected another entry")
             (execution,) = artifact["execution"]["entryPoints"]
-            if execution["workgroupSize"] != list(workgroup_size(entry)):
-                raise ValueError(
-                    "Quantized matrix-vector translation changed the workgroup size"
-                )
+            if execution["workgroupSize"] != list(self.workgroup_size(entry)):
+                raise ValueError(f"{self.LABEL} translation changed the workgroup size")
             manifest = build_runtime_artifact_manifest(work / "report.json")
             if not manifest["success"]:
                 raise ValueError(
-                    f"Quantized matrix-vector manifest failed: {manifest['diagnostics']}"
+                    f"{self.LABEL} manifest failed: {manifest['diagnostics']}"
                 )
             (work / "artifacts.json").write_text(json.dumps(manifest))
             package = build_runtime_package(work / "artifacts.json", output / "package")
             if not package["success"]:
                 raise ValueError(
-                    f"Quantized matrix-vector packaging failed: {package['diagnostics']}"
+                    f"{self.LABEL} packaging failed: {package['diagnostics']}"
                 )
+
+
+class QuantizedMatmulPackageCache(TranslatedEntryCache):
+    LABEL = "Quantized matrix-vector"
+    SOURCE = SOURCE
+    PREFIX = "quantized-matmul"
+
+    def signature(self, entry):
+        return signature(entry)
+
+    def workgroup_size(self, entry):
+        return workgroup_size(entry)
+
+    def project_config(self, output_dir, entry):
+        return project_config(self.root, output_dir, self.target, entry)
+
+    def recipe_hashes(self):
+        return _recipe_hashes()
 
 
 # The directory under a host package root that HostRuntime caches entries in.
 CACHE_DIRECTORY = "quantized-matmul"
 
 
-def _build_one(root, directory, target, entry):
+def build_record(cache, entry):
+    """Translate one entry through ``cache`` and describe its package."""
     start = time.monotonic()
-    descriptor, package = QuantizedMatmulPackageCache(root, directory, target).get(
-        entry
-    )
+    descriptor, package = cache.get(entry)
     return {
         "entry": entry,
-        "target": target,
+        "target": cache.target,
         "package": str(package),
         "artifact": descriptor["artifact"],
         "seconds": round(time.monotonic() - start, 1),
     }
 
 
-def build_entries(root, packages, target, entries, jobs):
-    """Translate ``entries`` into ``packages``' cache, ``jobs`` at a time.
+def _build_one(root, directory, target, entry):
+    return build_record(QuantizedMatmulPackageCache(root, directory, target), entry)
 
-    Returns one record per entry in sorted order. The cache publishes each
+
+def run_builds(builder, check, label, root, directory, target, entries, jobs):
+    """Run ``builder(root, directory, target, entry)`` over ``entries``.
+
+    Returns one record per entry in sorted order. The caches publish each
     entry by renaming a complete staging directory, so builders may overlap.
     """
     entries = sorted(set(entries))
     if not entries or type(jobs) is not int or jobs < 1:
-        raise ValueError("Quantized matrix-vector packaging needs entries and jobs")
+        raise ValueError(f"{label} packaging needs entries and jobs")
     for entry in entries:
-        signature(entry)
-    directory = Path(packages).resolve() / CACHE_DIRECTORY
+        check(entry)
     with ProcessPoolExecutor(max_workers=min(jobs, len(entries))) as pool:
         futures = [
-            pool.submit(_build_one, str(root), str(directory), target, entry)
+            pool.submit(builder, str(root), str(directory), target, entry)
             for entry in entries
         ]
         return [future.result() for future in futures]
+
+
+def build_entries(root, packages, target, entries, jobs):
+    """Translate ``entries`` into ``packages``' cache, ``jobs`` at a time."""
+    return run_builds(
+        _build_one,
+        signature,
+        "Quantized matrix-vector",
+        root,
+        Path(packages).resolve() / CACHE_DIRECTORY,
+        target,
+        entries,
+        jobs,
+    )
 
 
 def verification_entries():
@@ -286,8 +340,9 @@ def verification_entries():
     ]
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def cli(argv, description, build, verification):
+    """The package builders' command line: ``build`` and ``verification``."""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument(
@@ -301,13 +356,15 @@ def main(argv=None):
     )
     parser.add_argument("--jobs", type=int, default=2)
     args = parser.parse_args(argv)
-    entries = list(args.entry) + (verification_entries() if args.verification else [])
-    records = build_entries(
-        args.mlx_root, args.packages, args.target, entries, args.jobs
-    )
+    entries = list(args.entry) + (verification() if args.verification else [])
+    records = build(args.mlx_root, args.packages, args.target, entries, args.jobs)
     for record in records:
         print(json.dumps(record), flush=True)
     return 0
+
+
+def main(argv=None):
+    return cli(argv, __doc__, build_entries, verification_entries)
 
 
 if __name__ == "__main__":
