@@ -146,6 +146,7 @@ from .builtin_result_types import (
     inferred_value_type,
 )
 from .call_effects import builtin_argument_write_indices
+from .clip_position_defaults import default_clip_position_member
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
 from .entry_selection import entry_type_references
@@ -2813,6 +2814,8 @@ class GLSLCodeGen(
         self.structs_by_name = {}
         self.vertex_input_struct_names = set()
         self.vertex_output_struct_names = set()
+        self.default_clip_position_member_ids = set()
+        self.stage_io_reserved_value_names = set()
         self.combined_vertex_output_member_names = set()
         self.fragment_input_struct_names = set()
         self.fragment_input_member_names = set()
@@ -9012,6 +9015,16 @@ class GLSLCodeGen(
             ast, "vertex"
         )
         self.vertex_output_struct_names = self.stage_return_struct_names(ast, "vertex")
+        self.default_clip_position_member_ids = set()
+        self.default_clip_position_member_ids = (
+            self.glsl_default_clip_position_member_ids()
+        )
+        # Stage inputs and outputs become globals in GLSL, where they share one namespace with variables,
+        # functions and the members of unnamed blocks (GLSL 4.60 section 4.2.7). The whole program is consulted so
+        # that stages translated one at a time name their varyings alike.
+        self.stage_io_reserved_value_names = self.collect_glsl_global_identifier_names(
+            ast, None
+        ) | set(self.function_return_types)
         self.fragment_input_struct_names = self.stage_parameter_struct_names(
             ast, "fragment"
         )
@@ -22078,11 +22091,32 @@ class GLSLCodeGen(
         semantic = self.semantic_from_node(node)
         if semantic is not None:
             return semantic
+        if id(node) in self.default_clip_position_member_ids:
+            return "gl_Position"
         name = getattr(node, "name", None)
         mapped_name = self.semantic_map.get(name)
         if isinstance(mapped_name, str) and mapped_name.startswith("gl_"):
             return name
         return None
+
+    def glsl_default_clip_position_member_ids(self):
+        """Members that carry a vertex stage's clip position without a semantic (``clip_position_defaults``)."""
+        member_ids = set()
+        for struct_name in sorted(self.vertex_output_struct_names):
+            struct = self.structs_by_name.get(struct_name)
+            member = default_clip_position_member(
+                getattr(struct, "members", None),
+                has_semantic=lambda node: self.semantic_from_node(node) is not None
+                or self.stage_io_semantic_from_node(node) is not None,
+                declares_position=lambda node: self.map_semantic(
+                    self.stage_io_semantic_from_node(node)
+                )
+                == "gl_Position",
+                is_float4=lambda node: self.member_type_name(node) == "vec4",
+            )
+            if member is not None:
+                member_ids.add(id(member))
+        return member_ids
 
     def parameter_has_mapped_semantic(
         self, parameter, expected_semantic, stage_name=None
@@ -22750,6 +22784,11 @@ class GLSLCodeGen(
         return "layout(location = 0)"
 
     def stage_io_name_avoiding_reserved(self, preferred_name, reserved_names):
+        if preferred_name in self.stage_io_reserved_value_names:
+            return self.glsl_generated_module_identifier(
+                ("stage-io", "reserved", str(preferred_name)),
+                f"out_{self.glsl_sanitized_identifier_base(preferred_name)}",
+            )
         emitted_name = self.glsl_module_identifier_name(preferred_name)
         emitted_reserved_names = {
             self.glsl_module_identifier_name(name)
@@ -22904,11 +22943,22 @@ class GLSLCodeGen(
                 return type_name[: -len(suffix)].strip()
         return type_name
 
+    def vertex_input_member_emitted_name(self, member):
+        """A vertex input that would redeclare a global takes another name; its location still links it."""
+        if member.name not in self.stage_io_reserved_value_names:
+            return None
+        return self.glsl_generated_module_identifier(
+            ("stage-io", "vertex-input", member.name),
+            f"in_{member.name}",
+        )
+
     def generate_stage_input_declarations(self, node):
         code = ""
         for member in getattr(node, "members", []) or []:
             member_type = self.member_type_name(member)
-            member_name = self.glsl_module_identifier_name(member.name)
+            member_name = self.vertex_input_member_emitted_name(
+                member
+            ) or self.glsl_module_identifier_name(member.name)
             layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
@@ -23087,7 +23137,10 @@ class GLSLCodeGen(
             return distance_output_name(self, member, mapped_semantic)
         if self.is_vertex_builtin_output(mapped_semantic):
             return mapped_semantic
-        if member.name in self.vertex_input_member_names:
+        if (
+            member.name in self.vertex_input_member_names
+            or member.name in self.stage_io_reserved_value_names
+        ):
             return self.glsl_generated_module_identifier(
                 ("stage-io", "vertex-output", member.name),
                 f"out_{member.name}",
@@ -23130,7 +23183,26 @@ class GLSLCodeGen(
             if self.is_vertex_builtin_output(output_name):
                 return None
             return self.combined_fragment_input_member_name(output_name)
-        return self.combined_fragment_input_member_name(member.name)
+        linked_name = self.linked_vertex_output_member_name(member.name)
+        if linked_name is None and member.name in self.stage_io_reserved_value_names:
+            linked_name = self.glsl_generated_module_identifier(
+                ("stage-io", "vertex-output", member.name),
+                f"out_{member.name}",
+            )
+        return self.combined_fragment_input_member_name(linked_name or member.name)
+
+    def linked_vertex_output_member_name(self, member_name):
+        """The emitted name of the vertex output a fragment input of another structure reads by name."""
+        for struct_name in sorted(self.vertex_output_struct_names):
+            struct = self.structs_by_name.get(struct_name)
+            for member in getattr(struct, "members", []) or []:
+                if member.name != member_name:
+                    continue
+                output_name = self.vertex_output_member_name(member)
+                if self.is_vertex_builtin_output(output_name):
+                    return None
+                return output_name
+        return None
 
     def fragment_input_builtin_alias(self, member):
         semantic = self.stage_io_semantic_from_node(member)
@@ -23153,15 +23225,9 @@ class GLSLCodeGen(
         return self.stage_input_builtin_alias(semantic, "fragment")
 
     def combined_fragment_input_member_name(self, input_name):
-        if (
-            self.current_target_stage is not None
-            or input_name not in self.combined_vertex_output_member_names
-        ):
-            return self.glsl_module_identifier_name(input_name)
-        return self.glsl_generated_module_identifier(
-            ("stage-io", "combined-fragment-input", input_name),
-            f"in_{input_name}",
-        )
+        # Guarded stage sections are compiled one stage at a time, and a varying without a location links to the
+        # output of the same name (GLSL 4.60 section 4.3.4), so a fragment input keeps the vertex output's name.
+        return self.glsl_module_identifier_name(input_name)
 
     def is_vertex_builtin_output(self, name):
         # A scalar distance output is named by its element, ``gl_ClipDistance[0]``.
@@ -23198,7 +23264,10 @@ class GLSLCodeGen(
                 maps[param.name] = member_map
             else:
                 maps[param.name] = {
-                    member.name: self.glsl_struct_member_name(type_name, member.name)
+                    member.name: (
+                        self.vertex_input_member_emitted_name(member)
+                        or self.glsl_struct_member_name(type_name, member.name)
+                    )
                     for member in getattr(struct, "members", [])
                 }
         return maps
@@ -25505,7 +25574,6 @@ class GLSLCodeGen(
         used_names = set(self.current_glsl_local_identifier_names.values())
         used_names.update(self.local_variable_types)
         used_names.update(self.current_identifier_aliases.values())
-        used_names.update(reserved_names)
         used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
         if preallocated:
             used_names.discard(emitted_name)
@@ -25515,6 +25583,9 @@ class GLSLCodeGen(
                 for source, alias in self.current_identifier_aliases.items()
                 if source != name
             )
+        # Nor a name the stage's inputs and outputs already declare: a local must not hide the stage output it
+        # is written to, as in ``vec4 worldPosition = ...; output.worldPosition = worldPosition.xyz;``.
+        used_names.update(reserved_names)
         if emitted_name in used_names or emitted_name in reserved_names:
             emitted_name = self.glsl_unique_identifier(
                 emitted_name,
