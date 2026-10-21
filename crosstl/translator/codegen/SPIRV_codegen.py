@@ -314,6 +314,19 @@ class VulkanSPIRVCodeGen(
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
     COOPERATIVE_MATRIX_KHR_PROFILE = "vulkan-khr-cooperative-matrix"
+    # Execution models whose extensions (SPV_EXT_mesh_shader, SPV_KHR_ray_tracing) need a SPIR-V 1.4 module.
+    SPIRV_1_4_EXECUTION_MODELS = frozenset(
+        {
+            "MeshEXT",
+            "TaskEXT",
+            "RayGenerationKHR",
+            "IntersectionKHR",
+            "AnyHitKHR",
+            "ClosestHitKHR",
+            "MissKHR",
+            "CallableKHR",
+        }
+    )
     COOPERATIVE_MATRIX_SCOPE_VALUES = {"subgroup": 3}
     COOPERATIVE_MATRIX_USE_VALUES = {
         "matrix_a": 0,
@@ -18322,11 +18335,29 @@ class VulkanSPIRVCodeGen(
                 "through no descriptor (GL_EXT_ray_tracing)"
             )
 
+    def uses_storage_buffer_storage_class(self) -> bool:
+        """Whether storage buffers are ``StorageBuffer`` + ``Block`` rather than ``Uniform`` + ``BufferBlock``.
+
+        The SPIR-V specification's Decoration table lists ``BufferBlock`` as missing after version 1.3, so a
+        module that must be 1.4 or later declares its storage buffers in the ``StorageBuffer`` storage class
+        (core since 1.3). The execution models are known before any buffer is declared.
+        """
+        return (
+            self.cooperative_matrix_khr_enabled
+            or self.include_resource_interface_variables
+            or bool(
+                set(getattr(self, "program_execution_models", ()) or ())
+                & self.SPIRV_1_4_EXECUTION_MODELS
+            )
+        )
+
     def storage_buffer_storage_class(self) -> str:
-        return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"
+        return (
+            "StorageBuffer" if self.uses_storage_buffer_storage_class() else "Uniform"
+        )
 
     def storage_buffer_block_decoration(self) -> str:
-        return "Block" if self.cooperative_matrix_khr_enabled else "BufferBlock"
+        return "Block" if self.uses_storage_buffer_storage_class() else "BufferBlock"
 
     def decorate_storage_buffer_nested_type(
         self, type_id: SpirvId, layout: str = "std430"
@@ -30962,6 +30993,11 @@ class VulkanSPIRVCodeGen(
 
     def spirv_module_version(self) -> str:
         if self.include_resource_interface_variables:
+            return "1.4"
+        if (
+            set(getattr(self, "program_execution_models", ()) or ())
+            & self.SPIRV_1_4_EXECUTION_MODELS
+        ):
             return "1.4"
         if "MeshShadingEXT" in self.required_capabilities:
             return "1.4"
