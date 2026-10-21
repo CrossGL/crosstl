@@ -207,6 +207,23 @@ def o_struct_stride(inp):
     return out.reshape(-1).astype(np.float32)
 
 
+def o_packed_mixed(inp):
+    # Words of an element: a at 0..2, padding 3, s at 4, b at 5..7, c at 8, padding 9, d at 10..11.
+    r = inp.reshape(64, 12).astype(np.float32)
+    out = np.stack(
+        [
+            r[:, 2],
+            r[:, 5],
+            r[:, 7] + np.float32(0.5),
+            r[:, 8],
+            r[:, 11],
+            r[:, 0] + r[:, 10] + r[:, 4],
+        ],
+        axis=1,
+    )
+    return out.reshape(-1).astype(np.float32)
+
+
 def o_matrix_orientation(inp):
     """GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6 on mat2x3 values built from six inputs per thread."""
     out = []
@@ -1308,6 +1325,16 @@ CASES = [
         np.arange(64 * 7, dtype=np.float32),
         np.float32,
         o_struct_stride,
+        compare="ulp:0",
+    ),
+    Case(
+        "m_packed_mixed",
+        "H16",
+        "struct mixing float3 and packed_float3 members: 48-byte elements, packed member at 20",
+        "MSL float3 and packed vector alignment",
+        np.arange(64 * 12, dtype=np.float32),
+        np.float32,
+        o_packed_mixed,
         compare="ulp:0",
     ),
     Case(

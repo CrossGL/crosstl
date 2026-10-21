@@ -9,8 +9,9 @@ element type unchanged, so a translated program read and wrote other bytes than 
   DXC's ``-fvk-use-dx-layout``). CrossGL marks such buffers ``@buffer_layout(hlsl_structured)``;
 * an MSL ``device`` buffer uses the natural layout of its element type: ``float2`` is 8-byte and ``float3`` and
   ``float4`` 16-byte sized and aligned, so ``device float3*`` has a 16-byte stride and ``struct { float3 a;
-  float b; }`` puts ``b`` at byte 16 and takes 32 bytes (MSL 3.2 section 2.2 and table 2.4). CrossGL marks such
-  buffers ``@buffer_layout(metal)`` where that differs from the HLSL or std430 layout;
+  float b; }`` puts ``b`` at byte 16 and takes 32 bytes (MSL 3.2 section 2.2 and table 2.4). A packed vector member
+  (``packed_float3``, ``@ packed vec3`` in CrossGL) is aligned to its scalar and takes 12 bytes (section 2.2.3).
+  CrossGL marks such buffers ``@buffer_layout(metal)`` where that differs from the HLSL or std430 layout;
 * GLSL's std430 rules, which OpenGL storage blocks and the SPIR-V emitter use, align a three- or four-component
   vector to 16 bytes and a two-component one to 8, size a ``vec3`` 12 bytes and align a struct to its widest member
   (GLSL 4.60 section 7.6.2.2), so ``vec3 v[]`` has a 16-byte stride and the two structs above take 16 bytes.
@@ -36,10 +37,11 @@ never written.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from .. import ast as A
+from ..codegen.buffer_member_layout import member_is_packed
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name, iter_functions, iter_structs, type_from_node
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
@@ -122,6 +124,8 @@ class _Shape:
     # An ``opaque`` value has no word lowering: (kind, bits, rows, columns), columns 0 for a scalar or vector.
     opaque: tuple = ()
     source: str = "hlsl"
+    # A vector stored in MSL's packed form (a ``@ packed`` member): aligned to its scalar under the MSL rules.
+    packed: bool = False
 
     @property
     def lowerable(self) -> bool:
@@ -166,15 +170,16 @@ def _round(value, alignment):
     return -(-value // alignment) * alignment
 
 
-def _vector_layout(scalar, lanes, rules):
+def _vector_layout(scalar, lanes, rules, packed=False):
     """``(size, alignment, leaves)`` of a vector of ``lanes`` scalars of ``scalar`` bytes under ``rules``.
 
     HLSL structured buffers align a vector to its scalar (D3D11.3 section 5.3.7); std430 aligns a two-component
     vector to twice and a three- or four-component one to four times its scalar (GLSL 4.60 section 7.6.2.2); MSL
-    sizes and aligns ``T3`` like ``T4`` (MSL 3.2 table 2.4).
+    sizes and aligns ``T3`` like ``T4`` (MSL 3.2 table 2.4), and a ``packed`` vector like its scalars. A target
+    declares a packed vector as a plain one, so only the MSL rules read ``packed``.
     """
     leaves = tuple((scalar * lane, scalar) for lane in range(lanes))
-    if rules == "hlsl" or lanes == 1:
+    if rules == "hlsl" or lanes == 1 or (packed and rules == "metal"):
         return scalar * lanes, scalar, leaves
     if rules == "metal":
         size = scalar * (4 if lanes == 3 else lanes)
@@ -208,7 +213,7 @@ def _layout(shape: _Shape, rules: str) -> tuple[int, int, tuple]:
     if shape.form == "scalar":
         return _vector_layout(4, 1, rules)
     if shape.form == "vector":
-        return _vector_layout(4, shape.lanes, rules)
+        return _vector_layout(4, shape.lanes, rules, shape.packed)
     if shape.form == "opaque":
         return _opaque_layout(shape.opaque, rules)
     if shape.form == "matrix":
@@ -328,7 +333,10 @@ class _Shapes:
         if name not in self.cache:
             members, offset = [], 0
             for member in struct.members:
-                shape = self.of(member.member_type, f"{context}, member {member.name}")
+                member_context = f"{context}, member {member.name}"
+                shape = self.of(member.member_type, member_context)
+                if member_is_packed(member):
+                    shape = _packed_shape(shape, member_context)
                 size, alignment, _leaves = _layout(shape, self.source)
                 offset = _round(offset, alignment)
                 members.append((member.name, shape, offset // 4))
@@ -337,6 +345,17 @@ class _Shapes:
                 "struct", name=name, members=tuple(members), source=self.source
             )
         return self.cache[name]
+
+
+def _packed_shape(shape, context):
+    """``shape`` stored as MSL packed vectors: a vector, or an array of vectors, of a ``@ packed`` member."""
+    if shape.form == "vector":
+        return replace(shape, packed=True)
+    if shape.form == "array" and shape.element.form == "vector":
+        return replace(shape, element=replace(shape.element, packed=True))
+    raise StructuredLayoutUnsupportedError(
+        f"{context}: only vectors and arrays of vectors have a packed form"
+    )
 
 
 def _matrix_spelling(name):

@@ -7,7 +7,8 @@ register. A GLSL std430 or scalar block (a Vulkan push constant, or a block
 written for GL_EXT_scalar_block_layout) packs ``float t[4]`` into 16 bytes,
 a ``mat2`` into 16 and, under the scalar layout, a ``vec3[]`` with a 12-byte
 stride; a std140 block with ``offset`` qualifiers can place a nested struct
-at offsets HLSL never uses.
+at offsets HLSL never uses. An MSL constant buffer (``@ buffer_layout(metal)``)
+gives ``float3`` 16 bytes and a packed ``float3`` 12 at 4-byte alignment.
 
 Such a block declares its bytes as one ``uint4`` array, every member becomes
 a ``static`` global of its own type and name, and a loader that each stage

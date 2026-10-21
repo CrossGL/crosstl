@@ -8,6 +8,9 @@ std140. CrossGL keeps the layout of a constant block in ``@ buffer_layout(...)``
 * an HLSL constant buffer (``hlsl_cbuffer``) packs members into 16-byte registers: ``float a[2]; float b;`` puts
   ``b`` at byte 20 and ``float c; float2 d;`` puts ``d`` at byte 4, where std140 puts them at 32 and 8 (see
   :mod:`hlsl_buffer_layout`);
+* an MSL ``constant`` buffer (``metal``) uses the natural layout of its type: a ``float3`` takes 16 bytes, so
+  ``float3 a; float b;`` puts ``b`` at byte 16, and a ``@ packed`` ``float3`` takes 12 bytes at 4-byte alignment
+  (see :mod:`glsl_block_layout`);
 * a ``packoffset(c1.y)`` or ``layout(offset = 20)`` qualifier places a member at the byte it names (see
   :mod:`buffer_member_layout`), and ``layout(align = 32)`` raises its alignment.
 
@@ -27,9 +30,14 @@ from dataclasses import dataclass, replace
 
 from ..ast import ArrayNode, ArrayType, FunctionNode
 from .array_utils import evaluate_literal_int_expression
-from .buffer_member_layout import member_explicit_offset, member_is_row_major
+from .buffer_member_layout import (
+    member_explicit_offset,
+    member_is_packed,
+    member_is_row_major,
+)
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
+    METAL_LAYOUT,
     STD140_LAYOUT,
     block_matrix_vector_stride,
     block_struct_placements,
@@ -55,7 +63,9 @@ __all__ = [
 ]
 
 SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION = "GL_EXT_scalar_block_layout"
-PLACED_LAYOUTS = (HLSL_CBUFFER_LAYOUT,) + GLSL_BLOCK_LAYOUTS
+PLACED_LAYOUTS = (HLSL_CBUFFER_LAYOUT,) + GLSL_BLOCK_LAYOUTS + (METAL_LAYOUT,)
+# Layouts the std140, std430 and scalar paths of the generator never reproduce, so a block always takes placements.
+ALWAYS_PLACED_LAYOUTS = (HLSL_CBUFFER_LAYOUT, METAL_LAYOUT)
 
 
 @dataclass(frozen=True)
@@ -90,7 +100,7 @@ def _block_members(node):
 
 
 def _member_tuple(member):
-    """``(name, type, row_major, offset, alignment)`` of a block or struct member."""
+    """``(name, type, row_major, offset, alignment, packed)`` of a block or struct member."""
     if isinstance(member, ArrayNode):
         element_type = getattr(member, "element_type", getattr(member, "vtype", None))
         member_type = ArrayType(element_type, getattr(member, "size", None))
@@ -104,6 +114,7 @@ def _member_tuple(member):
         member_is_row_major(member),
         member_explicit_offset(member),
         member_explicit_alignment(member),
+        member_is_packed(member),
     )
 
 
@@ -123,7 +134,7 @@ def _block_layout_type(codegen, node, members):
         if struct is None:
             return None
         return [
-            (*_member_tuple(member)[:3], None, member_explicit_alignment(member))
+            (*_member_tuple(member)[:3], None, *_member_tuple(member)[4:])
             for member in _block_members(struct)
         ]
 
@@ -248,6 +259,17 @@ def _check_validator_extents(struct_name, placements, layout):
             _check_validator_extents(nested.struct_name, nested_placements, layout)
 
 
+def _std140_signature(layout_type):
+    """The std140 placements of a block's members, or ``None`` when std140 has no layout for one (a packed
+    vector)."""
+    std140_type = replace(layout_type, offsets=(), alignments=())
+    try:
+        std140 = _root_placements(std140_type, STD140_LAYOUT)
+        return _placements_signature(std140, STD140_LAYOUT)
+    except HlslLayoutError:
+        return None
+
+
 def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
     """The placements of a ``cbuffer`` whose bytes differ from std140, or ``None`` for the std140 path.
 
@@ -257,7 +279,7 @@ def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
     layout = declared_buffer_layout(getattr(node, "attributes", None)) or STD140_LAYOUT
     members = _block_members(node)
     explicit = _has_explicit_placement(members)
-    if layout != HLSL_CBUFFER_LAYOUT and not explicit:
+    if layout not in ALWAYS_PLACED_LAYOUTS and not explicit:
         return None
     if layout not in PLACED_LAYOUTS:
         raise _unsupported(
@@ -269,11 +291,7 @@ def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
     try:
         layout_type = _block_layout_type(codegen, node, members)
         placements = _root_placements(layout_type, layout)
-        std140_type = replace(layout_type, offsets=(), alignments=())
-        std140 = _root_placements(std140_type, STD140_LAYOUT)
-        if _placements_signature(placements, layout) == _placements_signature(
-            std140, STD140_LAYOUT
-        ):
+        if _placements_signature(placements, layout) == _std140_signature(layout_type):
             return None
         _check_validator_extents(node.name, placements, layout)
     except HlslLayoutError as exc:

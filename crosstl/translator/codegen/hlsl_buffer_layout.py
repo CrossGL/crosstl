@@ -61,6 +61,11 @@ class HlslLayoutType:
     buffer (``packoffset`` or ``offset`` qualifiers), ``None`` for a member
     without one, and is empty when no member has one. ``alignments`` holds the
     GLSL ``align`` qualifiers of the members in the same way.
+
+    ``packed`` marks a vector stored in the packed form of MSL (``packed_float3``, kept in CrossGL as a ``@ packed``
+    member): aligned to its scalar and sized by its components (MSL 3.2 section 2.2.3). Only the ``metal`` and
+    ``scalar`` block rules lay such a vector out, and the HLSL structured-buffer rules, which already pack every
+    vector that way; the other rules refuse it.
     """
 
     kind: str
@@ -74,6 +79,7 @@ class HlslLayoutType:
     row_major: bool = False
     offsets: Tuple[Optional[int], ...] = ()
     alignments: Tuple[Optional[int], ...] = ()
+    packed: bool = False
 
     @property
     def scalar_size(self):
@@ -184,6 +190,11 @@ def cbuffer_placement(layout_type, offset):
     following member may reuse.
     """
     kind = layout_type.kind
+    if layout_type.packed:
+        raise HlslLayoutError(
+            "a packed vector has no HLSL constant-buffer layout: constant packing keeps a vector within one "
+            "16-byte register"
+        )
     if kind in ("scalar", "vector"):
         size = layout_type.scalar_size * layout_type.components
         start = align_to(offset, layout_type.scalar_size)

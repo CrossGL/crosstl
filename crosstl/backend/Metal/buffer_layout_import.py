@@ -19,9 +19,20 @@ source spelling and compares it with the HLSL structured, std430 and natural MSL
 * a packed element without matrices whose Metal layout is the HLSL structured layout is marked
   ``hlsl_structured``, which every target reproduces (the Metal generator with packed storage, OpenGL and SPIR-V
   with a buffer of 32-bit words);
-* an element whose Metal layout is the natural MSL layout of its CrossGL type is marked ``metal``, which the Metal
-  generator keeps and HLSL, OpenGL and SPIR-V reproduce with a buffer of 32-bit words where their rules differ;
-* any other packed element is refused, because no CrossGL buffer layout reproduces it.
+* an element whose Metal layout is the natural MSL layout of its CrossGL type, where the packed vector members of
+  its structs are ``@ packed`` members, is marked ``metal``, which the Metal generator keeps and HLSL, OpenGL and
+  SPIR-V reproduce with a buffer of 32-bit words where their rules differ;
+* any other packed element (an array of packed vectors that is not a struct member) is refused, because no
+  CrossGL buffer layout reproduces it.
+
+A ``constant T&`` stage-entry parameter whose ``T`` holds packed vector members that move the members after them
+is marked ``metal`` by :meth:`MetalBufferLayoutImport.metal_constant_reference_layout`: std140 and HLSL constant
+packing have no packed vector, so the other targets bind it as a constant buffer in MSL's layout. Other constant
+references keep the target's constant-buffer layout, which the project reflection reports to the host.
+
+A struct member stored as a packed vector keeps that storage: :meth:`MetalBufferLayoutImport.metal_packed_member`
+finds the members CrossGL spells ``@ packed vec3`` (see :mod:`crosstl.translator.codegen.buffer_member_layout`), so
+the Metal generator declares ``packed_float3`` again and the block planners place the member at its MSL offset.
 """
 
 from __future__ import annotations
@@ -127,14 +138,35 @@ def _layout(node, rules):
     return _round(size, alignment), offsets
 
 
-def _unpacked(node):
-    """``node`` with every packed vector replaced by its vector type: the natural MSL layout of its CrossGL type."""
+def _crossgl(node):
+    """``node`` as CrossGL keeps it: a struct member keeps its packed storage (``@ packed``), and a packed vector
+    that is no struct member's own type (the buffer element itself, or an element of a nested array) is a vector.
+    """
+    if node.form == "struct":
+        return replace(node, members=tuple(_member(member) for member in node.members))
     return replace(
         node,
         packed=False,
-        element=None if node.element is None else _unpacked(node.element),
-        members=tuple(_unpacked(member) for member in node.members),
+        element=None if node.element is None else _crossgl(node.element),
     )
+
+
+def _plain(node):
+    """``node`` with every packed vector replaced by its vector type."""
+    return replace(
+        node,
+        packed=False,
+        element=None if node.element is None else _plain(node.element),
+        members=tuple(_plain(member) for member in node.members),
+    )
+
+
+def _member(node):
+    if node.form == "vector":
+        return node
+    if node.form == "array" and node.element.form == "vector":
+        return node
+    return _crossgl(node)
 
 
 def _walk(node):
@@ -165,17 +197,75 @@ class MetalBufferLayoutImport:
         packed = any(part.packed for part in parts)
         matrix = any(part.form == "matrix" for part in parts)
         metal = _layout(node, "metal")
-        if metal == _layout(node, "hlsl") == _layout(node, "std430"):
+        # Packed members that move other members must be placed by a declared layout on every target.
+        packed_moves = packed and metal != _layout(_plain(node), "metal")
+        if (
+            metal == _layout(node, "hlsl") == _layout(node, "std430")
+            and not packed_moves
+        ):
             return None
         if packed and not matrix and metal == _layout(node, "hlsl"):
             return HLSL_STRUCTURED
-        if metal == _layout(_unpacked(node), "metal"):
+        if metal == _layout(_crossgl(node), "metal"):
             return METAL
         self.refuse_import(
             f"{context}: the Metal layout of {element_type} matches neither the HLSL structured-buffer layout nor "
-            "the natural MSL layout of its CrossGL type"
+            "the natural MSL layout of its CrossGL type, whose packed vectors are struct members"
         )
         return None
+
+    def metal_constant_reference_layout(self, parameter, context):
+        """``"metal"`` for a ``constant T&`` stage-entry parameter whose ``T`` holds packed vector members that move
+        other members, else ``None``.
+
+        The other targets bind a constant reference as a std140 block or an HLSL constant buffer and report that
+        layout to the host, which then writes the members where the target reads them. Neither rule set has a
+        packed vector, so a ``T`` whose packed members move the members after them keeps its MSL layout instead.
+        """
+        qualifiers = set(self.effective_declaration_qualifiers(parameter))
+        if "constant" not in qualifiers:
+            return None
+        raw = str(self.resolve_type_alias(getattr(parameter, "vtype", None)) or "")
+        raw = raw.strip()
+        if raw.count("&") != 1 or not raw.endswith("&") or "*" in raw:
+            return None
+        try:
+            node = self.metal_layout_type(raw[:-1].strip(), ())
+        except _Unknown:
+            if "packed_" in raw:
+                self.refuse_import(
+                    f"{context}: the layout of the packed constant type {raw[:-1].strip()} cannot be determined"
+                )
+            return None
+        if node.form != "struct" or not any(part.packed for part in _walk(node)):
+            return None
+        metal = _layout(node, "metal")
+        if metal == _layout(_plain(node), "metal"):
+            return None
+        if metal == _layout(_crossgl(node), "metal"):
+            return METAL
+        self.refuse_import(
+            f"{context}: the Metal layout of {raw[:-1].strip()} holds packed vectors that are not struct members "
+            "or arrays of them, which CrossGL cannot mark packed"
+        )
+        return None
+
+    def metal_packed_member(self, member):
+        """Whether a struct member is stored as an MSL packed vector (``packed_float3``) or a one-dimensional array
+        of them, the members CrossGL marks ``@ packed``; a deeper array of packed vectors is a plain array there,
+        and the layout checks refuse it where its layout matters."""
+        if not isinstance(member, VariableNode):
+            return False
+        text = str(self.resolve_type_alias(getattr(member, "vtype", None)) or "")
+        text = re.sub(r"^(?:(?:const|volatile)\s+)+", "", text.strip()).strip()
+        depth = len(getattr(member, "array_sizes", None) or [])
+        while True:
+            array = _ARRAY.match(text)
+            if array is None:
+                break
+            depth += 1
+            text = str(self.resolve_type_alias(array.group(1).strip()) or "").strip()
+        return depth <= 1 and bool(_PACKED.match(text))
 
     def metal_device_pointer_element_type(self, parameter):
         """The element type of a ``device`` or ``constant`` pointer parameter of a helper function, or ``None``.

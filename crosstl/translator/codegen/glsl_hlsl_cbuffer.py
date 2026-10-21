@@ -25,6 +25,10 @@ same way: OpenGL uniform blocks have only the std140 layout, which moves every
 ``float[]`` element to its own 16 bytes. So is a std140 block whose ``offset``
 or ``align`` qualifiers move its members. Arrays whose stride is not a whole
 number of registers are read word by word.
+
+An MSL constant buffer marked ``@ buffer_layout(metal)`` is declared the same
+way: its ``float3`` members take 16 bytes and its ``@ packed`` vectors 12, so
+``float3 a; float b;`` puts ``b`` at byte 16 where std140 puts it at 12.
 """
 
 import re
@@ -37,14 +41,19 @@ from .array_utils import (
     fold_array_type_counts,
     format_c_style_array_declaration,
 )
-from .buffer_member_layout import member_explicit_offset, member_is_row_major
+from .buffer_member_layout import (
+    member_explicit_offset,
+    member_is_packed,
+    member_is_row_major,
+)
 from .glsl_block_layout import (
-    GLSL_BLOCK_LAYOUTS,
+    BLOCK_LAYOUTS,
     block_array_stride,
     block_matrix_vector_stride,
     block_struct_placements,
     declared_buffer_layout,
     member_explicit_alignment,
+    packed_layout_type,
 )
 from .hlsl_buffer_layout import (
     CBUFFER_REGISTER_SIZE,
@@ -186,19 +195,19 @@ def std140_scalar_offsets(layout_type, offset=0):
 
 
 def layout_matrix_vector_stride(layout_type, layout):
-    if layout in GLSL_BLOCK_LAYOUTS:
+    if layout in BLOCK_LAYOUTS:
         return block_matrix_vector_stride(layout_type, layout)
     return cbuffer_matrix_vector_stride(layout_type)
 
 
 def layout_array_stride(layout_type, layout):
-    if layout in GLSL_BLOCK_LAYOUTS:
+    if layout in BLOCK_LAYOUTS:
         return block_array_stride(layout_type, layout)
     return cbuffer_array_stride(layout_type)
 
 
 def layout_member_placements(layout_type, layout):
-    if layout in GLSL_BLOCK_LAYOUTS:
+    if layout in BLOCK_LAYOUTS:
         placements, _size = block_struct_placements(layout_type, layout)
     else:
         placements, _size = cbuffer_struct_placements(layout_type)
@@ -365,6 +374,16 @@ class GLSLHlslConstantBuffers:
             return self.glsl_hlsl_cbuffer_struct_layout_type(mapped, struct, stack)
         raise HlslLayoutError(f"type '{raw_type}' has no HLSL constant-buffer layout")
 
+    def glsl_hlsl_cbuffer_member_layout_type(self, node, member):
+        layout_type = self.glsl_hlsl_cbuffer_layout_type(
+            self.glsl_hlsl_cbuffer_member_raw_type(member),
+            (node.name,),
+            member_is_row_major(member),
+        )
+        if member_is_packed(member):
+            return packed_layout_type(layout_type, member.name)
+        return layout_type
+
     def glsl_hlsl_cbuffer_struct_layout_type(self, type_name, struct, stack):
         name = self.glsl_source_type_identifier_name(type_name)
         if name in stack:
@@ -380,6 +399,8 @@ class GLSLHlslConstantBuffers:
                 (*stack, name),
                 member_is_row_major(member),
             )
+            if member_is_packed(member):
+                member_type = packed_layout_type(member_type, member_name)
             members.append((member_name, member_type))
         return struct_type(name, members)
 
@@ -396,28 +417,23 @@ class GLSLHlslConstantBuffers:
         if not hasattr(self, "glsl_hlsl_cbuffer_loaders"):
             self.reset_glsl_hlsl_cbuffers()
         source_layout = declared_buffer_layout(getattr(node, "attributes", None))
-        if (
-            source_layout != HLSL_CBUFFER_LAYOUT
-            and source_layout not in GLSL_BLOCK_LAYOUTS
-        ):
+        if source_layout != HLSL_CBUFFER_LAYOUT and source_layout not in BLOCK_LAYOUTS:
             return None
         members = [
             member
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
-        label = "HLSL" if source_layout == HLSL_CBUFFER_LAYOUT else source_layout
+        label = {HLSL_CBUFFER_LAYOUT: "HLSL", "metal": "MSL"}.get(
+            source_layout, source_layout
+        )
         try:
             layout_type = struct_type(
                 node.name,
                 [
                     (
                         member.name,
-                        self.glsl_hlsl_cbuffer_layout_type(
-                            self.glsl_hlsl_cbuffer_member_raw_type(member),
-                            (node.name,),
-                            member_is_row_major(member),
-                        ),
+                        self.glsl_hlsl_cbuffer_member_layout_type(node, member),
                     )
                     for member in members
                 ],
@@ -458,7 +474,11 @@ class GLSLHlslConstantBuffers:
                 reason=(
                     "hlsl-cbuffer-layout"
                     if source_layout == HLSL_CBUFFER_LAYOUT
-                    else "glsl-block-layout"
+                    else (
+                        "metal-constant-layout"
+                        if source_layout == "metal"
+                        else "glsl-block-layout"
+                    )
                 ),
             ) from exc
 

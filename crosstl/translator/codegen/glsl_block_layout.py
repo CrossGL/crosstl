@@ -29,9 +29,17 @@ CrossGL keeps such a block as a ``cbuffer`` marked ``@ buffer_layout(std140)``
 (or ``std430``, ``scalar``); the shapes are the :class:`HlslLayoutType` values
 of :mod:`hlsl_buffer_layout`, so a backend may place a buffer with either rule
 set and compare them.
+
+The same planner computes the ``metal`` layout of an MSL ``constant`` buffer,
+the natural layout of its type (MSL 3.2 section 2.2 and table 2.4): it follows
+std430 except that a three-component vector takes 16 bytes, so a following
+scalar starts after it, and that a packed vector (``packed_float3``, a
+``@ packed`` member in CrossGL) is aligned to its scalar and takes exactly its
+components. MSL's one-byte ``bool`` has no word layout and is refused.
 """
 
 import re
+from dataclasses import replace
 
 from ..ast import ArrayType, MatrixType, NamedType, PrimitiveType, VectorType
 from .hlsl_buffer_layout import (
@@ -54,12 +62,13 @@ from .hlsl_buffer_layout import (
 STD140_LAYOUT = "std140"
 STD430_LAYOUT = "std430"
 SCALAR_BLOCK_LAYOUT = "scalar"
+METAL_LAYOUT = "metal"
 # Layouts a ``@ buffer_layout`` attribute may name.
 DECLARED_BUFFER_LAYOUTS = HLSL_BUFFER_LAYOUTS + (
     STD140_LAYOUT,
     STD430_LAYOUT,
     SCALAR_BLOCK_LAYOUT,
-    "metal",
+    METAL_LAYOUT,
 )
 VEC4_ALIGNMENT = 16
 
@@ -133,11 +142,13 @@ def member_explicit_alignment(member):
 
 # Block layout rules ---------------------------------------------------------
 GLSL_BLOCK_LAYOUTS = (STD140_LAYOUT, STD430_LAYOUT, SCALAR_BLOCK_LAYOUT)
+# Every layout the block planner below computes.
+BLOCK_LAYOUTS = GLSL_BLOCK_LAYOUTS + (METAL_LAYOUT,)
 
 
 def require_block_layout(layout):
-    if layout not in GLSL_BLOCK_LAYOUTS:
-        raise HlslLayoutError(f"'{layout}' is not a GLSL block layout")
+    if layout not in BLOCK_LAYOUTS:
+        raise HlslLayoutError(f"'{layout}' is not a block layout")
 
 
 def block_vector_alignment(scalar_size, components, layout):
@@ -146,6 +157,31 @@ def block_vector_alignment(scalar_size, components, layout):
     if components == 2:
         return 2 * scalar_size
     return 4 * scalar_size
+
+
+def check_block_value(layout_type, layout):
+    """Refuse a value ``layout`` has no layout for: a packed vector outside the metal and scalar rules, or an MSL
+    ``bool``, which takes one byte."""
+    if layout_type.packed and layout not in (METAL_LAYOUT, SCALAR_BLOCK_LAYOUT):
+        raise HlslLayoutError(
+            f"a packed vector has no {layout} layout: {layout} aligns a vector of two or more components to "
+            "more than its scalar"
+        )
+    if layout == METAL_LAYOUT and layout_type.scalar == "bool":
+        raise HlslLayoutError(
+            "an MSL bool in a constant buffer takes one byte, which no word layout reproduces"
+        )
+
+
+def packed_layout_type(layout_type, member_name=""):
+    """``layout_type`` stored in MSL's packed form: a vector, or an array of vectors, of a ``@ packed`` member."""
+    if layout_type.kind == "vector":
+        return replace(layout_type, packed=True)
+    if layout_type.kind == "array" and layout_type.element.kind == "vector":
+        return replace(layout_type, element=replace(layout_type.element, packed=True))
+    raise HlslLayoutError(
+        f"member '{member_name}' is marked packed, but only vectors and arrays of vectors have a packed form"
+    )
 
 
 def block_matrix_vector_stride(layout_type, layout):
@@ -163,7 +199,8 @@ def block_matrix_vector_stride(layout_type, layout):
 def block_alignment(layout_type, layout):
     """The base alignment of a value under ``layout``."""
     kind = layout_type.kind
-    if kind == "scalar":
+    check_block_value(layout_type, layout)
+    if kind == "scalar" or layout_type.packed:
         return layout_type.scalar_size
     if kind == "vector":
         return block_vector_alignment(
@@ -200,7 +237,15 @@ def block_array_stride(layout_type, layout):
 def block_size(layout_type, layout):
     """The bytes a value takes: no other member may start before its offset plus this size."""
     kind = layout_type.kind
+    check_block_value(layout_type, layout)
     if kind in ("scalar", "vector"):
+        if (
+            layout == METAL_LAYOUT
+            and layout_type.components == 3
+            and not layout_type.packed
+        ):
+            # An MSL three-component vector takes the size of four (MSL 3.2 table 2.4).
+            return layout_type.scalar_size * 4
         return layout_type.scalar_size * layout_type.components
     if kind == "matrix":
         if layout == SCALAR_BLOCK_LAYOUT:
@@ -266,14 +311,14 @@ def block_struct_placements(layout_type, layout, root=False):
 
 
 def layout_struct_placements(layout_type, layout, root=False):
-    """Member placements and size of a struct under ``layout`` (an HLSL or a GLSL block layout)."""
-    if layout in GLSL_BLOCK_LAYOUTS:
+    """Member placements and size of a struct under ``layout`` (an HLSL or a block layout)."""
+    if layout in BLOCK_LAYOUTS:
         return block_struct_placements(layout_type, layout, root)
     return struct_placements(layout_type, layout)
 
 
 def layout_array_stride(layout_type, layout):
-    if layout in GLSL_BLOCK_LAYOUTS:
+    if layout in BLOCK_LAYOUTS:
         return block_array_stride(layout_type, layout)
     return cbuffer_array_stride(layout_type)
 
@@ -407,19 +452,22 @@ def crossgl_type_node_layout_type(
 def crossgl_struct_layout_type(
     name, members, struct_members, stack=(), constant_value=None
 ):
-    """The layout shape of a struct or block from its ``(name, type, row_major, offset, alignment)`` members."""
+    """The layout shape of a struct or block from its ``(name, type, row_major, offset, alignment)`` members.
+
+    A sixth item, when present, says whether the member is ``@ packed``.
+    """
     members = list(members)
+    layouts = []
+    for member in members:
+        layout = crossgl_layout_type(
+            member[1], struct_members, member[2], stack, constant_value
+        )
+        if len(member) > 5 and member[5]:
+            layout = packed_layout_type(layout, member[0])
+        layouts.append((member[0], layout))
     return struct_type(
         name,
-        [
-            (
-                member[0],
-                crossgl_layout_type(
-                    member[1], struct_members, member[2], stack, constant_value
-                ),
-            )
-            for member in members
-        ],
+        layouts,
         [member[3] for member in members],
         [member[4] for member in members],
     )

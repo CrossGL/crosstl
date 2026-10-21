@@ -108,6 +108,7 @@ from .buffer_block_diagnostics import (
     record_unsupported_layout_failures,
 )
 from .buffer_length import BufferLengthUnsupportedError
+from .buffer_member_layout import member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
     component_access_type,
@@ -3985,6 +3986,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
+                        member_type = self.metal_packed_storage_type(
+                            member, member_type
+                        )
                         declaration = format_c_style_array_declaration(
                             member_type, member.name
                         )
@@ -4015,6 +4019,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
+                        member_type = self.metal_packed_storage_type(
+                            member, member_type
+                        )
                         declaration = format_c_style_array_declaration(
                             member_type, member.name
                         )
@@ -4682,6 +4689,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             mapped_type = self.map_type(element_type)
             if preserve_native_narrow_storage:
                 mapped_type = self.metal_struct_storage_type(element_type)
+            mapped_type = self.metal_packed_storage_type(member, mapped_type)
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
             if member.size:
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4741,6 +4749,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 member_type = self.map_type(member_type_str)
                 if preserve_native_narrow_storage:
                     member_type = self.metal_struct_storage_type(member_type_str)
+                member_type = self.metal_packed_storage_type(member, member_type)
                 dependencies.update(self.metal_struct_type_dependencies(member_type))
                 declaration = format_c_style_array_declaration(member_type, member.name)
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4786,12 +4795,34 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             raw_type = self.struct_member_raw_type(member)
             if self.metal_native_narrow_bitcast_storage_type(raw_type) is not None:
                 member_type = self.metal_struct_storage_type(raw_type)
+        member_type = self.metal_packed_storage_type(member, member_type)
         dependencies.update(self.metal_struct_type_dependencies(member_type))
         return (
             f"    {member_type} {member.name}{abi_attr}{semantic_attr}"
             f"{interpolation_attr};\n",
             dependencies,
         )
+
+    METAL_PACKED_VECTOR_RE = re.compile(
+        r"(?:metal::)?(?P<vector>(?:float|half|int|uint|short|ushort|char|uchar|long|ulong|bfloat)[234])"
+    )
+
+    def metal_packed_storage_type(self, member, type_text):
+        """``type_text`` in MSL's packed vector form (``packed_float3``) for a ``@ packed`` member.
+
+        A packed vector is aligned to its scalar and takes exactly its components (MSL 3.2 section 2.2.3), the
+        layout an MSL source declared with ``packed_float3``; the value is the ordinary vector.
+        """
+        if not member_is_packed(member) or str(type_text).startswith("packed_"):
+            return type_text
+        base, suffix = split_array_type_suffix(str(type_text))
+        match = self.METAL_PACKED_VECTOR_RE.fullmatch(base.strip())
+        if match is None:
+            raise ValueError(
+                f"Metal struct member '{getattr(member, 'name', '?')}' is marked packed, but {type_text} has no "
+                "packed vector form"
+            )
+        return f"packed_{match.group('vector')}{suffix}"
 
     def metal_struct_type_dependencies(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -21747,7 +21778,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.normalized_metal_abi_attribute_name(attr) == "function_constant"
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
-                or str(getattr(attr, "name", "")).lower() == BUFFER_LAYOUT_ATTRIBUTE
+                or str(getattr(attr, "name", "")).lower()
+                in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
             ):
                 continue
             if hasattr(attr, "name"):

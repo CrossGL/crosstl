@@ -26,7 +26,7 @@ def test_hazard_inventory_and_oracles():
     # natural MSL layout, Metal helper functions that take packed and natural buffer pointers, and constants
     # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing, HLSL row_major cbuffer
     # matrices and MSL layout.
-    assert len(CASES) == len(BY_ID) == 107
+    assert len(CASES) == len(BY_ID) == 108
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

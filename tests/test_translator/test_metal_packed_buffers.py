@@ -88,9 +88,19 @@ def test_import_marks_packed_elements_with_their_layout(
     assert marks == ([layout] if layout else [])
 
 
-def test_import_refuses_packed_elements_no_layout_reproduces(tmp_path):
+def test_import_keeps_packed_members_no_other_layout_reproduces(tmp_path):
     # Metal: b at 16, 24 bytes; natural MSL (float3 a): b at 16, 32 bytes; HLSL structured: b at 12, 20 bytes.
+    # CrossGL keeps a as a packed member, whose MSL layout is Metal's.
     prelude = "struct R { packed_float3 a; float2 b; };"
+    code = _flat(_translate(tmp_path, "cgl", _kernel("R", prelude)))
+    assert "@packed vec3 a;" in code
+    assert re.findall(r"@buffer_layout\((\w+)\) RWStructuredBuffer", code) == ["metal"]
+
+
+def test_import_refuses_packed_elements_no_layout_reproduces(tmp_path):
+    # A two-dimensional array of packed vectors has no packed form in CrossGL: Metal gives it a 12-byte stride after
+    # the 16-byte c, where HLSL structured buffers put b at 12 and CrossGL's vec3[2][2] has a 16-byte stride.
+    prelude = "struct R { float3 c; packed_float3 b[2][2]; };"
     with pytest.raises(MetalImportRefused, match="matches neither"):
         _translate(tmp_path, "cgl", _kernel("R", prelude))
 

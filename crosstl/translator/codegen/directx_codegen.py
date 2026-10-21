@@ -132,6 +132,7 @@ from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .buffer_member_layout import (
     member_explicit_offset,
+    member_is_packed,
     member_is_row_major,
     packoffset_text,
 )
@@ -202,7 +203,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_block_layout import (
-    GLSL_BLOCK_LAYOUTS,
+    BLOCK_LAYOUTS,
     crossgl_struct_layout_type,
     declared_buffer_layout,
     hlsl_packoffsets_for_block,
@@ -12595,7 +12596,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         :class:`HlslRegisterBlockPlan`: the block is then read through its registers (``hlsl_glsl_block_registers``).
         """
         layout = declared_buffer_layout(getattr(node, "attributes", None))
-        if layout not in GLSL_BLOCK_LAYOUTS:
+        if layout not in BLOCK_LAYOUTS:
             return {}
         structs = {
             struct.name: struct
@@ -12645,7 +12646,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def hlsl_block_member(self, member):
-        """``(name, type, row_major, offset, alignment)`` of a uniform-block or struct member."""
+        """``(name, type, row_major, offset, alignment, packed)`` of a uniform-block or struct member."""
         if isinstance(member, ArrayNode):
             element_type = getattr(
                 member, "element_type", getattr(member, "vtype", "float")
@@ -12661,6 +12662,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             member_is_row_major(member),
             member_explicit_offset(member),
             member_explicit_alignment(member),
+            member_is_packed(member),
         )
 
     def generate_hlsl_cbuffer_member_declaration(self, member, packoffset=None):
@@ -14988,6 +14990,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             # Matrix orientation is a storage qualifier and is emitted as one.
             "row_major",
             "column_major",
+            # MSL's packed vector storage is a buffer layout, which the layout planners read.
+            "packed",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata

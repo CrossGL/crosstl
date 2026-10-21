@@ -15,6 +15,10 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .constant_reference_layouts import (
+    ConstantReferenceLayoutError,
+    hoist_constant_reference_layouts,
+)
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -38,6 +42,7 @@ from .intrinsic_named_functions import (
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
+from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .shader_records import (
@@ -70,6 +75,8 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "ConstantReferenceLayoutError",
+    "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
@@ -141,7 +148,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). For targets that build arrays
+    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
+    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), and constant
+    references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
+    storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
     (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
     (:mod:`.array_parameters`). ``a.length()`` of a sized
@@ -181,6 +191,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
+    hoist_constant_reference_layouts(program, report.target)
+    refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)

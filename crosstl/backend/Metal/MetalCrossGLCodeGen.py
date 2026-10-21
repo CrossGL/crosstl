@@ -3604,6 +3604,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         owner=self.map_struct_name(struct_node.name),
                         static_member_types=static_member_types,
                     )
+                    if self.metal_packed_member(member) and not decl.startswith(
+                        "static "
+                    ):
+                        decl = f"@packed {decl}"
                     if isinstance(member, VariableNode) and getattr(
                         member, "name", None
                     ):
@@ -9630,6 +9634,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             parameter_names = [self.render_identifier(p.name) for p in func.params]
             for index, parameter in enumerate(func.params):
                 layout = self.structured_buffer_parameter_layout(func, parameter)
+                if layout is None and stage_entry:
+                    layout = self.metal_constant_reference_layout(
+                        parameter,
+                        f"constant parameter {parameter.name} of "
+                        f"{getattr(func, 'name', 'a function')}",
+                    )
                 if layout is not None:
                     parameter_declarations[index] = (
                         f"@buffer_layout({layout}) " + parameter_declarations[index]

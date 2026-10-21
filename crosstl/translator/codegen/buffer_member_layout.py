@@ -12,6 +12,10 @@ bytes those qualifiers name:
 * ``row_major`` (HLSL, and GLSL ``layout(row_major)``) stores a matrix row by
   row; ``column_major`` is the default. CrossGL keeps them as ``@ row_major``
   and ``@ column_major``.
+* An MSL packed vector member (``packed_float3 v;``, MSL 3.2 section 2.2.3) is
+  aligned to its scalar and takes exactly its components, where ``float3``
+  takes 16 bytes. CrossGL keeps it as ``@ packed vec3 v;``; the value is an
+  ordinary vector, and only its storage in a buffer differs.
 
 Backends that reproduce the layout of a source buffer read these qualifiers
 from here, so that every target places a member at the same bytes.
@@ -45,6 +49,11 @@ def member_is_row_major(member):
     """Whether a member is declared ``row_major`` (and not also ``column_major``)."""
     names = member_attribute_names(member)
     return "row_major" in names and "column_major" not in names
+
+
+def member_is_packed(member):
+    """Whether a struct member is stored in MSL's packed vector form (``@ packed``)."""
+    return "packed" in member_attribute_names(member)
 
 
 def member_explicit_offset(member):
