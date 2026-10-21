@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 import math
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -14,6 +13,7 @@ from demos.integrations.mlx.portable_host.random_layout import (
     RandomOutputLayout,
 )
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 GUARD = [91] * GUARD_COUNT
 TYPES = {
@@ -94,10 +94,7 @@ def validate(entry, buffers, byte_count, execution):
     ):
         raise ValueError("Contiguous random entry requires row-contiguous keys")
     word_count = (per_key + 3) // 4
-    if execution != {
-        "workgroupCount": layout.workgroup_count,
-        "workgroupSize": [1, 1, 1],
-    }:
+    if execution != layout.execution:
         raise ValueError("Random launch does not match its output layout")
     output = buffers["out"]
     for name, buffer in buffers.items():
@@ -219,7 +216,6 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         "randomGuardValues": readback[layout.native_byte_count :],
         "outputHash": hashlib.sha256(logical).hexdigest(),
     }
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     ctypes.memmove(supplied["out"].data, logical, len(logical))
     host.dispatch_count += 1

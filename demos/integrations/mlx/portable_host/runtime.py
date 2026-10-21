@@ -129,6 +129,7 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
 class Buffer(ctypes.Structure):
@@ -273,10 +274,15 @@ class HostRuntime:
         half_arithmetic=None,
         bfloat=None,
         retain_native_modules=False,
+        trace_values=True,
     ):
         if type(retain_native_modules) is not bool:
             raise ValueError("Native module retention must be a Boolean")
+        if type(trace_values) is not bool:
+            raise ValueError("Trace value retention must be a Boolean")
         self.retain_native_modules = retain_native_modules
+        # False keeps each long scalar array as its length and SHA-256 only.
+        self.trace_values = trace_values
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
@@ -1181,229 +1187,211 @@ class HostRuntime:
                 )
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
-        with self.trace.open("a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
+        write_trace(
+            self,
+            {
+                "entry": entry,
+                "target": self.target,
+                "threads": threads,
+                **execution,
+                "dispatchVersion": DISPATCH_VERSION,
+                "artifact": descriptor["artifact"],
+                "details": result.details,
+                **(
                     {
-                        "entry": entry,
-                        "target": self.target,
-                        "threads": threads,
-                        **execution,
-                        "dispatchVersion": DISPATCH_VERSION,
-                        "artifact": descriptor["artifact"],
-                        "details": result.details,
+                        (
+                            "bfloatStorage"
+                            if entry in BFLOAT_ENTRIES
+                            else "halfStorage"
+                        ): {
+                            "logicalType": output_dtype,
+                            "physicalType": storage,
+                            "encoding": expected_encoding,
+                            "values": output["values"][: buffer.count],
+                            "guardValues": output["values"][buffer.count :],
+                            "logicalWords": list(values),
+                        },
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
+                    else {}
+                ),
+                **(
+                    {
+                        "sliceUpdateValues": output["values"][: buffer.count],
+                        "sliceUpdateGuardValues": output["values"][buffer.count :],
+                        "sliceUpdateMetadata": slice_metadata,
                         **(
                             {
-                                (
-                                    "bfloatStorage"
-                                    if entry in BFLOAT_ENTRIES
-                                    else "halfStorage"
-                                ): {
-                                    "logicalType": output_dtype,
-                                    "physicalType": storage,
-                                    "encoding": expected_encoding,
-                                    "values": output["values"][: buffer.count],
-                                    "guardValues": output["values"][buffer.count :],
-                                    "logicalWords": list(values),
-                                },
                                 "inputs": inputs,
                                 "packageRoot": str(package_directory),
                             }
-                            if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
+                            if self.retain_native_modules
                             else {}
                         ),
                         **(
                             {
-                                "sliceUpdateValues": output["values"][: buffer.count],
-                                "sliceUpdateGuardValues": output["values"][
+                                "sliceUpdateStorageWords": output["values"][
+                                    : buffer.count
+                                ],
+                                "sliceUpdateGuardWords": output["values"][
                                     buffer.count :
                                 ],
-                                "sliceUpdateMetadata": slice_metadata,
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "sliceUpdateStorageWords": output["values"][
-                                            : buffer.count
-                                        ],
-                                        "sliceUpdateGuardWords": output["values"][
-                                            buffer.count :
-                                        ],
-                                        "sliceUpdateValues": [
-                                            wire_value(
-                                                ctypes.c_float.from_buffer_copy(
-                                                    ctypes.c_uint32(word)
-                                                ).value
-                                            )
-                                            for word in output["values"][: buffer.count]
-                                        ],
-                                        "sliceUpdateGuardValues": [
-                                            ctypes.c_float.from_buffer_copy(
-                                                ctypes.c_uint32(word)
-                                            ).value
-                                            for word in output["values"][buffer.count :]
-                                        ],
-                                    }
-                                    if bit_storage
-                                    else {}
-                                ),
-                            }
-                            if slice_update
-                            else {}
-                        ),
-                        **(
-                            {
-                                "integer64Values": output["values"][: buffer.count],
-                                "integer64GuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                            }
-                            if entry in INTEGER64_ENTRIES
-                            else {}
-                        ),
-                        **(
-                            {
-                                "selectionValues": output["values"][: buffer.count],
-                                "selectionGuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                            }
-                            if selection
-                            else {}
-                        ),
-                        **(
-                            {"bitwiseValues": output["values"][: buffer.count]}
-                            if bitwise
-                            else {}
-                        ),
-                        **(
-                            {"absoluteValues": output["values"][: buffer.count]}
-                            if absolute
-                            else {}
-                        ),
-                        **(
-                            {"unaryGuardValues": output["values"][buffer.count :]}
-                            if unary and guarded
-                            else {}
-                        ),
-                        **(
-                            {
-                                "unaryValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if unary and self.retain_native_modules
-                            else {}
-                        ),
-                        **(
-                            {"initializationValue": initial_value}
-                            if initialization
-                            else {}
-                        ),
-                        **(
-                            {
-                                "reductionGuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                                "reductionValues": output["values"][: buffer.count],
-                                **(
-                                    {
-                                        "reductionLayout": dict(
-                                            inputCount=supplied["in"].count,
-                                            outputCount=supplied["out"].count,
-                                        )
-                                    }
-                                    if shaped_reduction
-                                    and checked_reduction is not None
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    or checked_reduction is not None
-                                    else {}
-                                ),
-                                "reductionMetadata": (
-                                    {"outputSize": threads}
-                                    if initialization
-                                    else (
-                                        shaped_metadata
-                                        if shaped_reduction
-                                        else {
-                                            name: ctypes.cast(
-                                                supplied[name].data,
-                                                ctypes.POINTER(ctypes.c_uint64),
-                                            )[0]
-                                            for name in ("in_size", "row_size")
-                                        }
+                                "sliceUpdateValues": [
+                                    wire_value(
+                                        ctypes.c_float.from_buffer_copy(
+                                            ctypes.c_uint32(word)
+                                        ).value
                                     )
-                                ),
+                                    for word in output["values"][: buffer.count]
+                                ],
+                                "sliceUpdateGuardValues": [
+                                    ctypes.c_float.from_buffer_copy(
+                                        ctypes.c_uint32(word)
+                                    ).value
+                                    for word in output["values"][buffer.count :]
+                                ],
                             }
-                            if reduction
-                            else {}
-                        ),
-                        **(
-                            {
-                                "copyGuardWords": output["values"][buffer.count :],
-                                "copyMetadata": copy_metadata,
-                                "copyValues": output["values"][: buffer.count],
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    else {}
-                                ),
-                            }
-                            if copy
-                            else {}
-                        ),
-                        **(
-                            {"binaryGuardValues": output["values"][buffer.count :]}
-                            if binary_operation
-                            else {}
-                        ),
-                        **(
-                            {
-                                "binaryValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if binary_operation and self.retain_native_modules
-                            else {}
-                        ),
-                        **(
-                            {
-                                "castGuardValues": output["values"][buffer.count :],
-                                "castValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if cast
-                            else {}
-                        ),
-                        **(
-                            {
-                                "booleanGuardValues": output["values"][buffer.count :],
-                                "physicalBooleanType": physical_dtype(
-                                    "bool_", self.target
-                                ),
-                            }
-                            if output_dtype == "bool_"
+                            if bit_storage
                             else {}
                         ),
                     }
-                )
-                + "\n"
-            )
+                    if slice_update
+                    else {}
+                ),
+                **(
+                    {
+                        "integer64Values": output["values"][: buffer.count],
+                        "integer64GuardValues": output["values"][buffer.count :],
+                    }
+                    if entry in INTEGER64_ENTRIES
+                    else {}
+                ),
+                **(
+                    {
+                        "selectionValues": output["values"][: buffer.count],
+                        "selectionGuardValues": output["values"][buffer.count :],
+                    }
+                    if selection
+                    else {}
+                ),
+                **(
+                    {"bitwiseValues": output["values"][: buffer.count]}
+                    if bitwise
+                    else {}
+                ),
+                **(
+                    {"absoluteValues": output["values"][: buffer.count]}
+                    if absolute
+                    else {}
+                ),
+                **(
+                    {"unaryGuardValues": output["values"][buffer.count :]}
+                    if unary and guarded
+                    else {}
+                ),
+                **(
+                    {
+                        "unaryValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if unary and self.retain_native_modules
+                    else {}
+                ),
+                **({"initializationValue": initial_value} if initialization else {}),
+                **(
+                    {
+                        "reductionGuardValues": output["values"][buffer.count :],
+                        "reductionValues": output["values"][: buffer.count],
+                        **(
+                            {
+                                "reductionLayout": dict(
+                                    inputCount=supplied["in"].count,
+                                    outputCount=supplied["out"].count,
+                                )
+                            }
+                            if shaped_reduction and checked_reduction is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if self.retain_native_modules
+                            or checked_reduction is not None
+                            else {}
+                        ),
+                        "reductionMetadata": (
+                            {"outputSize": threads}
+                            if initialization
+                            else (
+                                shaped_metadata
+                                if shaped_reduction
+                                else {
+                                    name: ctypes.cast(
+                                        supplied[name].data,
+                                        ctypes.POINTER(ctypes.c_uint64),
+                                    )[0]
+                                    for name in ("in_size", "row_size")
+                                }
+                            )
+                        ),
+                    }
+                    if reduction
+                    else {}
+                ),
+                **(
+                    {
+                        "copyGuardWords": output["values"][buffer.count :],
+                        "copyMetadata": copy_metadata,
+                        "copyValues": output["values"][: buffer.count],
+                        **(
+                            {
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if self.retain_native_modules
+                            else {}
+                        ),
+                    }
+                    if copy
+                    else {}
+                ),
+                **(
+                    {"binaryGuardValues": output["values"][buffer.count :]}
+                    if binary_operation
+                    else {}
+                ),
+                **(
+                    {
+                        "binaryValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if binary_operation and self.retain_native_modules
+                    else {}
+                ),
+                **(
+                    {
+                        "castGuardValues": output["values"][buffer.count :],
+                        "castValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if cast
+                    else {}
+                ),
+                **(
+                    {
+                        "booleanGuardValues": output["values"][buffer.count :],
+                        "physicalBooleanType": physical_dtype("bool_", self.target),
+                    }
+                    if output_dtype == "bool_"
+                    else {}
+                ),
+            },
+        )
         self.dispatch_count = getattr(self, "dispatch_count", 0) + 1

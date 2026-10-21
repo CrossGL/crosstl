@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -17,6 +16,7 @@ from demos.integrations.mlx.portable_host.quantization_dispatch import (
     encode,
 )
 from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 GUARD_COUNT = 8
 # Exactly representable in every element type; no route may read it into an
@@ -195,7 +195,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
         "outputHash": hashlib.sha256(payload).hexdigest(),
     }
     # Validate the result and persist evidence before changing the MLX output.
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     ctypes.memmove(supplied["y"].data, payload, len(payload))
     host.dispatch_count += 1

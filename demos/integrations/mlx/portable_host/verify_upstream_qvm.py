@@ -210,6 +210,7 @@ if __name__ == "__main__":
     if args.prepare:
         prepare_packages(args.mlx_root, args.packages, args.output_dir, args.jobs)
     elif args.worker:
-        worker(args, UPSTREAM_TESTS)
+        # About 20k dispatches: full value arrays would exceed 4 GB of trace.
+        worker(args, UPSTREAM_TESTS, trace_values=False)
     else:
         run(args.mlx_root, args.packages, args.output_dir, args.jobs)

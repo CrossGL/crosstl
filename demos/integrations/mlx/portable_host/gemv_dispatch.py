@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -20,6 +19,7 @@ from demos.integrations.mlx.portable_host.quantization_dispatch import (
     decode,
 )
 from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 # The bindings the translation must reflect: the kernels read nothing else
 # that is not a scalar.
@@ -171,7 +171,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
         "outputHash": hashlib.sha256(payload).hexdigest(),
     }
     # Validate the result and persist evidence before changing the MLX output.
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     ctypes.memmove(supplied["out_vec"].data, payload, len(payload))
     host.dispatch_count += 1

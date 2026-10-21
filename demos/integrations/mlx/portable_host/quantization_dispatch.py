@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -14,6 +13,7 @@ from crosstl.project.runtime_value_encoding import (
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import half_storage, quantization_layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 GUARDS = {"uint8": 0xA5, "float32": 0x3EAAAAAB, "float16": 0x3555, "bfloat16": 0x3EAB}
 GUARD_COUNT = 17
@@ -205,8 +205,7 @@ def dispatch(host, entry, buffers, count, elements, launch):
         },
     }
     # Validate every result and persist evidence before changing any MLX output.
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     for name, data in storage.items():
         ctypes.memmove(supplied[name].data, data, len(data))
     host.dispatch_count += 1

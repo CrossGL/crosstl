@@ -78,8 +78,11 @@ def validate_trace(trace, target, count):
         )
 
 
-def worker(args, tests=UPSTREAM_TESTS):
-    """Run ``tests`` unchanged on MLX's CPU or through the translated host."""
+def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
+    """Run ``tests`` unchanged on MLX's CPU or through the translated host.
+
+    ``trace_values=False`` records long value arrays only by length and digest.
+    """
     import mlx.core as mx
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -93,6 +96,7 @@ def worker(args, tests=UPSTREAM_TESTS):
             mlx_root=args.mlx_root,
             reductions=args.reductions,
             random=args.random,
+            trace_values=trace_values,
         )
         host.install()
     else:

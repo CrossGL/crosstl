@@ -1112,7 +1112,13 @@ void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   const uint64_t words = (bytes_per_key + 3) / 4;
   const uint64_t columns = (words + 1) / 2;
-  if (key_count > 65535 || columns > 65535) {
+  // The kernel keeps no group-shared state: split the word-pair axis into the
+  // smallest exact group height that keeps every workgroup count portable.
+  uint64_t height = (columns + 65534) / 65535;
+  while (height <= 1024 && columns % height != 0) {
+    ++height;
+  }
+  if (key_count > 65535 || height > 1024) {
     throw std::invalid_argument("CrossTL random launch exceeds the portable workgroup limits.");
   }
   auto keys = gather_input(inputs[0]);
@@ -1132,8 +1138,8 @@ void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
       {"key_strides", "int64", strides.data(), strides.size(), 0},
   };
   const CrosstlMlxLaunch launch{
-      {static_cast<uint32_t>(key_count), static_cast<uint32_t>(columns), 1},
-      {1, 1, 1}};
+      {static_cast<uint32_t>(key_count), static_cast<uint32_t>(columns / height), 1},
+      {1, static_cast<uint32_t>(height), 1}};
   char error[2048] = {};
   const int status = dispatch_callback.load()(
       entry, buffers, 6, out.nbytes(), &launch, error, sizeof(error));
