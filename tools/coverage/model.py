@@ -4,7 +4,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCALARS = ("bool", "int", "uint", "float", "double", "int64", "uint64")
+SCALARS = (
+    "bool",
+    "int",
+    "uint",
+    "float",
+    "double",
+    "int64",
+    "uint64",
+    "half",
+    "int16",
+    "uint16",
+    "int8x4_packed",
+    "uint8x4_packed",
+)
+# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit scalars, and the
+# 32-bit words that pack four 8-bit integers (HLSL shader model 6.6).
+WIDE_INTEGERS = frozenset({"int64", "uint64"})
+NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
+PACKED_BYTES = frozenset({"int8x4_packed", "uint8x4_packed"})
+# Overload selection prefers a signature without these when a function has one.
+OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",
@@ -16,9 +36,36 @@ LANGUAGES = (
     "rust",
     "slang",
     "spirv",
+    "webgl",
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The ray-tracing stages a probe can run in, each with the name HLSL's ``[shader(...)]`` attribute and slangc's
+# ``-stage`` give it. A ray-tracing intrinsic is probed in a closest-hit shader, which allows most of them, unless only
+# one other stage has it (DirectX Raytracing functional specification, "Intrinsics", and HLSL shader execution
+# reordering).
+RAYTRACING_STAGES = {
+    "ray-generation": "raygeneration",
+    "intersection": "intersection",
+    "any-hit": "anyhit",
+    "closest-hit": "closesthit",
+    "miss": "miss",
+    "callable": "callable",
+}
+_RAYTRACING_ONLY = {
+    "AcceptHitAndEndSearch": "any-hit",
+    "IgnoreHit": "any-hit",
+    "ReportHit": "intersection",
+    "ReportHitOptix": "intersection",
+    "MaybeReorderThread": "ray-generation",
+    "ReorderThread": "ray-generation",
+    "dx::MaybeReorderThread": "ray-generation",
+}
+
+
+def raytracing_stage(name: str) -> str:
+    """The ray-tracing stage that probes the intrinsic ``name``."""
+    return _RAYTRACING_ONLY.get(name, "closest-hit")
 
 
 @dataclass(frozen=True)
@@ -89,7 +136,9 @@ class Feature:
     then says why. ``stage`` is the shader stage the probe must run in. ``spelling`` is how the native probe calls
     the feature when that differs from ``name``, as for WGSL's ``bitcast<u32>``. ``counterpart`` is the overload the
     CrossGL probe calls when CrossGL's operation takes other arguments than the feature, as a WGSL texture function
-    does: it takes a texture and a sampler where CrossGL takes one GLSL sampler.
+    does: it takes a texture and a sampler where CrossGL takes one GLSL sampler. ``target`` is the compiler target
+    probes are checked for when it is not the language's usual one, as ``hlsl`` for a Slang function that SPIR-V
+    lacks.
     """
 
     language: str
@@ -102,6 +151,7 @@ class Feature:
     note: str = ""
     spelling: str = ""
     counterpart: Signature | None = None
+    target: str = ""
 
     @property
     def key(self) -> str:

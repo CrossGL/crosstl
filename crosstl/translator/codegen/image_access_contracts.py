@@ -12,6 +12,10 @@ from ..validation import (
     texture_intrinsic_min_argument_count,
 )
 from .lowering_refusals import refuse_unsupported
+from .texture_lod_clamp import (
+    TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES,
+    TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES,
+)
 
 IMAGE_ATOMIC_INTRINSIC_NAMES = {
     "imageAtomicAdd",
@@ -1217,6 +1221,8 @@ TEXTURE_COMPARE_INTRINSIC_NAMES = (
     | TEXTURE_COMPARE_LOD_OFFSET_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_INTRINSIC_NAMES
     | TEXTURE_COMPARE_GRAD_OFFSET_INTRINSIC_NAMES
+    # Minimum-LOD clamped compares (texture_lod_clamp.py); emitters lower them before their compare dispatch.
+    | TEXTURE_COMPARE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
@@ -1255,6 +1261,8 @@ TEXTURE_SAMPLE_INTRINSIC_NAMES = (
     TEXTURE_SAMPLE_BASIC_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_LOD_INTRINSIC_NAMES
     | TEXTURE_SAMPLE_GRAD_INTRINSIC_NAMES
+    # Minimum-LOD clamped samples (texture_lod_clamp.py); emitters lower them before their sample dispatch.
+    | TEXTURE_SAMPLE_LOD_CLAMP_INTRINSIC_NAMES
 )
 
 
@@ -1504,6 +1512,34 @@ def is_projected_texture_grad_offset_operation(operation):
 def is_projected_texture_compare_operation(operation):
     """Return whether a texture compare intrinsic uses projected coordinates."""
     return operation in PROJECTED_TEXTURE_COMPARE_INTRINSIC_NAMES
+
+
+def projected_texture_compare_reference(compare, divisor):
+    """The depth reference a projected compare tests: ``compare / q``.
+
+    ``textureCompareProj*`` takes the raw reference and divides it by the coordinate's projection component ``q``,
+    as it divides the coordinate. SPIR-V ``OpImageSampleProjDref*`` (Vulkan, "Projection Operation") and GLSL
+    ``textureProj`` on shadow samplers define it so; targets without projective compares sample the projected
+    coordinate against this quotient.
+    """
+    if not (
+        all(char.isalnum() or char in "_.[]" for char in compare)
+        or _is_parenthesized(compare)
+    ):
+        compare = f"({compare})"
+    return f"{compare} / {divisor}"
+
+
+def _is_parenthesized(expression):
+    """Whether one pair of parentheses encloses the whole expression."""
+    if not (expression.startswith("(") and expression.endswith(")")):
+        return False
+    depth = 0
+    for index, char in enumerate(expression):
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0 and index < len(expression) - 1:
+            return False
+    return True
 
 
 def is_texture_compare_operation(operation):

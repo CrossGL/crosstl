@@ -1027,9 +1027,13 @@ def test_codegen_texture2d_array_sample_preserves_array_slice_from_filament_sdl(
     ast = parse_crossgl(crossgl)
     metal = MetalCodeGen().generate(ast)
     assert "texUV.sample(s, (float3(vert.texcoord, 0)).xy" in metal
-    assert "uint((float3(vert.texcoord, 0)).z)" in metal
+    assert (
+        "uint(rint(clamp(float((float3(vert.texcoord, 0)).z), 0.0, 2047.0)))" in metal
+    )
     assert "texUV.sample(s, (float3(vert.texcoord, 1)).xy" in metal
-    assert "uint((float3(vert.texcoord, 1)).z)" in metal
+    assert (
+        "uint(rint(clamp(float((float3(vert.texcoord, 1)).z), 0.0, 2047.0)))" in metal
+    )
 
 
 def test_codegen_texture2d_array_alias_preserves_sample_slice():
@@ -2553,26 +2557,30 @@ def test_codegen_texture_sample_compare_array_options_roundtrip():
     metal = MetalCodeGen().generate(ast)
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth)" in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, offset)"
+        in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, level(lod), offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, level(lod), offset)"
+        in metal
     )
     assert (
         "tex.sample_compare(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), depth, gradient2d(ddx, ddy), offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, gradient2d(ddx, ddy), offset)"
+        in metal
     )
     assert (
         "cube.sample_compare(samp, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), depth, gradientcube(ddxCube, ddyCube))" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), depth, gradientcube(ddxCube, ddyCube))"
+        in metal
     )
     assert (
-        "sample_compare(samp, (float3(uv, layer)).xy, uint((float3(uv, layer)).z), depth, level(level("
+        "sample_compare(samp, (float3(uv, layer)).xy, uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), depth, level(level("
         not in metal
     )
 
@@ -2596,7 +2604,7 @@ def test_codegen_depth_array_sample_compare_bias_option_from_msl_spec_is_diagnos
 
     assert (
         "Metal depth compare LOD option bias on shadowMap: CrossGL depth compares "
-        "have no bias or minimum-LOD clamp operand"
+        "have no bias operand"
     ) in message
     assert "textureCompare(shadowMap, shadowSampler, uv, layer, compare" not in crossgl
     assert "bias(lodBias)" not in crossgl
@@ -2642,7 +2650,7 @@ def test_codegen_texture_sample_min_lod_clamp_option_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "textureMinLodClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
+    assert "textureClamp(colorMap, colorSampler, uv, firstTailMip)" in crossgl
     assert "textureLod(colorMap" not in crossgl
 
     ast = parse_crossgl(crossgl)
@@ -2673,7 +2681,7 @@ def test_codegen_texture_sample_namespace_qualified_options_roundtrip():
     assert "textureLod(tex, samp, uv, lod)" in crossgl
     assert "texture(tex, samp, uv, biasValue)" in crossgl
     assert "textureGrad(tex, samp, uv, ddx, ddy)" in crossgl
-    assert "textureMinLodClamp(tex, samp, uv, firstTailMip)" in crossgl
+    assert "textureClamp(tex, samp, uv, firstTailMip)" in crossgl
     assert "metal_u3a_u3a" not in crossgl
 
     ast = parse_crossgl(crossgl)
@@ -2876,11 +2884,13 @@ def test_codegen_texture_gather_offset_and_array_slice_overloads_roundtrip():
     assert "tex.gather(samp, uv, offset, component::z)" in metal
     assert (
         "tex.gather(samp, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), offset, component::w)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), offset, component::w)"
+        in metal
     )
     assert (
         "tex.gather(samp, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), component::y)" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), component::y)"
+        in metal
     )
     assert "textureGather" not in metal
 
@@ -2933,17 +2943,20 @@ def test_codegen_depth_gather_compare_array_slice_overloads_roundtrip():
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), compare)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), compare)"
+        in metal
     )
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float3(uv, layer)).xy, "
-        "uint((float3(uv, layer)).z), compare, offset)" in metal
+        "uint(rint(clamp(float((float3(uv, layer)).z), 0.0, 2047.0))), compare, offset)"
+        in metal
     )
     assert (
         "shadowMap.gather_compare("
         "shadowSampler, (float4(dir, layer)).xyz, "
-        "uint((float4(dir, layer)).w), compare)" in metal
+        "uint(rint(clamp(float((float4(dir, layer)).w), 0.0, 2047.0))), compare)"
+        in metal
     )
     assert "textureGatherCompare(" not in metal
 
@@ -6401,7 +6414,7 @@ def test_codegen_preserves_template_helper_generics_for_crossgl_specialization()
     assert [param.name for param in function.generic_params] == ["T", "U"]
 
 
-def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
+def test_codegen_keeps_global_constexpr_sampler_state_for_roundtrip():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6416,16 +6429,21 @@ def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "texture(texture_, in_.texCoords)" in crossgl
-    assert "sampler2d" not in crossgl
-    assert "texture(texture_, sampler2d" not in crossgl
+    # The fixed state is part of the program: dropping it would sample with
+    # whatever default sampler the round trip invents.
+    assert (
+        "const sampler sampler2d_ = sampler(coord::normalized, filter::linear);"
+        in crossgl
+    )
+    assert "texture(texture_, sampler2d_, in_.texCoords)" in crossgl
 
     ast = parse_crossgl(crossgl)
     metal = MetalCodeGen().generate(ast)
-    assert "texture_.sample(sampler(" in metal
+    assert "sampler2d_ = sampler(coord::normalized, filter::linear);" in metal
+    assert "texture_.sample(sampler2d_, in_.texCoords)" in metal
 
 
-def test_codegen_omits_global_constexpr_sampler_array_argument_for_roundtrip():
+def test_codegen_keeps_global_constexpr_sampler_array_for_roundtrip():
     # Apple MSL supports arrays of samplers declared in program scope.
     code = """
     #include <metal_stdlib>
@@ -6442,13 +6460,10 @@ def test_codegen_omits_global_constexpr_sampler_array_argument_for_roundtrip():
     """
     crossgl = convert(code)
 
-    assert "texture(tex, uv)" in crossgl
-    assert "sampler[2]" not in crossgl
-    assert "samplers" not in crossgl
-
-    ast = parse_crossgl(crossgl)
-    metal = MetalCodeGen().generate(ast)
-    assert "tex.sample(sampler(" in metal
+    assert "const sampler samplers[2] = {" in crossgl
+    assert "sampler(address::clamp_to_zero)" in crossgl
+    assert "sampler(coord::pixel)" in crossgl
+    assert "texture(tex, samplers[0], uv)" in crossgl
 
 
 def test_roundtrip_local_constexpr_sampler_options_from_apple_texture_sample():

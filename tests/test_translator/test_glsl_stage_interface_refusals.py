@@ -54,8 +54,30 @@ def test_stageless_void_main_is_still_emitted():
     assert "float doubled = scale(1.0);" in glsl
 
 
-def test_hlsl_vertex_entry_without_stage_is_refused(tmp_path):
+def test_hlsl_entry_without_stage_is_refused(tmp_path):
+    # No semantic names a stage: neither the result nor the parameter is a
+    # system value or a structure of stage semantics.
     source = tmp_path / "stageless.hlsl"
+    source.write_text("""
+struct Result { float4 Value : RESULT0; };
+Result main(float2 Pos : POSITION0)
+{
+    Result output = (Result)0;
+    output.Value = float4(Pos, 0.0, 1.0);
+    return output;
+}
+""")
+
+    with pytest.raises(OpenGLLoweringRefused) as refusal:
+        crosstl.translate(str(source), backend="opengl", source_backend="directx")
+
+    assert refusal.value.project_diagnostic_code.endswith("opengl-lowering-unsupported")
+
+
+def test_hlsl_entry_returning_a_position_structure_is_a_vertex_stage(tmp_path):
+    # Only a vertex or domain shader returns SV_Position, and a domain shader
+    # carries [domain]; the returned structure names the vertex stage.
+    source = tmp_path / "vertex.hlsl"
     source.write_text("""
 struct VSInput { float2 Pos : POSITION0; };
 struct VSOutput { float4 Pos : SV_POSITION; };
@@ -67,10 +89,10 @@ VSOutput main(VSInput input)
 }
 """)
 
-    with pytest.raises(OpenGLLoweringRefused) as refusal:
-        crosstl.translate(str(source), backend="opengl", source_backend="directx")
+    glsl = crosstl.translate(str(source), backend="opengl", source_backend="directx")
 
-    assert refusal.value.project_diagnostic_code.endswith("opengl-lowering-unsupported")
+    assert "layout(location = 0) in vec2 Pos;" in glsl
+    assert "gl_Position = vec4(Pos, 0.0, 1.0);" in glsl
 
 
 def test_hlsl_domain_patch_parameter_is_refused(tmp_path):

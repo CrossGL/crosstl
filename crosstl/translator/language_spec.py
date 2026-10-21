@@ -268,7 +268,8 @@ def _matrix_shape(spelling: str) -> tuple[int, int]:
     is_double = spelling.startswith("dmat")
     dimensions = spelling[4:] if is_double else spelling[3:]
     if "x" in dimensions:
-        rows, columns = dimensions.split("x", 1)
+        # CrossGL follows GLSL: matCxR has C columns and R rows.
+        columns, rows = dimensions.split("x", 1)
         return int(rows), int(columns)
     size = int(dimensions)
     return size, size

@@ -13,8 +13,16 @@ from __future__ import annotations
 import re
 
 from .. import crossgl
-from ..model import VOID, Feature, Param, Signature, Type
-from ..objects import OBJECTS, SAMPLERS, Object
+from ..model import (
+    OTHER_WIDTHS,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    raytracing_stage,
+)
+from ..objects import OBJECTS, SAMPLERS, element
 from ..validators import HLSL_SHADER_MODEL as SHADER_MODEL
 from .common import pick
 
@@ -30,9 +38,13 @@ LEFT_OUT = dict.fromkeys(
 )
 # Namespaces of global functions, and the prefix HLSL calls their functions by.
 _FUNCTIONS = {"Intrinsics": "", "DxIntrinsics": "dx::"}
+# The shader model 2 and 3 samplers. DXC's table still declares tex1D through texCUBEproj on them, but DXC has no
+# spelling for the types and rejects every call with "Unsupported intrinsic", so those functions are left out.
+_LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
-    "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped".split()
+    "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
+    " WriteSamplerFeedback WriteSamplerFeedbackBias".split()
 )
 SCALAR = {
     "bool": "bool",
@@ -53,8 +65,18 @@ SCALAR = {
     "any": "float",
     "double": "double",
     "double_only": "double",
+    "float16_t": "half",
+    "numeric16_only": "half",
+    "int16_t": "int16",
+    "uint16_t": "uint16",
+    "u64": "uint64",
+    "any_int64": "int64",
+    "int64_only": "int64",
+    "p32i8": "int8x4_packed",
+    "p32u8": "uint8x4_packed",
 }
-# Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification).
+# Intrinsics that only exist in one kind of shader stage (Direct3D 12 functional specification), under the report's
+# stage names: Direct3D's amplification stage is the task stage, and its hull stage the tessellation-control stage.
 STAGES = {
     "fragment": (
         "clip ddx ddx_coarse ddx_fine ddy ddy_coarse ddy_fine fwidth EvaluateAttributeAtSample "
@@ -69,14 +91,25 @@ STAGES = {
         "TriangleObjectPositions dx::MaybeReorderThread"
     ),
     "mesh": "SetMeshOutputCounts",
-    "amplification": "DispatchMesh",
-    "hull": (
+    "task": "DispatchMesh",
+    "tessellation-control": (
         "Process2DQuadTessFactorsAvg Process2DQuadTessFactorsMax Process2DQuadTessFactorsMin "
         "ProcessIsolineTessFactors ProcessQuadTessFactorsAvg ProcessQuadTessFactorsMax ProcessQuadTessFactorsMin "
         "ProcessTriTessFactorsAvg ProcessTriTessFactorsMax ProcessTriTessFactorsMin"
     ),
 }
-_STAGE_OF = {name: stage for stage, names in STAGES.items() for name in names.split()}
+_STAGE_OF = {
+    name: raytracing_stage(name) if stage == "raytracing" else stage
+    for stage, names in STAGES.items()
+    for name in names.split()
+}
+
+
+def stage_of(name: str) -> str:
+    """The stage Direct3D allows the intrinsic ``name`` in, or an empty string when every stage has it."""
+    return _STAGE_OF.get(name, "")
+
+
 # Parameters that must be immediate values although the table declares them ``in``: GetAttributeAtVertex
 # reads one of the primitive's three vertices, so its index is a literal 0, 1 or 2 (HLSL SM 6.1 barycentrics),
 # and Barrier's memory-type and semantic flags must be constants (HLSL SM 6.8 barriers).
@@ -141,7 +174,7 @@ def _own(spelling: str) -> tuple[dict | None, Type | None]:
     if base not in SCALAR:
         return reference, Type.other(base)
     shape = _layout(layout)
-    if SCALAR[base] in ("int", "uint", "bool") and len(shape) == 2:
+    if SCALAR[base] not in ("float", "double", "half") and len(shape) == 2:
         shape = (shape[0],)
     return reference, Type(SCALAR[base], shape)
 
@@ -202,11 +235,11 @@ def _shader_model(attributes: str) -> tuple[int, ...]:
 
 
 def _preference(signature: Signature) -> tuple[bool, bool]:
-    """Sort key among overloads: value-returning before ``void``, 32-bit before ``double``; stable otherwise."""
+    """Sort key among overloads: value-returning before ``void``, 32-bit before 64-bit or 16-bit; stable otherwise."""
     kinds = [signature.result, *(p.type for p in signature.params)]
     return signature.result == VOID and any(
         p.direction == "out" for p in signature.params
-    ), any(k.scalar == "double" for k in kinds)
+    ), any(k.scalar in OTHER_WIDTHS for k in kinds)
 
 
 def declarations(text: str):
@@ -232,13 +265,14 @@ def declarations(text: str):
             )
 
 
-def _concrete(text: str, kind: Object) -> str:
-    """``text`` with an object's generic types made concrete: ``$classT`` is its element type, ``$funcT`` (the type a
-    templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that layout.
+def _concrete(text: str, held: Type | None) -> str:
+    """``text`` with an object's generic types made concrete: ``$classT`` is its element type ``held``, ``$funcT``
+    (the type a templated load returns) ``uint``, and ``$match<0, -1> void<n>`` the element's component type in that
+    layout.
     """
-    element = kind.element or Type("uint")
-    spelled = element.scalar + (f"<{element.shape[0]}>" if element.shape else "")
-    text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", element.scalar, text)
+    held = held or Type("uint")
+    spelled = held.scalar + (f"<{held.shape[0]}>" if held.shape else "")
+    text = re.sub(r"\$match<\s*0\s*,\s*-1\s*>\s*void\b", held.scalar, text)
     text = re.sub(r"\$match<\s*-1\s*,\s*0\s*>\s*void\b", spelled, text)
     text = re.sub(r"\bany_sampler\b", "sampler", text)
     return text.replace("$classT", spelled).replace("$funcT", "uint")
@@ -271,7 +305,7 @@ def _overloads(
 def _method(owner: str, name: str, declared: list) -> Feature:
     kind = OBJECTS.get(owner)
     signatures, note = _overloads(
-        declared, (lambda text: _concrete(text, kind)) if kind else str
+        declared, (lambda text: _concrete(text, element(owner, name))) if kind else str
     )
     if kind is None and not note.startswith("needs"):
         signatures, note = [], f"no probe for {owner} objects yet"
@@ -285,7 +319,7 @@ def _method(owner: str, name: str, declared: list) -> Feature:
         None if note else chosen,
         group=owner,
         crossgl=name,
-        stage="fragment" if name in _DERIVATIVES else "compute",
+        stage="fragment" if name in _DERIVATIVES else kind.stage if kind else "compute",
         note=note,
         spelling=name,
     )
@@ -298,6 +332,8 @@ def parse(
     methods: dict[tuple[str, str], list] = {}
     for namespace, name, attributes, result, params in declarations(text):
         if namespace in LEFT_OUT or "hidden" in attributes or name.startswith("__"):
+            continue
+        if _LEGACY_SAMPLER.search(params):
             continue
         if namespace in _FUNCTIONS:
             name = _FUNCTIONS[namespace] + name

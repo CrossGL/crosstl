@@ -5901,7 +5901,7 @@ def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     generated_code = generate_code(ast)
 
     assert "void vs_main() @stage_entry" in generated_code
-    assert "gl_Position = float4(0, 0, 0, 1);" in generated_code
+    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
 
     reparsed = parse_crossgl(generated_code)
     vertex_stage = reparsed.stages[ShaderStage.VERTEX]
@@ -7663,7 +7663,7 @@ def test_spirv_sparse_dref_sample_keeps_dref_helper_name_codegen_reparse():
     assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
     assert (
         "depthOut = spirvSparseTexel("
-        "spirvImageSparseSampleDrefLod(shadowTex, coord, coord[2], 0.0));"
+        "spirvImageSparseSampleDrefLod(shadowTex, coord.xy, coord[2], 0.0));"
         in generated_code
     )
     assert "spirvImageSparseSampleDrefCompare" not in generated_code
@@ -7734,11 +7734,12 @@ def test_glslang_dref_sample_preserves_compare_operand_codegen_reparse():
     assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
     assert "float depthOut @output @location(0);" in generated_code
     assert (
-        "depthOut = textureCompareLod(shadowTex, coord, coord[2], 0.0);"
+        "depthOut = textureCompareLod(shadowTex, coord.xy, coord[2], 0.0);"
         in generated_code
     )
     assert (
-        "depthOut = textureLod(shadowTex, coord, coord[2], 0.0);" not in generated_code
+        "depthOut = textureLod(shadowTex, coord.xy, coord[2], 0.0);"
+        not in generated_code
     )
     assert "Unhandled statement type" not in generated_code
 
@@ -7753,7 +7754,7 @@ def test_glslang_dref_lod_offset_sample_preserves_const_offset_codegen_reparse()
     assert "float depthOut @output @location(0);" in generated_code
     assert (
         "depthOut = textureCompareLodOffset("
-        "shadowTex, coord, coord[2], 0.0, int2(1, 2));" in generated_code
+        "shadowTex, coord.xy, coord[2], 0.0, int2(1, 2));" in generated_code
     )
     assert "depthOut = textureLodOffset(" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7784,7 +7785,7 @@ def test_spirv_implicit_lod_min_lod_offset_codegen_reparse():
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
-        "outColor = spirvTextureOffsetMinLod(colorTex, uv, int2(1, 2), 0.5);"
+        "outColor = textureOffsetClamp(colorTex, uv, int2(1, 2), 0.5);"
         in generated_code
     )
     assert "outColor = textureOffset(colorTex, uv, 0.5);" not in generated_code

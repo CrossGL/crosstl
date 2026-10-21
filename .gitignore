@@ -1,53 +1,18 @@
-# Prerequisites
-*.d
-__pycache__/
-.venv
-
-# msvc specific
-.vs
-build
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-/venv
-/compiler/codegen/__pycache__
-/compiler/__pycache__
-*:Z*
-*workspace
-
 # Python
-crosstl.egg-info
-.vscode/settings.json
-.github/.DS_Store
+__pycache__/
+.venv/
+/venv/
+build/
 dist/
-.DS_Store
+*.egg-info/
+
+# Generated locally
 docs/_build/
-docs/doxygen/build/
+examples/output/
+/coverage.json
+
+# Editors, operating systems and local worktrees
+.vs/
+.vscode/settings.json
+.DS_Store
 worktrees/

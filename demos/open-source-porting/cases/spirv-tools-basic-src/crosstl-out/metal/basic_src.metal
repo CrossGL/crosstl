@@ -2,20 +2,16 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct gl_PerVertex {
-    float4 gl_Position;
-    float gl_PointSize;
-    float gl_ClipDistance[8];
-    float gl_CullDistance[8];
+struct VertexInput {
+    float4 ua_position [[attribute(0)]];
+};
+struct VertexOutput {
+    float4 ANGLEXfbPosition [[user(locn0)]];
+    float4 position [[position]];
 };
 // Vertex Shader
-vertex void vertex_main() {
-    __attribute__((unused)) float4 _ua_position;
-    __attribute__((unused)) float4 ANGLEXfbPosition;
-    __attribute__((unused)) float4 gl_Position;
-    __attribute__((unused)) float gl_PointSize;
-    __attribute__((unused)) float gl_ClipDistance[8];
-    __attribute__((unused)) float gl_CullDistance[8];
-    gl_Position = _ua_position;
-    return;
+vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
+    VertexOutput output;
+    output.position = input.ua_position;
+    return output;
 }

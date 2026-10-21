@@ -112,6 +112,100 @@ def _i32_edge(n=64):
     return _tile(base, n).astype(np.int32)
 
 
+def o_matrix_orientation(inp):
+    """GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6 on mat2x3 values built from six inputs per thread."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).T.copy()  # 3 rows, 2 columns; column c is m[:, c]
+        mv = m @ np.array([1.0, 10.0])
+        vm = np.array([1.0, 10.0, 100.0]) @ m
+        c1, ck = m[:, 1].copy(), m[:, k].copy()
+        d = np.eye(3) * a[0]
+        dm = d @ mv
+        row = [*mv, *vm, c1[0], c1[2], m[2, 0], dm[0], dm[2] + d[1, 0], ck[1]]
+        m[:, 1] = m[:, 0] + c1
+        m[1, 0] = 7.0
+        row += [m[0, 1], m[2, 1], m[1, 0]]
+        s = np.column_stack([m[0:2, 0], m[1:3, 1]])
+        row.append((s @ np.array([1.0, 1000.0]))[0])
+        t = m.T
+        row.append(t[1, 2] + 2 * 100.0)
+        row.append((m @ t)[0, 2])
+        row.append((t @ m)[0, 1])
+        m[:, k] = [a[5], 2.0, 3.0]
+        row.append(m[0, 1] + m[1, 0] * 10.0)
+        m[:, k] += [1.0, 20.0, 300.0]
+        row.append(m[0, k] + m[2, k])
+        op = np.outer(m[:, 0], [1.0, 10.0])
+        row += [(m * m)[2, 1], op[2, 1], op[1, 0], m[1, 1] + 1000.0]
+        out += row
+    return np.array(out, dtype=np.float32)
+
+
+def o_hlsl_matrix_orientation(inp):
+    """HLSL floatRxC rows, row-filling constructors and initializer lists, _mRC swizzles, mul and casts."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).copy()  # HLSL float2x3: two rows of three
+        mv = m @ np.array([1.0, 10.0, 100.0])
+        vm = np.array([1.0, 10.0]) @ m
+        r1, rk = m[1].copy(), m[k].copy()
+        row = [*mv, *vm, r1[0], r1[2], m[0, 2], rk[1], m[1, 2] + m[0, 0] * 10.0]
+        row.append(m[0, 2] + m[1, 0] * 100.0)
+        m[1] = m[0] + r1
+        m[0, 1] = 7.0
+        row += [m[1, 0], m[1, 2], m[0, 1]]
+        m[k] = [a[5], 2.0, 3.0]
+        row.append(m[1, 0] + m[0, 1] * 10.0)
+        m[k] += [1.0, 20.0, 300.0]
+        row.append(m[k, 0] + m[k, 2])
+        row.append((m * m)[1, 2])
+        t = m.T
+        row += [(m @ t)[1, 0], (t @ m)[2, 0]]
+        tr = m[:2, :2]
+        row.append(tr[1, 1] + tr[0, 1] * 10.0)
+        il = np.array([[a[0], 2.0], [3.0, a[1]]])
+        row.append(il[0, 1] + il[1, 0] * 10.0 + il[1, 1] * 100.0)
+        row.append(a[0] + a[0] * 10.0)
+        m[0, 1] = 9.0
+        row.append(m[0, 1])
+        fm = np.array([[1.0, 2.0], [3.0, a[0]]])
+        row.append(fm[1, 0] + fm[0, 1] * 10.0 + fm[1, 1] * 100.0)
+        out += row
+    return np.array(out, dtype=np.float32)
+
+
+def _matrix_storage_input(n=64):
+    """``n`` std430 mat2x3 values: two columns of three floats, each padded to four with -1000."""
+    columns = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
+    out = []
+    for i in range(n):
+        for column in columns + np.float32(i % 4):
+            out += [*column, -1000.0]
+    return np.array(out, dtype=np.float32)
+
+
+def o_matrix_storage(inp):
+    """GLSL 4.60 sections 4.1.11 and 7.6.2.2 on std430 mat2x3 values and matrix initializer lists."""
+    out = []
+    for i in range(inp.size // 8):
+        c0 = inp[8 * i : 8 * i + 3].astype(np.float64)
+        c1 = inp[8 * i + 4 : 8 * i + 7].astype(np.float64)
+        mv = c0 + 10.0 * c1
+        gv = np.array([c0[0], c1[0]]) + 100.0 * np.array([c0[2], 5.0])
+        hv = (
+            np.array([c1[0], c1[1]])
+            + 10.0 * np.array([c1[2], c0[0]])
+            + 100.0 * np.array([c0[1], c0[2]])
+        )
+        out += [*mv, *gv, *hv, c1[2] + c0[1] * 10.0]
+    return np.array(out, dtype=np.float32)
+
+
 def o_add_wrap(inp):
     x = inp.astype(np.int64)
     return (_wrap32(x + 1) > x).astype(np.int32)
@@ -1140,6 +1234,38 @@ CASES = [
         np.arange(64 * 4, dtype=np.float32),
         np.float32,
         lambda inp: inp[3::4].astype(np.float32),
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_orientation",
+        "S11",
+        "mat2x3 constructors, columns, products, built-ins and mat3(s)",
+        "GLSL 4.60 sections 5.4.2, 5.6, 5.10 and 8.6",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_matrix_orientation,
+        compare="ulp:0",
+    ),
+    Case(
+        "h_matrix_orientation",
+        "S11",
+        "float2x3 rows, row-filling constructors, _mRC swizzles, mul, * and casts",
+        "HLSL matrix type, per-component math and mul references",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_hlsl_matrix_orientation,
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_storage",
+        "S11",
+        "std430 mat2x3 storage loads and matrix initializer lists",
+        "GLSL 4.60 sections 4.1.11 and 7.6.2.2",
+        _matrix_storage_input(),
+        np.float32,
+        o_matrix_storage,
         compare="ulp:0",
     ),
     Case(

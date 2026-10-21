@@ -394,7 +394,7 @@ class HLSLPreciseArithmeticMixin:
     def precise_product_shape(value_type):
         """``(kind, rows, cols, family)`` of a CrossGL product operand.
 
-        CrossGL ``matRxC`` has R rows and C columns; ``m[k]`` is column k. A
+        CrossGL ``matCxR`` has C columns and R rows; ``m[k]`` is column k. A
         vector is reported with its length as ``rows``.
         """
         if value_type is None:
@@ -409,8 +409,8 @@ class HLSLPreciseArithmeticMixin:
             return ("vector", int(vector.group(2)), 1, family)
         matrix = MATRIX_TYPE.fullmatch(value_type)
         if matrix:
-            rows = int(matrix.group(2))
-            cols = int(matrix.group(3) or rows)
+            cols = int(matrix.group(2))
+            rows = int(matrix.group(3) or cols)
             family = "double" if matrix.group(1) else "float"
             return ("matrix", rows, cols, family)
         return None
@@ -582,7 +582,7 @@ class HLSLPreciseArithmeticMixin:
         if left_rows == right_cols:
             result_type = f"{prefix}{left_rows}"
         else:
-            result_type = f"{prefix}{left_rows}x{right_cols}"
+            result_type = f"{prefix}{right_cols}x{left_rows}"
         return self.precise_function(
             result_type,
             name,

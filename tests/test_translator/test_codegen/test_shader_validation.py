@@ -7439,10 +7439,10 @@ def test_generated_metal_integer_gather_offsets_compile_with_metal(tmp_path):
     # Component i of textureGatherOffsets is texel T_i0_j0 of the footprint at
     # offset i (GLSL 4.60, section 8.9.4); Metal's gather returns it in w.
     assert (
-        "return int4(tex.gather(s, uvLayer.xy, uint(uvLayer.z), offset, component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 0), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(0, 1), component::z).w, "
-        "tex.gather(s, uvLayer.xy, uint(uvLayer.z), int2(1, 1), component::z).w);"
+        "return int4(tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), offset, component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 0), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(0, 1), component::z).w, "
+        "tex.gather(s, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), int2(1, 1), component::z).w);"
         in code
     )
 
@@ -12360,18 +12360,16 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     run_validator([glslang, "-S", "frag", str(source)])
 
 
-def test_generated_glsl_fragment_cube_array_shadow_compare_lod_grad_fails_closed():
+def test_generated_glsl_fragment_cube_array_shadow_compare_grad_fails_closed():
+    # GL_EXT_texture_shadow_lod adds textureLod for cube-array shadows; no extension adds textureGrad.
     message = refused_glsl(
         GLSLCodeGen().generate_stage,
         crosstl.translator.parse(SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER),
         "fragment",
     )
 
-    assert "OpenGL cannot lower 2 constructs" in message
-    assert (
-        "texture compare: textureCompareLod explicit LOD requires 2D shadow samplers"
-        in message
-    )
+    assert "OpenGL cannot lower 1 construct" in message
+    assert "textureCompareLod" not in message
     assert (
         "texture compare: textureCompareGrad explicit gradients require 2D, "
         "2D-array, or cube shadow samplers" in message

@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import textwrap
@@ -404,7 +405,11 @@ def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang(
 
     assert "const S sc = S(float16_t(0.125));" in crossgl
     assert "S{" not in crossgl
-    assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
+    # The anonymous block stays a buffer block (its members are buffer members, GLSL 4.60 section 4.3.9).
+    assert re.search(
+        r"layout\((?=[^)]*\bstd430\b)(?=[^)]*\brow_major\b)[^)]*\)\s*buffer\s+B2\s*\{\s*S v\[2\];\s*\}\s*b2;",
+        crossgl,
+    )
     assert "0.125hf" not in crossgl
     assert "const int64_t signedLong = (-10);" in crossgl
     assert "const uint64_t unsignedLong = 0xFFFFFFFFu;" in crossgl
@@ -1191,7 +1196,7 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(shadowMapSampler, input.uv, 0.5)" in hlsl
     assert (
-        "shadowMap.SampleCmpLevel(" "shadowMapSampler, uvz.xy, uvz.z, 0.0, int2(1, -1))"
+        "shadowMap.SampleCmpLevelZero(shadowMapSampler, uvz.xy, uvz.z, int2(1, -1))"
     ) in hlsl
     assert "shadowMap.Sample(" not in hlsl
 
@@ -1279,7 +1284,7 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     assert "shadowMap.SampleCmp(" in hlsl
-    assert "shadowMap.SampleCmpLevel(" in hlsl
+    assert "shadowMap.SampleCmpLevelZero(" in hlsl
     assert "shadowMap.SampleCmpGrad(" in hlsl
     assert "shadowMap.Sample(" not in hlsl
 
@@ -1288,9 +1293,12 @@ def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
     assert "shadowMap.sample(" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z))" in glsl
     assert (
-        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z), 0.0, offset)"
+        "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z))"
+        in glsl
+    )
+    assert (
+        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z / uvRefQ.xyw.z), 0.0, offset)"
         in glsl
     )
     assert "textureCompareProj" not in glsl
@@ -1365,7 +1373,8 @@ def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_refer
     assert (
         "shadowCubeArray.sample_compare("
         "sampler(mag_filter::linear, min_filter::linear), "
-        "input.cubeLayer.xyz, uint(input.cubeLayer.w), 0.5)" in metal
+        "input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), 0.5)"
+        in metal
     )
     assert "shadowCubeArray.sample(" not in metal
 
@@ -1594,7 +1603,9 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
     assert "cbuffer Uniforms" not in crossgl
 
 
-def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign():
+def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
+    tmp_path,
+):
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.glsl.register.autoassign.frag, which samples separate texture and
     # sampler resources through sampler1D(g_tTex1, g_sSamp1).
@@ -1618,8 +1629,14 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
     assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
+    # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
+    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
+    assert "texture(g_tTex1, 0.1)" in glsl
+    assert "g_sSamp1" not in glsl
+    assert "texture1D" not in glsl
+    validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/spv.sampledImageBlock.frag, which fetches from sampler2D(tex0, samp0).
@@ -1645,6 +1662,8 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign()
 
     fetch_glsl = GLSLCodeGen().generate(parse_crossgl(fetch_crossgl))
     assert "texelFetch(tex0, ivec2(0), 0)" in fetch_glsl
+    assert "layout(binding = 0) uniform sampler2D tex0;" in fetch_glsl
+    validate_glsl_with_glslang(tmp_path, fetch_glsl, "frag")
 
 
 def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
@@ -1704,7 +1723,7 @@ def test_codegen_constant_expression_resource_binding_from_godot_scene_forward()
 
     shader_ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(binding = 1036) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    assert "layout(binding = 12) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
     GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
 
 

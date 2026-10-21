@@ -36,6 +36,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..matrix_shape import matrix_type_spelling
 from .array_utils import parse_array_type, split_array_type_suffix
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -9087,8 +9088,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         elif hasattr(type_node, "element_type"):
             if hasattr(type_node, "rows"):
                 element_type = self.convert_type_node_to_string(type_node.element_type)
-                prefix = "dmat" if element_type == "double" else "mat"
-                return f"{prefix}{type_node.rows}x{type_node.cols}"
+                return matrix_type_spelling(type_node, element_type, short_square=False)
             elif not hasattr(type_node, "size"):
                 return str(type_node)
             elif str(type(type_node)).find("ArrayType") != -1:

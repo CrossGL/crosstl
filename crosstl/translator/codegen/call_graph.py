@@ -170,6 +170,10 @@ class CallGraph:
         self.functions.append(function)
         self._scopes.append(stage)
 
+    def stage_of(self, index):
+        """The stage that declares function ``index`` (its entry point or a stage-local function), or ``None``."""
+        return self._scopes[index]
+
     def _declare_globals(self, program):
         scope = self.scope
         for constant in getattr(program, "constants", None) or []:

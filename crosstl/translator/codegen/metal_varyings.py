@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .stage_distance_layout import distance_component_count, distance_semantic
 
 __all__ = [
     "METAL_VARYING_BUILTINS",
@@ -43,6 +44,8 @@ METAL_VARYING_BUILTINS = frozenset(
         "amplification_count",
         "amplification_id",
         "barycentric_coord",
+        "base_instance",
+        "base_vertex",
         "clip_distance",
         "front_facing",
         "instance_id",
@@ -133,6 +136,8 @@ def metal_varying_attribute(codegen, node, semantic, *, offset=0):
     maps as before; otherwise ``" [[user(KEY)]]"``, or ``""`` for a varying that links by name.
     """
     name = getattr(node, "name", None) or "?"
+    _check_metal_distance(codegen, node, semantic, name)
+    _check_metal_distance(codegen, node, codegen.semantic_from_node(node), name)
     if semantic is not None and is_metal_varying_builtin(
         codegen.canonical_metal_semantic(semantic)
     ):
@@ -163,3 +168,37 @@ def metal_varying_attribute(codegen, node, semantic, *, offset=0):
         raw, location=location, user_name=user_name, offset=offset, name=name
     )
     return "" if key is None else f" [[user({key})]]"
+
+
+def _check_metal_distance(codegen, node, semantic, name):
+    """Refuse a clip or cull distance member that Metal's one ``[[clip_distance]]`` value cannot carry.
+
+    MSL declares clip distances as one ``float`` or ``float[n]`` member with ``[[clip_distance]]`` and has no
+    cull distance attribute (MSL 3.2 section 5.2.3.3). A float vector, or a second value with a higher semantic
+    index (HLSL ``SV_ClipDistance1``), would need the members packed into one array.
+    """
+    parsed = distance_semantic(semantic)
+    if parsed is None:
+        return
+    builtin, index = parsed
+    if builtin == "gl_CullDistance":
+        raise MetalVaryingLinkError(name, "Metal has no cull distance attribute")
+    if index != 0:
+        raise MetalVaryingLinkError(
+            name,
+            f"clip distance semantic index {index}: Metal carries clip distances in one "
+            "[[clip_distance]] member, so only semantic index 0 maps",
+        )
+    array_size = getattr(node, "size", None) if hasattr(node, "element_type") else None
+    type_node = (
+        getattr(node, "element_type", None)
+        if array_size is not None
+        else getattr(node, "member_type", None) or getattr(node, "vtype", None)
+    )
+    shape = distance_component_count(codegen.type_name_string(type_node), array_size)
+    if shape is None or shape[0] == "vector":
+        raise MetalVaryingLinkError(
+            name,
+            "a Metal [[clip_distance]] member is a float or a float array, not "
+            f"'{codegen.type_name_string(type_node)}'",
+        )

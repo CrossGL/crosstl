@@ -2,12 +2,12 @@
 
 Metal only provides floating-point matrices; HLSL also has ``int``, ``uint`` and
 ``bool`` matrices, which CrossGL keeps under their HLSL names (``int2x3`` has
-two rows and three columns, like every CrossGL ``matRxC``). They become values
+two rows and three columns, the integer counterpart of CrossGL ``mat3x2``). They become values
 of ``crosstl_hlsl_matrix<T, Columns, Rows>``, which mirrors Metal's
 ``matrix<T, Columns, Rows>`` exactly: an array of column vectors, ``m[i]`` is
 column ``i``, constructors fill whole columns, ``*`` with a vector or matrix
 is the linear-algebra product and the other operators work element-wise. A
-CrossGL ``int2x3`` therefore maps to ``crosstl_int3x2`` just as ``mat2x3`` maps
+CrossGL ``int2x3`` therefore maps to ``crosstl_int3x2`` just as ``mat3x2`` maps
 to ``float3x2``.
 """
 

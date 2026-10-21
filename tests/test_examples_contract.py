@@ -21,6 +21,18 @@ FULL_BACKEND_EXAMPLES = (
     "graphics/SimpleShader.cgl",
 )
 
+# Every example except GenericPatternMatching, whose generic functions SPIR-V output refuses until they are
+# monomorphized.
+VULKAN_EXAMPLES = (
+    "advanced/ArrayTest.cgl",
+    "compute/ParticleSimulation.cgl",
+    "cross_platform/UniversalPBRShader.cgl",
+    "gpu_computing/MatrixMultiplication.cgl",
+    "graphics/ComplexShader.cgl",
+    "graphics/PerlinNoise.cgl",
+    "graphics/SimpleShader.cgl",
+)
+
 WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS = (
     ("compute/ParticleSimulation.cgl", "webgl"),
     ("gpu_computing/MatrixMultiplication.cgl", "webgl"),
@@ -162,18 +174,20 @@ def test_checked_in_examples_parse_as_crossgl(example_path):
     crosstl.translator.parse(example_path.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize(
-    "spvasm_path",
-    sorted((EXAMPLES_ROOT / "output" / "vulkan").rglob("*.spvasm")),
-)
-def test_checked_in_vulkan_example_outputs_validate_with_spirv_tools(
-    tmp_path, spvasm_path
-):
+@pytest.mark.parametrize("relative_path", VULKAN_EXAMPLES)
+def test_vulkan_example_outputs_validate_with_spirv_tools(tmp_path, relative_path):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")
     if spirv_as is None or spirv_val is None:
         pytest.skip("spirv-as and spirv-val are not installed")
 
+    spvasm_path = tmp_path / f"{Path(relative_path).stem}.spvasm"
+    spvasm_path.write_text(
+        crosstl.translate(
+            str(_example_path(relative_path)), backend="vulkan", format_output=False
+        ),
+        encoding="utf-8",
+    )
     binary_path = tmp_path / f"{spvasm_path.stem}.spv"
     assemble = subprocess.run(
         [spirv_as, str(spvasm_path), "-o", str(binary_path)],

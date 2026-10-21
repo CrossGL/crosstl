@@ -612,11 +612,15 @@ def test_row_major_packing_transposes_non_square_matrix_types():
     row_major = generate_crossgl(NON_SQUARE_HLSL, matrix_packing="row_major")
     default = generate_crossgl(NON_SQUARE_HLSL)
 
-    # CrossGL matRxC has R rows; row-major packing holds the HLSL transpose.
-    assert "mat3x2 m = mat3x2(1, 2, 3, 4, 5, 6);" in row_major
+    # CrossGL matCxR has C columns of R rows (ADR 0004); row-major packing
+    # holds the HLSL transpose, each HLSL row a column.
+    assert "mat2x3 m = mat2x3(1, 2, 3, 4, 5, 6);" in row_major
     assert "(m * vec2(1, 2))" in row_major
     assert "m[1][2]" in row_major
-    assert "mat2x3 m = mat2x3(1, 2, 3, 4, 5, 6);" in default
+    # Column-major packing keeps the matrix: HLSL float2x3 is CrossGL mat3x2.
+    assert "mat3x2 m = mat3x2(1, 4, 2, 5, 3, 6);" in default
+    assert "(vec2(1, 2) * m)" in default
+    assert "m[2][1]" in default
     # 1xN matrices are vectors, so their elements are components.
     assert "row.z" in row_major
     assert "_m02" not in row_major

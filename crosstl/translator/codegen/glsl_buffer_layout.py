@@ -3,6 +3,7 @@
 from inspect import Parameter, signature
 
 from ..ast import ArrayNode
+from ..matrix_shape import matrix_type_spelling
 
 
 def align_to(value, alignment):
@@ -407,6 +408,14 @@ def glsl_buffer_block_member_type(
             array_size = member_type.size
             member_type = member_type.element_type
         type_name = convert_type_node_to_string(member_type)
+        if type(member_type).__name__ == "MatrixType" and getattr(
+            getattr(member_type, "element_type", None), "name", "float"
+        ) in {"float", "double"}:
+            # Lay matrices out by their CrossGL spelling: target spellings disagree on
+            # which of the two numbers counts the columns.
+            type_name = matrix_type_spelling(
+                member_type, member_type.element_type.name, short_square=False
+            )
     elif isinstance(member, ArrayNode):
         is_array = True
         array_size = member.size
