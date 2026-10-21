@@ -2238,10 +2238,12 @@ def _write_failed_artifact_report(repo):
 
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     backend_catalog = json.loads(
-        (ROOT / "support" / "backends.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "backends.json").read_text(encoding="utf-8")
     )
 
     assert manifest["schemaVersion"] == 1
@@ -23446,7 +23448,9 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
 
 def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
     support_manifest = json.loads(
-        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
     )
     manifest_entry = next(
         entry

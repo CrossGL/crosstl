@@ -9,7 +9,6 @@ on:
     paths:
       - "crosstl/**"
       - "examples/**"
-      - "support/**"
       - "docs/**"
       - "pyproject.toml"
       - "README.md"

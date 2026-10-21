@@ -54,6 +54,12 @@ def _report(commit="0123456789abcdef", date="2026-10-19T03:41:00Z"):
                 "path": "tools/coverage/features/metal.txt",
                 "describes": "MSL library",
             },
+            "glsl-extensions": {
+                "repository": "KhronosGroup/GLSL",
+                "commit": "0099bf83b0288469917fc2e2972cb0a2b74d6711",
+                "path": "extensions/ext/GL_EXT_shader_atomic_float.txt",
+                "describes": "GLSL atomic float extension",
+            },
         },
         "validators": {"glslangValidator": "16.0", "metal": None},
         "backends": [
@@ -114,6 +120,9 @@ def test_markdown_lists_scores_sources_and_gaps():
     )
     assert "crosstl/blob/0123456789abcdef/tools/coverage/features/metal.txt" in text
     assert "metal (not installed)" in text
+    # A second list for a language is listed under the language's name, not its key.
+    assert "| GLSL | [GLSL atomic float extension](" in text
+    assert "glsl-extensions" not in text
     # A gap's detail stays on one line and cannot break the list or a table.
     assert "- `fwrong0` wrong: wrong \\| detail second line" in text
     assert "Untested, by category: function 2." in text
