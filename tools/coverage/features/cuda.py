@@ -48,6 +48,10 @@ _ATOMIC_PREFERENCE = ("i", "u", "f", "ll", "ull", "ill", "d", "us")
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\([^)]*\)\)")
 # Block comments, such as the ``/* clock_t= */`` before clock's result type.
 _COMMENT = re.compile(r"/\*.*?\*/", re.S)
+# Declarations only an MSVC build sees: the ``long double`` predicates ``__finitel``, ``__isinfl`` and ``__isnanl``
+# that Microsoft's C library headers call. The probes are validated on Linux, where Clang's headers do not declare
+# them.
+_MSVC_ONLY = re.compile(r"^#ifdef _MSC_VER\n.*?^#endif[^\n]*\n", re.M | re.S)
 
 
 def cuda_type(spelling: str) -> Type:
@@ -82,7 +86,7 @@ def parameter(text: str, atomic: bool, first: bool) -> Param:
 def definitions(text: str, group: str) -> list[tuple[str, str, Signature, str]]:
     """``(name, group, signature, helper)`` for every function the header defines, first definition of a name only.
     ``helper`` is the typed atomic helper's own name, or empty."""
-    text = _ATTRIBUTE.sub("", _COMMENT.sub("", text))
+    text = _ATTRIBUTE.sub("", _COMMENT.sub("", _MSVC_ONLY.sub("", text)))
     found: dict[str, tuple[str, str, Signature, str]] = {}
     for result, name, params in _DEFINITION.findall(text):
         if name in LEFT_OUT:

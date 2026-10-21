@@ -850,6 +850,9 @@ __DEVICE__ unsigned int __uAtomicAdd_block(unsigned int *__p, unsigned int __v) 
 }
 __DEVICE__ int __popc(unsigned int __a) { return __nv_popc(__a); }
 __DEVICE__ int __isfinited(double __a) { return __nv_isfinited(__a); }
+#ifdef _MSC_VER
+__DEVICE__ int __isnanl(long double __a);
+#endif
 __DEVICE__ /* clock_t= */ int clock() { return __nvvm_read_ptx_sreg_clock(); }
 __DEVICE_VOID__ void __threadfence(void) { __nvvm_membar_gl(); }
 """
