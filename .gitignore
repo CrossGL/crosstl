@@ -50,4 +50,5 @@ dist/
 .DS_Store
 docs/_build/
 docs/doxygen/build/
+examples/output/
 worktrees/
