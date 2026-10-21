@@ -24,7 +24,6 @@ glslang does for a GLSL block that needs it. A layout no planner reproduces rais
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Optional, Tuple
 
 from ..ast import ArrayNode, ArrayType, FunctionNode
 from .array_utils import evaluate_literal_int_expression
@@ -70,7 +69,7 @@ class PlacedUniformBlock:
 
     layout: str
     layout_type: HlslLayoutType
-    placements: Tuple
+    placements: tuple
     clone_key: str
 
 
@@ -249,7 +248,7 @@ def _check_validator_extents(struct_name, placements, layout):
             _check_validator_extents(nested.struct_name, nested_placements, layout)
 
 
-def placed_uniform_block(codegen, node) -> Optional[PlacedUniformBlock]:
+def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
     """The placements of a ``cbuffer`` whose bytes differ from std140, or ``None`` for the std140 path.
 
     Blocks without explicit placements that declare std430 or scalar keep their own path, and so does a block
