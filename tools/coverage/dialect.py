@@ -55,6 +55,8 @@ class Dialect:
     packed_bytes = False
 
     def type(self, kind: Type) -> str:
+        if kind.count:
+            raise ProbeError(f"no probe for {self.language} array parameters yet")
         if kind.opaque:
             if kind.opaque == "void":
                 return "void"
@@ -114,6 +116,15 @@ class Dialect:
         if kind.shape:
             return self.construct(kind, [zero] * kind.shape[0])
         return zero
+
+    def constant_array(self, kind: Type, name: str) -> str:
+        """A local constant ``name`` of the array type ``kind``, for an argument that must be a constant
+        expression."""
+        element = self.type(kind.element)
+        values = ", ".join([self.literal(kind.element)] * kind.count)
+        return (
+            f"const {element} {name}[{kind.count}] = {element}[{kind.count}]({values});"
+        )
 
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""

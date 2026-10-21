@@ -149,9 +149,8 @@ class _Builder:
         )
         for kind in ([] if read else [result]) + [p.type for p in signature.params]:
             if not self._resource(kind):
-                dialect.type(
-                    kind
-                )  # raises ProbeError for what the language cannot spell
+                # Raises ProbeError for what the language cannot spell.
+                dialect.type(kind.element)
         for index, param in enumerate(signature.params):
             local = f"a{index}"
             if self.payload and (
@@ -179,6 +178,9 @@ class _Builder:
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))
+            elif param.direction == "const" and param.type.count:
+                self.lines.append(dialect.constant_array(param.type, local))
+                arguments.append(local)
             elif param.direction == "const":
                 arguments.append(dialect.literal(param.type))
             elif param.direction == "address":
