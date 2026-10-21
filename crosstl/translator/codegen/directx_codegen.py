@@ -130,6 +130,11 @@ from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
+from .buffer_member_layout import (
+    member_explicit_offset,
+    member_is_row_major,
+    packoffset_text,
+)
 from .builtin_result_types import (
     C_FAMILY,
     component_access_type,
@@ -206,6 +211,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
+from .hlsl_buffer_layout import HlslLayoutError
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
@@ -439,6 +445,15 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
+)
+from .std140_buffer_layout import (
+    SCALAR_BLOCK_LAYOUT,
+    STD140_LAYOUT,
+    STD430_LAYOUT,
+    crossgl_struct_layout_type,
+    declared_buffer_layout,
+    hlsl_packoffsets_for_std140,
+    member_explicit_alignment,
 )
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
@@ -12546,24 +12561,97 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.advance_resource_register(register_cursors, space, binding, 1)
             register = self.resource_register_suffix(register_prefix, binding, node)
             code += resource_identity_marker(node, node.name)
-            if isinstance(node, StructNode):
+            if isinstance(node, StructNode) or (
+                hasattr(node, "name") and hasattr(node, "members")
+            ):
+                packoffsets = self.hlsl_std140_packoffsets(ast, node)
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
-                members = getattr(node, "members", [])
-                for member in members:
-                    declaration = self.generate_hlsl_cbuffer_member_declaration(member)
-                    code += f"    {declaration};\n"
-                code += "};\n"
-            elif hasattr(node, "name") and hasattr(
-                node, "members"
-            ):  # Generic cbuffer handling
-                code += f"{buffer_keyword} {node.name}{register} {{\n"
-                for member in node.members:
-                    declaration = self.generate_hlsl_cbuffer_member_declaration(member)
+                for member in getattr(node, "members", []) or []:
+                    declaration = self.generate_hlsl_cbuffer_member_declaration(
+                        member, packoffsets.get(getattr(member, "name", None))
+                    )
                     code += f"    {declaration};\n"
                 code += "};\n"
         return code
 
-    def generate_hlsl_cbuffer_member_declaration(self, member):
+    def hlsl_std140_packoffsets(self, ast, node):
+        """``packoffset`` arguments that keep the members of a std140 uniform block at their std140 offsets.
+
+        A GLSL uniform block keeps the std140 layout the host writes (``@ buffer_layout(std140)``). HLSL packing
+        places a ``vec3`` after a ``float``, and any member after an array, a matrix or a struct, at other bytes, so
+        every member gets the ``packoffset`` of its std140 offset unless HLSL packing already agrees. A struct or
+        array whose inner layout differs between the two rule sets, and the std430 and scalar layouts, are refused.
+        """
+        layout = declared_buffer_layout(getattr(node, "attributes", None))
+        if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
+            raise ValueError(
+                f"Cannot reproduce the {layout} layout of uniform block '{node.name}' "
+                "in HLSL"
+            )
+        if layout != STD140_LAYOUT:
+            return {}
+        structs = {
+            struct.name: struct
+            for struct in getattr(ast, "structs", []) or []
+            if getattr(struct, "name", None)
+        }
+
+        def struct_members(name):
+            struct = structs.get(name)
+            if struct is None:
+                return None
+            return [
+                self.hlsl_std140_member(member)
+                for member in getattr(struct, "members", []) or []
+                if getattr(member, "name", None)
+                and not isinstance(member, FunctionNode)
+            ]
+
+        try:
+            layout_type = crossgl_struct_layout_type(
+                node.name,
+                [
+                    self.hlsl_std140_member(member)
+                    for member in getattr(node, "members", []) or []
+                    if getattr(member, "name", None)
+                ],
+                struct_members,
+                (node.name,),
+                self.hlsl_constant_int_value,
+            )
+            offsets = hlsl_packoffsets_for_std140(layout_type)
+        except HlslLayoutError as exc:
+            raise ValueError(
+                f"Cannot reproduce the std140 layout of uniform block '{node.name}' "
+                f"in HLSL: {exc}"
+            ) from exc
+        if offsets is None:
+            return {}
+        return {
+            name: packoffset_text(offset)
+            for (name, _member_type), offset in zip(layout_type.members, offsets)
+        }
+
+    def hlsl_std140_member(self, member):
+        """``(name, type, row_major, offset, alignment)`` of a uniform-block or struct member."""
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            member_type = ArrayType(element_type, getattr(member, "size", None))
+        elif hasattr(member, "member_type"):
+            member_type = member.member_type
+        else:
+            member_type = getattr(member, "vtype", "float")
+        return (
+            member.name,
+            member_type,
+            member_is_row_major(member),
+            member_explicit_offset(member),
+            member_explicit_alignment(member),
+        )
+
+    def generate_hlsl_cbuffer_member_declaration(self, member, packoffset=None):
         if isinstance(member, ArrayNode):
             element_type = getattr(
                 member, "element_type", getattr(member, "vtype", "float")
@@ -12594,7 +12682,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if layout_qualifier:
             declaration = f"{layout_qualifier} {declaration}"
 
-        packoffset = self.hlsl_cbuffer_member_packoffset(member)
+        packoffset = packoffset or self.hlsl_cbuffer_member_packoffset(member)
         if packoffset:
             declaration = f"{declaration} : packoffset({packoffset})"
         return declaration

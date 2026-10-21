@@ -2229,6 +2229,28 @@ class GLSLToCrossGLConverter:
             self.append_concrete_descriptor_attribute(attributes, name, value)
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def uniform_block_buffer_layout_suffix(self, block_name, uniforms):
+        """The ``@buffer_layout`` of a uniform block: the memory layout the host writes it with.
+
+        Uniform blocks use std140 unless they name ``std430`` or ``scalar`` (GLSL 4.60 section 4.4.5). ``shared`` and
+        ``packed`` leave the offsets to the implementation, which the host must query; std140 is the layout every
+        implementation accepts for them, so they are kept as std140 too. A block written in HLSL ``cbuffer`` syntax
+        keeps the default HLSL packing of the generators, and a struct-typed loose uniform has no byte layout.
+        """
+        block_struct = self.structs_by_name.get(block_name)
+        if (
+            block_struct is None
+            or not getattr(block_struct, "interface_block", False)
+            or getattr(block_struct, "hlsl_cbuffer", False)
+        ):
+            # A struct-typed loose uniform is set through the API, not as buffer bytes.
+            return ""
+        layout = self.uniform_block_layout(block_name, uniforms)
+        for name in ("std430", "scalar"):
+            if self.layout_has_key(layout, name):
+                return f" @buffer_layout({name})"
+        return " @buffer_layout(std140)"
+
     def descriptor_set_uniform_block_output_name(self, block_name, uniforms):
         block_struct = self.structs_by_name.get(block_name)
         if block_struct is None:
@@ -2250,6 +2272,7 @@ class GLSLToCrossGLConverter:
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, uniforms
         )
+        attributes += self.uniform_block_buffer_layout_suffix(block_name, uniforms)
         output_name = self.descriptor_set_uniform_block_output_name(
             block_name, uniforms
         )

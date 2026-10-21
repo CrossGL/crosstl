@@ -24,6 +24,12 @@ exact HLSL offsets:
   helper reads the rows;
 * members with ``packoffset`` sit at the bytes it names, in offset order.
 
+GLSL uniform blocks marked ``@ buffer_layout(std140)`` are planned the same way
+at their std140 offsets (:mod:`std140_buffer_layout`). Their arrays and
+matrices pad every element and column to 16 bytes, so a ``floatCx3`` matrix
+keeps its native type too, and a nested struct ends with explicit padding up
+to its std140 size, which is its array stride.
+
 A layout that Metal cannot express raises :class:`HlslLayoutError` instead of
 silently reading other bytes.
 """
@@ -38,13 +44,26 @@ from .hlsl_buffer_layout import (
     HlslLayoutError,
     align_to,
     array_type,
-    cbuffer_array_stride,
     oriented_matrix_type,
     scalar_type,
-    struct_placements,
     struct_type,
     vector_type,
 )
+from .std140_buffer_layout import (
+    STD140_LAYOUT,
+    layout_array_stride,
+    layout_struct_placements,
+    std140_size,
+)
+
+# Layouts whose arrays put every element in its own 16-byte register and whose
+# matrices put every column (or row) in one.
+REGISTER_LAYOUTS = (HLSL_CBUFFER_LAYOUT, STD140_LAYOUT)
+LAYOUT_LABELS = {
+    HLSL_CBUFFER_LAYOUT: "HLSL",
+    HLSL_STRUCTURED_LAYOUT: "HLSL",
+    STD140_LAYOUT: "std140",
+}
 
 METAL_SCALAR_STORAGE = {
     "bool": ("uint", 4),
@@ -97,6 +116,9 @@ class MetalLayoutPlan:
     padding: Dict[str, int] = field(default_factory=dict)
     size: int = 0
     alignment: int = 1
+    # Bytes after the last member that belong to the struct (std140 rounds a
+    # struct's size up to its alignment).
+    tail_padding: int = 0
 
     def member(self, name):
         for member in self.members:
@@ -112,6 +134,10 @@ class MetalLayoutPlan:
                 lines.append(f"char {padding_name(index)}[{padding}];")
             suffix = f"[{member.array_count}]" if member.array_count is not None else ""
             lines.append(f"{member.storage_type} {member.name}{suffix};")
+        if self.tail_padding:
+            lines.append(
+                f"char {padding_name(len(self.members))}[{self.tail_padding}];"
+            )
         return lines
 
 
@@ -225,7 +251,8 @@ class MetalHlslBufferLayouts:
         return plan
 
     def plan_members(self, name, layout_type, layout, root=False):
-        placements, _hlsl_size = struct_placements(layout_type, layout)
+        placements, _source_size = layout_struct_placements(layout_type, layout, root)
+        label = LAYOUT_LABELS[layout]
         # Metal lays a struct out in member order; members placed by packoffset
         # are declared in the order of their offsets.
         placements = sorted(placements, key=lambda placement: placement.offset)
@@ -236,12 +263,12 @@ class MetalHlslBufferLayouts:
             member = self.member_storage(placement, layout)
             if member.offset % member.alignment:
                 raise HlslLayoutError(
-                    f"member '{placement.name}' of '{name}' at HLSL offset "
+                    f"member '{placement.name}' of '{name}' at {label} offset "
                     f"{member.offset} cannot use Metal storage '{member.storage_type}'"
                 )
             if member.offset < cursor:
                 raise HlslLayoutError(
-                    f"member '{placement.name}' of '{name}' at HLSL offset "
+                    f"member '{placement.name}' of '{name}' at {label} offset "
                     f"{member.offset} overlaps the Metal storage of the previous member"
                 )
             if member.offset > cursor:
@@ -249,9 +276,20 @@ class MetalHlslBufferLayouts:
             plan.members.append(member)
             cursor = member.offset + member.size
             max_alignment = max(max_alignment, member.alignment)
+        if layout == STD140_LAYOUT and not root:
+            # The struct's std140 size is its array stride and where the next
+            # member may start; it is a multiple of 16, so of any Metal alignment.
+            source_size = std140_size(layout_type)
+            if source_size < cursor:
+                raise HlslLayoutError(
+                    f"struct '{name}' needs {cursor} bytes of Metal storage but has a "
+                    f"std140 size of {source_size}"
+                )
+            plan.tail_padding = source_size - cursor
+            cursor = source_size
         plan.alignment = max_alignment
         plan.size = align_to(cursor, max_alignment)
-        self.use_natural_vector_storage(plan, cursor, root)
+        self.use_natural_vector_storage(plan, cursor, root or layout == STD140_LAYOUT)
         return plan
 
     @staticmethod
@@ -316,11 +354,15 @@ class MetalHlslBufferLayouts:
                 write = f"uint{width}"
             return f"packed_{storage}{width}", size * width, size, read, write, None
         if kind == "matrix":
-            if layout != HLSL_CBUFFER_LAYOUT:
+            if layout not in REGISTER_LAYOUTS:
                 raise HlslLayoutError(
                     "matrices in HLSL structured buffers have no Metal layout"
                 )
-            return self.matrix_storage(layout_type, padded=False)
+            # A std140 matrix is an array of its columns (rows): the last one is
+            # padded like the others.
+            return self.matrix_storage(
+                layout_type, padded=layout == STD140_LAYOUT, layout=layout
+            )
         if kind == "struct":
             plan = self.require_struct(layout_type, layout)
             return plan.name, plan.size, plan.alignment, None, None, plan.name
@@ -330,11 +372,12 @@ class MetalHlslBufferLayouts:
         layout_type = placement.layout_type
         element = layout_type.element
         count = layout_type.count
-        if layout == HLSL_CBUFFER_LAYOUT and element.kind in ("scalar", "vector"):
+        label = LAYOUT_LABELS[layout]
+        if layout in REGISTER_LAYOUTS and element.kind in ("scalar", "vector"):
             storage, size = METAL_SCALAR_STORAGE[element.scalar]
             if size != 4:
                 raise HlslLayoutError(
-                    "64-bit scalar arrays in HLSL constant buffers are not supported"
+                    f"64-bit scalar arrays in {label} buffers are not supported"
                 )
             width = element.components if element.kind == "vector" else 1
             read = None
@@ -350,16 +393,16 @@ class MetalHlslBufferLayouts:
                 read_conversion=read,
                 element_suffix=METAL_ELEMENT_SUFFIXES[width],
             )
-        if layout == HLSL_CBUFFER_LAYOUT and element.kind == "matrix":
-            storage = self.matrix_storage(element, padded=True)
+        if layout in REGISTER_LAYOUTS and element.kind == "matrix":
+            storage = self.matrix_storage(element, padded=True, layout=layout)
         else:
             storage = self.value_storage(element, layout)
         storage_type, size, alignment, read, write, nested = storage
-        if layout == HLSL_CBUFFER_LAYOUT:
-            stride = cbuffer_array_stride(layout_type)
+        if layout in REGISTER_LAYOUTS:
+            stride = layout_array_stride(layout_type, layout)
             if size != stride:
                 raise HlslLayoutError(
-                    f"array '{placement.name}' has a {stride}-byte HLSL element "
+                    f"array '{placement.name}' has a {stride}-byte {label} element "
                     f"stride but Metal element storage of {size} bytes"
                 )
         return MetalLayoutMember(
@@ -374,7 +417,7 @@ class MetalHlslBufferLayouts:
             nested_struct=nested,
         )
 
-    def matrix_storage(self, layout_type, padded):
+    def matrix_storage(self, layout_type, padded, layout=HLSL_CBUFFER_LAYOUT):
         """Storage of a constant-buffer matrix, as returned by :meth:`value_storage`.
 
         ``padded`` storage fills the last register too, as array elements do.
@@ -392,6 +435,11 @@ class MetalHlslBufferLayouts:
             native = f"float{registers}x4"
             conversion = "transpose" if row_major else None
             return native, 16 * registers, 16, conversion, conversion, None
+        if scalar == "float" and components == 3 and layout == STD140_LAYOUT:
+            # Metal's float3 columns take 16 bytes, as std140 columns (rows) do.
+            native = f"float{registers}x3"
+            conversion = "transpose" if row_major else None
+            return native, 16 * registers, 16, conversion, conversion, None
         name = f"crosstl_hlsl_cbuffer_{scalar}{columns}x{rows}"
         if row_major:
             name += "_row_major"
@@ -404,21 +452,23 @@ class MetalHlslBufferLayouts:
             )
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
-    def plan_cbuffer(self, name, members):
-        """Plan a constant buffer declared with HLSL packing.
+    def plan_cbuffer(self, name, members, layout=HLSL_CBUFFER_LAYOUT):
+        """Plan a constant buffer declared with HLSL packing or as a std140 uniform block.
 
-        ``members`` are ``(name, raw_type, row_major, offset)``, where ``offset``
-        is the byte offset of a ``packoffset`` qualifier or ``None``.
+        ``members`` are ``(name, raw_type, row_major, offset[, alignment])``,
+        where ``offset`` is the byte offset of a ``packoffset`` or ``offset``
+        qualifier and ``alignment`` that of an ``align`` qualifier, or ``None``.
         """
         layout_type = struct_type(
             name,
             [
-                (member_name, self.layout_type(member_type, (name,), row_major))
-                for member_name, member_type, row_major, _offset in members
+                (member[0], self.layout_type(member[1], (name,), member[2]))
+                for member in members
             ],
             [member[3] for member in members],
+            [member[4] if len(member) > 4 else None for member in members],
         )
-        return self.plan_members(name, layout_type, HLSL_CBUFFER_LAYOUT, root=True)
+        return self.plan_members(name, layout_type, layout, root=True)
 
     def plan_structured_element(self, raw_type):
         """Storage of one structured-buffer element.

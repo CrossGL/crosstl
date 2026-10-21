@@ -29,7 +29,14 @@ from .hlsl_buffer_layout import (
     HlslLayoutError,
     buffer_layout_from_attributes,
 )
-from .metal_hlsl_buffer_layout import MetalHlslBufferLayouts
+from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
+from .std140_buffer_layout import (
+    SCALAR_BLOCK_LAYOUT,
+    STD140_LAYOUT,
+    STD430_LAYOUT,
+    declared_buffer_layout,
+    member_explicit_alignment,
+)
 
 
 class MetalHlslResourceMixin:
@@ -149,9 +156,10 @@ class MetalHlslResourceMixin:
     def collect_metal_hlsl_buffer_layouts(self, ast):
         """Plan Metal storage that reproduces the HLSL buffer layouts of a program.
 
-        Constant buffers marked ``@ buffer_layout(hlsl_cbuffer)`` and the element
-        types of structured buffers marked ``@ buffer_layout(hlsl_structured)``
-        get Metal declarations with the exact HLSL member offsets.
+        Constant buffers marked ``@ buffer_layout(hlsl_cbuffer)`` or, for GLSL
+        uniform blocks, ``@ buffer_layout(std140)``, and the element types of
+        structured buffers marked ``@ buffer_layout(hlsl_structured)`` get Metal
+        declarations with the exact member offsets of those layouts.
         """
         self.metal_hlsl_cbuffer_plans = {}
         self.metal_hlsl_struct_plans = {}
@@ -161,8 +169,13 @@ class MetalHlslResourceMixin:
         planner = MetalHlslBufferLayouts(self.metal_hlsl_layout_type_resolver)
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
-            layout = buffer_layout_from_attributes(getattr(cbuffer, "attributes", None))
-            if layout != HLSL_CBUFFER_LAYOUT:
+            layout = declared_buffer_layout(getattr(cbuffer, "attributes", None))
+            if layout not in (HLSL_CBUFFER_LAYOUT, STD140_LAYOUT):
+                if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
+                    raise ValueError(
+                        f"Cannot reproduce the {layout} layout of uniform block "
+                        f"'{cbuffer.name}' in Metal"
+                    )
                 continue
             try:
                 members = [
@@ -171,15 +184,16 @@ class MetalHlslResourceMixin:
                         self.struct_member_raw_type(member),
                         member_is_row_major(member),
                         member_explicit_offset(member),
+                        member_explicit_alignment(member),
                     )
                     for member in getattr(cbuffer, "members", []) or []
                     if getattr(member, "name", None)
                 ]
-                plan = planner.plan_cbuffer(cbuffer.name, members)
+                plan = planner.plan_cbuffer(cbuffer.name, members, layout)
             except HlslLayoutError as exc:
                 raise ValueError(
-                    f"Cannot reproduce the HLSL layout of cbuffer '{cbuffer.name}' "
-                    f"in Metal: {exc}"
+                    f"Cannot reproduce the {LAYOUT_LABELS[layout]} layout of cbuffer "
+                    f"'{cbuffer.name}' in Metal: {exc}"
                 ) from exc
             self.metal_hlsl_cbuffer_plans[id(cbuffer)] = plan
             for member in plan.members:
