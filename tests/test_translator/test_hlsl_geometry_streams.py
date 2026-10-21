@@ -123,7 +123,8 @@ _GLSL_NAMES = re.compile(r"\b(gl_\w+|EmitVertex|EndPrimitive)\b")
 def _translate(tmp_path, source, name, backend="directx"):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    # Unformatted, so the assertions do not depend on clang-format being installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _dxc(tmp_path, code, profile="gs_6_0"):
@@ -153,7 +154,10 @@ def _dxc(tmp_path, code, profile="gs_6_0"):
 
 
 def _flat(code):
-    return re.sub(r"\s+", " ", code)
+    """``code`` on one line, with semantics as ``name : SEMANTIC`` and attributes adjacent."""
+    code = re.sub(r"\s+", " ", code)
+    code = re.sub(r"(\w)\s*:\s*((?:SV_)?[A-Z][A-Za-z_]*\d*)\b", r"\1 : \2", code)
+    return re.sub(r"\]\s+\[", "][", code)
 
 
 def _struct_semantics(code, struct_name):
