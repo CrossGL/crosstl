@@ -508,6 +508,65 @@ def test_trace_ray_probes_are_valid(language):
         assert verdict.accepted, verdict.log
 
 
+UDT = Type("", (), "udt")
+REPORT_HIT = Feature(
+    "hlsl",
+    "function",
+    "ReportHit",
+    Signature(Type("bool"), (Param(Type("float")), Param(UINT), Param(UDT))),
+    crossgl="ReportHit",
+    stage="intersection",
+)
+GET_ATTRIBUTES = Feature(
+    "hlsl",
+    "method",
+    "DxHitObject.GetAttributes",
+    Signature(VOID, (Param(UDT, "out"),)),
+    group="DxHitObject",
+    crossgl="GetAttributes",
+    spelling="GetAttributes",
+    stage="ray-generation",
+)
+
+
+@pytest.mark.parametrize(
+    ("language", "barycentrics"),
+    [
+        ("hlsl", "float2(fin[i + 1u], fin[i + 2u])"),
+        ("crossgl", "vec2(fin[i + 1u], fin[i + 2u])"),
+    ],
+)
+def test_an_intersection_shader_reports_triangle_attributes(language, barycentrics):
+    source = probes.build(REPORT_HIT, language).source
+    assert "BuiltInTriangleIntersectionAttributes a2;" in source
+    assert f"a2.barycentrics = {barycentrics};" in source
+    assert "bool r = ReportHit(a0, a1, a2);" in source
+
+
+def test_a_hit_object_writes_its_attributes_to_a_local():
+    for language in ("hlsl", "crossgl"):
+        source = probes.build(GET_ATTRIBUTES, language).source
+        assert "BuiltInTriangleIntersectionAttributes a0;" in source
+        assert "barycentrics" not in source
+        assert "obj.GetAttributes(a0);" in source
+
+
+def test_a_user_defined_inout_parameter_outside_a_payload_stage_stays_untested():
+    invoke = replace(GET_ATTRIBUTES, signature=Signature(VOID, (Param(UDT, "inout"),)))
+    with pytest.raises(probes.ProbeError, match="parameters of type udt"):
+        probes.build(invoke, "hlsl")
+
+
+@pytest.mark.parametrize("feature", [REPORT_HIT, GET_ATTRIBUTES])
+def test_hit_attribute_probes_are_valid(feature):
+    if not validators.available("hlsl"):
+        pytest.skip("no hlsl validator")
+    for baseline in (False, True):
+        probe = probes.build(feature, "hlsl", baseline=baseline)
+        verdict = validators.validate("hlsl", probe.source, feature.stage, probe.entry)
+        assert verdict.accepted, verdict.log
+
+
 def test_stages_without_a_function_probe_say_so():
     for stage in STAGE_FUNCTIONS:
         with pytest.raises(probes.ProbeError, match=f"no {stage}-stage probe for glsl"):

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from . import constructs
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
-from .model import RAYTRACING_STAGES, Feature, Signature, Type
+from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type
 from .objects import Receiver, Uniforms
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
@@ -40,6 +40,9 @@ _STAGE_PROGRAMS = {
 _PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
 # A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.
 _RAY_DESCRIPTIONS = frozenset({"ray_desc", "RayDesc"})
+# The hit attributes a probe passes for a user-defined type outside the payload stages: those ``ReportHit`` reports
+# from an intersection shader and a hit object hands back. HLSL, Slang and CrossGL spell the triangle attributes alike.
+_HIT_ATTRIBUTES = "BuiltInTriangleIntersectionAttributes"
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,23 @@ class _Builder:
             kind
         )
 
+    def _attributes(self, param: Param) -> bool:
+        """Whether ``param`` takes hit attributes: a user-defined ``in`` or ``out`` parameter outside a payload stage.
+        A user-defined ``inout`` parameter there is a payload, which such a probe does not declare.
+        """
+        return (
+            not self.payload
+            and param.type.opaque == "udt"
+            and param.direction in ("in", "out")
+        )
+
+    def _hit_attributes(self, name: str, filled: bool) -> list[str]:
+        """Triangle hit attributes ``name``, with barycentrics the input buffers give when ``filled``."""
+        lines = [f"{_HIT_ATTRIBUTES} {name};"]
+        if filled:
+            lines.append(f"{name}.barycentrics = {self.value(Type('float', (2,)))};")
+        return lines
+
     def _ray(self, name: str) -> list[str]:
         """A ray descriptor ``name`` whose origin and direction the input buffers give."""
         vector = Type("float", (3,))
@@ -147,7 +167,8 @@ class _Builder:
             result.opaque
             and (dialect.reading(result.opaque) or dialect.holding(result.opaque))
         )
-        for kind in ([] if read else [result]) + [p.type for p in signature.params]:
+        params = [p.type for p in signature.params if not self._attributes(p)]
+        for kind in ([] if read else [result]) + params:
             if not self._resource(kind):
                 # Raises ProbeError for what the language cannot spell.
                 dialect.type(kind.element)
@@ -157,6 +178,11 @@ class _Builder:
                 param.type.opaque == "udt" or param.direction == "inout"
             ):
                 arguments.append(dialect.payload)
+            elif self._attributes(param):
+                self.lines += self._hit_attributes(local, param.direction == "in")
+                arguments.append(
+                    local if param.direction == "in" else dialect.out_argument(local)
+                )
             elif receiver and receiver.takes(param.type):
                 arguments.append(receiver.argument(param.type))
             elif self.uniforms.takes(param.type):
