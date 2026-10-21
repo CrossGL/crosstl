@@ -175,7 +175,8 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         "Every feature in a pinned upstream feature list gets a generated probe. For output, CrossTL translates a "
         "CrossGL probe to the language; for input, it imports a native probe and translates it back. The "
-        "language's reference tool then validates the result:",
+        "native SPIR-V probe is the module glslang compiles the GLSL probe to, and its round trip must keep the "
+        "feature's instruction. The language's reference tool then validates the result:",
         "",
         "- **supported**: the reference tool accepts the translation;",
         "- **refused**: CrossTL rejects the feature with a diagnostic;",

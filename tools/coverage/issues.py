@@ -317,10 +317,15 @@ def bug_body(row: dict, features: list[dict], repository: str) -> str:
     language, direction = row["language"], row["direction"]
     tool = TOOLS.get(language, language)
     if direction == "input":
+        # A SPIR-V round trip must also keep the feature's instruction (:mod:`.spirv_input`).
+        rejects = (
+            f"produces code that {tool} rejects or that no longer calls the feature's instruction"
+            if language == "spirv"
+            else f"produces code that {tool} rejects"
+        )
         what = (
             f"CrossTL imports the generated {chart.name(language)} probe, which {tool} accepts, but the "
-            "round trip through CrossGL fails without a typed diagnostic or produces code that "
-            f"{tool} rejects."
+            f"round trip through CrossGL fails without a typed diagnostic or {rejects}."
         )
     else:
         what = (

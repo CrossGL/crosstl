@@ -8,7 +8,7 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from . import probes, validators
+from . import probes, spirv_input, validators
 from .model import Feature, Result
 from .semantic import lower
 
@@ -33,6 +33,7 @@ INPUT_BACKENDS = {
     "mojo": "mojo",
     "rust": "rust",
     "slang": "slang",
+    "spirv": "vulkan",
 }
 
 
@@ -187,7 +188,10 @@ def run_input(feature: Feature, language: str) -> Result:
         return Result(feature, "input", outcome, detail, tool)
 
     try:
-        probe = probes.build(feature, language)
+        if language == "spirv":
+            probe = spirv_input.build(feature)
+        else:
+            probe = probes.build(feature, language)
     except probes.ProbeError as error:
         return result("untested", str(error))
     if not validators.available(language):
@@ -204,11 +208,10 @@ def run_input(feature: Feature, language: str) -> Result:
     except Broken as error:
         return result("wrong", str(error))
     verdict = _validated(language, translated, feature.stage)
-    return (
-        result("supported")
-        if verdict.accepted
-        else result("wrong", f"after the round trip: {verdict.log}")
-    )
+    if not verdict.accepted:
+        return result("wrong", f"after the round trip: {verdict.log}")
+    lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
+    return result("wrong", lost) if lost else result("supported")
 
 
 def _job(job: tuple[Feature, str, str]) -> Result:

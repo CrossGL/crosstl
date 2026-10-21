@@ -112,6 +112,12 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
+        # SPIR-V input probes are glslang's output.
+        | (
+            {"glslangValidator", "spirv-dis"}
+            if "spirv" in languages and "input" in directions
+            else set()
+        )
     )
     return {
         "schema": SCHEMA,

@@ -76,7 +76,7 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | GLSL | `opengl` | measured | measured |
 | HLSL | `directx` | measured | measured |
 | Metal | `metal` | measured | measured |
-| SPIR-V assembly | `vulkan` | measured | available |
+| SPIR-V assembly | `vulkan` | measured | measured |
 | WGSL | `wgsl` | measured | not offered |
 | GLSL ES 3.00 (WebGL 2) | `webgl` | available | not offered |
 | CUDA | `cuda` | measured | measured |

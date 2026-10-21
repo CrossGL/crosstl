@@ -445,11 +445,23 @@ def can_lower(language: str) -> bool:
     return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
+def first_error(log: str) -> str:
+    """The first line of a tool's log that reports an error, or the log's start when none says so."""
+    errors = [line for line in log.splitlines() if "error" in line.lower()]
+    return (errors[0] if errors else log[:300]).strip()
+
+
 def lower(
-    language: str, source: str, entry: str = "main", stage: str = "compute"
+    language: str,
+    source: str,
+    entry: str = "main",
+    stage: str = "compute",
+    *,
+    raw_ids: bool = True,
 ) -> tuple[str, str]:
     """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
 
+    ``raw_ids`` numbers every id instead of naming it after its debug name, so assemblies compare by instruction.
     Call only when :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
@@ -473,7 +485,11 @@ def lower(
             return "", compiled.log
         try:
             result = subprocess.run(
-                [*command("spirv-dis"), "--raw-id", "probe.spv"],
+                [
+                    *command("spirv-dis"),
+                    *(["--raw-id"] if raw_ids else []),
+                    "probe.spv",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=TIMEOUT,

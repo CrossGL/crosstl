@@ -152,16 +152,14 @@ def lower(feature: Feature) -> tuple[str, str]:
     stage = feature.stage
     lowered, log = validators.lower(feature.language, probe.source, probe.entry, stage)
     if not lowered:
-        return "", f"does not lower to SPIR-V: {_first_error(log)}"
+        return "", f"does not lower to SPIR-V: {validators.first_error(log)}"
     reference, log = validators.lower(
         feature.language, baseline.source, baseline.entry, stage
     )
     if not reference:
-        return "", f"the baseline does not lower to SPIR-V: {_first_error(log)}"
+        return (
+            "",
+            f"the baseline does not lower to SPIR-V: {validators.first_error(log)}",
+        )
     semantic = identify(instructions(lowered), instructions(reference))
     return (semantic, "") if semantic else ("", "the call lowers to no instruction")
-
-
-def _first_error(log: str) -> str:
-    errors = [line for line in log.splitlines() if "error" in line.lower()]
-    return (errors[0] if errors else log[:300]).strip()

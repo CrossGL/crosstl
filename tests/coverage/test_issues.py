@@ -502,6 +502,16 @@ def test_input_rows_describe_the_round_trip():
     assert "round trip" in actions[1].body
 
 
+def test_spirv_input_bugs_name_the_dropped_instruction_as_a_failure():
+    detail = "the round trip no longer calls NMin"
+    row = _row("spirv", "input", [_feature("NMin", "wrong", detail=detail)])
+    body = issues.plan(_report(row), [])[1].body
+    assert "or that no longer calls the feature's instruction" in body
+    assert detail in body
+    glsl = _row("glsl", "input", [_feature("x", "wrong", detail="bad")])
+    assert "instruction" not in issues.plan(_report(glsl), [])[1].body
+
+
 def test_long_gap_lists_are_cut_to_the_body_limit(monkeypatch):
     monkeypatch.setattr(issues, "BODY_LIMIT", 1_500)
     row = _row(
