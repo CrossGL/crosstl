@@ -202,6 +202,70 @@ def test_node_probes_are_valid_and_a_library_needs_an_entry_of_the_stage():
     assert "no node entry point" in verdict.log
 
 
+def node_method(owner, name, result, *params):
+    return Feature(
+        "hlsl",
+        "method",
+        f"{owner}.{name}",
+        Signature(result, tuple(Param(p) for p in params)),
+        group=owner,
+        crossgl=name,
+        spelling=name,
+        stage="node",
+    )
+
+
+NODE_METHODS = [
+    node_method("NodeOutput", "IsValid", Type("bool")),
+    node_method(
+        "NodeOutput",
+        "GetThreadNodeOutputRecords",
+        Type.other("ThreadNodeOutputRecords"),
+        Type("uint"),
+    ),
+    node_method("EmptyNodeOutput", "ThreadIncrementOutputCount", VOID, Type("uint")),
+    node_method("EmptyNodeInput", "Count", Type("uint")),
+    node_method("GroupNodeInputRecords", "Count", Type("uint")),
+    node_method("RWDispatchNodeInputRecord", "FinishedCrossGroupSharing", Type("bool")),
+    node_method("GroupOrThreadNodeOutputRecords", "OutputComplete", VOID),
+]
+
+
+def test_node_objects_are_entry_parameters_of_their_kind_of_node():
+    is_valid, records, _, empty_input, _, shared, complete = (
+        probes.build(f, "hlsl").source for f in NODE_METHODS
+    )
+    assert "void main([MaxRecords(1)] NodeOutput<Record> obj) {" in is_valid
+    assert '[NodeLaunch("broadcasting")]\n[NodeDispatchGrid(1, 1, 1)]' in is_valid
+    # A call whose records object is dropped crashes DXC, so the probe keeps it.
+    assert (
+        "    ThreadNodeOutputRecords<Record> r = obj.GetThreadNodeOutputRecords(a0);"
+        in (records)
+    )
+    # An input record makes the node a coalescing one, which has no fixed grid.
+    assert '[NodeLaunch("coalescing")]\n[NumThreads(1, 1, 1)]' in empty_input
+    assert "void main([MaxRecords(1)] EmptyNodeInput obj) {" in empty_input
+    assert "struct [NodeTrackRWInputSharing] Record {" in shared
+    assert "globallycoherent RWDispatchNodeInputRecord<Record> obj" in shared
+    assert "void main([MaxRecords(1)] NodeOutput<Record> output) {" in complete
+    assert (
+        "    ThreadNodeOutputRecords<Record> obj = output.GetThreadNodeOutputRecords(1);"
+        in (complete)
+    )
+    for method in NODE_METHODS:
+        with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
+            probes.build(method, "crossgl")
+
+
+@pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
+@pytest.mark.parametrize("node_feature", NODE_METHODS, ids=lambda f: f.name)
+@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
+def test_node_object_probes_are_valid(node_feature, baseline):
+    probe = probes.build(node_feature, "hlsl", baseline=baseline)
+    verdict = validators.validate("hlsl", probe.source, "node", probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 EMIT_STREAM_VERTEX = feature(
     "EmitStreamVertex", VOID, Param(Type("int"), "const"), stage="geometry"
 )
@@ -688,8 +752,8 @@ def test_ray_query_is_a_local_variable():
 
 
 def test_method_probe_needs_an_object_it_can_declare():
-    with pytest.raises(probes.ProbeError, match="no probe for NodeOutput objects"):
-        probes.build(method("NodeOutput", "IsValid", Type("bool")), "hlsl")
+    with pytest.raises(probes.ProbeError, match="no probe for FutureObject objects"):
+        probes.build(method("FutureObject", "IsValid", Type("bool")), "hlsl")
     with pytest.raises(probes.ProbeError, match="no probe for metal Texture2D"):
         probes.build(SAMPLE_LEVEL, "metal")
 

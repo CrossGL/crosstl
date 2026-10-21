@@ -268,6 +268,10 @@ namespace NodeOutputMethods {
     bool [[]] IsValid();
 } namespace
 
+namespace FutureObjectMethods {
+    bool [[]] IsValid();
+} namespace
+
 namespace StreamMethods {
 void [[]] Append(in $match<-1, 1> void x) : stream_append;
 void [[]] RestartStrip() : stream_restart;
@@ -343,8 +347,18 @@ def test_hlsl_feedback_methods_take_the_texture_they_record():
 
 def test_hlsl_methods_of_types_no_probe_declares_are_untested():
     features = by_name(hlsl.parse(HLSL_TABLE))
-    assert features["NodeOutput.IsValid"].signature is None
-    assert features["NodeOutput.IsValid"].note == "no probe for NodeOutput objects yet"
+    assert features["FutureObject.IsValid"].signature is None
+    assert (
+        features["FutureObject.IsValid"].note == "no probe for FutureObject objects yet"
+    )
+
+
+def test_hlsl_work_graph_objects_are_probed_in_a_node_shader():
+    node_output = by_name(hlsl.parse(HLSL_TABLE))["NodeOutput.IsValid"]
+    assert (node_output.stage, node_output.signature) == (
+        "node",
+        Signature(Type("bool"), ()),
+    )
 
 
 def test_hlsl_hit_object_methods_are_probed_in_a_ray_generation_shader():

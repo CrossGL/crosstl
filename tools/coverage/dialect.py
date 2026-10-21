@@ -119,6 +119,15 @@ class Dialect:
         """The element type of the output buffer; ``atomic`` when the probe passes it to an atomic operation."""
         return self.type(kind)
 
+    def absent(self, stage: str) -> str:
+        """Why the language has no ``stage`` at all, or an empty string when it has one or a probe is missing."""
+        return ""
+
+    def holding(self, opaque: str) -> str:
+        """The spelling of a local that holds a result of the opaque type ``opaque``, for a call whose result must be
+        kept, or an empty string when the probe only makes the call."""
+        return ""
+
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         """How a probe reads a result of the opaque type ``opaque`` as a value: the value's type and an expression
         with ``{}`` for the call, or ``None`` when the probe only makes the call."""
@@ -200,9 +209,9 @@ class Dialect:
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A geometry shader that takes and emits points and runs ``body`` with ``i`` set to 0, for a feature only
-        that stage has; the buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``stream``, the type of the
-        output stream the entry point takes as ``obj``, for a probe of the stream's methods; the probe then fills in
-        :attr:`vertex` before ``body``."""
+        that stage has; the buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``parameter``, the type of
+        the output stream the entry point takes as ``obj``, for a probe of the stream's methods; the probe then fills
+        in :attr:`vertex` before ``body``."""
         raise ProbeError(f"no geometry-stage probe for {self.language} yet")
 
     def raytracing(
@@ -232,5 +241,6 @@ class Dialect:
 
     def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         """A work-graph node shader of one thread, launched once, that runs ``body`` with ``i`` set to 0; the
-        buffers and ``parts`` are :meth:`kernel`'s."""
+        buffers and ``parts`` are :meth:`kernel`'s. ``parts`` may add ``parameter``, the type of the node input or
+        output the entry point takes as ``obj``, for a probe of its methods."""
         raise ProbeError(f"no node-stage probe for {self.language} yet")

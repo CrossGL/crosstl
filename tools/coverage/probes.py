@@ -143,7 +143,10 @@ class _Builder:
         dialect, arguments, output = self.dialect, [], None
         receiver = self.receiver
         result = signature.result
-        read = bool(result.opaque and dialect.reading(result.opaque))
+        read = bool(
+            result.opaque
+            and (dialect.reading(result.opaque) or dialect.holding(result.opaque))
+        )
         for kind in ([] if read else [result]) + [p.type for p in signature.params]:
             if not self._resource(kind):
                 dialect.type(
@@ -200,12 +203,16 @@ class _Builder:
         call = dialect.call(name, arguments)
         result = signature.result
         reading = dialect.reading(result.opaque) if result.opaque else None
+        held = dialect.holding(result.opaque) if result.opaque else ""
         if output is None and reading:
             output, read = reading
             stores = [
                 dialect.declare(output, "r", read.format(call)),
                 dialect.store("r"),
             ]
+        elif output is None and held:
+            output = Type("uint")
+            stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
         elif output is not None or result.opaque:
             stores = [dialect.statement(call)]
             if output is None:
@@ -257,6 +264,9 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         *RAYTRACING_STAGES,
     ):
         raise ProbeError(f"no {feature.stage}-stage probe yet")
+    absent = dialect.absent(feature.stage)
+    if absent:
+        raise NoSpelling(absent)
     name = feature.crossgl if crossgl else feature.spelling or feature.name
     if not name:
         raise NoSpelling(
@@ -298,7 +308,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         program = getattr(dialect, _STAGE_PROGRAMS[feature.stage])
         if receiver and receiver.parameter:
             source = program(
-                buffers, body, declarations=declarations, stream=receiver.parameter
+                buffers, body, declarations=declarations, parameter=receiver.parameter
             )
         else:
             source = program(buffers, body, declarations=declarations)

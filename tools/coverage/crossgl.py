@@ -8,14 +8,7 @@ anywhere else.
 
 from __future__ import annotations
 
-from .dialect import (
-    UNIFORM_ARRAY_LENGTH,
-    Buffer,
-    Dialect,
-    NoSpelling,
-    ProbeError,
-    uniform_read,
-)
+from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .model import WIDE_INTEGERS
 from .objects import VERTEX
 from .templates import C_FAMILY, Template
@@ -149,7 +142,7 @@ class CrossGL(Dialect):
         return "\n".join(lines) + "\n"
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        stream = parts.get("stream")
+        stream = parts.get("parameter")
         if stream:
             return self._streaming_geometry(stream, buffers, body, parts)
         lines = ["shader Probe {"]
@@ -265,8 +258,8 @@ class CrossGL(Dialect):
         )
         return self._program("task", shared, buffers, functions, parts)
 
-    def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        raise NoSpelling("CrossGL has no work-graph node stage")
+    def absent(self, stage: str) -> str:
+        return "CrossGL has no work-graph node stage" if stage == "node" else ""
 
 
 # A geometry stage's input and output primitives, as the CrossGL importers write them.

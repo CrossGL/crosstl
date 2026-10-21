@@ -34,6 +34,12 @@ _FLOAT4 = Type("float", (4,))
 # as the stream's own element type; a probe appends the vertex its geometry program fills in.
 VERTEX = "Vertex"
 STREAM = f"PointStream<{VERTEX}>"
+# The record type of a work-graph probe's node inputs and outputs.
+RECORD = "Record"
+
+
+def _node(spelling: str) -> Object:
+    return Object(spelling, stage="node", parameter=True)
 
 
 def _textures(spelling: str, register: str, *names: str) -> dict[str, Object]:
@@ -87,6 +93,14 @@ OBJECTS: dict[str, Object] = {
     "DxHitObject": Object("dx::HitObject", stage="ray-generation"),
     # A geometry shader's output stream is a parameter of its entry point.
     "Stream": Object(STREAM, stage="geometry", parameter=True),
+    # A work graph's node shader takes its inputs and outputs as entry-point parameters (HLSL work graphs). The
+    # records object OutputComplete is called on is one the node requests from an output.
+    "NodeOutput": _node(f"NodeOutput<{RECORD}>"),
+    "EmptyNodeOutput": _node("EmptyNodeOutput"),
+    "EmptyNodeInput": _node("EmptyNodeInput"),
+    "GroupNodeInputRecords": _node(f"GroupNodeInputRecords<{RECORD}>"),
+    "RWDispatchNodeInputRecord": _node(f"RWDispatchNodeInputRecord<{RECORD}>"),
+    "GroupOrThreadNodeOutputRecords": _node(f"ThreadNodeOutputRecords<{RECORD}>"),
     # A feedback texture records which mips of its paired texture a sample would touch; it binds as a UAV.
     "FeedbackTexture2D": Object(
         "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>", None, "u"

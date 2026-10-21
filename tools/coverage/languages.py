@@ -8,7 +8,7 @@ from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
 from .model import RAYTRACING_STAGES, Type
-from .objects import STREAM, VERTEX
+from .objects import RECORD, STREAM, VERTEX
 
 
 class GLSL(Dialect):
@@ -152,7 +152,7 @@ class HLSL(Dialect):
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         # A Direct3D geometry shader always takes an output stream. Its vertex has no system value, which the
         # validator would require every path to write, so a probe that appends nothing is valid.
-        stream = parts.get("stream", STREAM)
+        stream = parts.get("parameter", STREAM)
         lines = [
             f"struct {VERTEX} {{",
             "    float4 value : TEXCOORD0;",
@@ -272,15 +272,41 @@ class HLSL(Dialect):
         ]
         return "\n".join(lines) + "\n"
 
+    # Node inputs that make a node a coalescing one, which runs a thread group per batch of input records; any other
+    # node is a broadcasting one with a fixed dispatch grid. A records object is requested from a node output.
+    _COALESCING = ("EmptyNodeInput", "GroupNodeInputRecords")
+    _RECORDS = {
+        "ThreadNodeOutputRecords": "GetThreadNodeOutputRecords",
+        "GroupNodeOutputRecords": "GetGroupNodeOutputRecords",
+    }
+
+    def holding(self, opaque: str) -> str:
+        return f"{opaque}<{RECORD}>" if opaque in self._RECORDS else ""
+
     def node(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        parameter = parts.get("parameter", "")
+        kind = parameter.split("<")[0]
+        # Only a record whose type tracks it can signal FinishedCrossGroupSharing.
+        shared = kind == "RWDispatchNodeInputRecord"
+        declared, opening = f"[MaxRecords(1)] {parameter} obj", []
+        if kind in self._RECORDS:
+            declared = f"[MaxRecords(1)] NodeOutput<{RECORD}> output"
+            opening = [f"    {parameter} obj = output.{self._RECORDS[kind]}(1);"]
+        elif shared:
+            declared = f"globallycoherent {parameter} obj"
+        coalescing = kind in self._COALESCING
         lines = [
+            f"struct {'[NodeTrackRWInputSharing] ' if shared else ''}{RECORD} {{",
+            "    uint value;",
+            "};",
             *self._globals(buffers, parts),
             '[Shader("node")]',
-            '[NodeLaunch("broadcasting")]',
-            "[NodeDispatchGrid(1, 1, 1)]",
+            f'[NodeLaunch("{"coalescing" if coalescing else "broadcasting"}")]',
+            *(() if coalescing else ("[NodeDispatchGrid(1, 1, 1)]",)),
             "[NumThreads(1, 1, 1)]",
-            "void main() {",
+            f"void main({declared if parameter else ''}) {{",
             "    uint i = 0u;",
+            *opening,
             *(f"    {line}" for line in body),
             "}",
         ]
