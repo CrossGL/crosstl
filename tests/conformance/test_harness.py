@@ -24,8 +24,9 @@ def test_hazard_inventory_and_oracles():
     # flow with function variables and with phis, an HLSL structured buffer of structs with vector members, a
     # Metal buffer of structs with packed vector members, Metal buffers of float3, float3x3 and structs in the
     # natural MSL layout, Metal helper functions that take packed and natural buffer pointers, and constants
-    # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing and MSL layout.
-    assert len(CASES) == len(BY_ID) == 106
+    # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing, HLSL row_major cbuffer
+    # matrices and MSL layout.
+    assert len(CASES) == len(BY_ID) == 107
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

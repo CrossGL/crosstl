@@ -94,15 +94,15 @@ GLSL_EXPLICIT_OFFSETS_OFFSETS = [0, 20, 32, 64]
 def _translate(tmp_path, source, name, source_backend):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(
-        str(path), backend="vulkan", source_backend=source_backend
-    )
+    return crosstl.translate(str(path), backend="vulkan", source_backend=source_backend)
 
 
 def _member_offsets(code, struct):
     offsets = {
         int(match.group(1)): int(match.group(2))
-        for match in re.finditer(rf"OpMemberDecorate %{struct} (\d+) Offset (\d+)", code)
+        for match in re.finditer(
+            rf"OpMemberDecorate %{struct} (\d+) Offset (\d+)", code
+        )
     }
     return [offsets[index] for index in sorted(offsets)]
 

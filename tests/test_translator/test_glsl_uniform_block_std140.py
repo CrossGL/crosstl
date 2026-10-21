@@ -34,7 +34,8 @@ BLOCK_OFFSETS = [0, 16, 28, 32, 64, 80, 128, 192, 224, 240, 272]
 
 LAYOUT_CASES = {
     "vectors_and_matrices": BLOCK,
-    "non_square_matrices": """#version 450
+    "non_square_matrices": (
+        """#version 450
 struct S { float x; vec2 y; };
 layout(std140, binding = 1) uniform Shapes {
     vec2 a; vec2 b; float c; vec3 d[3]; S s[2]; mat2x3 m23; mat3x2 m32;
@@ -45,8 +46,10 @@ void main() {
     color = vec4(shapes.a + shapes.b, shapes.c + shapes.d[2].z, shapes.s[1].y.x)
           + vec4(shapes.m23[1], shapes.m32[2].y) + vec4(shapes.r23[0], shapes.r32[1].x + shapes.tail);
 }
-""",
-    "nested_structs": """#version 450
+"""
+    ),
+    "nested_structs": (
+        """#version 450
 struct Inner { vec3 p; float q; };
 struct Outer { float x; Inner i; vec2 y; };
 layout(std140, binding = 2) uniform Nested { Outer o; float z; Outer arr[2]; vec3 w; } nested;
@@ -54,7 +57,8 @@ layout(location = 0) out vec4 color;
 void main() {
     color = vec4(nested.o.i.p * nested.o.x, nested.z) + vec4(nested.arr[1].i.p, nested.arr[0].y.y + nested.w.x);
 }
-""",
+"""
+    ),
 }
 
 
@@ -82,7 +86,9 @@ def _block_layout(assembly):
         name = re.sub(r"_std140_\d+$", "", names.get(target, target.lstrip("%")))
         key = (name, int(index))
         members.setdefault(key, set()).add(decoration)
-    strides = sorted(int(stride) for stride in re.findall(r"ArrayStride (\d+)", assembly))
+    strides = sorted(
+        int(stride) for stride in re.findall(r"ArrayStride (\d+)", assembly)
+    )
     return members, strides
 
 
@@ -90,11 +96,19 @@ def test_uniform_block_keeps_its_name_and_binding(tmp_path):
     crossgl = _translate(tmp_path, BLOCK, "cgl")
     assert "cbuffer Params @binding(3)" in crossgl
     assert "Uniforms" not in crossgl
-    assert re.search(r"layout\(std140, binding = 3\) uniform Params\b", _translate(tmp_path, BLOCK, "opengl"))
+    assert re.search(
+        r"layout\(std140, binding = 3\) uniform Params\b",
+        _translate(tmp_path, BLOCK, "opengl"),
+    )
     assert "cbuffer Params : register(b3)" in _translate(tmp_path, BLOCK, "directx")
-    assert re.search(r"constant Params\s*&\s*params \[\[buffer\(3\)\]\]", _translate(tmp_path, BLOCK, "metal"))
+    assert re.search(
+        r"constant Params\s*&\s*params \[\[buffer\(3\)\]\]",
+        _translate(tmp_path, BLOCK, "metal"),
+    )
     assembly = _translate(tmp_path, BLOCK, "vulkan")
-    variable = re.search(r"(%\w+) = OpVariable %_ptr_Uniform_Params Uniform", assembly).group(1)
+    variable = re.search(
+        r"(%\w+) = OpVariable %_ptr_Uniform_Params Uniform", assembly
+    ).group(1)
     assert f"OpDecorate {variable} Binding 3" in assembly
 
 
@@ -116,7 +130,11 @@ void main() { color = vec4(float(index) + float(block.value)); }
 def test_spirv_uses_std140_offsets(tmp_path):
     members, _strides = _block_layout(_translate(tmp_path, BLOCK, "vulkan"))
     offsets = [
-        int(next(d for d in members[("Params", index)] if d.startswith("Offset")).split()[1])
+        int(
+            next(
+                d for d in members[("Params", index)] if d.startswith("Offset")
+            ).split()[1]
+        )
         for index in range(len(BLOCK_OFFSETS))
     ]
     assert offsets == BLOCK_OFFSETS
@@ -138,7 +156,16 @@ def test_spirv_layout_matches_glslang(tmp_path, case):
     assert _block_layout(assembly) == expected
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
         (tmp_path / "out.spvasm").write_text(assembly, encoding="utf-8")
-        _run(["spirv-as", "--target-env", "vulkan1.1", str(tmp_path / "out.spvasm"), "-o", str(tmp_path / "o.spv")])
+        _run(
+            [
+                "spirv-as",
+                "--target-env",
+                "vulkan1.1",
+                str(tmp_path / "out.spvasm"),
+                "-o",
+                str(tmp_path / "o.spv"),
+            ]
+        )
         _run(["spirv-val", "--target-env", "vulkan1.1", str(tmp_path / "o.spv")])
 
 
