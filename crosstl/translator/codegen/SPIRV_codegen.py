@@ -144,6 +144,7 @@ from .spirv_push_constants import (
     is_push_constant_block,
     uniform_block_storage_layout,
 )
+from .spirv_ray_builtins import ray_builtin_info
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -29626,6 +29627,9 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
+        ray = ray_builtin_info(self, name)
+        if ray is not None:
+            return ray
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
@@ -29867,7 +29871,7 @@ class VulkanSPIRVCodeGen(
             ),
             "gl_GeometryIndexEXT": (
                 "int",
-                "GeometryIndexKHR",
+                "RayGeometryIndexKHR",
                 "Input",
                 {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
             ),
@@ -30051,9 +30055,10 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "ViewportIndex":
             self.require_capability("MultiViewport")
         elif (
-            builtin_name == "Layer"
+            builtin_name in {"Layer", "PrimitiveId"}
             and self.current_stage_builtin_execution_model() == "Fragment"
         ):
+            # A fragment stage reads both through the Geometry capability (SPIR-V section 3.2.20, BuiltIn).
             self.require_capability("Geometry")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:

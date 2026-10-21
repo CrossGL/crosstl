@@ -145,6 +145,7 @@ from .builtin_result_types import (
     component_access_type,
     inferred_value_type,
 )
+from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
@@ -36372,15 +36373,7 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_builtin_identifier_result_type(self, name):
         if not name:
             return None
-        target_name = self.glsl_target_builtin_identifier(name)
-        return {
-            "gl_GlobalInvocationID": "uvec3",
-            "gl_LocalInvocationID": "uvec3",
-            "gl_WorkGroupID": "uvec3",
-            "gl_NumWorkGroups": "uvec3",
-            "gl_WorkGroupSize": "uvec3",
-            "gl_LocalInvocationIndex": "uint",
-        }.get(target_name)
+        return crossgl_builtin_variable_type(self.glsl_target_builtin_identifier(name))
 
     def expression_result_type(self, expr):
         if expr is None:

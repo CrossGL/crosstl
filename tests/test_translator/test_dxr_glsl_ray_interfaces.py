@@ -14,12 +14,17 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics import DxrRayInterfaceUnsupportedError
+from tests.spirv_friendly_names import friendly_spirv
 
 
 def _translate(tmp_path, source, name, backend="opengl"):
     path = tmp_path / f"{name}.hlsl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, source_backend="directx")
+    # Unformatted, so the assertions do not depend on clang-format or SPIRV-Tools being installed.
+    code = crosstl.translate(
+        str(path), backend=backend, source_backend="directx", format_output=False
+    )
+    return friendly_spirv(code) if backend == "vulkan" else code
 
 
 def _glslang(tmp_path, code, stage):
@@ -179,3 +184,91 @@ def test_payload_without_a_known_struct_type_is_refused(tmp_path):
     ).replace("Payload payload;", "Payload payload; Payload payloads[1];")
     with pytest.raises(DxrRayInterfaceUnsupportedError, match="payload argument"):
         _translate(tmp_path, source, "array.rgen")
+
+
+BUILTIN_ATTRIBUTES_HIT = """
+struct Payload { float3 color; };
+
+[shader("closesthit")]
+void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attribs)
+{
+    float2 uv = attribs.barycentrics;
+    payload.color = float3(1.0 - uv.x - uv.y, uv.x, uv.y) * RayTCurrent();
+}
+"""
+
+BUILTIN_ATTRIBUTES_ANY_HIT = """
+struct Payload { float3 color; };
+
+[shader("anyhit")]
+void main(inout Payload payload, BuiltInTriangleIntersectionAttributes attribs)
+{
+    if (attribs.barycentrics.x > 0.5) {
+        IgnoreHit();
+    }
+    payload.color = float3(attribs.barycentrics, 0.0);
+}
+"""
+
+
+def _spirv_val(tmp_path, assembly):
+    if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+        return
+    source = tmp_path / "out.spvasm"
+    source.write_text(assembly)
+    for command in (
+        ["spirv-as", "--target-env", "vulkan1.2", str(source), "-o", "out.spv"],
+        ["spirv-val", "--target-env", "vulkan1.2", "out.spv"],
+    ):
+        result = subprocess.run(command, capture_output=True, text=True, cwd=tmp_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, name, stage",
+    [
+        (BUILTIN_ATTRIBUTES_HIT, "builtin.rchit", "rchit"),
+        (BUILTIN_ATTRIBUTES_ANY_HIT, "builtin.rahit", "rahit"),
+    ],
+)
+def test_builtin_triangle_attributes_are_two_barycentrics_in_glsl(
+    tmp_path, source, name, stage
+):
+    code = _translate(tmp_path, source, name)
+    flat = _squash(code)
+    # DXR declares the struct itself; GLSL reads the same two floats from a vec2 hit attribute.
+    assert (
+        "struct BuiltInTriangleIntersectionAttributes { vec2 barycentrics; };" in flat
+    )
+    assert (
+        "hitAttributeEXT BuiltInTriangleIntersectionAttributes crossgl_hit_attributes;"
+        in flat
+    )
+    assert (
+        "BuiltInTriangleIntersectionAttributes attribs = crossgl_hit_attributes;"
+        in flat
+    )
+    _glslang(tmp_path, code, stage)
+
+
+@pytest.mark.parametrize(
+    "source, name, model",
+    [
+        (BUILTIN_ATTRIBUTES_HIT, "builtin.rchit", "ClosestHitKHR"),
+        (BUILTIN_ATTRIBUTES_ANY_HIT, "builtin.rahit", "AnyHitKHR"),
+    ],
+)
+def test_builtin_triangle_attributes_reach_spirv_as_a_hit_attribute(
+    tmp_path, source, name, model
+):
+    code = _translate(tmp_path, source, name, backend="vulkan")
+    assert f"OpEntryPoint {model} " in code
+    assert re.search(
+        r"%crossgl_hit_attributes = OpVariable %\S+ HitAttributeKHR", code
+    ), code
+    assert (
+        'OpMemberName %BuiltInTriangleIntersectionAttributes 0 "barycentrics"' in code
+    )
+    if model == "ClosestHitKHR":
+        assert "BuiltIn RayTmaxKHR" in code
+    _spirv_val(tmp_path, code)
