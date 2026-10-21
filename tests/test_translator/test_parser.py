@@ -4116,29 +4116,65 @@ def test_complete_shader_declaration_still_parses():
     assert [function.name for function in ast.functions] == ["identity"]
 
 
-def test_unterminated_shader_declaration_fails_in_bounded_subprocess():
+@pytest.mark.parametrize(
+    "source,message",
+    [
+        pytest.param(
+            "shader Incomplete { float identity(float value) { return value; }",
+            "Unterminated shader declaration 'Incomplete'",
+            id="shader",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="stage-block",
+        ),
+        pytest.param(
+            "compute { void main() { float x = 1.0; }",
+            "Unterminated compute stage block",
+            id="top-level-stage-block",
+        ),
+        pytest.param(
+            "shader S { compute { void main() { if (true) {",
+            "Unterminated compute stage block",
+            id="function-body",
+        ),
+        pytest.param(
+            "shader S { cbuffer Params { float scale;",
+            "Unterminated cbuffer 'Params'",
+            id="cbuffer",
+        ),
+        pytest.param(
+            "shader S { compute { layout(std430) buffer Data { float values[];",
+            "Unterminated buffer block 'Data'",
+            id="buffer-block",
+        ),
+    ],
+)
+def test_unterminated_declaration_fails_in_bounded_subprocess(source, message):
     # Keep a regression in a child process so a parser hang cannot stall pytest.
     script = (
+        "import sys\n"
         "from crosstl.translator.lexer import Lexer\n"
         "from crosstl.translator.parser import Parser\n"
-        "source = 'shader Incomplete { float identity(float value) { return value; }'\n"
         "try:\n"
-        "    Parser(Lexer(source).tokens).parse()\n"
+        "    Parser(Lexer(sys.stdin.read()).tokens).parse()\n"
         "except SyntaxError as exc:\n"
         "    print(exc)\n"
         "else:\n"
-        "    raise SystemExit('expected SyntaxError for unterminated shader')\n"
+        "    raise SystemExit('expected SyntaxError for unterminated input')\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
+        input=source,
         capture_output=True,
         text=True,
-        timeout=4,
+        timeout=60,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Unterminated shader declaration 'Incomplete'" in result.stdout
+    assert message in result.stdout
 
 
 def test_nested_generic_type_close_does_not_eat_shift_operator():

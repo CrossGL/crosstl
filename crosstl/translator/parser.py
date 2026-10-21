@@ -618,12 +618,7 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token[0] == "EOF":
-                raise SyntaxError(
-                    f"Unterminated shader declaration {name!r}: "
-                    "expected '}' before end of input"
-                )
-
+            self.reject_end_of_input(f"shader declaration {name!r}")
             if self.current_token[0] == "PREPROCESSOR":
                 preprocessors.append(self.parse_preprocessor_directive())
             elif self.current_token[0] == "PRECISION":
@@ -769,6 +764,7 @@ class Parser:
         layout_qualifiers = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"{stage_type} stage block")
             if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
                 layout = self.parse_stage_layout_qualifier()
                 layout_qualifiers.append(layout)
@@ -1217,6 +1213,7 @@ class Parser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"buffer block {block_name!r}")
             member = self.parse_struct_member()
             self.append_parsed_nodes(members, member)
         self.eat("RBRACE")
@@ -5697,6 +5694,7 @@ class Parser:
         body = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"{stage_type} stage block")
             if self.is_function_declaration():
                 func = self.parse_function()
                 body.append(func)
@@ -5731,6 +5729,7 @@ class Parser:
         members = []
 
         while self.current_token[0] != "RBRACE":
+            self.reject_end_of_input(f"cbuffer {name!r}")
             member = self.parse_struct_member()
             self.append_parsed_nodes(members, member)
 
@@ -6099,6 +6098,17 @@ class Parser:
         """Consume one token when recovering from unsupported syntax."""
         if self.current_token[0] != "EOF":
             self.eat(self.current_token[0])
+
+    def reject_end_of_input(self, construct):
+        """Raise ``SyntaxError`` if the input ends inside ``construct`` before its closing brace.
+
+        Brace-delimited loops that recover with ``skip_unknown_token`` or a member parser that returns ``None`` at
+        ``EOF`` would otherwise spin forever on truncated input.
+        """
+        if self.current_token[0] == "EOF":
+            raise SyntaxError(
+                f"Unterminated {construct}: expected '}}' before end of input"
+            )
 
     def skip_balanced_declaration(self):
         """Recover past one semicolon or braced declaration without leaking tokens."""
