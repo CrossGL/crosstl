@@ -24,6 +24,7 @@ from crosstl.translator.codegen.barrier_peephole import (
     merge_adjacent_hlsl_barriers,
     merge_adjacent_metal_barriers,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 ALL_BARRIERS_CROSSGL = """
 shader main {
@@ -156,6 +157,10 @@ def test_spirv_barriers_without_crossgl_equivalent_are_refused(opcode, operands)
 def _translate(tmp_path, source, backend, name):
     path = tmp_path / name
     path.write_text(source)
+    if backend == "vulkan":
+        return friendly_spirv(
+            crosstl.translate(str(path), backend=backend, format_output=False)
+        )
     return crosstl.translate(str(path), backend=backend)
 
 

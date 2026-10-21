@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 import crosstl
+from tests.spirv_friendly_names import friendly_spirv
 
 HLSL_PACKED = """cbuffer Params : register(b0) {
     float a;
@@ -94,7 +95,14 @@ GLSL_EXPLICIT_OFFSETS_OFFSETS = [0, 20, 32, 64]
 def _translate(tmp_path, source, name, source_backend):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend="vulkan", source_backend=source_backend)
+    return friendly_spirv(
+        crosstl.translate(
+            str(path),
+            backend="vulkan",
+            source_backend=source_backend,
+            format_output=False,
+        )
+    )
 
 
 def _member_offsets(code, struct):

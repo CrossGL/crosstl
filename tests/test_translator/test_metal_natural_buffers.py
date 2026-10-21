@@ -19,6 +19,7 @@ import crosstl
 from crosstl.translator.semantics.structured_layouts import (
     StructuredLayoutUnsupportedError,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 PRELUDE = "#include <metal_stdlib>\nusing namespace metal;\n"
 
@@ -40,6 +41,10 @@ kernel void k(device const float3* v [[buffer(0)]], device T* t [[buffer(1)]], d
 def _translate(tmp_path, backend, source, suffix="metal", format_output=False):
     path = tmp_path / f"shader.{suffix}"
     path.write_text(source, encoding="utf-8")
+    if backend == "vulkan" and format_output:
+        return friendly_spirv(
+            crosstl.translate(str(path), backend=backend, format_output=False)
+        )
     return crosstl.translate(str(path), backend=backend, format_output=format_output)
 
 

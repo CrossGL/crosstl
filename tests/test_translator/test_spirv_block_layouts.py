@@ -16,6 +16,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.SPIRV_codegen import UnsupportedSPIRVFeatureError
+from tests.spirv_friendly_names import friendly_spirv
 
 HAS_SPIRV_TOOLS = bool(shutil.which("spirv-as") and shutil.which("spirv-val"))
 
@@ -115,6 +116,10 @@ void main() {
 def _translate(tmp_path, source, backend, name):
     path = tmp_path / name
     path.write_text(source)
+    if backend == "vulkan":
+        return friendly_spirv(
+            crosstl.translate(str(path), backend=backend, format_output=False)
+        )
     return crosstl.translate(str(path), backend=backend)
 
 

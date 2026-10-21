@@ -19,6 +19,7 @@ from crosstl.translator.ast import ArrayType
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.semantics import DescriptorArrayUnsupportedError
+from tests.spirv_friendly_names import friendly_spirv
 
 GRID_CGL = """
 shader main {
@@ -44,6 +45,9 @@ shader main {
 def _translate(tmp_path, source, name, backend, **options):
     path = tmp_path / name
     path.write_text(source)
+    if backend == "vulkan":
+        options["format_output"] = False
+        return friendly_spirv(crosstl.translate(str(path), backend=backend, **options))
     return crosstl.translate(str(path), backend=backend, **options)
 
 
@@ -107,12 +111,13 @@ def test_first_suffix_is_the_outermost_dimension():
         ("cuda", "float a[2][3];"),
         ("hip", "float a[2][3];"),
         ("wgsl", "var a: array<array<f32, 3>, 2>;"),
-        ("rust", "let mut a : [[f32; 3]; 2]"),
+        ("rust", "let mut a: [[f32; 3]; 2]"),
         ("mojo", "var a = InlineArray[InlineArray[Float32, 3], 2]"),
     ],
 )
 def test_every_emitter_declares_two_arrays_of_three(tmp_path, backend, declaration):
-    code = _translate(tmp_path, GRID_CGL, "grid.cgl", backend)
+    # Unformatted output does not depend on whether clang-format is installed.
+    code = _translate(tmp_path, GRID_CGL, "grid.cgl", backend, format_output=False)
     compact = re.sub(r"\s+", " ", code)
     assert declaration in compact
     for name in ("b", "c"):

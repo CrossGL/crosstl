@@ -22,6 +22,7 @@ from crosstl.translator.codegen.glsl_block_layout import (
     hlsl_packoffsets_for_block,
 )
 from crosstl.translator.codegen.hlsl_buffer_layout import HlslLayoutError
+from tests.spirv_friendly_names import friendly_spirv
 
 BASIC = """#version 450
 layout(std140, binding = 2) uniform Params {
@@ -109,6 +110,12 @@ void main() {
 def _translate(tmp_path, source, backend, name="shader.frag"):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
+    if backend == "vulkan":
+        return friendly_spirv(
+            crosstl.translate(
+                str(path), backend=backend, format_output=False, source_backend="opengl"
+            )
+        )
     return crosstl.translate(str(path), backend=backend, source_backend="opengl")
 
 
@@ -368,7 +375,7 @@ def test_hlsl_loads_structs_that_std140_lays_out_differently(tmp_path):
     assert "pair.first = asfloat(__crossgl_Mismatched_registers[0].x);" in code
     assert "pair.second = asfloat(__crossgl_Mismatched_registers[1].xyz);" in code
     assert re.search(
-        r"PSMain\(\) : SV_Target0 \{ __crossgl_load_Mismatched\(\);", code
+        r"PSMain\(\) ?: SV_Target0 \{ __crossgl_load_Mismatched\(\);", code
     ), code
 
 

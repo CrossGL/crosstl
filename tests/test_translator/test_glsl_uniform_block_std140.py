@@ -15,6 +15,7 @@ import subprocess
 import pytest
 
 import crosstl
+from tests.spirv_friendly_names import friendly_spirv
 
 BLOCK = """#version 450
 struct T { vec4 p; float q; };
@@ -65,6 +66,10 @@ void main() {
 def _translate(tmp_path, source, backend, suffix="frag"):
     path = tmp_path / f"shader.{suffix}"
     path.write_text(source, encoding="utf-8")
+    if backend == "vulkan":
+        return friendly_spirv(
+            crosstl.translate(str(path), backend=backend, format_output=False)
+        )
     return crosstl.translate(str(path), backend=backend)
 
 

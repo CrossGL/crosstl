@@ -21,6 +21,7 @@ from crosstl.translator.codegen.glsl_block_layout import (
     block_struct_placements,
     crossgl_layout_type,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 STD430_PUSH = """#version 450
 struct Item { float x; vec3 y; };
@@ -154,6 +155,12 @@ void main() { outColor = pc.mvp * pc.color + vec4(pc.dir * pc.scale, 0.0); }
 def _translate(tmp_path, source, backend, name="shader.frag"):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
+    if backend == "vulkan":
+        return friendly_spirv(
+            crosstl.translate(
+                str(path), backend=backend, format_output=False, source_backend="opengl"
+            )
+        )
     return crosstl.translate(str(path), backend=backend, source_backend="opengl")
 
 

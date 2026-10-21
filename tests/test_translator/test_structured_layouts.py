@@ -17,6 +17,7 @@ import crosstl
 from crosstl.translator.semantics.structured_layouts import (
     StructuredLayoutUnsupportedError,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 HLSL = """
 struct P {
@@ -51,6 +52,10 @@ void main(uint3 id : SV_DispatchThreadID) {
 def _translate(tmp_path, backend, source=HLSL, format_output=False):
     path = tmp_path / "shader.hlsl"
     path.write_text(source, encoding="utf-8")
+    if backend == "vulkan" and format_output:
+        return friendly_spirv(
+            crosstl.translate(str(path), backend=backend, format_output=False)
+        )
     return crosstl.translate(str(path), backend=backend, format_output=format_output)
 
 

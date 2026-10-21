@@ -14,11 +14,15 @@ import pytest
 
 import crosstl
 from crosstl.translator.diagnostics import TranslationDiagnostic
+from tests.spirv_friendly_names import friendly_spirv
 
 
 def _translate(tmp_path, source, name, backend="vulkan", **options):
     path = tmp_path / name
     path.write_text(source)
+    if backend == "vulkan":
+        options["format_output"] = False
+        return friendly_spirv(crosstl.translate(str(path), backend=backend, **options))
     return crosstl.translate(str(path), backend=backend, **options)
 
 
