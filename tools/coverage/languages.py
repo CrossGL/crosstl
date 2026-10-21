@@ -443,6 +443,12 @@ class WGSL(Dialect):
     def out_argument(self, name: str) -> str:
         raise ProbeError("WGSL has no output parameters")
 
+    def workgroup(self, kind: Type, name: str) -> str:
+        return f"var<workgroup> {name}: {self.type(kind)};"
+
+    def workgroup_argument(self, name: str) -> str:
+        return f"&{name}"
+
     def inout_argument(self) -> str:
         return "&outp[i]"
 

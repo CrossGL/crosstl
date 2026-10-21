@@ -1106,6 +1106,32 @@ def test_wgsl_has_no_output_parameters():
         probes.build(frexp, "wgsl")
 
 
+WORKGROUP_LOAD = Feature(
+    "wgsl",
+    "function",
+    "workgroupUniformLoad",
+    Signature(Type("float"), (Param(Type("float"), "workgroup"),)),
+    crossgl="workgroupUniformLoad",
+)
+
+
+def test_workgroup_parameter_takes_a_shared_variable_the_probe_fills():
+    source = probes.build(WORKGROUP_LOAD, "wgsl").source
+    assert "var<workgroup> a0: f32;" in source
+    assert "    a0 = fin[i + 0u];" in source
+    assert "    var r: f32 = workgroupUniformLoad(&a0);" in source
+    crossgl = probes.build(WORKGROUP_LOAD, "crossgl").source
+    assert "        shared float a0;" in crossgl
+    assert "            float r = workgroupUniformLoad(a0);" in crossgl
+
+
+@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+def test_workgroup_parameter_probe_is_valid_wgsl():
+    probe = probes.build(WORKGROUP_LOAD, "wgsl")
+    verdict = validators.validate("wgsl", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
+
+
 METAL_SIGNATURES = [
     feature("fma", VEC3, VEC3, VEC3, VEC3),
     feature("select", VEC3, VEC3, VEC3, Type("bool", (3,))),

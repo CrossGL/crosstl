@@ -25,6 +25,12 @@ LEFT_OUT_NAMES = {
     "atomicStoreMin": "Chromium extension (atomic_vec2u_min_max)",
     "inputAttachmentLoad": "Chromium extension (chromium_internal_input_attachments)",
 }
+# Operations CrossGL has no spelling for, with the reason.
+UNSPELLED = {
+    "textureSampleBaseClampToEdge": (
+        "no CrossGL sample clamps its coordinates half a texel inside the edge"
+    ),
+}
 _SCALARS = {"f32": "float", "i32": "int", "u32": "uint", "bool": "bool"}
 _IMPLICIT_ORDER = ("f32", "i32", "u32", "bool")
 _EXPLICIT_ORDER = ("u32", "i32", "f32", "bool")
@@ -58,6 +64,9 @@ class _Types:
             elif name == "I" and constraint == "iu32":
                 # A lane index; naga accepts only u32 there.
                 self.bindings[name] = Type("uint")
+            elif constraint == "__constructible":
+                # Any concrete constructible type, such as the one workgroupUniformLoad reads.
+                self.bindings[name] = Type("float")
             elif constraint in self.matchers:
                 self.bindings[name] = self._choose(self.matchers[constraint], order)
             else:
@@ -120,6 +129,11 @@ class _Types:
             # The probe's atomic operand is an element of a storage buffer.
             if atomic and arguments[0] != "workgroup":
                 return Param(self.type(atomic.group(1)), "inout")
+            # A pointer to a workgroup variable of a value type, such as workgroupUniformLoad reads.
+            if not atomic and arguments[0] == "workgroup" and len(arguments) > 1:
+                kind = self.type(arguments[1])
+                if not kind.opaque:
+                    return Param(kind, "workgroup")
             return Param(Type.other(text))
         return Param(self.type(text), "const" if constant else "in")
 
@@ -237,6 +251,8 @@ def parse(
         spelling, counterpart = spellings.spelling("wgsl", name, glsl_names), None
         if name in spellings.COUNTERPARTS["wgsl"]:
             spelling, counterpart = prototype(spellings.COUNTERPARTS["wgsl"][name])
+        if name in UNSPELLED:
+            spelling = ""
         features.append(
             Feature(
                 "wgsl",
@@ -247,6 +263,7 @@ def parse(
                 crossgl=spelling,
                 stage=stage,
                 spelling=f"{name}<{template}>" if template else "",
+                note=UNSPELLED.get(name, ""),
                 counterpart=counterpart,
             )
         )

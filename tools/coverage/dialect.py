@@ -181,6 +181,14 @@ class Dialect:
         """A pointer to the local ``name``, for a parameter that takes one."""
         raise ProbeError(f"no probe passes {self.language} a pointer yet")
 
+    def workgroup(self, kind: Type, name: str) -> str:
+        """The declaration of a variable ``name`` that a compute workgroup shares."""
+        return f"shared {self.type(kind)} {name};"
+
+    def workgroup_argument(self, name: str) -> str:
+        """The workgroup variable ``name``, for a parameter that takes one."""
+        return name
+
     def inout_argument(self) -> str:
         return "outp[i]"
 
