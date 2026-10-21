@@ -224,6 +224,7 @@ $type1 [[rn]] GetAttributeAtVertex(in numeric<> value, in uint VertexID);
 float<3> [[rn]] WorldRayOrigin();
 void [[]] IgnoreHit();
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
+$type1 [[rn]] NonUniformResourceIndex(in any<> index) : nonuniform_resource_index;
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
 uint   [[rn,min_sm=6.10]] GetGroupWaveIndex();
 float_like<4> [[ro]] tex2D(in sampler2d s, in float_like<2> x) : tex2d;
@@ -371,6 +372,10 @@ def test_hlsl_resolves_generic_layouts_and_matched_types():
     assert vertex.stage == "fragment"
     barrier = features["Barrier"].signature
     assert [p.direction for p in barrier.params] == ["const", "const"]
+    # The table admits any type, but the function marks a resource array index: ``uint`` in the HLSL reference.
+    assert features["NonUniformResourceIndex"].signature == Signature(
+        Type("uint"), (Param(Type("uint"), "in"),)
+    )
 
 
 def test_hlsl_reads_16_bit_scalars():
