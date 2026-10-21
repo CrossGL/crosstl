@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 from collections import Counter
 from pathlib import Path
 
 from . import chart, ir, trend
 from .model import OUTCOMES
+from .report import dumps
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
 HISTORY_RUNS = 400
@@ -250,7 +250,7 @@ def write_site(
     directory.mkdir(parents=True, exist_ok=True)
     runs = history(report, previous_history)
     files = {
-        "coverage.json": json.dumps(report, indent=1, sort_keys=True) + "\n",
+        "coverage.json": dumps(report),
         "coverage.svg": chart.render(report),
         "COVERAGE.md": markdown(report, repository),
         "history.csv": runs,

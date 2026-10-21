@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import pytest
 
@@ -46,7 +47,54 @@ def test_report_groups_results_and_marks_directions_not_offered():
     ]
     assert backends["wgsl", "input"]["offered"] is False
     assert ("glsl", "input") not in backends
+    assert backends["glsl", "output"]["validator"] == "glslangValidator"
     assert "not offered" in report.summary(data)
+
+
+def test_coverage_json_stores_features_as_rows_and_each_diagnostic_once(tmp_path):
+    texture = Feature("glsl", "function", "texture", None)
+    results = [
+        Result(ABS, "output", "supported"),
+        Result(texture, "output", "wrong", "ERROR: 'texture' : no matching overload"),
+        Result(
+            Feature("glsl", "function", "textureLod", None),
+            "output",
+            "wrong",
+            "ERROR: 'texture' : no matching overload",
+        ),
+        Result(
+            Feature("glsl", "function", "fma", None),
+            "output",
+            "refused",
+            "no lowering",
+            semantic="GLSL.std.450:Fma",
+        ),
+    ]
+    data = report.build(results, ["glsl", "wgsl"], ["output", "input"])
+    path = tmp_path / "coverage.json"
+    report.write(data, path)
+
+    stored = {b["language"]: b for b in json.loads(path.read_text())["backends"]}
+    glsl = stored["glsl"]
+    assert glsl["columns"][:5] == ["name", "category", "group", "outcome", "detail"]
+    assert glsl["details"] == ["ERROR: 'texture' : no matching overload", "no lowering"]
+    assert [row[4] for row in glsl["features"]] == [None, 1, 0, 0]
+    assert "\n" not in path.read_text().rstrip("\n")
+    assert report.load(path) == data
+    # A backend that is not offered has no features to store as rows.
+    assert stored["wgsl"] == next(
+        b for b in data["backends"] if b["language"] == "wgsl"
+    )
+
+
+def test_loading_keeps_features_that_are_already_dictionaries():
+    data = {
+        "schema": 1,
+        "backends": [
+            {"language": "glsl", "features": [{"name": "abs", "outcome": "supported"}]}
+        ],
+    }
+    assert report.loads(json.dumps(data)) == data
 
 
 class Diagnostic(ValueError):
