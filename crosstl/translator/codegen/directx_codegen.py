@@ -2469,6 +2469,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.fragment_entry_output_struct_names = set()
+        self.geometry_entry_vertex_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -3839,6 +3840,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
+        self.geometry_entry_vertex_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -4045,6 +4047,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         )
         self.fragment_entry_output_struct_names = (
             self.collect_hlsl_fragment_entry_output_struct_names(ast, target_stage)
+        )
+        self.geometry_entry_vertex_struct_names = (
+            self.collect_hlsl_geometry_entry_vertex_struct_names(ast, target_stage)
         )
         self.function_return_types = {
             func.name: self.hlsl_function_return_type_name(
@@ -38199,7 +38204,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             not in self.fragment_entry_input_struct_names
         ):
             return {}
+        return self.hlsl_default_location_member_semantics(struct_node)
 
+    def hlsl_default_geometry_vertex_member_semantics(self, struct_node):
+        # A geometry stage's input and output vertices link with the neighbouring stages' varyings, which
+        # take TEXCOORD<location> (vertex outputs and fragment inputs above).
+        if (
+            getattr(struct_node, "name", None)
+            not in self.geometry_entry_vertex_struct_names
+        ):
+            return {}
+        return self.hlsl_default_location_member_semantics(struct_node)
+
+    def hlsl_default_location_member_semantics(self, struct_node):
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
@@ -38298,6 +38315,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         defaults.update(self.hlsl_default_vertex_output_member_semantics(struct_node))
         defaults.update(self.hlsl_default_fragment_input_member_semantics(struct_node))
         defaults.update(self.hlsl_default_fragment_output_member_semantics(struct_node))
+        defaults.update(self.hlsl_default_geometry_vertex_member_semantics(struct_node))
         return defaults
 
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
@@ -39027,6 +39045,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             base_type = return_type.split("<", 1)[0].split("[", 1)[0].strip()
             if base_type in self.structs_by_name:
                 struct_names.add(base_type)
+        return struct_names
+
+    def collect_hlsl_geometry_entry_vertex_struct_names(self, ast, target_stage=None):
+        """Structures a geometry entry receives its primitive's vertices in or appends to a stream."""
+        if not stage_matches(target_stage, "geometry"):
+            return set()
+
+        struct_names = set()
+        stream_types = {"PointStream", "LineStream", "TriangleStream"}
+        primitives = {"point", "line", "triangle", "lineadj", "triangleadj"}
+        for func in self.hlsl_stage_entry_functions(ast, "geometry"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                if self.hlsl_parameter_type_base(parameter) in stream_types:
+                    type_name = self.hlsl_parameter_type_generic_argument(parameter, 0)
+                elif set(self.hlsl_parameter_qualifiers(parameter)) & primitives:
+                    type_name = self.type_name_string(
+                        getattr(
+                            parameter, "param_type", getattr(parameter, "vtype", None)
+                        )
+                    )
+                else:
+                    continue
+                base_type = (
+                    str(type_name or "").split("<", 1)[0].split("[", 1)[0].strip()
+                )
+                if base_type in self.structs_by_name:
+                    struct_names.add(base_type)
         return struct_names
 
     def hlsl_program_hull_output_control_points(self, ast):
