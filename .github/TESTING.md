@@ -66,7 +66,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
-| `project-demo-testing.yml` | The ComputeSharp port, on Metal and OpenGL; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
+| `computesharp.yml` | The ComputeSharp port, on Metal and OpenGL; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
 | `conformance.yml` | Differential execution of `tests/conformance`; Linux on pull requests, all three platforms on `main` and nightly |
 | `corpus.yml` | The pinned third-party corpus in `tests/conformance/corpus` |
 | `fuzz.yml` | Weekly crash fuzzing of every importer |
@@ -74,6 +74,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `docs.yml` | The Sphinx documentation build |
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
+| `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.

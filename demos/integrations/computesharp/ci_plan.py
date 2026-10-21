@@ -32,7 +32,7 @@ import subprocess
 from pathlib import Path
 
 RELEVANT_PATHS = (
-    ".github/workflows/project-demo-testing.yml",
+    ".github/workflows/computesharp.yml",
     "crosstl/*.py",
     "crosstl/backend/**",
     "crosstl/translator/**",

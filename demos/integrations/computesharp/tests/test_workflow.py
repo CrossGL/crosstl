@@ -27,9 +27,9 @@ from fixture_support import ROOT, load_module  # noqa: E402
 
 PLAN = load_module("computesharp_ci_plan", ROOT / "ci_plan.py")
 REPO_ROOT = ROOT.parents[2]
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "project-demo-testing.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "computesharp.yml"
 RELEVANT_PATHS = {
-    ".github/workflows/project-demo-testing.yml",
+    ".github/workflows/computesharp.yml",
     "crosstl/*.py",
     "crosstl/backend/**",
     "crosstl/translator/**",
@@ -288,7 +288,7 @@ RECORDS = (
             True,
             True,
         ),
-        ("push", (".github/workflows/project-demo-testing.yml",), True, True),
+        ("push", (".github/workflows/computesharp.yml",), True, True),
         ("push", (".github/workflows/demo-project-testing.yml",), False, False),
     ],
 )
