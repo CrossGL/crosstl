@@ -106,6 +106,8 @@ METAL_STANDARD = "metal4.1"
 CUDA_ARCH = "sm_80"
 # Slang probes compile to SPIR-V, the target whose validator (SPIRV-Tools, built into slangc) checks the result.
 SLANG_TARGET = "spirv"
+# slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
+SLANG_VALIDATION = {"SLANG_RUN_SPIRV_VALIDATION": "1"}
 # HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
 # targets have none. No GPU is needed: hipcc compiles for the named target.
 HIP_ARCH = "gfx1100"
@@ -197,14 +199,27 @@ def available(language: str, target: str = "") -> bool:
     return not missing(language, target)
 
 
-def _run(arguments: list[str], cwd: str) -> Verdict:
+def _run(
+    arguments: list[str],
+    cwd: str,
+    environment: dict[str, str] | None = None,
+    stdout: bool = True,
+) -> Verdict:
+    """Run a validator in ``cwd``. ``environment`` adds variables to the inherited environment; without ``stdout``,
+    the log leaves out standard output, where slangc lists the SPIR-V it failed to validate ahead of the error.
+    """
     try:
         result = subprocess.run(
-            arguments, capture_output=True, text=True, timeout=TIMEOUT, cwd=cwd
+            arguments,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
+            cwd=cwd,
+            env={**os.environ, **environment} if environment else None,
         )
     except subprocess.TimeoutExpired:
         return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
-    log = _ANSI.sub("", result.stdout + result.stderr)
+    log = _ANSI.sub("", (result.stdout if stdout else "") + result.stderr)
     # Some compilers (mojo) print the scratch directory's real path, which on macOS is under /private; the longer
     # spelling goes first, since it contains the other.
     for directory in sorted({os.path.realpath(cwd), cwd}, key=len, reverse=True):
@@ -431,6 +446,8 @@ def validate(
                     output,
                 ],
                 scratch,
+                SLANG_VALIDATION,
+                stdout=False,
             )
             if target != "hlsl" or not compiled.accepted:
                 return compiled
