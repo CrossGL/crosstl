@@ -262,9 +262,10 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "geometry {",
-            "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
-            "buffer_append(stream, points[0]);",
+            "void gs_main(GSOut points[2], inout PointStream<GSOut> stream) @ stage_entry",
+            "stream.Append(points[0]);",
         ),
+        absent=("buffer_append",),
     ),
     ExternalFixture(
         name="directx_sdk_subd11_patch_constant_payload_interface",
@@ -319,7 +320,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "out vec3 tangent[4] @ Tangent;",
             "out vec2 uv[4] @ TexCoord;",
-            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const outputPatch patch) @ stage_entry",
+            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const OutputPatch<HSOut, 16> patch) @ stage_entry",
         ),
     ),
     ExternalFixture(

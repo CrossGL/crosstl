@@ -281,7 +281,9 @@ class HLSLMatrixImportMixin:
             depth += 1
             base = base.array
         if isinstance(base, MemberAccessNode):
-            owner = self.raw_type_base(self.expression_raw_type(base.object))
+            owner = self.raw_type_base(
+                self.member_owner_type(self.expression_raw_type(base.object))
+            )
             dims = self.struct_member_array_dims.get(owner, {}).get(base.member) or 0
         elif isinstance(base, (str, VariableNode)):
             name = base if isinstance(base, str) else base.name

@@ -3,8 +3,8 @@ struct VertexOutput {
     float3 fragColor: TEXCOORD0;
     float4 gl_Position: SV_POSITION;
 };
-float2 positions[3];
-float3 colors[3];
+static float2 positions[3];
+static float3 colors[3];
 // Vertex Shader
 VertexOutput VSMain(uint gl_VertexIndex : SV_VertexID) {
     VertexOutput output;

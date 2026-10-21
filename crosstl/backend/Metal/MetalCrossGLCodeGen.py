@@ -2,7 +2,13 @@
 
 import re
 
-from ...translator.codegen.array_utils import evaluate_literal_int_expression
+from ...translator.codegen.array_utils import (
+    evaluate_literal_int_expression,
+    prepend_array_dimension,
+    split_array_type_suffix,
+)
+from ...translator.codegen.bitfield_builtins import METAL_BITFIELD_FUNCTIONS
+from ...translator.codegen.pack_builtins import METAL_PACK_FUNCTIONS
 from ...translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
     scalar_storage_layout,
@@ -31,6 +37,8 @@ from ...translator.semantics.sampler_states import (
 )
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from .barrier_import import metal_barrier_statements
+from .buffer_layout_import import MetalBufferLayoutImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -954,7 +962,7 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter(ImportRefusalMixin):
+class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     IMPORT_REFUSAL_TYPE = MetalImportRefused
@@ -1226,6 +1234,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
     metal_bit_intrinsics = {
         "popcount": "bitCount",
         "reverse_bits": "bitfieldReverse",
+        # Bit-field, pack and unpack functions with exactly the GLSL meaning (MSL sections 6.13 and 6.16).
+        **METAL_BITFIELD_FUNCTIONS,
+        **METAL_PACK_FUNCTIONS,
     }
     metal_scalar_arithmetic_types = {
         "bool": ("integer", True, 1),
@@ -1877,6 +1888,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         self.current_stage_entry_resource_parameter_ids = set()
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
+        self.structured_buffer_lvalue_roots = set()
         self.struct_member_types = {}
         self.struct_member_name_maps = {}
         self.resolved_struct_member_types = {}
@@ -3592,6 +3604,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                         owner=self.map_struct_name(struct_node.name),
                         static_member_types=static_member_types,
                     )
+                    if self.metal_packed_member(member) and not decl.startswith(
+                        "static "
+                    ):
+                        decl = f"@packed {decl}"
                     if isinstance(member, VariableNode) and getattr(
                         member, "name", None
                     ):
@@ -8840,7 +8856,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
-        return suffix + self.format_declarator_array_suffix(var)
+        # ``array<T, N> name[M]`` is M arrays of N: the declarator's dimensions are the outer ones.
+        return self.format_declarator_array_suffix(var) + suffix
 
     def format_declarator_array_suffix(self, var):
         if not hasattr(var, "array_sizes") or not var.array_sizes:
@@ -9132,7 +9149,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 include_declarator_arrays = False
                 name_array_suffix = self.format_declarator_array_suffix(var)
             type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
-            type_str = f"{mapped_type}{type_array_suffix}"
+            # The element of ``array<array<T, 3>, 2>`` maps to ``T[3]``; the outer dimensions come first.
+            element_base, element_suffix = (
+                split_array_type_suffix(mapped_type)
+                if type_array_suffix and str(mapped_type).rstrip().endswith("]")
+                else (mapped_type, "")
+            )
+            type_str = f"{element_base}{type_array_suffix}{element_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
         qualifiers = set(self.effective_declaration_qualifiers(var))
         alias_name = str(getattr(var, "vtype", ""))
@@ -9635,6 +9658,18 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 for index, p in enumerate(func.params)
             ]
             parameter_names = [self.render_identifier(p.name) for p in func.params]
+            for index, parameter in enumerate(func.params):
+                layout = self.structured_buffer_parameter_layout(func, parameter)
+                if layout is None and stage_entry:
+                    layout = self.metal_constant_reference_layout(
+                        parameter,
+                        f"constant parameter {parameter.name} of "
+                        f"{getattr(func, 'name', 'a function')}",
+                    )
+                if layout is not None:
+                    parameter_declarations[index] = (
+                        f"@buffer_layout({layout}) " + parameter_declarations[index]
+                    )
             if stage_entry and self.preserve_resource_origins:
                 for index, parameter in enumerate(func.params):
                     if self.is_stage_entry_buffer_resource_parameter(parameter):
@@ -10330,8 +10365,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 lowered_callback = self.generate_callback_statement(
                     stmt, indent, is_main
                 )
+                lowered_barrier = self.generate_metal_barrier_statement(stmt, indent)
                 if lowered_callback is not None:
                     code += lowered_callback
+                elif lowered_barrier is not None:
+                    code += lowered_barrier
                 else:
                     code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, (MethodCallNode, CallNode)):
@@ -11411,7 +11449,65 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             return None
         return f"{self.generate_expression(node.left, is_main)} = {call}"
 
+    def structured_buffer_lvalue_root(self, expr):
+        """The structured-buffer element a member, swizzle or index chain writes through, if any."""
+        node = expr
+        while isinstance(node, (MemberAccessNode, ArrayAccessNode)):
+            if isinstance(node, ArrayAccessNode) and (
+                self.is_structured_buffer_element_access(node)
+            ):
+                return node
+            node = node.object if isinstance(node, MemberAccessNode) else node.array
+        return None
+
+    def generate_with_structured_buffer_lvalue(self, target, generate):
+        """Run ``generate`` with ``target``'s structured-buffer element spelled as ``buffer[index]``.
+
+        ``buffer_load(b, i)`` is a value; ``buffer_load(b, i).m = v`` would assign to a copy, so the element an
+        assignment or increment writes through keeps CrossGL's indexing form, which names the storage.
+        """
+        root = self.structured_buffer_lvalue_root(target)
+        if root is None:
+            return generate()
+        roots = self.structured_buffer_lvalue_roots
+        roots.add(id(root))
+        try:
+            return generate()
+        finally:
+            roots.discard(id(root))
+
+    def structured_buffer_parameter_layout(self, func, parameter):
+        """The ``@buffer_layout`` a buffer or device pointer parameter needs to keep its Metal element layout."""
+        if self.structured_buffer_pointer_type(parameter):
+            element_type = self.structured_buffer_element_source_type(parameter)
+            kind = "buffer parameter"
+        else:
+            element_type = self.metal_device_pointer_element_type(parameter)
+            kind = "pointer parameter"
+        if element_type is None:
+            return None
+        return self.metal_buffer_element_layout(
+            element_type,
+            f"{kind} {parameter.name} of {getattr(func, 'name', 'a function')}",
+        )
+
+    def binds_reference_argument(self, function_name, expression, index):
+        """Whether argument ``index`` of a call binds a reference parameter of a source function."""
+        candidates = self.metal_user_function_overloads(
+            function_name, source_offset=self.alias_source_offset(expression)
+        )
+        return any(
+            index < len(getattr(candidate, "params", None) or [])
+            and self.reference_parameter(candidate.params[index])
+            for candidate in candidates
+        )
+
     def generate_assignment(self, node, is_main):
+        return self.generate_with_structured_buffer_lvalue(
+            node.left, lambda: self.generate_assignment_statement(node, is_main)
+        )
+
+    def generate_assignment_statement(self, node, is_main):
         contracted_assignment = self.generate_metal_contracted_assignment(node, is_main)
         if contracted_assignment is not None:
             return contracted_assignment
@@ -12385,6 +12481,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                 )
             if (
                 not self.suppress_structured_buffer_index_lowering
+                and id(expr) not in self.structured_buffer_lvalue_roots
                 and self.is_structured_buffer_element_access(expr)
             ):
                 return self.generate_structured_buffer_load(expr, is_main)
@@ -12436,6 +12533,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     operand = f"{array}[{index}]"
                 else:
                     operand = self.generate_expression(expr.operand, is_main)
+            elif expr.op in {"++", "--"}:
+                operand = self.generate_with_structured_buffer_lvalue(
+                    expr.operand,
+                    lambda: self.generate_expression(expr.operand, is_main),
+                )
             else:
                 operand = self.generate_expression(expr.operand, is_main)
             if expr.op == "post...":
@@ -12458,7 +12560,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
                     getattr(expr, "source_location", None),
                     operation=expr.op,
                 )
-            operand = self.generate_postfix_operand(expr.operand, is_main)
+            operand = self.generate_with_structured_buffer_lvalue(
+                expr.operand,
+                lambda: self.generate_postfix_operand(expr.operand, is_main),
+            )
             return f"{operand}{expr.op}"
         elif isinstance(expr, TernaryOpNode):
             wide_vector = self.wide_vector_expression_info(
@@ -12751,24 +12856,40 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
             return self.metal_atomic_thread_fence_call(args, source_location)
 
         if unscoped_name in {"threadgroup_barrier", "simdgroup_barrier"}:
-            flags = self.metal_mem_flag_names(args)
-            if flags and len(flags) > 1:
-                flags = flags - {"mem_none"}
-            if unscoped_name == "threadgroup_barrier" and flags == {"mem_none"}:
-                return "workgroupExecutionBarrier()"
-            if unscoped_name == "simdgroup_barrier" and flags == {"mem_none"}:
-                return "subgroupExecutionBarrier()"
-            if flags == {"mem_threadgroup"}:
-                return "workgroupBarrier()"
-            if flags == {"mem_device"}:
-                return "memoryBarrierBuffer()"
-            if flags == {"mem_texture"}:
-                return "memoryBarrierImage()"
-            if flags == {"mem_device", "mem_threadgroup", "mem_texture"}:
-                return "allMemoryBarrier()"
-            return None
+            if self.metal_user_function_overloads(name):
+                return None
+            lowered = metal_barrier_statements(
+                unscoped_name, self.metal_mem_flag_names(args)
+            )
+            if isinstance(lowered, str):
+                return self.refuse_import(lowered, "workgroupBarrier()")
+            if len(lowered) != 1:
+                return self.refuse_import(
+                    f"{unscoped_name} with device or texture memory flags becomes a sequence of CrossGL "
+                    "barriers, which needs a statement of its own",
+                    "workgroupBarrier()",
+                )
+            return f"{lowered[0]}()"
 
         return None
+
+    def generate_metal_barrier_statement(self, stmt, indent):
+        """A Metal barrier statement as its CrossGL barrier sequence, or ``None`` for other statements."""
+        name = str(stmt.name).lstrip(":")
+        unscoped_name = name.split("::")[-1]
+        if unscoped_name not in {"threadgroup_barrier", "simdgroup_barrier"}:
+            return None
+        if "::" in name and not name.startswith("metal::"):
+            return None
+        if self.metal_user_function_overloads(name):
+            return None
+        lowered = metal_barrier_statements(
+            unscoped_name, self.metal_mem_flag_names(stmt.args)
+        )
+        if isinstance(lowered, str) or len(lowered) == 1:
+            return None
+        separator = ";\n" + "    " * indent
+        return separator.join(f"{call}()" for call in lowered) + ";\n"
 
     def metal_uniform_value_expression(self, name, args, is_main):
         """Lower Metal's uniformity assertion while preserving its value."""
@@ -13862,7 +13983,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin):
         self, source_name, mapped_name, expression, index, is_main=False
     ):
         argument = expression.args[index]
-        rendered = self.generate_expression(argument, is_main)
+        if self.binds_reference_argument(source_name, expression, index):
+            rendered = self.generate_with_structured_buffer_lvalue(
+                argument, lambda: self.generate_expression(argument, is_main)
+            )
+        else:
+            rendered = self.generate_expression(argument, is_main)
         source_name = str(source_name).lstrip(":")
         if source_name.startswith("metal::"):
             source_name = source_name[len("metal::") :]
@@ -18449,7 +18575,9 @@ float {scalar}(float value) {{
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
             element_type, size = array_type
-            return f"{self.map_type(element_type)}[{self.format_array_extent(size)}]"
+            return prepend_array_dimension(
+                self.map_type(element_type), self.format_array_extent(size)
+            )
 
         base = metal_type.strip()
         if base.endswith("..."):
@@ -18545,7 +18673,9 @@ float {scalar}(float value) {{
             )
             if canonical_element is None:
                 return None
-            return f"{canonical_element}[{self.format_array_extent(size)}]"
+            return prepend_array_dimension(
+                canonical_element, self.format_array_extent(size)
+            )
         suffix = ""
         while candidate.endswith(("*", "&")):
             suffix = candidate[-1] + suffix
@@ -22422,7 +22552,8 @@ float {scalar}(float value) {{
             next_binding += 1
         return snapshots
 
-    def structured_buffer_pointer_type(self, var):
+    def structured_buffer_element_source_type(self, var):
+        """The Metal element type of a buffer resource declaration that becomes a structured buffer."""
         if not (
             self.has_attribute(var, "buffer")
             or id(var) in self.current_stage_entry_resource_parameter_ids
@@ -22441,7 +22572,13 @@ float {scalar}(float value) {{
             element_type = array_element_type
         if not element_type:
             return None
-        element_type = self.resolve_type_alias(element_type)
+        return self.resolve_type_alias(element_type)
+
+    def structured_buffer_pointer_type(self, var):
+        element_type = self.structured_buffer_element_source_type(var)
+        if not element_type:
+            return None
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         buffer_type = (
             "StructuredBuffer"
             if qualifiers.intersection({"constant", "const"})

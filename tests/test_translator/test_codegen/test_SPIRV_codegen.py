@@ -7805,12 +7805,18 @@ class TestVulkanSPIRVCodeGen:
             f"OpMemoryBarrier {workgroup_scope.group(1)} {shared_semantics.group(1)}"
             in spv_code
         )
+        # memoryBarrierShared orders workgroup memory; groupMemoryBarrier orders buffer, image and workgroup
+        # memory within the workgroup (GLSL 4.60 section 8.16), as glslang emits it.
         assert (
             spv_code.count(
                 f"OpMemoryBarrier {workgroup_scope.group(1)} "
                 f"{shared_semantics.group(1)}"
             )
-            == 2
+            == 1
+        )
+        assert (
+            f"OpMemoryBarrier {workgroup_scope.group(1)} {all_semantics.group(1)}"
+            in spv_code
         )
         assert (
             f"OpMemoryBarrier {device_scope.group(1)} {buffer_semantics.group(1)}"
@@ -7923,13 +7929,16 @@ class TestVulkanSPIRVCodeGen:
             "groupMemoryBarrier",
             "memoryBarrierShared",
         ]:
-            assert (
-                spv_code_refused.count(
-                    f"synchronization builtin '{function_name}' "
-                    "requires a workgroup-capable execution model"
-                )
-                == 2
-            )
+            # GLSL's barrier() orders a tessellation control patch's invocations
+            # (GLSL 4.60 section 8.16); only the evaluation stage refuses it.
+            assert spv_code_refused.count(
+                f"synchronization builtin '{function_name}' "
+                "requires a workgroup-capable execution model"
+            ) == (1 if function_name == "barrier" else 2)
+        assert (
+            "synchronization builtin 'barrier' requires a workgroup-capable "
+            "execution model; current execution model: TessellationEvaluation"
+        ) in spv_code_refused
 
     def test_geometry_stage_layouts_emit_execution_modes(self, tmp_path):
         source_code = """
@@ -15622,8 +15631,10 @@ class TestVulkanSPIRVCodeGen:
 
         assert f"OpMemberDecorate {std430_block} 1 Offset 16" in spv_code
         assert f"OpMemberDecorate {std430_block} 3 Offset 32" in spv_code
+        # std140 sizes vec3 as three components, so tail packs at 28 and values starts at 32 (glslang agrees).
         assert f"OpMemberDecorate {std140_block} 1 Offset 16" in spv_code
-        assert f"OpMemberDecorate {std140_block} 3 Offset 48" in spv_code
+        assert f"OpMemberDecorate {std140_block} 2 Offset 28" in spv_code
+        assert f"OpMemberDecorate {std140_block} 3 Offset 32" in spv_code
         assert f"OpMemberDecorate {scalar_block} 1 Offset 4" in spv_code
         assert f"OpMemberDecorate {scalar_block} 3 Offset 20" in spv_code
         assert "ArrayStride 16" in spv_code

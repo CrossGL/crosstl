@@ -13,6 +13,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -59,6 +60,7 @@ from ..math_namespaces import (
 from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -87,6 +89,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -94,13 +97,18 @@ from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
+from .barrier_peephole import merge_adjacent_metal_barriers
+from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
+from .boolean_mix import boolean_mix_selector, metal_boolean_mix
 from .buffer_block_diagnostics import (
     BufferBlockUnsupportedError,
     record_unsupported_layout_failures,
 )
 from .buffer_length import BufferLengthUnsupportedError
+from .buffer_member_layout import member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
     component_access_type,
@@ -136,6 +144,11 @@ from .enum_utils import (
     generic_type_parts,
     infer_enum_constructor_type,
 )
+from .exponent_builtins import emit_metal_exponent_helpers, metal_exponent_call
+from .extended_arithmetic_builtins import (
+    emit_metal_extended_arithmetic_helpers,
+    metal_extended_arithmetic_call,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -167,6 +180,7 @@ from .glsl_buffer_layout import (
     matrix_column_offsets,
     vector_component_offsets,
 )
+from .hlsl_buffer_layout import BUFFER_LAYOUT_ATTRIBUTE
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -345,6 +359,8 @@ from .metal_array_copies import (
     generate_metal_array_initializer,
     render_metal_split_member_constructor_arguments,
 )
+from .metal_atomic_addresses import metal_vector_component_address
+from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
 from .metal_hlsl_matrix import (
@@ -356,8 +372,16 @@ from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
+from .metal_stage_refusals import refuse_metal_stages
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
+from .metal_wave_extended import (
+    emit_metal_wave_extension_helpers,
+    metal_subgroup_lane_mask_expression,
+    metal_wave_extension_call,
+    metal_wave_extension_lane_requirements,
+)
 from .operator_spellings import map_c_family_operator
+from .pack_builtins import PACK_FUNCTIONS, metal_pack_call
 from .pointer_reinterpret import (
     PointerReinterpretationError,
     crossgl_literal_positive_integer,
@@ -381,7 +405,6 @@ from .stage_utils import (
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
-    stage_layout_entry_value,
     stage_matches,
 )
 from .texture_lod_clamp import (
@@ -990,6 +1013,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.metal_wave_extension_helpers = {}
+        self.metal_exponent_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -1914,7 +1939,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
         lower_relational_builtins(ast)
-        return self.refusals.run(self.render_program, ast, target_stage)
+        return merge_adjacent_metal_barriers(
+            self.refusals.run(self.render_checked_program, ast, target_stage)
+        )
+
+    def render_checked_program(self, ast, target_stage=None):
+        """Render the program and refuse the types the Metal language does not have."""
+        output = self.render_program(ast, target_stage)
+        refuse_metal_double_values(output, self.refuse_lowering)
+        return output
 
     def refuse_lowering(self, reason, fallback=""):
         """Record a construct with no faithful Metal lowering and return ``fallback`` in its place.
@@ -1927,6 +1960,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = lower_constant_buffer_resources(
+            ast,
+            lambda name: self.refuse_lowering(
+                f"array of constant buffers '{name}': Metal binds an array of buffers only through an "
+                "argument buffer"
+            ),
+        )
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
@@ -2285,6 +2325,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.metal_wave_extension_helpers = {}
+        self.metal_exponent_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -2495,10 +2537,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.metal_prelude_insertion_index = len(code)
         if self.requires_metal_system_thread_scope:
             code += self.generate_metal_system_thread_scope_support()
-        if self.has_geometry_stage(ast, target_stage):
-            code += self.generate_metal_geometry_stream_helpers()
-        if self.has_tessellation_stage(ast, target_stage):
-            code += self.generate_metal_tessellation_patch_helpers()
         code += generate_enum_constants(
             self,
             self.plain_enums + self.struct_payload_enums,
@@ -2562,16 +2600,26 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                         base_type = self.convert_type_node_to_string(
                             node.var_type.element_type
                         )
+                        # An array of arrays: the outer dimension is the first suffix.
+                        base_type, element_suffix = split_array_type_suffix(base_type)
                         array_size = (
                             self.expression_to_string(node.var_type.size)
                             if node.var_type.size
                             else self.resource_array_size_hints.get(node.name, "")
                         )
                         vtype = base_type
-                        array_suffix = f"[{array_size}]" if array_size else "[]"
+                        array_suffix = (
+                            f"[{array_size}]" if array_size else "[]"
+                        ) + element_suffix
                         resource_count = self.resource_array_count(
                             node.var_type.size if node.var_type.size else array_size
                         )
+                        element_type = node.var_type.element_type
+                        while isinstance(element_type, ArrayType):
+                            resource_count *= self.resource_array_count(
+                                element_type.size
+                            )
+                            element_type = element_type.element_type
                     else:
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
@@ -3139,6 +3187,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_buffer_atomic_compare_helpers()
         code += self.generate_pointer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
+        code += emit_metal_wave_extension_helpers(self)
+        code += emit_metal_exponent_helpers(self)
+        code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += self.generate_metal_inverse_helpers()
@@ -3935,6 +3986,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
+                        member_type = self.metal_packed_storage_type(
+                            member, member_type
+                        )
                         declaration = format_c_style_array_declaration(
                             member_type, member.name
                         )
@@ -3965,6 +4019,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                             member_type = self.map_type(
                                 getattr(member, "vtype", "float")
                             )
+                        member_type = self.metal_packed_storage_type(
+                            member, member_type
+                        )
                         declaration = format_c_style_array_declaration(
                             member_type, member.name
                         )
@@ -4632,6 +4689,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             mapped_type = self.map_type(element_type)
             if preserve_native_narrow_storage:
                 mapped_type = self.metal_struct_storage_type(element_type)
+            mapped_type = self.metal_packed_storage_type(member, mapped_type)
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
             if member.size:
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4691,6 +4749,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 member_type = self.map_type(member_type_str)
                 if preserve_native_narrow_storage:
                     member_type = self.metal_struct_storage_type(member_type_str)
+                member_type = self.metal_packed_storage_type(member, member_type)
                 dependencies.update(self.metal_struct_type_dependencies(member_type))
                 declaration = format_c_style_array_declaration(member_type, member.name)
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
@@ -4736,12 +4795,34 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             raw_type = self.struct_member_raw_type(member)
             if self.metal_native_narrow_bitcast_storage_type(raw_type) is not None:
                 member_type = self.metal_struct_storage_type(raw_type)
+        member_type = self.metal_packed_storage_type(member, member_type)
         dependencies.update(self.metal_struct_type_dependencies(member_type))
         return (
             f"    {member_type} {member.name}{abi_attr}{semantic_attr}"
             f"{interpolation_attr};\n",
             dependencies,
         )
+
+    METAL_PACKED_VECTOR_RE = re.compile(
+        r"(?:metal::)?(?P<vector>(?:float|half|int|uint|short|ushort|char|uchar|long|ulong|bfloat)[234])"
+    )
+
+    def metal_packed_storage_type(self, member, type_text):
+        """``type_text`` in MSL's packed vector form (``packed_float3``) for a ``@ packed`` member.
+
+        A packed vector is aligned to its scalar and takes exactly its components (MSL 3.2 section 2.2.3), the
+        layout an MSL source declared with ``packed_float3``; the value is the ordinary vector.
+        """
+        if not member_is_packed(member) or str(type_text).startswith("packed_"):
+            return type_text
+        base, suffix = split_array_type_suffix(str(type_text))
+        match = self.METAL_PACKED_VECTOR_RE.fullmatch(base.strip())
+        if match is None:
+            raise ValueError(
+                f"Metal struct member '{getattr(member, 'name', '?')}' is marked packed, but {type_text} has no "
+                "packed vector form"
+            )
+        return f"packed_{match.group('vector')}{suffix}"
 
     def metal_struct_type_dependencies(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -5897,34 +5978,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     return_type = return_wrapper["struct_name"]
                 self.current_function_return_wrapper = return_wrapper
             code += f"fragment {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type == "geometry":
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            function_name = entry_name or f"geometry_{func.name}"
-            self.validate_metal_geometry_stage(
-                func,
-                param_list,
-                stage_node=stage_node,
-            )
-            code += self.generate_metal_geometry_stage_comments(
-                func,
-                param_list,
-                stage_node=stage_node,
-            )
-            code += f"{return_type} {function_name}({params_str}) {{\n"
-        elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            function_name = entry_name or self.stage_entry_base_name(shader_type, func)
-            self.validate_metal_tessellation_stage(func, param_list, shader_type)
-            code += self.generate_metal_tessellation_stage_comments(
-                func,
-                param_list,
-                shader_type,
-            )
-            code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func
@@ -6306,6 +6359,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         compute_name = self.metal_compute_builtin_expression_name(name)
         if compute_name != name:
             return compute_name
+        lane_mask = metal_subgroup_lane_mask_expression(self, name)
+        if lane_mask is not None:
+            return lane_mask
         diagnostic = self.metal_glsl_subgroup_lane_builtin_diagnostic(name)
         if diagnostic is not None:
             return diagnostic
@@ -6438,6 +6494,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def used_wave_stage_builtin_operations(self, body):
         operations = set()
         for node in self.iter_ast_nodes(body):
+            operations.update(metal_wave_extension_lane_requirements(node))
             if isinstance(node, WaveOpNode):
                 operation = getattr(node, "operation", None)
             elif isinstance(node, FunctionCallNode):
@@ -11368,6 +11425,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if byte_update is not None:
                     return byte_update
+                # Buffer storage whose reads convert (a packed vector's
+                # components) is updated in place through the storage itself.
+                layout_store = self.metal_hlsl_layout_store_target(expr.operand)
+                if layout_store is not None and not layout_store[1]:
+                    operand = layout_store[0]
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             if operator == "!":
@@ -11522,6 +11584,34 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            if (
+                func_name in PACK_FUNCTIONS
+                and func_name not in self.user_function_names
+            ):
+                return metal_pack_call(
+                    self, func_name, [self.generate_expression(a) for a in expr.args]
+                )
+            if (
+                func_name in BITFIELD_ARITIES
+                and func_name not in self.user_function_names
+            ):
+                return metal_bitfield_call(
+                    self, func_name, [self.generate_expression(a) for a in expr.args]
+                )
+            boolean_mix = boolean_mix_selector(
+                self, func_name, expr.args, self.user_function_names
+            )
+            if boolean_mix is not None:
+                return metal_boolean_mix(self, expr.args, boolean_mix)
+            exponent_call = metal_exponent_call(self, func_name, expr.args)
+            if exponent_call is not None:
+                return exponent_call
+            extended_arithmetic = metal_extended_arithmetic_call(
+                self, func_name, expr.args
+            )
+            if extended_arithmetic is not None:
+                return extended_arithmetic
 
             vector_set = re.fullmatch(
                 r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
@@ -12771,12 +12861,38 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupExecutionBarrier": "threadgroup_barrier(mem_flags::mem_none)",
             "subgroupExecutionBarrier": "simdgroup_barrier(mem_flags::mem_none)",
-            "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            # The GL_KHR_shader_subgroup barriers order buffer, image and shared memory, or one of them, for the
+            # subgroup; Metal spells each as a SIMD-group barrier over the same memory, as it spells workgroup
+            # fences as threadgroup barriers.
+            "subgroupBarrier": (
+                "simdgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
+            "subgroupMemoryBarrier": (
+                "simdgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
+            "subgroupMemoryBarrierBuffer": "simdgroup_barrier(mem_flags::mem_device)",
+            "subgroupMemoryBarrierShared": (
+                "simdgroup_barrier(mem_flags::mem_threadgroup)"
+            ),
+            "subgroupMemoryBarrierImage": "simdgroup_barrier(mem_flags::mem_texture)",
+            # groupMemoryBarrier and memoryBarrier order buffer, image and shared memory (GLSL 4.60 section
+            # 8.16); deviceMemoryBarrier orders buffers and textures (HLSL DeviceMemoryBarrier).
+            "groupMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
             "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
-            "deviceMemoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "deviceMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_texture)"
+            ),
             "memoryBarrierImage": "threadgroup_barrier(mem_flags::mem_texture)",
-            "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "memoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
             "allMemoryBarrier": (
                 "threadgroup_barrier(mem_flags::mem_device | "
                 "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
@@ -12865,9 +12981,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
 
     def generate_metal_wave_op_expression(self, node):
-        return self.generate_metal_wave_operation(node.operation, node.arguments)
+        result = self.generate_metal_wave_operation(node.operation, node.arguments)
+        if result is None:
+            return self.metal_wave_diagnostic_expression(
+                node.operation, node.arguments, "is not recognized by the Metal backend"
+            )
+        return result
 
     def generate_metal_wave_operation(self, operation, arguments):
+        extension = metal_wave_extension_call(self, operation, arguments)
+        if extension is not None:
+            return extension
         expected_arity = self.METAL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_arity is None:
             return None
@@ -13155,6 +13279,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return f"as_type<{mapped_type}>({inner})"
 
     def metal_wave_result_type(self, operation, arguments):
+        if operation in WAVE_EXTENDED_OPERATIONS:
+            return wave_extended_result_type(
+                operation,
+                self.expression_result_type(arguments[0]) if arguments else None,
+            )
         if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:
             return "uint"
         if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:
@@ -14849,9 +14978,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 func_name, target, "requires writable storage"
             )
 
-        target_expr = self.generate_expression(target)
-        if not self.is_metal_address_expression(target, target_expr):
-            target_expr = f"&{target_expr}"
+        target_expr = metal_vector_component_address(
+            self, target, address_space, mapped_target_type
+        )
+        if target_expr is None:
+            target_expr = self.generate_expression(target)
+            if not self.is_metal_address_expression(target, target_expr):
+                target_expr = f"&{target_expr}"
         if operation == "compare_exchange":
             compare = self.generate_expression_with_expected(
                 args[1], mapped_target_type
@@ -16647,6 +16780,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             pointee_type = self.metal_native_narrow_bitcast_storage_type(
                 raw_param_type.pointee_type
             ) or self.map_resource_type_with_format(raw_param_type.pointee_type, node)
+            layout_storage = getattr(self, "metal_hlsl_pointer_parameters", {}).get(
+                id(node)
+            )
+            if layout_storage is not None:
+                pointee_type = layout_storage[0]
             memory_qualifiers = self.resource_memory_qualifier_prefix(
                 node, raw_param_type
             )
@@ -18001,96 +18139,19 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             in self.glsl_buffer_block_struct_names
         )
 
-    def unsupported_stage_types(self):
-        return set()
-
     def validate_supported_stage_types(self, ast, target_stage=None):
-        unsupported_stages = []
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            stage_name = normalize_stage_name(stage_type)
-            if stage_name in self.unsupported_stage_types() and stage_matches(
-                target_stage, stage_name
-            ):
-                unsupported_stages.append(stage_name)
-
-        if unsupported_stages:
-            stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(
-                f"Metal output does not support stage type(s): {stage_list}"
-            )
-
-    def has_geometry_stage(self, ast, target_stage=None):
-        if not stage_matches(target_stage, "geometry"):
-            return False
-
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            if normalize_stage_name(stage_type) == "geometry":
-                return True
-
+        """Refuse the requested stages Metal cannot write as entry points (:mod:`.metal_stage_refusals`)."""
+        stage_names = {
+            normalize_stage_name(stage_type)
+            for stage_type in getattr(ast, "stages", {}) or {}
+        }
         for func in getattr(ast, "functions", []) or []:
             qualifiers = getattr(func, "qualifiers", None)
             if qualifiers is None:
                 qualifiers = [getattr(func, "qualifier", None)]
-            if any(
-                normalize_stage_name(qualifier) == "geometry"
-                for qualifier in qualifiers
-            ):
-                return True
-
-        return False
-
-    def generate_metal_geometry_stream_helpers(self):
-        return (
-            "template <typename T>\n"
-            "struct CrossGLMetalPointStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-            "template <typename T>\n"
-            "struct CrossGLMetalLineStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-            "template <typename T>\n"
-            "struct CrossGLMetalTriangleStream {\n"
-            "    void Append(T value) { }\n"
-            "    void RestartStrip() { }\n"
-            "};\n\n"
-        )
-
-    def has_tessellation_stage(self, ast, target_stage=None):
-        tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
-        if not any(stage_matches(target_stage, stage) for stage in tessellation_stages):
-            return False
-
-        for stage_type in getattr(ast, "stages", {}) or {}:
-            if normalize_stage_name(stage_type) in tessellation_stages:
-                return True
-
-        for func in getattr(ast, "functions", []) or []:
-            qualifiers = getattr(func, "qualifiers", None)
-            if qualifiers is None:
-                qualifiers = [getattr(func, "qualifier", None)]
-            if any(
-                normalize_stage_name(qualifier) in tessellation_stages
-                for qualifier in qualifiers
-            ):
-                return True
-
-        return False
-
-    def generate_metal_tessellation_patch_helpers(self):
-        return (
-            "template <typename T, int N>\n"
-            "struct CrossGLMetalInputPatch {\n"
-            "    T control_points[N];\n"
-            "    T operator[](uint index) const { return control_points[index]; }\n"
-            "};\n\n"
-            "template <typename T, int N>\n"
-            "struct CrossGLMetalOutputPatch {\n"
-            "    T control_points[N];\n"
-            "    T operator[](uint index) const { return control_points[index]; }\n"
-            "};\n\n"
+            stage_names.update(normalize_stage_name(q) for q in qualifiers if q)
+        refuse_metal_stages(
+            name for name in stage_names if stage_matches(target_stage, name)
         )
 
     def stage_entry_types(self):
@@ -18683,35 +18744,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 return getattr(attr, "arguments", []) or []
         return []
 
-    def metal_geometry_maxvertexcount(self, func, stage_node=None):
-        arguments = self.metal_stage_attribute_arguments(func, "maxvertexcount")
-        if arguments:
-            if len(arguments) != 1:
-                raise ValueError(
-                    "Metal geometry stage maxvertexcount requires exactly one argument"
-                )
-            value_text = self.attribute_value_to_string(arguments[0])
-        else:
-            value_text = None
-            if stage_node is not None:
-                value_text = stage_layout_entry_value(
-                    stage_node, "max_vertices", "out"
-                ) or stage_layout_entry_value(
-                    stage_node,
-                    "maxvertexcount",
-                    "out",
-                )
-            if value_text is None:
-                raise ValueError(
-                    "Metal geometry stage requires maxvertexcount attribute"
-                )
-        value = self.literal_int_value(value_text, self.literal_int_constants)
-        if value is not None and value <= 0:
-            raise ValueError(
-                f"Metal geometry stage maxvertexcount ({value}) must be positive"
-            )
-        return value_text
-
     def metal_parameter_qualifiers(self, parameter):
         qualifiers = []
         allowed_qualifiers = {
@@ -18742,19 +18774,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 qualifiers.append(normalized)
         return qualifiers
 
-    def metal_geometry_input_primitive_qualifier(self, parameter):
-        primitive_qualifiers = {
-            "point",
-            "line",
-            "triangle",
-            "lineadj",
-            "triangleadj",
-        }
-        for qualifier in self.metal_parameter_qualifiers(parameter):
-            if qualifier in primitive_qualifiers:
-                return qualifier
-        return None
-
     def metal_parameter_is_array(self, parameter):
         raw_type = self.parameter_raw_type(parameter)
         if (
@@ -18784,100 +18803,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return None
         return self.literal_int_value(array_size, self.literal_int_constants)
 
-    def validate_metal_geometry_input_primitive_arity(self, parameters):
-        expected_counts = {
-            "point": 1,
-            "line": 2,
-            "triangle": 3,
-            "lineadj": 4,
-            "triangleadj": 6,
-        }
-
-        for parameter in parameters:
-            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
-            if primitive is None:
-                continue
-
-            expected_count = expected_counts[primitive]
-            if not self.metal_parameter_is_array(parameter):
-                raise ValueError(
-                    "Metal geometry stage "
-                    f"{primitive} input primitive parameter '{parameter.name}' "
-                    f"must be an array with {expected_count} element(s)"
-                )
-
-            array_count = self.metal_parameter_array_count(parameter)
-            if array_count is None:
-                continue
-            if array_count != expected_count:
-                raise ValueError(
-                    "Metal geometry stage "
-                    f"{primitive} input primitive parameter '{parameter.name}' "
-                    f"must have {expected_count} element(s), got {array_count}"
-                )
-
-    def validate_metal_geometry_stage(self, func, parameters, stage_node=None):
-        self.metal_geometry_maxvertexcount(func, stage_node=stage_node)
-
-        if not any(
-            self.metal_geometry_stream_info(self.parameter_raw_type(param))
-            for param in parameters
-        ):
-            raise ValueError(
-                "Metal geometry stage parameters must include a PointStream, "
-                "LineStream, or TriangleStream output parameter"
-            )
-
-        if not any(
-            self.metal_geometry_input_primitive_qualifier(param) for param in parameters
-        ):
-            raise ValueError(
-                "Metal geometry stage parameters must include an input primitive "
-                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
-            )
-
-        self.validate_metal_geometry_input_primitive_arity(parameters)
-
-    def generate_metal_geometry_stage_comments(
-        self,
-        func,
-        parameters,
-        stage_node=None,
-    ):
-        maxvertexcount = self.metal_geometry_maxvertexcount(
-            func,
-            stage_node=stage_node,
-        )
-        input_descriptions = []
-        stream_descriptions = []
-
-        for parameter in parameters:
-            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
-            if primitive is not None:
-                input_descriptions.append(f"{primitive}:{parameter.name}")
-
-            stream_info = self.metal_geometry_stream_info(
-                self.parameter_raw_type(parameter)
-            )
-            if stream_info is not None:
-                stream_name, output_type = stream_info
-                stream_descriptions.append(
-                    f"{stream_name}:{parameter.name}->{output_type}"
-                )
-
-        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
-        if input_descriptions:
-            lines.append(
-                "// CrossGL geometry input primitive: "
-                f"{', '.join(input_descriptions)}\n"
-            )
-        if stream_descriptions:
-            lines.append(
-                "// CrossGL geometry output stream: "
-                f"{', '.join(stream_descriptions)}\n"
-            )
-        return "".join(lines)
-
     def metal_tessellation_stage_attribute_value(self, func, attribute_name):
         arguments = self.metal_stage_attribute_arguments(func, attribute_name)
         if not arguments:
@@ -18888,35 +18813,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "exactly one argument"
             )
         return self.attribute_value_to_string(arguments[0])
-
-    def metal_tessellation_output_control_points(self, func):
-        output_control_points = self.metal_tessellation_stage_attribute_value(
-            func, "outputcontrolpoints"
-        )
-        if output_control_points is None:
-            output_control_points = self.metal_tessellation_stage_attribute_value(
-                func, "vertices"
-            )
-        return output_control_points
-
-    def metal_tessellation_positive_int_attribute(
-        self, func, attribute_name, stage_name, display_name=None
-    ):
-        value_text = self.metal_tessellation_stage_attribute_value(func, attribute_name)
-        if value_text is None:
-            return None
-        value = self.literal_int_value(value_text, self.literal_int_constants)
-        display_name = display_name or attribute_name
-        if value is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {display_name} must be an integer "
-                f"constant, got {value_text}"
-            )
-        if value <= 0:
-            raise ValueError(
-                f"Metal {stage_name} stage {display_name} ({value}) must be " "positive"
-            )
-        return value
 
     def metal_tessellation_domain(self, func):
         value = self.metal_tessellation_stage_attribute_value(func, "domain")
@@ -18938,275 +18834,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 f"Metal tessellation domain cannot be represented: {value}"
             )
         return mapped
-
-    def metal_tessellation_partitioning(self, func):
-        value = self.metal_tessellation_stage_attribute_value(func, "partitioning")
-        if value is None:
-            return None
-        partition_name = str(value).strip().strip('"').lower()
-        partition_map = {
-            "integer": "integer",
-            "equal": "integer",
-            "equal_spacing": "integer",
-            "fractional_even": "fractional_even",
-            "fractional_even_spacing": "fractional_even",
-            "fractional_odd": "fractional_odd",
-            "fractional_odd_spacing": "fractional_odd",
-        }
-        mapped = partition_map.get(partition_name)
-        if mapped is None:
-            raise ValueError(
-                f"Metal tessellation partitioning cannot be represented: {value}"
-            )
-        return mapped
-
-    def metal_tessellation_output_topology(self, func, domain):
-        value = self.metal_tessellation_stage_attribute_value(func, "outputtopology")
-        if value is None:
-            return None
-
-        topology_name = str(value).strip().strip('"').lower()
-        if topology_name in {"triangle_cw", "triangles_cw"}:
-            if domain != "triangle":
-                raise ValueError(
-                    "Metal tessellation outputtopology triangle_cw requires "
-                    "triangle domain"
-                )
-            return "triangle_cw"
-        if topology_name in {"triangle_ccw", "triangles_ccw"}:
-            if domain != "triangle":
-                raise ValueError(
-                    "Metal tessellation outputtopology triangle_ccw requires "
-                    "triangle domain"
-                )
-            return "triangle_ccw"
-        if topology_name in {"line", "lines"}:
-            if domain != "isoline":
-                raise ValueError(
-                    "Metal tessellation outputtopology line requires isoline domain"
-                )
-            return "line"
-        if topology_name in {"point", "points"}:
-            return "point"
-
-        raise ValueError(
-            f"Metal tessellation outputtopology cannot be represented: {value}"
-        )
-
-    def metal_tessellation_patch_constant_function_name(self, func):
-        return self.metal_tessellation_stage_attribute_value(func, "patchconstantfunc")
-
-    def metal_tessellation_patch_parameters(self, parameters, patch_type):
-        for parameter in parameters:
-            info = self.metal_tessellation_patch_info(
-                self.parameter_raw_type(parameter)
-            )
-            if info is not None and info["kind"] == patch_type:
-                yield parameter, info
-
-    def metal_tessellation_patch_control_point_count(self, parameters, patch_type):
-        for _parameter, info in self.metal_tessellation_patch_parameters(
-            parameters, patch_type
-        ):
-            return info["count_value"]
-        return None
-
-    def validate_metal_tessellation_patch_parameter_signature(
-        self, parameter, info, stage_name
-    ):
-        patch_type = info["kind"]
-        parameter_name = getattr(parameter, "name", None)
-        name_clause = (
-            f" parameter '{parameter_name}'" if parameter_name else " parameter"
-        )
-        type_name = self.type_name_string(self.parameter_raw_type(parameter))
-
-        if not info["valid"]:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} must use "
-                f"{patch_type}<T, N>; found '{type_name or patch_type}'"
-            )
-
-        if info["element_type"] is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} must include "
-                "an element type"
-            )
-
-        control_points = info["count_value"]
-        if control_points is None:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count '{info['count_text']}' must be an integer constant"
-            )
-        if control_points <= 0:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count ({control_points}) must be positive"
-            )
-        if control_points > 32:
-            raise ValueError(
-                f"Metal {stage_name} stage {patch_type}{name_clause} control "
-                f"point count ({control_points}) must be at most 32"
-            )
-
-    def validate_metal_tessellation_patch_parameter_signatures(
-        self, parameters, patch_type, stage_name
-    ):
-        for parameter, info in self.metal_tessellation_patch_parameters(
-            parameters, patch_type
-        ):
-            self.validate_metal_tessellation_patch_parameter_signature(
-                parameter, info, stage_name
-            )
-
-    def validate_metal_tessellation_control_stage(self, func, parameters):
-        stage_name = "tessellation_control"
-        domain = self.metal_tessellation_domain(func)
-        if domain is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires domain attribute"
-            )
-        if self.metal_tessellation_partitioning(func) is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires partitioning attribute"
-            )
-        if self.metal_tessellation_output_topology(func, domain) is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires outputtopology attribute"
-            )
-
-        input_patch_parameters = list(
-            self.metal_tessellation_patch_parameters(parameters, "InputPatch")
-        )
-        if not input_patch_parameters:
-            raise ValueError(
-                "Metal tessellation_control stage parameters must include an "
-                "InputPatch<T, N> parameter"
-            )
-        self.validate_metal_tessellation_patch_parameter_signatures(
-            parameters, "InputPatch", stage_name
-        )
-
-        output_control_points = self.metal_tessellation_positive_int_attribute(
-            func, "outputcontrolpoints", stage_name
-        )
-        if output_control_points is None:
-            output_control_points = self.metal_tessellation_positive_int_attribute(
-                func, "vertices", stage_name, display_name="outputcontrolpoints"
-            )
-        if output_control_points is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires outputcontrolpoints "
-                "attribute"
-            )
-        if output_control_points > 32:
-            raise ValueError(
-                "Metal tessellation_control stage outputcontrolpoints "
-                f"({output_control_points}) must be at most 32"
-            )
-
-        input_control_points = self.metal_tessellation_patch_control_point_count(
-            parameters, "InputPatch"
-        )
-        if (
-            input_control_points is not None
-            and output_control_points != input_control_points
-        ):
-            raise ValueError(
-                "Metal tessellation_control stage outputcontrolpoints "
-                f"({output_control_points}) must match the InputPatch control "
-                f"point count ({input_control_points})"
-            )
-
-        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
-        if patch_constant_func is None:
-            raise ValueError(
-                "Metal tessellation_control stage requires patchconstantfunc "
-                "attribute"
-            )
-        if patch_constant_func not in self.user_function_names:
-            raise ValueError(
-                "Metal tessellation_control stage patchconstantfunc "
-                f"'{patch_constant_func}' must name a function in the program"
-            )
-
-        if not any(
-            self.metal_parameter_has_semantic(parameter, "SV_OutputControlPointID")
-            for parameter in parameters
-        ):
-            raise ValueError(
-                "Metal tessellation_control stage parameters must include an "
-                "SV_OutputControlPointID parameter"
-            )
-        self.validate_metal_scalar_integer_semantic_types(
-            parameters,
-            stage_name,
-            ("SV_OutputControlPointID", "SV_PrimitiveID"),
-        )
-        self.validate_metal_tessellation_max_factor(func, stage_name)
-
-    def validate_metal_tessellation_evaluation_stage(self, func, parameters):
-        stage_name = "tessellation_evaluation"
-        domain = self.metal_tessellation_domain(func)
-        if domain is None:
-            raise ValueError(
-                "Metal tessellation_evaluation stage requires domain attribute"
-            )
-        self.metal_tessellation_output_topology(func, domain)
-
-        output_patch_parameters = list(
-            self.metal_tessellation_patch_parameters(parameters, "OutputPatch")
-        )
-        if not output_patch_parameters:
-            raise ValueError(
-                "Metal tessellation_evaluation stage parameters must include an "
-                "OutputPatch<T, N> parameter"
-            )
-        self.validate_metal_tessellation_patch_parameter_signatures(
-            parameters, "OutputPatch", stage_name
-        )
-
-        if not any(
-            self.metal_parameter_has_semantic(parameter, "SV_DomainLocation")
-            for parameter in parameters
-        ):
-            raise ValueError(
-                "Metal tessellation_evaluation stage parameters must include an "
-                "SV_DomainLocation parameter"
-            )
-        self.validate_metal_domain_location_type(parameters)
-        self.validate_metal_domain_location_components(func, parameters)
-        self.validate_metal_scalar_integer_semantic_types(
-            parameters,
-            stage_name,
-            ("SV_PrimitiveID",),
-        )
-
-    def validate_metal_tessellation_max_factor(self, func, stage_name):
-        max_tess_factor_text = self.metal_tessellation_stage_attribute_value(
-            func, "maxtessfactor"
-        )
-        if max_tess_factor_text is None:
-            return
-        try:
-            max_tess_factor = float(str(max_tess_factor_text).strip().strip('"'))
-        except ValueError as exc:
-            raise ValueError(
-                "Metal tessellation_control stage maxtessfactor "
-                f"'{max_tess_factor_text}' must be a numeric literal"
-            ) from exc
-        if not (1.0 <= max_tess_factor <= 64.0):
-            raise ValueError(
-                "Metal tessellation_control stage maxtessfactor "
-                f"({max_tess_factor_text}) must be in the range 1.0..64.0"
-            )
-
-    def validate_metal_tessellation_stage(self, func, parameters, shader_type):
-        if shader_type == "tessellation_control":
-            self.validate_metal_tessellation_control_stage(func, parameters)
-        elif shader_type == "tessellation_evaluation":
-            self.validate_metal_tessellation_evaluation_stage(func, parameters)
 
     def validate_metal_domain_location_type(self, parameters):
         for parameter in parameters:
@@ -19325,52 +18952,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if suffix == "":
                 return 1
         return None
-
-    def generate_metal_tessellation_stage_comments(self, func, parameters, shader_type):
-        metadata = []
-        domain = self.metal_tessellation_domain(func)
-        if domain:
-            metadata.append(f"domain={domain}")
-        partitioning = self.metal_tessellation_partitioning(func)
-        if partitioning:
-            metadata.append(f"partitioning={partitioning}")
-        output_topology = self.metal_tessellation_output_topology(func, domain)
-        if output_topology:
-            metadata.append(f"outputtopology={output_topology}")
-        output_control_points = self.metal_tessellation_output_control_points(func)
-        if output_control_points:
-            metadata.append(f"outputcontrolpoints={output_control_points}")
-        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
-        if patch_constant_func:
-            metadata.append(f"patchconstantfunc={patch_constant_func}")
-        max_tess_factor = self.metal_tessellation_stage_attribute_value(
-            func, "maxtessfactor"
-        )
-        if max_tess_factor:
-            metadata.append(f"maxtessfactor={max_tess_factor}")
-
-        lines = [
-            f"// CrossGL {shader_type} stage"
-            f"{': ' + ', '.join(metadata) if metadata else ''}\n"
-        ]
-
-        patch_descriptions = []
-        for parameter in parameters:
-            info = self.metal_tessellation_patch_info(
-                self.parameter_raw_type(parameter)
-            )
-            if info is None or not info["valid"]:
-                continue
-            patch_descriptions.append(
-                f"{info['kind']}:{parameter.name}->{info['element_type']}"
-                f"[{info['count_text']}]"
-            )
-        if patch_descriptions:
-            lines.append(
-                "// CrossGL tessellation patch parameters: "
-                f"{', '.join(patch_descriptions)}\n"
-            )
-        return "".join(lines)
 
     def metal_local_size_threadgroup_total(self, execution_config):
         values = [str(value).strip() for value in compute_local_size(execution_config)]
@@ -22197,6 +21778,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.normalized_metal_abi_attribute_name(attr) == "function_constant"
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
+                or str(getattr(attr, "name", "")).lower()
+                in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
             ):
                 continue
             if hasattr(attr, "name"):
@@ -22628,9 +22211,21 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             and not args
         ):
             return None
-        access = self.glsl_buffer_block_member_access(
-            getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
         )
+        if isinstance(object_expr, (IdentifierNode, VariableNode)):
+            name = getattr(object_expr, "name", None)
+            if self.current_address_space_variables.get(name) in {
+                "device",
+                "constant",
+            } and str(self.local_variable_types.get(name, "")).endswith("*"):
+                raise BufferLengthUnsupportedError(
+                    "metal",
+                    f"length() of buffer view '{name}' needs the bound buffer's "
+                    "size, which a Metal buffer argument does not carry",
+                )
+        access = self.glsl_buffer_block_member_access(object_expr)
         if access is None or not access.get("is_array"):
             return None
         if access.get("array_size") is not None:
@@ -27142,12 +26737,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
-                        return f"{element_type}[{type_node.size}]"
+                        return prepend_array_dimension(element_type, type_node.size)
                     else:
                         size_str = self.safe_expression_to_string(type_node.size)
-                        return f"{element_type}[{size_str}]"
+                        return prepend_array_dimension(element_type, size_str)
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size

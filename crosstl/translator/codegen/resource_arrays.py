@@ -2121,7 +2121,12 @@ def collect_resource_array_size_hints(
             if isinstance(node, ArrayAccessNode):
                 array_expr = getattr(node, "array", getattr(node, "array_expr", None))
                 index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-                array_name = expression_name(array_expr)
+                # Only an index into the declared array itself sizes it; ``a[i][j]``'s ``j`` indexes an element.
+                array_name = (
+                    None
+                    if isinstance(array_expr, ArrayAccessNode)
+                    else expression_name(array_expr)
+                )
                 index = resource_index_hint(
                     index_expr, visible_constants, visible_index_hints, call_stack
                 )
@@ -2164,7 +2169,12 @@ def collect_resource_array_size_hints(
                 continue
             array_expr = getattr(node, "array", getattr(node, "array_expr", None))
             index_expr = getattr(node, "index", getattr(node, "index_expr", None))
-            array_name = expression_name(array_expr)
+            # Only an index into the declared array itself sizes it; ``a[i][j]``'s ``j`` indexes an element.
+            array_name = (
+                None
+                if isinstance(array_expr, ArrayAccessNode)
+                else expression_name(array_expr)
+            )
             index = resource_index_hint(
                 index_expr, visible_constants, visible_index_hints
             )

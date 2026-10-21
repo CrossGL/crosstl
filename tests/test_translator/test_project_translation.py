@@ -7876,8 +7876,15 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
     assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
-    assert vertex_glsl.splitlines().count("out vec4 PSIn_Color;") == 1
-    assert fragment_glsl.splitlines().count("in vec4 PSIn_Color;") == 1
+    # COLOR0 links by its GLSL location on both sides of the interface.
+    assert (
+        vertex_glsl.splitlines().count("layout(location = 13) out vec4 PSIn_Color;")
+        == 1
+    )
+    assert (
+        fragment_glsl.splitlines().count("layout(location = 13) in vec4 PSIn_Color;")
+        == 1
+    )
     assert "layout(location = 0) out vec4 fragColor;" in fragment_glsl
     assert "fragColor = Color;" in fragment_glsl
 

@@ -3,6 +3,10 @@
 import logging
 from copy import deepcopy
 
+from .anonymous_blocks import (
+    AnonymousBufferBlock,
+    bind_anonymous_buffer_block_members,
+)
 from .ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -80,6 +84,7 @@ from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespa
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
+from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
 WAVE_INTRINSICS = {
     "WaveGetLaneCount",
@@ -122,6 +127,7 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitAnd",
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
+    *sorted(WAVE_EXTENDED_OPERATIONS),
 }
 
 COOPERATIVE_MATRIX_INTRINSICS = {
@@ -329,6 +335,7 @@ class Parser:
         # lookahead can undo its edits without copying the whole token list.
         self.token_edits = []
         self.strict_function_bodies = strict_function_bodies
+        self.anonymous_buffer_blocks = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
         self.current_function_return_type = None
@@ -424,6 +431,7 @@ class Parser:
         return ("EOF", None)
 
     def finalize_shader(self, shader):
+        bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
         return validate_shader_cbuffers(shader)
 
     def append_parsed_nodes(self, collection, parsed):
@@ -1235,10 +1243,12 @@ class Parser:
 
         variable_name = self.default_layout_buffer_instance_name(block_name)
         variable_type = NamedType(block_name)
-        if self.current_token[0] == "IDENTIFIER":
+        anonymous = self.current_token[0] != "IDENTIFIER"
+        if not anonymous:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1249,7 +1259,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            variable_type = ArrayType(variable_type, size)
+            sizes.append(size)
+        variable_type = self.wrap_array_dimensions(variable_type, sizes)
 
         self.eat("SEMICOLON")
 
@@ -1260,6 +1271,13 @@ class Parser:
             qualifiers=qualifiers + ["buffer"],
             attributes=self.glsl_buffer_block_attributes(layout_attributes),
         )
+        if anonymous:
+            self.anonymous_buffer_blocks.append(
+                AnonymousBufferBlock(
+                    variable_node,
+                    [getattr(member, "name", None) for member in members],
+                )
+            )
         return struct_node, variable_node
 
     def glsl_buffer_block_attributes(self, layout_attributes):
@@ -1856,6 +1874,7 @@ class Parser:
             param_type = self.parse_type()
             name = self.parse_binding_identifier()
 
+        sizes = []
         while self.current_token[
             0
         ] == "LBRACKET" and not self.current_token_starts_square_attribute(
@@ -1866,7 +1885,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            param_type = ArrayType(param_type, size)
+            sizes.append(size)
+        param_type = self.wrap_array_dimensions(param_type, sizes)
 
         if isinstance(param_type, ReferenceType):
             qualifier_names = {str(qualifier).lower() for qualifier in qualifiers}
@@ -2096,10 +2116,11 @@ class Parser:
         name = self.parse_binding_identifier()
         self.eat("COLON")
         var_type = self.parse_resource_parameter_type()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2148,14 +2169,16 @@ class Parser:
             self.eat("VAR")
             name = self.parse_binding_identifier()
             var_type = None
+            sizes = []
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 var_type = self.parse_type()
-                var_type = self.parse_array_suffixes(var_type)
+                sizes = self.parse_array_suffix_sizes()
 
             attributes.extend(self.parse_post_declaration_attributes())
             if var_type is not None:
-                var_type = self.parse_array_suffixes(var_type)
+                sizes += self.parse_array_suffix_sizes()
+                var_type = self.wrap_array_dimensions(var_type, sizes)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -2209,11 +2232,12 @@ class Parser:
         var_type = self.parse_array_suffixes(deepcopy(base_type))
         name = self.parse_binding_identifier()
         generic_params = self.parse_declaration_square_generic_parameters()
-        var_type = self.parse_array_suffixes(var_type)
+        sizes = self.parse_array_suffix_sizes()
 
         attributes = list(declaration_attributes)
         attributes.extend(self.parse_post_declaration_attributes())
-        var_type = self.parse_array_suffixes(var_type)
+        sizes += self.parse_array_suffix_sizes()
+        var_type = self.wrap_array_dimensions(var_type, sizes)
 
         initial_value = None
         if self.current_token[0] == "EQUALS":
@@ -2248,8 +2272,9 @@ class Parser:
             return self.parse_square_generic_arguments()
         return []
 
-    def parse_array_suffixes(self, type_node):
-        """Parse one or more non-attribute array suffixes after a type/name."""
+    def parse_array_suffix_sizes(self):
+        """Parse the sizes of consecutive non-attribute array suffixes, in source order (``None`` when unsized)."""
+        sizes = []
         while (
             self.current_token[0] == "LBRACKET"
             and not self.current_token_starts_square_attribute(
@@ -2262,8 +2287,23 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
+            sizes.append(size)
+        return sizes
+
+    @staticmethod
+    def wrap_array_dimensions(type_node, sizes):
+        """``T`` with suffixes ``[a][b]`` as an array of ``a`` arrays of ``b`` ``T``: the first suffix is outermost.
+
+        A declarator's suffixes enclose its type's own (GLSL 4.60 section 4.1.9: ``vec4[2] a[3]`` is an array of 3
+        ``vec4[2]``), so they wrap ``type_node`` whole.
+        """
+        for size in reversed(sizes):
             type_node = ArrayType(type_node, size)
         return type_node
+
+    def parse_array_suffixes(self, type_node):
+        """Parse one or more non-attribute array suffixes after a type/name."""
+        return self.wrap_array_dimensions(type_node, self.parse_array_suffix_sizes())
 
     def parse_variable_qualifiers(self):
         """Parse declaration qualifiers that precede a variable type."""
@@ -2784,9 +2824,11 @@ class Parser:
         else:
             base_type = PrimitiveType("float")
 
+        sizes = []
         while self.current_token[0] == "LBRACKET":
             if (
-                isinstance(base_type, NamedType)
+                not sizes
+                and isinstance(base_type, NamedType)
                 and self.square_brackets_form_type_arguments()
             ):
                 base_type.generic_args.extend(self.parse_square_generic_arguments())
@@ -2796,7 +2838,8 @@ class Parser:
             if self.current_token[0] != "RBRACKET":
                 size = self.parse_expression()
             self.eat("RBRACKET")
-            base_type = ArrayType(base_type, size)
+            sizes.append(size)
+        base_type = self.wrap_array_dimensions(base_type, sizes)
 
         while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
             if self.current_token[0] == "MULTIPLY":
@@ -4366,13 +4409,15 @@ class Parser:
             self.eat("VAR")
             name = self.parse_binding_identifier()
             var_type = None
+            sizes = []
             if self.current_token[0] == "COLON":
                 self.eat("COLON")
                 var_type = self.parse_type()
-                var_type = self.parse_array_suffixes(var_type)
+                sizes = self.parse_array_suffix_sizes()
             attributes = self.parse_post_declaration_attributes()
             if var_type is not None:
-                var_type = self.parse_array_suffixes(var_type)
+                sizes += self.parse_array_suffix_sizes()
+                var_type = self.wrap_array_dimensions(var_type, sizes)
 
             initial_value = None
             if self.current_token[0] == "EQUALS":
@@ -5097,6 +5142,9 @@ class Parser:
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
+                    elif left.name in GLSL_SUBGROUP_FUNCTIONS:
+                        # CrossGL also accepts the GL_KHR_shader_subgroup spelling of a wave operation.
+                        left = WaveOpNode(GLSL_SUBGROUP_FUNCTIONS[left.name], arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
                         left = self.infer_cooperative_matrix_operation_or_preserve(
                             CooperativeMatrixOpNode(

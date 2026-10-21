@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 320,
-        "endOffset": 8503,
+        "endLine": 328,
+        "endOffset": 8741,
         "file": "crosstl-out/vulkan/lighting.fs.spvasm",
-        "length": 8503,
+        "length": 8741,
         "line": 1,
         "offset": 0
       },

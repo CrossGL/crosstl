@@ -5,7 +5,7 @@ shader main {
     vec4 color;
     };
 
-    cbuffer Material @push_constant {
+    cbuffer Material @push_constant @buffer_layout(std430) {
     int kind;
     float fa[3];
     };

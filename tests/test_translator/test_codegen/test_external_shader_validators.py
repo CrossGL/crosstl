@@ -2239,8 +2239,10 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
     code = HLSLCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert "AllMemoryBarrier();" in code
+    # barrier(); memoryBarrier(); workgroupBarrier(); run back to back, so one barrier over all memory that
+    # synchronizes the group orders every access as the three do (barrier_peephole).
+    assert code.count("AllMemoryBarrierWithGroupSync();") == 1
+    assert "GroupMemoryBarrierWithGroupSync();" not in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -4504,8 +4506,12 @@ def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_p
     code = MetalCodeGen().generate(
         crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
     )
-    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
-    assert "threadgroup_barrier(mem_flags::mem_device);" in code
+    # Adjacent barriers fold into one barrier carrying the union of their flags.
+    assert code.count("threadgroup_barrier(") == 1
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in code
     assert "workgroupBarrier();" not in code
     shader_path.write_text(code, encoding="utf-8")
 

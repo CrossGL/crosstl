@@ -124,6 +124,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -133,6 +134,7 @@ from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
+    prepend_array_dimension,
     split_array_type_suffix,
 )
 from .ast_walk import walk_ast_values
@@ -171,6 +173,8 @@ from .enum_utils import (
     sanitize_type_name,
     substitute_generic_type_name,
 )
+from .exponent_builtins import emit_glsl_exponent_helpers, glsl_exponent_call
+from .extended_arithmetic_builtins import glsl_extended_arithmetic_call
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -204,6 +208,7 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
     patch_parameter_refusal_reason,
@@ -238,6 +243,13 @@ from .glsl_version_requirements import (
     program_extensions,
     resolve_version_line,
     with_es_default_precisions,
+)
+from .glsl_wave_extended import (
+    GLSL_CLUSTERED_BITWISE_OPERATIONS,
+    GLSL_CLUSTERED_NUMERIC_OPERATIONS,
+    GLSL_EXTENDED_WAVE_ARITIES,
+    GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
+    GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -398,6 +410,7 @@ from .index_range_contracts import (
     truncating_division_interval,
 )
 from .integer_intervals import convert_integer_intervals
+from .interface_conflicts import InterfaceLocationConflictError
 from .loop_guard_bounds import guarded_additive_loop_entries
 from .loop_induction import (
     checked_induction_value,
@@ -446,6 +459,7 @@ from .scalar_return_bounds import (
     vector_return_intervals,
 )
 from .stage_distance_layout import distance_semantic
+from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -1856,73 +1870,77 @@ class GLSLCodeGen(
     # non-type keywords. Source languages such as HLSL accept them as ordinary
     # identifiers (``this``, ``resource``, ``filter``), so they are escaped.
     # Mesa also lexes ``packed``, reserved up to GLSL 1.30, as a keyword.
-    GLSL_RESERVED_IDENTIFIERS = GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES | {
-        "active",
-        "asm",
-        "attribute",
-        "barrier",
-        "buffer",
-        "cast",
-        "centroid",
-        "class",
-        "coherent",
-        "common",
-        "enum",
-        "extern",
-        "external",
-        "filter",
-        "fixed",
-        "flat",
-        "fvec2",
-        "fvec3",
-        "fvec4",
-        "goto",
-        "half",
-        "highp",
-        "hvec2",
-        "hvec3",
-        "hvec4",
-        "inline",
-        "input",
-        "interface",
-        "invariant",
-        "layout",
-        "long",
-        "lowp",
-        "mediump",
-        "namespace",
-        "noinline",
-        "noperspective",
-        "output",
-        "packed",
-        "partition",
-        "patch",
-        "precise",
-        "precision",
-        "public",
-        "readonly",
-        "resource",
-        "restrict",
-        "sample",
-        "sampler3DRect",
-        "shared",
-        "short",
-        "sizeof",
-        "smooth",
-        "static",
-        "subroutine",
-        "superp",
-        "template",
-        "this",
-        "typedef",
-        "uniform",
-        "union",
-        "unsigned",
-        "using",
-        "varying",
-        "volatile",
-        "writeonly",
-    }
+    GLSL_RESERVED_IDENTIFIERS = (
+        GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
+        | {
+            "active",
+            "asm",
+            "attribute",
+            "barrier",
+            "buffer",
+            "cast",
+            "centroid",
+            "class",
+            "coherent",
+            "common",
+            "enum",
+            "extern",
+            "external",
+            "filter",
+            "fixed",
+            "flat",
+            "fvec2",
+            "fvec3",
+            "fvec4",
+            "goto",
+            "half",
+            "highp",
+            "hvec2",
+            "hvec3",
+            "hvec4",
+            "inline",
+            "input",
+            "interface",
+            "invariant",
+            "layout",
+            "long",
+            "lowp",
+            "mediump",
+            "namespace",
+            "noinline",
+            "noperspective",
+            "output",
+            "packed",
+            "partition",
+            "patch",
+            "precise",
+            "precision",
+            "public",
+            "readonly",
+            "resource",
+            "restrict",
+            "sample",
+            "sampler3DRect",
+            "shared",
+            "short",
+            "sizeof",
+            "smooth",
+            "static",
+            "subroutine",
+            "superp",
+            "template",
+            "this",
+            "typedef",
+            "uniform",
+            "union",
+            "unsigned",
+            "using",
+            "varying",
+            "volatile",
+            "writeonly",
+        }
+        | GLSL_TYPE_KEYWORDS
+    )
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
@@ -2025,6 +2043,24 @@ class GLSLCodeGen(
         "WavePrefixProduct": ("*", False),
         "WavePrefixInclusiveSum": ("+", True),
         "WavePrefixInclusiveProduct": ("*", True),
+    }
+    # GL_KHR_shader_subgroup_basic barriers, plus CrossGL's execution-only subgroup barrier.
+    GLSL_SUBGROUP_BARRIER_FUNCTIONS = frozenset(
+        {
+            "subgroupBarrier",
+            "subgroupExecutionBarrier",
+            "subgroupMemoryBarrier",
+            "subgroupMemoryBarrierBuffer",
+            "subgroupMemoryBarrierShared",
+            "subgroupMemoryBarrierImage",
+        }
+    )
+    # Workgroup-scope fences that order the memory of each subgroup fence for the subgroup as well.
+    GLSL_SUBGROUP_FENCE_WIDENINGS = {
+        "subgroupMemoryBarrier": "groupMemoryBarrier",
+        "subgroupMemoryBarrierBuffer": "memoryBarrierBuffer",
+        "subgroupMemoryBarrierShared": "memoryBarrierShared",
+        "subgroupMemoryBarrierImage": "memoryBarrierImage",
     }
     GLSL_SOFTWARE_SUBGROUP_OPERATIONS = frozenset(
         {
@@ -2175,6 +2211,7 @@ class GLSLCodeGen(
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
         "WaveMultiPrefixBitXor": 2,
+        **GLSL_EXTENDED_WAVE_ARITIES,
     }
     GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
         "WaveShuffleAndFillUp": (3, 4),
@@ -2214,6 +2251,7 @@ class GLSLCodeGen(
         "QuadReadAcrossY": "subgroupQuadSwapVertical",
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
+        **GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     }
     GLSL_WAVE_BITWISE_VALUE_OPERATIONS = {
         "WaveActiveBitAnd",
@@ -2369,6 +2407,7 @@ class GLSLCodeGen(
         "WaveMultiPrefixBitAnd": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveMultiPrefixBitOr": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveMultiPrefixBitXor": "#extension GL_KHR_shader_subgroup_ballot : require",
+        **GLSL_EXTENDED_WAVE_EXTENSIONS,
     }
     GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
@@ -2437,6 +2476,7 @@ class GLSLCodeGen(
         "WavePrefixInclusiveMin",
         "WavePrefixExclusiveMax",
         "WavePrefixInclusiveMax",
+        *GLSL_CLUSTERED_NUMERIC_OPERATIONS,
     }
     GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
         "WaveActiveBitAnd",
@@ -2448,6 +2488,7 @@ class GLSLCodeGen(
         "WavePrefixInclusiveBitOr",
         "WavePrefixExclusiveBitXor",
         "WavePrefixInclusiveBitXor",
+        *GLSL_CLUSTERED_BITWISE_OPERATIONS,
     }
     GLSL_WAVE_BOOLEAN_OPERATIONS = {
         "WaveActiveAllTrue",
@@ -2800,6 +2841,7 @@ class GLSLCodeGen(
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_exponent_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -2848,42 +2890,10 @@ class GLSLCodeGen(
             "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
-            "Position": "layout(location = 0)",
-            "POSITION": "layout(location = 0)",
-            "Color": "layout(location = 13)",
-            "COLOR": "layout(location = 13)",
-            "COLOR0": "layout(location = 13)",
-            "COLOR1": "layout(location = 14)",
-            "COLOR2": "layout(location = 15)",
-            "COLOR3": "layout(location = 16)",
-            "COLOR4": "layout(location = 17)",
-            "COLOR5": "layout(location = 18)",
-            "COLOR6": "layout(location = 19)",
-            "COLOR7": "layout(location = 20)",
-            "Normal": "layout(location = 1)",
-            "NORMAL": "layout(location = 1)",
-            "Tangent": "layout(location = 2)",
-            "TANGENT": "layout(location = 2)",
-            "Binormal": "layout(location = 3)",
-            "BINORMAL": "layout(location = 3)",
-            "TexCoord": "layout(location = 4)",
-            "TEXCOORD": "layout(location = 4)",
-            "TexCoord0": "layout(location = 5)",
-            "TEXCOORD0": "layout(location = 5)",
-            "TexCoord1": "layout(location = 6)",
-            "TEXCOORD1": "layout(location = 6)",
-            "TexCoord2": "layout(location = 7)",
-            "TEXCOORD2": "layout(location = 7)",
-            "TexCoord3": "layout(location = 8)",
-            "TEXCOORD3": "layout(location = 8)",
-            "TexCoord4": "layout(location = 9)",
-            "TEXCOORD4": "layout(location = 9)",
-            "TexCoord5": "layout(location = 10)",
-            "TEXCOORD5": "layout(location = 10)",
-            "TexCoord6": "layout(location = 11)",
-            "TEXCOORD6": "layout(location = 11)",
-            "TexCoord7": "layout(location = 12)",
-            "TEXCOORD7": "layout(location = 12)",
+            **{
+                semantic: f"layout(location = {location})"
+                for semantic, location in GLSL_SEMANTIC_LOCATIONS.items()
+            },
             # Vertex outputs
             "gl_Position": "gl_Position",
             "gl_PointSize": "gl_PointSize",
@@ -4081,7 +4091,7 @@ class GLSLCodeGen(
                     continue
                 function_name = self.function_call_name(node)
                 if (
-                    function_name in {"subgroupBarrier", "subgroupExecutionBarrier"}
+                    function_name in self.GLSL_SUBGROUP_BARRIER_FUNCTIONS
                     and function_name not in self.function_return_types
                 ):
                     return True
@@ -8585,6 +8595,7 @@ class GLSLCodeGen(
         self.required_glsl_complex64_helpers = set()
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
+        self.glsl_exponent_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -9056,6 +9067,15 @@ class GLSLCodeGen(
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
+        # VSInput, VSOutput and PSInput name stage interfaces by convention only when the program has that stage.
+        program_stage_names = {
+            normalize_stage_name(stage_type)
+            for stage_type in getattr(ast, "stages", {})
+        } | {function_stage_name(func) for func in functions} - {None}
+        legacy_vertex_names = not program_stage_names or "vertex" in program_stage_names
+        legacy_fragment_names = (
+            not program_stage_names or "fragment" in program_stage_names
+        )
         data_struct_nodes = []
         for node in structs:
             if isinstance(node, StructNode):
@@ -9078,6 +9098,7 @@ class GLSLCodeGen(
                     continue
                 elif (
                     node.name == "VSInput"
+                    and legacy_vertex_names
                     or node.name in self.vertex_input_struct_names
                 ):
                     if emit_vertex_io:
@@ -9091,7 +9112,9 @@ class GLSLCodeGen(
                             data_struct_nodes.append(node)
                     elif not emit_graphics_io:
                         data_struct_nodes.append(node)
-                elif node.name == "VSOutput":
+                elif node.name == "VSOutput" and (
+                    legacy_vertex_names or legacy_fragment_names
+                ):
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
                         code += self.wrap_stage_guard(
@@ -9118,7 +9141,7 @@ class GLSLCodeGen(
                         )
                         emitted_io = True
                     if not emitted_io:
-                        if emit_vertex_io:
+                        if emit_vertex_io and legacy_vertex_names:
                             code += self.wrap_stage_guard(
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
@@ -9163,7 +9186,7 @@ class GLSLCodeGen(
                         ast, node.name, emitted_io, emit_graphics_io
                     ):
                         data_struct_nodes.append(node)
-                elif node.name == "PSInput":
+                elif node.name == "PSInput" and legacy_fragment_names:
                     if emit_fragment_io:
                         code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
@@ -9620,8 +9643,29 @@ class GLSLCodeGen(
                     mapped_type_for_layout=f"{mapped_type}{array_suffix}",
                 )
 
+        interface_var_stages = {
+            id(variable): normalize_stage_name(stage_type)
+            for stage_type, stage in getattr(ast, "stages", {}).items()
+            for variable in getattr(stage, "local_variables", []) or []
+        }
         for node in stage_local_interface_vars:
-            code += self.generate_stage_local_interface_variable_declaration(node)
+            # A stage's own in/out variables exist only in that stage's section of a combined program, and
+            # take their locations in that stage's interface.
+            owner = interface_var_stages.get(id(node))
+            previous_stage_io_stage = self.current_global_stage_io_stage
+            if owner is not None:
+                self.current_global_stage_io_stage = owner
+            try:
+                declaration = self.generate_stage_local_interface_variable_declaration(
+                    node
+                )
+            finally:
+                self.current_global_stage_io_stage = previous_stage_io_stage
+            code += (
+                declaration
+                if owner is None
+                else self.wrap_stage_guard(declaration, owner)
+            )
 
         cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
         if cbuffers:
@@ -9911,6 +9955,7 @@ class GLSLCodeGen(
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
+            + emit_glsl_exponent_helpers(self)
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
@@ -18391,6 +18436,19 @@ class GLSLCodeGen(
             block_name = "Entry_Value_Args"
         return block_name
 
+    @staticmethod
+    def glsl_uniform_member_orientation(member):
+        """``layout(row_major) `` for a block member whose matrices are stored row by row (GLSL 4.60 section
+        4.4.5), which sets the bytes the host writes."""
+        names = {str(q).lower() for q in getattr(member, "qualifiers", None) or []}
+        names.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(member, "attributes", None) or []
+        )
+        if "row_major" in names and "column_major" not in names:
+            return "layout(row_major) "
+        return ""
+
     def generate_cbuffers(self, ast, target_stage=None):
         code = ""
         cbuffers = self.glsl_cbuffer_nodes(ast, target_stage)
@@ -18524,13 +18582,12 @@ class GLSLCodeGen(
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
+                        orientation = self.glsl_uniform_member_orientation(member)
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += (
-                                f"    {self.map_type(element_type)} {member_name}[];\n"
-                            )
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[];\n"
                     else:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
@@ -18541,7 +18598,8 @@ class GLSLCodeGen(
                         declaration = format_c_style_array_declaration(
                             member_type, member_name
                         )
-                        code += f"    {declaration};\n"
+                        orientation = self.glsl_uniform_member_orientation(member)
+                        code += f"    {orientation}{declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
@@ -18553,13 +18611,12 @@ class GLSLCodeGen(
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
+                        orientation = self.glsl_uniform_member_orientation(member)
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
-                            code += (
-                                f"    {self.map_type(element_type)} {member_name}[];\n"
-                            )
+                            code += f"    {orientation}{self.map_type(element_type)} {member_name}[];\n"
                     else:
                         if hasattr(member, "member_type"):
                             member_type = self.map_type(member.member_type)
@@ -18570,7 +18627,8 @@ class GLSLCodeGen(
                         declaration = format_c_style_array_declaration(
                             member_type, member_name
                         )
-                        code += f"    {declaration};\n"
+                        orientation = self.glsl_uniform_member_orientation(member)
+                        code += f"    {orientation}{declaration};\n"
                 code += "};\n"
         return code
 
@@ -19696,6 +19754,8 @@ class GLSLCodeGen(
     def glsl_tessellation_partitioning(self, partitioning):
         partition_name = str(partitioning).strip().strip('"').lower()
         partition_map = {
+            # HLSL "integer" partitioning rounds levels up to integers, as equal_spacing does.
+            "integer": "equal_spacing",
             "equal": "equal_spacing",
             "equal_spacing": "equal_spacing",
             "fractional_even": "fractional_even_spacing",
@@ -21131,6 +21191,13 @@ class GLSLCodeGen(
                 seen_entries.add(id(func))
                 if entry_declares_parameter_struct(func):
                     return True
+                # Only vertex and fragment entry points flatten their interface structure locals into stage
+                # variables; any other stage's local of that type is an ordinary structure value.
+                if stage_name not in {
+                    "vertex",
+                    "fragment",
+                } and self.function_body_declares_type(func, struct_name):
+                    return True
 
         for func in getattr(ast, "functions", []) or []:
             if id(func) in stage_entry_ids:
@@ -22456,11 +22523,12 @@ class GLSLCodeGen(
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_location_label(start, end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_location_label(used_start, used_end)}"
+                    f"{self.stage_io_location_label(used_start, used_end)}",
                 )
         for (
             used_start,
@@ -22473,11 +22541,12 @@ class GLSLCodeGen(
             if used_index != 0:
                 continue
             if start <= used_end and used_start <= end:
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_location_label(start, end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}",
                 )
         ranges.append((start, end, name))
 
@@ -22507,11 +22576,12 @@ class GLSLCodeGen(
                     continue
                 if used_start == start and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise InterfaceLocationConflictError(
+                    "opengl",
                     f"Conflicting OpenGL {stage_name} {direction} location "
                     f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
                     f"overlaps '{used_name}' "
-                    f"{self.stage_io_location_label(used_start, used_end)}"
+                    f"{self.stage_io_location_label(used_start, used_end)}",
                 )
 
         entries = self.stage_io_used_components.setdefault((stage_name, direction), [])
@@ -22536,11 +22606,12 @@ class GLSLCodeGen(
                     component_start <= used_component_end
                     and used_component_start <= component_end
                 ):
-                    raise ValueError(
+                    raise InterfaceLocationConflictError(
+                        "opengl",
                         f"Conflicting OpenGL {stage_name} {direction} location "
                         f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
                         f"overlaps '{used_name}' "
-                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}",
                     )
         entries.append((start, end, component_start, component_end, index, name))
 
@@ -22552,9 +22623,10 @@ class GLSLCodeGen(
             return True
         if existing == declaration:
             return False
-        raise ValueError(
+        raise InterfaceLocationConflictError(
+            "opengl",
             f"Conflicting OpenGL {stage_name} {direction} declaration for "
-            f"'{name}': {declaration} differs from {existing}"
+            f"'{name}': {declaration} differs from {existing}",
         )
 
     def stage_io_declared_names(self, stage_name, direction):
@@ -31479,7 +31551,9 @@ class GLSLCodeGen(
         if direction is None:
             return
 
-        stage_name = self.current_target_stage or "global"
+        stage_name = (
+            self.current_global_stage_io_stage or self.current_target_stage or "global"
+        )
         if self.is_per_vertex_stage_io(node, qualifier, direction):
             mapped_type = self.stage_io_per_vertex_element_type(mapped_type)
         self.reserve_stage_io_layout(
@@ -39611,6 +39685,15 @@ complex64_t crossgl_complex64_mod_assign(
             if boolean_order_call is not None:
                 return boolean_order_call
 
+            exponent_call = glsl_exponent_call(self, original_func_name, expr.args)
+            if exponent_call is not None:
+                return exponent_call
+            extended_arithmetic_refusal = glsl_extended_arithmetic_call(
+                self, original_func_name, expr.args
+            )
+            if extended_arithmetic_refusal is not None:
+                return extended_arithmetic_refusal
+
             isfinite_call = self.generate_glsl_isfinite_call(
                 original_func_name,
                 expr.args,
@@ -40490,6 +40573,18 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=source_location,
                 )
             return "subgroupBarrier()"
+        if self.software_subgroup_width is not None and not args:
+            # Software subgroups are slices of the workgroup, so a workgroup-scope fence orders their memory.
+            widened = self.GLSL_SUBGROUP_FENCE_WIDENINGS.get(func_name)
+            if widened is not None:
+                return f"{widened}()"
+            if func_name == "subgroupBarrier":
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroups have no subgroup barrier over buffer, image and shared memory",
+                    operation=func_name,
+                    reason="subgroup-memory-barrier-unsupported",
+                    source_location=source_location,
+                )
         if func_name == "atomicThreadFence":
             return self.generate_glsl_atomic_thread_fence(
                 args,
@@ -40499,6 +40594,10 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         if func_name in {"workgroupBarrier", "workgroupExecutionBarrier"}:
             return "barrier()"
+        if func_name in {"deviceMemoryBarrier", "allMemoryBarrier"}:
+            # GLSL has no device-scope fence limited to buffers and images; memoryBarrier() orders those and
+            # shared memory (GLSL 4.60 section 8.16), which covers both.
+            return "memoryBarrier()"
         return None
 
     def collect_metal_simd_group_placeholder_functions(self, functions):
@@ -42808,6 +42907,8 @@ complex64_t crossgl_complex64_mod_assign(
         return self.generate_glsl_explicit_bitcast(integer_type, value_type, reduced)
 
     def glsl_wave_result_type(self, operation, arguments):
+        if operation in WAVE_BALLOT_BIT_OPERATIONS:
+            return wave_extended_result_type(operation, None)
         if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
             return "uint"
         if operation in {
@@ -44616,6 +44717,11 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_source_expression_type(self, expression):
         if expression is None:
             return None
+        if isinstance(expression, RayTracingOpNode) and expression.operation in {
+            "ReportHit",
+            "ReportIntersection",
+        }:
+            return "bool"  # reportIntersectionEXT returns whether the hit was accepted
         emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expression)
         if emulated_matrix_type is not None:
             return emulated_matrix_type
@@ -55319,7 +55425,9 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if not array_size and self.is_inferable_resource_array_type(vtype):
                 array_size = "1"
-            array_suffix = f"[{array_size}]" if array_size else "[]"
+            # An array of arrays: the outer dimension is the first suffix, the element's own ones follow it.
+            vtype, element_suffix = split_array_type_suffix(vtype)
+            array_suffix = (f"[{array_size}]" if array_size else "[]") + element_suffix
             resource_count = self.resource_array_count(
                 node_type.size if node_type.size else array_size
             )
@@ -56829,6 +56937,7 @@ complex64_t crossgl_complex64_mod_assign(
             "fractional_even_spacing",
             "fractional_odd_spacing",
             "hlsl_wavesize",
+            "instance",
             "invocations",
             "inputtopology",
             "isolines",
@@ -57328,12 +57437,12 @@ complex64_t crossgl_complex64_mod_assign(
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 if type_node.size is not None:
                     if isinstance(type_node.size, int):
-                        return f"{element_type}[{type_node.size}]"
+                        return prepend_array_dimension(element_type, type_node.size)
                     else:
                         size_str = self.expression_to_string(type_node.size)
-                        return f"{element_type}[{size_str}]"
+                        return prepend_array_dimension(element_type, size_str)
                 else:
-                    return f"{element_type}[]"
+                    return prepend_array_dimension(element_type)
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size

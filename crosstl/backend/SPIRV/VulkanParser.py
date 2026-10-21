@@ -6,6 +6,13 @@ import struct
 
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
+from .barrier_import import spirv_barrier_statements
+from .block_layout_import import spirv_block_buffer_layout
+from .function_structure import SpirvFunctionStructure
+from .integer_signedness_import import (
+    spirv_integer_binary_expression,
+    spirv_integer_conversion_expression,
+)
 from .local_names import function_local_names
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
@@ -13,6 +20,12 @@ from .ray_tracing_import import (
     ray_statement,
     ray_variable_locations,
     refuse_untranslated_statement,
+)
+from .select_import import spirv_select_expression
+from .struct_result_import import (
+    spirv_extended_arithmetic_call,
+    spirv_struct_result_call,
+    spirv_struct_result_member,
 )
 from .VulkanAst import *
 from .VulkanLexer import *
@@ -286,12 +299,6 @@ class VulkanParser:
         "SUDotAccSatKHR": "spirvSUDotAccSat",
         "UDotAccSat": "spirvUDotAccSat",
         "UDotAccSatKHR": "spirvUDotAccSat",
-    }
-    SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS = {
-        "IAddCarry": "spirvIAddCarry",
-        "ISubBorrow": "spirvISubBorrow",
-        "SMulExtended": "spirvSMulExtended",
-        "UMulExtended": "spirvUMulExtended",
     }
     SPIRV_ATOMIC_RMW_FUNCTIONS = {
         "OpAtomicIAdd": "atomicAdd",
@@ -596,10 +603,12 @@ class VulkanParser:
         "MatrixInverse": "inverse",
         "Modf": "modf",
         "ModfStruct": "modf",
-        "NClamp": "clamp",
+        # NMin, NMax and NClamp return the non-NaN operand (GLSL.std.450 sections 79-81),
+        # which is the C99 fmin/fmax rule; FMin and FMax leave that case undefined.
+        "NClamp": "fmin",
         "Normalize": "normalize",
-        "NMax": "max",
-        "NMin": "min",
+        "NMax": "fmax",
+        "NMin": "fmin",
         "PackDouble2x32": "packDouble2x32",
         "PackHalf2x16": "packHalf2x16",
         "PackSnorm2x16": "packSnorm2x16",
@@ -724,6 +733,7 @@ class VulkanParser:
         self.pos = 0
         self.current_token = self.tokens[self.pos]
         self.loop_depth = 0
+        self.spirv_module_execution_models = []
         self.breakable_depth = 0
         self.skip_comments()
 
@@ -1192,7 +1202,7 @@ class VulkanParser:
         self.spirv_apply_decoration_groups(
             decorations, member_decorations, group_decorates, group_member_decorates
         )
-        self.spirv_register_struct_type_names(types, names)
+        self.spirv_register_struct_type_names(types, names, member_names)
         self.spirv_assign_flattened_resource_block_member_aliases(
             variables,
             names,
@@ -1367,6 +1377,9 @@ class VulkanParser:
         entry_points_by_id = {}
         for entry in entry_points:
             entry_points_by_id.setdefault(entry["id"], []).append(entry)
+        self.spirv_module_execution_models = sorted(
+            {entry["execution_model"] for entry in entry_points}
+        )
         entry_instruction = None
         raw_instructions = []
         for result_id, opcode, operands, line_number in instructions:
@@ -1507,9 +1520,11 @@ class VulkanParser:
         expressions = {}
         expression_type_ids = {}
         variables_by_id = {variable["id"]: variable for variable in variables}
-        phi_contexts = self.spirv_assembly_phi_contexts(raw_instructions)
         used_result_ids = self.spirv_assembly_used_result_ids(raw_instructions)
-        current_label = None
+        structure = SpirvFunctionStructure(
+            self, raw_instructions, names, decorations, types, variables, constants
+        )
+        previous_result_id = None
 
         def record_expression(result_id, result_type_id, expression):
             expressions[result_id] = self.spirv_maybe_materialize_assembly_expression(
@@ -1525,8 +1540,12 @@ class VulkanParser:
             expression_type_ids[result_id] = result_type_id
 
         for result_id, opcode, operands, _line_number in raw_instructions:
+            structure.settle(
+                previous_result_id, expressions, expression_type_ids, statements
+            )
+            previous_result_id = result_id
             if result_id and opcode == "OpLabel":
-                current_label = result_id
+                structure.block_started(result_id, statements)
                 continue
 
             if result_id and opcode == "OpFunctionParameter":
@@ -1984,17 +2003,24 @@ class VulkanParser:
                 )
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
+                operand = self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                expressions[result_id] = spirv_integer_conversion_expression(
+                    opcode[2:],
+                    operands[0],
+                    operand,
+                    expression_type_ids.get(operands[1])
+                    or constant_types.get(operands[1]),
+                    types,
+                    self.spirv_vector_type_name,
+                ) or FunctionCallNode(
                     self.spirv_type_name(operands[0], types) or operands[0],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                    [operand],
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -2226,6 +2252,27 @@ class VulkanParser:
                 )
                 continue
 
+            if result_id and opcode == "OpExtInst" and len(operands) == 4:
+                struct_value = spirv_struct_result_call(
+                    self,
+                    result_id,
+                    operands[0],
+                    extended_instruction_imports.get(operands[1]),
+                    operands[2],
+                    self.spirv_assembly_operand_expression(
+                        operands[3], expressions, names, decorations, constants
+                    ),
+                    statements,
+                    names,
+                    decorations,
+                    types,
+                    constants,
+                )
+                if struct_value is not None:
+                    expressions[result_id] = struct_value
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode == "OpExtInst" and len(operands) >= 3:
                 call = FunctionCallNode(
                     self.spirv_ext_inst_function_name(
@@ -2243,6 +2290,19 @@ class VulkanParser:
                         for operand in operands[3:]
                     ],
                 )
+                if (
+                    extended_instruction_imports.get(operands[1]) == "GLSL.std.450"
+                    and self.SPIRV_GLSL_STD_450_EXT_INST_IDS.get(
+                        str(operands[2]), operands[2]
+                    )
+                    == "NClamp"
+                    and len(call.args) == 3
+                ):
+                    # NClamp(x, lo, hi) is NMin(NMax(x, lo), hi).
+                    call = FunctionCallNode(
+                        "fmin",
+                        [FunctionCallNode("fmax", call.args[:2]), call.args[2]],
+                    )
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
@@ -2301,8 +2361,7 @@ class VulkanParser:
                 )
                 expression_type_ids[result_id] = operands[0]
                 if result_id not in used_result_ids:
-                    # A discarded result still reports the hit; structured blocks emit it from this flag.
-                    expressions[result_id].spirv_unused_side_effect = True
+                    # A discarded result still reports the hit.
                     statements.append(expressions[result_id])
                 continue
 
@@ -2428,75 +2487,66 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
+                condition, true_value, false_value = (
+                    self.spirv_assembly_operand_expression(
+                        operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    for operand in operands[1:4]
+                )
                 record_expression(
                     result_id,
                     operands[0],
-                    TernaryOpNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[3],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
+                    spirv_select_expression(
+                        condition,
+                        true_value,
+                        false_value,
+                        expression_type_ids.get(operands[1])
+                        or constant_types.get(operands[1]),
+                        types,
                     ),
                 )
                 continue
 
             if result_id and opcode == "OpPhi" and len(operands) >= 3:
-                record_expression(
+                structure.import_phi(
                     result_id,
-                    operands[0],
-                    self.spirv_assembly_phi_expression(
-                        operands,
-                        current_label,
-                        phi_contexts,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
+                    operands,
+                    expressions,
+                    expression_type_ids,
+                    record_expression,
                 )
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
-            if (
-                result_id
-                and operation in self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS
-                and len(operands) >= 3
-            ):
-                record_expression(
+            if result_id and len(operands) >= 3:
+                struct_value = spirv_extended_arithmetic_call(
+                    self,
                     result_id,
                     operands[0],
-                    FunctionCallNode(
-                        self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[1:]
-                        ],
-                    ),
+                    operation,
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operand,
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                        for operand in operands[1:]
+                    ],
+                    statements,
+                    names,
+                    decorations,
+                    types,
                 )
-                continue
+                if struct_value is not None:
+                    expressions[result_id] = struct_value
+                    expression_type_ids[result_id] = operands[0]
+                    continue
 
             if (
                 result_id
@@ -2591,27 +2641,33 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
                 and len(operands) >= 3
             ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    BinaryOpNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ),
+                lhs, rhs = (
+                    self.spirv_assembly_operand_expression(
+                        operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                    for operand in operands[1:3]
                 )
+                expression = spirv_integer_binary_expression(
+                    operation,
+                    operands[0],
+                    lhs,
+                    expression_type_ids.get(operands[1])
+                    or constant_types.get(operands[1]),
+                    rhs,
+                    expression_type_ids.get(operands[2])
+                    or constant_types.get(operands[2]),
+                    types,
+                    self.spirv_vector_type_name,
+                )
+                if expression is None:
+                    expression = BinaryOpNode(
+                        lhs, self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation], rhs
+                    )
+                record_expression(result_id, operands[0], expression)
                 continue
 
             if (
@@ -2653,8 +2709,12 @@ class VulkanParser:
                 )
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
+                elif result_id not in used_result_ids:
+                    # The call's effects happen even when its result is discarded.
+                    statements.append(call)
                 else:
-                    record_expression(result_id, operands[0], call)
+                    expressions[result_id] = call
+                    expression_type_ids[result_id] = operands[0]
                 continue
 
             if opcode == "OpAtomicStore" and len(operands) >= 4:
@@ -2712,37 +2772,21 @@ class VulkanParser:
                 continue
 
             if opcode == "OpControlBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvControlBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:3]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue
 
             if opcode == "OpMemoryBarrier" and len(operands) >= 2:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:2]
-                        ],
+                statements.extend(
+                    spirv_barrier_statements(
+                        opcode,
+                        [constants.get(operand) for operand in operands[:2]],
+                        self.spirv_module_execution_models,
                     )
                 )
                 continue
@@ -2866,489 +2910,10 @@ class VulkanParser:
                 continue
             refuse_untranslated_statement(result_id, opcode)
 
-        structured_statements = self.spirv_assembly_simple_loop_body(
-            raw_instructions,
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
+        structure.settle(
+            previous_result_id, expressions, expression_type_ids, statements
         )
-        if structured_statements is None:
-            structured_statements = self.spirv_assembly_simple_switch_body(
-                raw_instructions,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-        if structured_statements is None:
-            structured_statements = self.spirv_assembly_simple_selection_body(
-                raw_instructions,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-        if structured_statements is not None:
-            return structured_statements
-
-        return statements
-
-    def spirv_assembly_simple_loop_body(
-        self,
-        raw_instructions,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        loop_merge_indices = [
-            index
-            for index, (_result_id, opcode, _operands, _line_number) in enumerate(
-                raw_instructions
-            )
-            if opcode == "OpLoopMerge"
-        ]
-        if len(loop_merge_indices) != 1:
-            return None
-
-        labels = self.spirv_assembly_label_indices(raw_instructions)
-        loop_index = loop_merge_indices[0]
-        result_id, _opcode, loop_operands, _line_number = raw_instructions[loop_index]
-        if result_id is not None or len(loop_operands) < 2:
-            return None
-        if loop_index + 1 >= len(raw_instructions):
-            return None
-
-        merge_label, continue_label = loop_operands[:2]
-        if merge_label not in labels or continue_label not in labels:
-            return None
-
-        header_index = self.spirv_assembly_enclosing_label_index(
-            raw_instructions, loop_index
-        )
-        if header_index is None:
-            return None
-        header_label = raw_instructions[header_index][0]
-
-        header_instructions = raw_instructions[header_index + 1 : loop_index]
-        if header_instructions:
-            return None
-
-        loop_shape = self.spirv_assembly_loop_shape_from_condition_block(
-            raw_instructions,
-            labels,
-            loop_index,
-            merge_label,
-        )
-        if loop_shape is None:
-            return None
-
-        condition_operand, body_label, inverted_condition, condition_instructions = (
-            loop_shape
-        )
-        if body_label not in labels:
-            return None
-
-        if not self.spirv_assembly_instruction_slice_is_expression_only(
-            condition_instructions,
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        ):
-            return None
-
-        body_instructions = self.spirv_assembly_loop_block_body_instructions(
-            raw_instructions, labels, body_label, {continue_label}
-        )
-        continue_instructions = self.spirv_assembly_loop_block_body_instructions(
-            raw_instructions, labels, continue_label, {header_label}
-        )
-        if body_instructions is None or continue_instructions is None:
-            return None
-        if not self.spirv_assembly_selection_block_is_simple(body_instructions):
-            return None
-        if not self.spirv_assembly_selection_block_is_simple(continue_instructions):
-            return None
-
-        prelude = self.spirv_assembly_linear_statements(
-            raw_instructions[:header_index],
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        )
-        body = self.spirv_assembly_linear_statements(
-            body_instructions,
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        )
-        body.extend(
-            self.spirv_assembly_linear_statements(
-                continue_instructions,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-        )
-        postlude = self.spirv_assembly_linear_statements(
-            raw_instructions[labels[merge_label] + 1 :],
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        )
-        condition = self.spirv_assembly_operand_expression(
-            condition_operand,
-            expressions,
-            names,
-            decorations,
-            constants,
-        )
-        if inverted_condition:
-            condition = UnaryOpNode("!", condition)
-
-        return [*prelude, WhileNode(condition, body), *postlude]
-
-    def spirv_assembly_loop_shape_from_condition_block(
-        self,
-        raw_instructions,
-        labels,
-        loop_index,
-        merge_label,
-    ):
-        _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
-            loop_index + 1
-        ]
-        if branch_opcode != "OpBranch" or not branch_operands:
-            return None
-
-        condition_label = branch_operands[0]
-        condition_block = self.spirv_assembly_block_instructions(
-            raw_instructions, labels, condition_label
-        )
-        if not condition_block:
-            return None
-
-        branch = condition_block[-1]
-        _result_id, opcode, operands, _line_number = branch
-        if opcode != "OpBranchConditional" or len(operands) < 3:
-            return None
-
-        shape = self.spirv_assembly_loop_condition_shape(operands, merge_label)
-        if shape is None:
-            return None
-        condition_operand, body_label, inverted_condition = shape
-        return (
-            condition_operand,
-            body_label,
-            inverted_condition,
-            condition_block[:-1],
-        )
-
-    def spirv_assembly_loop_condition_shape(self, branch_operands, merge_label):
-        condition_operand, true_label, false_label = branch_operands[:3]
-        if false_label == merge_label:
-            return condition_operand, true_label, False
-        if true_label == merge_label:
-            return condition_operand, false_label, True
-        return None
-
-    def spirv_assembly_enclosing_label_index(self, raw_instructions, instruction_index):
-        for index in range(instruction_index, -1, -1):
-            result_id, opcode, _operands, _line_number = raw_instructions[index]
-            if result_id and opcode == "OpLabel":
-                return index
-        return None
-
-    def spirv_assembly_block_instructions(self, raw_instructions, labels, label):
-        start = labels.get(label)
-        if start is None:
-            return None
-
-        block = []
-        for instruction in raw_instructions[start + 1 :]:
-            _result_id, opcode, _operands, _line_number = instruction
-            if opcode == "OpLabel":
-                break
-            block.append(instruction)
-        return block
-
-    def spirv_assembly_loop_block_body_instructions(
-        self, raw_instructions, labels, label, branch_targets
-    ):
-        block = self.spirv_assembly_block_instructions(raw_instructions, labels, label)
-        if block is None or not block:
-            return None
-
-        _result_id, opcode, operands, _line_number = block[-1]
-        if opcode != "OpBranch" or not operands or operands[0] not in branch_targets:
-            return None
-        return block[:-1]
-
-    def spirv_assembly_instruction_slice_is_expression_only(
-        self,
-        instructions,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        if not self.spirv_assembly_selection_block_is_simple(instructions):
-            return False
-        statements = self.spirv_assembly_linear_statements(
-            instructions,
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        )
-        return not statements
-
-    def spirv_assembly_simple_switch_body(
-        self,
-        raw_instructions,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        selection_count = sum(
-            1
-            for _result_id, opcode, _operands, _line_number in raw_instructions
-            if opcode == "OpSelectionMerge"
-        )
-        switch_count = sum(
-            1
-            for _result_id, opcode, _operands, _line_number in raw_instructions
-            if opcode == "OpSwitch"
-        )
-        if selection_count != 1 or switch_count != 1:
-            return None
-
-        labels = self.spirv_assembly_label_indices(raw_instructions)
-        for index, (_result_id, opcode, operands, _line_number) in enumerate(
-            raw_instructions
-        ):
-            if opcode != "OpSelectionMerge" or len(operands) < 1:
-                continue
-            if index + 1 >= len(raw_instructions):
-                continue
-
-            _switch_id, switch_opcode, switch_operands, _switch_line = raw_instructions[
-                index + 1
-            ]
-            if switch_opcode != "OpSwitch" or len(switch_operands) < 2:
-                continue
-
-            merge_label = operands[0]
-            selector_operand, default_label = switch_operands[:2]
-            case_operands = switch_operands[2:]
-            if (
-                merge_label not in labels
-                or default_label not in labels
-                or len(case_operands) % 2 != 0
-            ):
-                continue
-
-            cases = []
-            case_groups = []
-            current_group = None
-            closed_case_labels = set()
-            for operand_index in range(0, len(case_operands), 2):
-                literal = case_operands[operand_index]
-                target_label = case_operands[operand_index + 1]
-                if target_label not in labels:
-                    return None
-
-                if (
-                    current_group is not None
-                    and current_group["target_label"] == target_label
-                ):
-                    group = current_group
-                else:
-                    if target_label in closed_case_labels:
-                        return None
-                    if current_group is not None:
-                        closed_case_labels.add(current_group["target_label"])
-                    group = {"target_label": target_label, "literals": []}
-                    current_group = group
-                    case_groups.append(group)
-
-                group["literals"].append(literal)
-
-            if default_label in {group["target_label"] for group in case_groups}:
-                return None
-
-            for group in case_groups:
-                case_body = self.spirv_assembly_switch_case_body(
-                    raw_instructions,
-                    labels,
-                    group["target_label"],
-                    merge_label,
-                    expressions,
-                    names,
-                    decorations,
-                    member_decorations,
-                    member_names,
-                    types,
-                    variables_by_id,
-                    constants,
-                )
-                if case_body is None:
-                    return None
-                for literal in group["literals"][:-1]:
-                    cases.append(CaseNode(literal, []))
-                cases.append(CaseNode(group["literals"][-1], case_body))
-            default_body = self.spirv_assembly_switch_case_body(
-                raw_instructions,
-                labels,
-                default_label,
-                merge_label,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            if default_body is None:
-                return None
-            cases.append(CaseNode(None, default_body))
-
-            prelude = self.spirv_assembly_linear_statements(
-                raw_instructions[:index],
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            postlude = self.spirv_assembly_linear_statements(
-                raw_instructions[labels[merge_label] + 1 :],
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            selector = self.spirv_assembly_operand_expression(
-                selector_operand,
-                expressions,
-                names,
-                decorations,
-                constants,
-            )
-            return [*prelude, SwitchNode(selector, cases), *postlude]
-
-        return None
-
-    def spirv_assembly_switch_case_body(
-        self,
-        raw_instructions,
-        labels,
-        label,
-        merge_label,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        block = self.spirv_assembly_label_block_instructions(
-            raw_instructions, labels, label, merge_label
-        )
-        if block is None or not self.spirv_assembly_selection_block_is_simple(block):
-            return None
-
-        body = self.spirv_assembly_linear_statements(
-            block,
-            expressions,
-            names,
-            decorations,
-            member_decorations,
-            member_names,
-            types,
-            variables_by_id,
-            constants,
-        )
-        if self.spirv_assembly_label_block_branches_to_merge(
-            raw_instructions, labels, label, merge_label
-        ):
-            body.append(BreakNode())
-        return body
-
-    def spirv_assembly_label_indices(self, raw_instructions):
-        return {
-            result_id: index
-            for index, (result_id, opcode, _operands, _line_number) in enumerate(
-                raw_instructions
-            )
-            if result_id and opcode == "OpLabel"
-        }
+        return structure.structured_body(statements, expressions)
 
     def spirv_assembly_used_result_ids(self, raw_instructions):
         return {
@@ -3440,606 +3005,6 @@ class VulkanParser:
             return 1
 
         return count(expression)
-
-    def spirv_assembly_phi_contexts(self, raw_instructions):
-        contexts = {}
-        for index, (_result_id, opcode, operands, _line_number) in enumerate(
-            raw_instructions
-        ):
-            if opcode != "OpSelectionMerge" or not operands:
-                continue
-            if index + 1 >= len(raw_instructions):
-                continue
-
-            _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
-                index + 1
-            ]
-            if branch_opcode != "OpBranchConditional" or len(branch_operands) < 3:
-                continue
-
-            contexts[operands[0]] = {
-                "condition": branch_operands[0],
-                "true_label": branch_operands[1],
-                "false_label": branch_operands[2],
-            }
-        return contexts
-
-    def spirv_assembly_phi_expression(
-        self,
-        operands,
-        current_label,
-        phi_contexts,
-        expressions,
-        names,
-        decorations,
-        constants,
-    ):
-        incoming = [
-            (operands[index], operands[index + 1])
-            for index in range(1, len(operands) - 1, 2)
-        ]
-        if not incoming:
-            return FunctionCallNode("spirvPhi", [])
-
-        first_value = incoming[0][0]
-        if all(value == first_value for value, _label in incoming):
-            return self.spirv_assembly_operand_expression(
-                first_value,
-                expressions,
-                names,
-                decorations,
-                constants,
-            )
-
-        selection_phi = self.spirv_assembly_selection_phi_expression(
-            current_label,
-            incoming,
-            phi_contexts,
-            expressions,
-            names,
-            decorations,
-            constants,
-        )
-        if selection_phi is not None:
-            return selection_phi
-
-        args = []
-        for value, label in incoming:
-            args.append(
-                self.spirv_assembly_phi_operand_expression(
-                    value, expressions, names, decorations, constants
-                )
-            )
-            args.append(self.spirv_string_literal(str(label).lstrip("%")))
-        return FunctionCallNode("spirvPhi", args)
-
-    def spirv_assembly_phi_operand_expression(
-        self, operand, expressions, names, decorations, constants
-    ):
-        if (
-            isinstance(operand, str)
-            and operand.startswith("%")
-            and operand in expressions
-        ):
-            expression = VariableNode(
-                "",
-                self.spirv_assembly_value_name(operand, names, decorations),
-            )
-            return self.spirv_maybe_non_uniform_expression(
-                operand, expression, decorations
-            )
-
-        return self.spirv_assembly_operand_expression(
-            operand,
-            expressions,
-            names,
-            decorations,
-            constants,
-        )
-
-    def spirv_assembly_selection_phi_expression(
-        self,
-        current_label,
-        incoming,
-        phi_contexts,
-        expressions,
-        names,
-        decorations,
-        constants,
-    ):
-        context = phi_contexts.get(current_label)
-        if context is None or len(incoming) != 2:
-            return None
-
-        incoming_by_label = {label: value for value, label in incoming}
-        true_value = incoming_by_label.get(context["true_label"])
-        false_value = incoming_by_label.get(context["false_label"])
-        if true_value is None or false_value is None:
-            return None
-
-        return TernaryOpNode(
-            self.spirv_assembly_operand_expression(
-                context["condition"],
-                expressions,
-                names,
-                decorations,
-                constants,
-            ),
-            self.spirv_assembly_operand_expression(
-                true_value,
-                expressions,
-                names,
-                decorations,
-                constants,
-            ),
-            self.spirv_assembly_operand_expression(
-                false_value,
-                expressions,
-                names,
-                decorations,
-                constants,
-            ),
-        )
-
-    def spirv_assembly_label_block_branches_to_merge(
-        self, raw_instructions, labels, label, merge_label
-    ):
-        start = labels.get(label)
-        if start is None:
-            return False
-
-        for _result_id, opcode, operands, _line_number in raw_instructions[start + 1 :]:
-            if opcode == "OpLabel":
-                return False
-            if opcode == "OpBranch":
-                return bool(operands and operands[0] == merge_label)
-            if opcode in {
-                "OpReturn",
-                "OpReturnValue",
-                "OpKill",
-                "OpTerminateInvocation",
-                "OpDemoteToHelperInvocation",
-            }:
-                return False
-        return False
-
-    def spirv_assembly_simple_selection_body(
-        self,
-        raw_instructions,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        selection_count = sum(
-            1
-            for _result_id, opcode, _operands, _line_number in raw_instructions
-            if opcode == "OpSelectionMerge"
-        )
-        if selection_count != 1:
-            return None
-
-        labels = self.spirv_assembly_label_indices(raw_instructions)
-
-        for index, (_result_id, opcode, operands, _line_number) in enumerate(
-            raw_instructions
-        ):
-            if opcode != "OpSelectionMerge" or len(operands) < 1:
-                continue
-            if index + 1 >= len(raw_instructions):
-                continue
-
-            _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
-                index + 1
-            ]
-            if branch_opcode != "OpBranchConditional" or len(branch_operands) < 3:
-                continue
-
-            merge_label = operands[0]
-            condition_operand, true_label, false_label = branch_operands[:3]
-            if merge_label not in labels or true_label not in labels:
-                continue
-            if false_label != merge_label and false_label not in labels:
-                continue
-
-            true_instructions = self.spirv_assembly_label_block_instructions(
-                raw_instructions, labels, true_label, merge_label
-            )
-            false_instructions = (
-                []
-                if false_label == merge_label
-                else self.spirv_assembly_label_block_instructions(
-                    raw_instructions, labels, false_label, merge_label
-                )
-            )
-            if true_instructions is None or false_instructions is None:
-                continue
-            if not self.spirv_assembly_selection_block_is_simple(
-                true_instructions
-            ) or not self.spirv_assembly_selection_block_is_simple(false_instructions):
-                continue
-
-            prelude = self.spirv_assembly_linear_statements(
-                raw_instructions[:index],
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            true_body = self.spirv_assembly_linear_statements(
-                true_instructions,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            false_body = self.spirv_assembly_linear_statements(
-                false_instructions,
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            postlude = self.spirv_assembly_linear_statements(
-                raw_instructions[labels[merge_label] + 1 :],
-                expressions,
-                names,
-                decorations,
-                member_decorations,
-                member_names,
-                types,
-                variables_by_id,
-                constants,
-            )
-            condition = self.spirv_assembly_operand_expression(
-                condition_operand,
-                expressions,
-                names,
-                decorations,
-                constants,
-            )
-            return [
-                *prelude,
-                IfNode(condition, true_body, false_body or None),
-                *postlude,
-            ]
-
-        return None
-
-    def spirv_assembly_label_block_instructions(
-        self, raw_instructions, labels, label, merge_label
-    ):
-        if label == merge_label:
-            return []
-
-        start = labels.get(label)
-        if start is None:
-            return None
-
-        block = []
-        for instruction in raw_instructions[start + 1 :]:
-            _result_id, opcode, operands, _line_number = instruction
-            if opcode == "OpLabel":
-                return block
-            if opcode == "OpBranch" and operands and operands[0] == merge_label:
-                return block
-            block.append(instruction)
-            if opcode in {
-                "OpReturn",
-                "OpReturnValue",
-                "OpKill",
-                "OpTerminateInvocation",
-                "OpDemoteToHelperInvocation",
-            }:
-                return block
-
-        return block
-
-    def spirv_assembly_selection_block_is_simple(self, instructions):
-        structured_control_opcodes = {
-            "OpBranch",
-            "OpBranchConditional",
-            "OpLabel",
-            "OpLoopMerge",
-            "OpSelectionMerge",
-            "OpSwitch",
-        }
-        return all(
-            opcode not in structured_control_opcodes
-            for _result_id, opcode, _operands, _line_number in instructions
-        )
-
-    def spirv_assembly_linear_statements(
-        self,
-        instructions,
-        expressions,
-        names,
-        decorations,
-        member_decorations,
-        member_names,
-        types,
-        variables_by_id,
-        constants,
-    ):
-        statements = []
-        for result_id, opcode, operands, _line_number in instructions:
-            if result_id and opcode == "OpVariable" and len(operands) >= 2:
-                pointer_type = types.get(operands[0], {})
-                storage_class = operands[1]
-                if storage_class != "Function":
-                    continue
-
-                variable_name = self.spirv_assembly_value_name(
-                    result_id, names, decorations
-                )
-                variable_type, array_suffix = self.spirv_type_name_and_suffix(
-                    pointer_type.get("type_id"),
-                    types,
-                    constants,
-                    names=names,
-                )
-                variable_type = variable_type or pointer_type.get("type_id") or ""
-                declaration = VariableNode(
-                    variable_type,
-                    f"{variable_name}{array_suffix}",
-                    spirv_id=result_id,
-                    spirv_type_id=pointer_type.get("type_id"),
-                )
-                if len(operands) >= 3:
-                    statements.append(
-                        AssignmentNode(
-                            declaration,
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        )
-                    )
-                else:
-                    statements.append(declaration)
-                continue
-
-            if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
-                if self.spirv_type_name(operands[0], types) != "void":
-                    continue
-                statements.append(
-                    FunctionCallNode(
-                        self.spirv_assembly_value_name(
-                            operands[1], names, decorations, prefix="function"
-                        ),
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[2:]
-                        ],
-                    )
-                )
-                continue
-
-            if opcode == "OpAtomicStore" and len(operands) >= 4:
-                statements.append(
-                    self.spirv_assembly_atomic_store_statement(
-                        operands[0],
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode == "OpImageWrite" and len(operands) >= 3:
-                statements.append(
-                    self.spirv_assembly_image_write_statement(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
-                statements.append(
-                    self.spirv_assembly_geometry_emit_statement(
-                        opcode,
-                        operands,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode == "OpControlBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvControlBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
-                    )
-                )
-                continue
-
-            if opcode == "OpMemoryBarrier" and len(operands) >= 2:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:2]
-                        ],
-                    )
-                )
-                continue
-
-            if opcode == "OpMemoryNamedBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryNamedBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
-                    )
-                )
-                continue
-
-            if opcode == "OpStore" and len(operands) >= 2:
-                statements.append(
-                    AssignmentNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[0],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    )
-                )
-                continue
-
-            if opcode == "OpCopyMemory" and len(operands) >= 2:
-                if operands[0] == operands[1]:
-                    continue
-                statements.append(
-                    AssignmentNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[0],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    )
-                )
-                continue
-
-            if opcode == "OpCopyMemorySized" and len(operands) >= 3:
-                statements.append(
-                    self.spirv_assembly_copy_memory_sized_statement(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode in {
-                "OpKill",
-                "OpTerminateInvocation",
-                "OpDemoteToHelperInvocation",
-            }:
-                statements.append(DiscardNode())
-                continue
-
-            if opcode == "OpReturnValue" and operands:
-                statements.append(
-                    ReturnNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[0],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    )
-                )
-                continue
-
-            if opcode == "OpReturn":
-                statements.append(ReturnNode())
-                continue
-
-            if result_id and getattr(
-                expressions.get(result_id), "spirv_unused_side_effect", False
-            ):
-                statements.append(expressions[result_id])
-                continue
-
-            ray_call = ray_statement(
-                opcode,
-                operands,
-                lambda operand: self.spirv_assembly_operand_expression(
-                    operand, expressions, names, decorations, constants
-                ),
-                ray_variable_locations(variables_by_id.values(), decorations),
-            )
-            if ray_call is not None:
-                statements.append(ray_call)
-                continue
-            refuse_untranslated_statement(result_id, opcode)
-
-        return statements
 
     def spirv_assembly_access_chain_expression(
         self,
@@ -4135,9 +3100,15 @@ class VulkanParser:
                 member_index = self.spirv_integer_constant_operand(index_operand, {})
                 member_types = type_info.get("member_types", [])
                 if member_index is not None and 0 <= member_index < len(member_types):
-                    sparse_extract = self.spirv_sparse_image_result_extract_expression(
+                    sparse_extract = spirv_struct_result_member(
                         expression, member_index
                     )
+                    if sparse_extract is None:
+                        sparse_extract = (
+                            self.spirv_sparse_image_result_extract_expression(
+                                expression, member_index
+                            )
+                        )
                     if sparse_extract is not None:
                         expression = sparse_extract
                         current_type_id = member_types[member_index]
@@ -6572,12 +5543,30 @@ class VulkanParser:
 
         return layouts
 
-    def spirv_register_struct_type_names(self, types, names):
+    def spirv_register_struct_type_names(self, types, names, member_names=None):
+        # OpName may give several struct types one name (glslang calls every modf and frexp result ``ResType``).
+        # Struct types whose names and members agree are declared once; any other one takes the first free
+        # ``name_N``, so no two CrossGL struct declarations conflict.
+        member_names = member_names or {}
+        taken = {}
+        used_names = set(names.values())
         for type_id, type_info in types.items():
-            if type_info.get("kind") == "struct":
-                type_info["name"] = names.get(
-                    type_id
-                ) or self.spirv_fallback_identifier(type_id, "struct")
+            if type_info.get("kind") != "struct":
+                continue
+            name = names.get(type_id) or self.spirv_fallback_identifier(
+                type_id, "struct"
+            )
+            signature = (
+                tuple(type_info.get("member_types", [])),
+                tuple(sorted(member_names.get(type_id, {}).items())),
+            )
+            if taken.get(name, signature) != signature:
+                suffix = 1
+                while f"{name}_{suffix}" in taken or f"{name}_{suffix}" in used_names:
+                    suffix += 1
+                name = f"{name}_{suffix}"
+            taken.setdefault(name, signature)
+            type_info["name"] = name
 
     def spirv_assembly_structs(
         self,
@@ -6842,6 +5831,9 @@ class VulkanParser:
 
     def spirv_constant_literal_expression(self, type_id, literal, types):
         type_info = types.get(type_id, {})
+        if type_info.get("name") == "uint" and str(literal).isdigit():
+            # CrossGL reads an unsuffixed literal as int; one above INT_MAX would widen to a 64-bit integer.
+            return f"{literal}u" if int(str(literal)) > 0x7FFFFFFF else literal
         if type_info.get("name") not in {"half", "float", "double"}:
             return literal
 
@@ -7008,7 +6000,7 @@ class VulkanParser:
             struct_decorations + variable_decorations
         )
 
-        return LayoutNode(
+        node = LayoutNode(
             qualifiers,
             layout_type=layout_type,
             push_constant=storage_class == "PushConstant",
@@ -7020,6 +6012,19 @@ class VulkanParser:
             spirv_decorations=struct_decorations + variable_decorations,
             spirv_storage_class=storage_class,
         )
+        if storage_class in {"Uniform", "PushConstant"} and layout_type == "UNIFORM":
+            node.buffer_layout = spirv_block_buffer_layout(
+                block_name,
+                struct_type_id,
+                storage_class == "PushConstant",
+                types,
+                decorations,
+                member_decorations,
+                lambda length_id: self.spirv_integer_constant_operand(
+                    length_id, constants
+                ),
+            )
+        return node
 
     def spirv_has_decoration(self, decorations, target_decoration):
         return any(decoration == target_decoration for decoration, _ in decorations)

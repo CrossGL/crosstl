@@ -2374,14 +2374,14 @@ def test_glslang_web_comp_barrier_instructions_parse():
     body = ast.functions[0].body
 
     assert ast.spirv_assembly is True
+    # glslang's barrier(), memoryBarrier() and groupMemoryBarrier() (scopes 2/1/2, semantics 264/3400/3400)
+    # import as the CrossGL barriers that cover them.
     assert [stmt.name for stmt in body[:3]] == [
-        "spirvControlBarrier",
-        "spirvMemoryBarrier",
-        "spirvMemoryBarrier",
+        "workgroupBarrier",
+        "memoryBarrier",
+        "groupMemoryBarrier",
     ]
-    assert body[0].args == ["2", "2", "264"]
-    assert body[1].args == ["1", "3400"]
-    assert body[2].args == ["2", "3400"]
+    assert all(stmt.args == [] for stmt in body[:3])
     assert isinstance(body[3], ReturnNode)
 
 
@@ -2400,21 +2400,35 @@ def test_numeric_glsl_std450_extinst_imports_parse_to_builtin():
 def test_glsl_std450_struct_extinst_imports_parse_to_builtins():
     tokens = tokenize_code(SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY)
     ast = parse_code(tokens)
-    assignment = ast.functions[0].body[0]
+    body = ast.functions[0].body
 
+    # Each struct becomes its member-1 local, declared first, and a local holding the call that writes it.
     assert ast.spirv_assembly is True
+    for out_declaration, call_declaration, function, out_name, result_name in (
+        (body[0], body[1], "modf", "modf_parts_whole", "modf_parts_fract"),
+        (
+            body[2],
+            body[3],
+            "frexp",
+            "frexp_parts_exponent",
+            "frexp_parts_significand",
+        ),
+    ):
+        assert isinstance(out_declaration, VariableNode)
+        assert out_declaration.name == out_name
+        assert isinstance(call_declaration, AssignmentNode)
+        assert call_declaration.left.name == result_name
+        assert isinstance(call_declaration.right, FunctionCallNode)
+        assert call_declaration.right.name == function
+        assert [arg.name for arg in call_declaration.right.args] == [
+            "inputValue",
+            out_name,
+        ]
+    assignment = body[4]
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, BinaryOpNode)
-    assert isinstance(assignment.right.left, MemberAccessNode)
-    assert isinstance(assignment.right.left.object, FunctionCallNode)
-    assert assignment.right.left.object.name == "modf"
-    assert assignment.right.left.object.args[0].name == "inputValue"
-    assert assignment.right.left.member == "fractional"
-    assert isinstance(assignment.right.right, MemberAccessNode)
-    assert isinstance(assignment.right.right.object, FunctionCallNode)
-    assert assignment.right.right.object.name == "frexp"
-    assert assignment.right.right.object.args[0].name == "inputValue"
-    assert assignment.right.right.member == "significand"
+    assert assignment.right.left.name == "modf_parts_fract"
+    assert assignment.right.right.name == "frexp_parts_significand"
 
 
 def test_spirv_subgroup_broadcast_and_reduce_parse():

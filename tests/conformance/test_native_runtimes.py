@@ -16,11 +16,13 @@ from .runtimes import RUNTIMES, provision
 # The HLSL check binds a 12-byte structured-buffer stride. It is not h_precise: DXC emits that kernel's
 # a * b - c as an unfused fmul and fsub without fast-math flags, and WARP 1.0.19 and 1.0.21 still fuse them,
 # so it measures the WARP JIT rather than the adapter. Its scoreboard cells keep recording the divergence.
+# The second kernel of each language binds a constants block (Metal constant buffer, D3D12 constant-buffer
+# view, OpenGL uniform block, Vulkan push constants), so the adapter's constants path is checked as well.
 REFERENCE = {
-    "metal": "m_ptr_arith",
-    "hlsl": "h_float3_stride",
-    "glsl": "g_std430_vec3_float",
-    "spirv": "s_nocontraction",
+    "metal": ("m_ptr_arith", "m_constant_struct"),
+    "hlsl": ("h_float3_stride", "h_cbuffer_packing"),
+    "glsl": ("g_std430_vec3_float", "g_std140_uniform"),
+    "spirv": ("s_nocontraction", "s_push_constant_std430", "s_std140_uniform"),
 }
 REQUIRED = set(
     filter(None, os.environ.get("CROSSTL_CONFORMANCE_REQUIRE", "").split(","))
@@ -51,7 +53,7 @@ def test_reference_kernel_reproduces_its_oracle(name, tmp_path):
                 "--output",
                 str(output),
                 "--cases",
-                REFERENCE[runtime.target],
+                ",".join(REFERENCE[runtime.target]),
                 "--targets",
                 runtime.target,
                 "--runtimes",
@@ -88,8 +90,8 @@ def test_reference_kernel_reproduces_its_oracle(name, tmp_path):
     ]
     assert [(record["runtime"], record["outcome"]) for record in records] == [
         (name, "preserved")
-    ], json.dumps(reasons, indent=2, default=str)
-    assert runtime.expect in records[0]["execution"]["device"]
+    ] * len(REFERENCE[runtime.target]), json.dumps(reasons, indent=2, default=str)
+    assert all(runtime.expect in record["execution"]["device"] for record in records)
 
 
 D3D12_MODELS = tuple(f"cs_6_{minor}" for minor in range(10))

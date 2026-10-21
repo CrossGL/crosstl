@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 488,
+        "endLine": 17,
+        "endOffset": 394,
         "file": "crosstl-out/opengl/CubeFDM_vs.glsl",
-        "length": 488,
+        "length": 394,
         "line": 1,
         "offset": 0
       },

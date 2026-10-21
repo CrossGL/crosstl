@@ -54,6 +54,18 @@ class HlslLayoutType:
     ``kind`` is ``scalar``, ``vector``, ``matrix``, ``struct`` or ``array``.
     Matrices are described by their in-memory vectors: ``registers`` vectors of
     ``components`` scalars (rows for row-major storage, columns otherwise).
+    ``row_major`` says which: a row-major matrix of R rows and C columns has
+    ``registers == R`` and ``components == C``.
+
+    ``offsets`` holds the explicit byte offsets of the members of a constant
+    buffer (``packoffset`` or ``offset`` qualifiers), ``None`` for a member
+    without one, and is empty when no member has one. ``alignments`` holds the
+    GLSL ``align`` qualifiers of the members in the same way.
+
+    ``packed`` marks a vector stored in the packed form of MSL (``packed_float3``, kept in CrossGL as a ``@ packed``
+    member): aligned to its scalar and sized by its components (MSL 3.2 section 2.2.3). Only the ``metal`` and
+    ``scalar`` block rules lay such a vector out, and the HLSL structured-buffer rules, which already pack every
+    vector that way; the other rules refuse it.
     """
 
     kind: str
@@ -64,6 +76,10 @@ class HlslLayoutType:
     members: Tuple[Tuple[str, "HlslLayoutType"], ...] = ()
     element: Optional["HlslLayoutType"] = None
     count: int = 0
+    row_major: bool = False
+    offsets: Tuple[Optional[int], ...] = ()
+    alignments: Tuple[Optional[int], ...] = ()
+    packed: bool = False
 
     @property
     def scalar_size(self):
@@ -109,15 +125,56 @@ def vector_type(scalar, components):
     return HlslLayoutType("vector", scalar=scalar, components=components)
 
 
-def matrix_type(scalar, registers, components):
+def matrix_type(scalar, registers, components, row_major=False):
     scalar_type(scalar)
     return HlslLayoutType(
-        "matrix", scalar=scalar, components=components, registers=registers
+        "matrix",
+        scalar=scalar,
+        components=components,
+        registers=registers,
+        row_major=row_major,
     )
 
 
-def struct_type(name, members):
-    return HlslLayoutType("struct", struct_name=name, members=tuple(members))
+def oriented_matrix_type(scalar, columns, rows, row_major=False):
+    """The layout type of a matrix of ``columns`` columns and ``rows`` rows in the given orientation."""
+    if row_major:
+        return matrix_type(scalar, rows, columns, row_major=True)
+    return matrix_type(scalar, columns, rows)
+
+
+def struct_type(name, members, offsets=(), alignments=()):
+    members = tuple(members)
+    offsets = tuple(offsets or ())
+    if not any(offset is not None for offset in offsets):
+        offsets = ()
+    elif len(offsets) != len(members):
+        raise HlslLayoutError(f"struct '{name}' has offsets for some members only")
+    alignments = tuple(alignments or ())
+    if not any(alignment is not None for alignment in alignments):
+        alignments = ()
+    elif len(alignments) != len(members):
+        raise HlslLayoutError(f"struct '{name}' has alignments for some members only")
+    return HlslLayoutType(
+        "struct",
+        struct_name=name,
+        members=members,
+        offsets=offsets,
+        alignments=alignments,
+    )
+
+
+def contains_row_major_matrix(layout_type):
+    """Whether a value holds a row-major matrix anywhere."""
+    if layout_type.kind == "matrix":
+        return layout_type.row_major
+    if layout_type.kind == "array":
+        return contains_row_major_matrix(layout_type.element)
+    if layout_type.kind == "struct":
+        return any(
+            contains_row_major_matrix(member) for _name, member in layout_type.members
+        )
+    return False
 
 
 def array_type(element, count):
@@ -133,6 +190,11 @@ def cbuffer_placement(layout_type, offset):
     following member may reuse.
     """
     kind = layout_type.kind
+    if layout_type.packed:
+        raise HlslLayoutError(
+            "a packed vector has no HLSL constant-buffer layout: constant packing keeps a vector within one "
+            "16-byte register"
+        )
     if kind in ("scalar", "vector"):
         size = layout_type.scalar_size * layout_type.components
         start = align_to(offset, layout_type.scalar_size)
@@ -176,7 +238,13 @@ def cbuffer_array_stride(layout_type):
 
 
 def cbuffer_struct_placements(layout_type):
-    """Member placements of a struct (or constant buffer) relative to its start."""
+    """Member placements of a struct (or constant buffer) relative to its start.
+
+    Members with ``packoffset`` sit at the bytes it names, which must satisfy
+    the packing rules for their type, and must not overlap.
+    """
+    if layout_type.offsets:
+        return cbuffer_explicit_placements(layout_type)
     placements = []
     cursor = 0
     for name, member_type in layout_type.members:
@@ -184,6 +252,37 @@ def cbuffer_struct_placements(layout_type):
         placements.append(HlslMemberPlacement(name, member_type, start, size))
         cursor = start + size
     return placements, cursor
+
+
+def cbuffer_explicit_placements(layout_type):
+    if None in layout_type.offsets:
+        raise HlslLayoutError(
+            f"constant buffer '{layout_type.struct_name}' mixes packoffset members "
+            "with members placed in declaration order"
+        )
+    placements = []
+    for (name, member_type), offset in zip(layout_type.members, layout_type.offsets):
+        start, size = cbuffer_placement(member_type, offset)
+        if start != offset:
+            raise HlslLayoutError(
+                f"packoffset of '{name}' at byte {offset} breaks the constant-buffer "
+                f"packing of its type, which starts at byte {start}"
+            )
+        placements.append(HlslMemberPlacement(name, member_type, start, size))
+    check_disjoint_placements(layout_type.struct_name, placements)
+    return placements, max(
+        (placement.offset + placement.size for placement in placements), default=0
+    )
+
+
+def check_disjoint_placements(struct_name, placements):
+    ordered = sorted(placements, key=lambda placement: placement.offset)
+    for previous, placement in zip(ordered, ordered[1:]):
+        if placement.offset < previous.offset + previous.size:
+            raise HlslLayoutError(
+                f"member '{placement.name}' of '{struct_name}' at byte {placement.offset} "
+                f"overlaps member '{previous.name}'"
+            )
 
 
 def structured_size_align(layout_type):
