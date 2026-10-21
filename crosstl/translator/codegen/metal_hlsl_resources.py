@@ -167,7 +167,10 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_structured_buffers = {}
         self.metal_hlsl_pointer_parameters = {}
         self.metal_hlsl_cbuffer_array_members = {}
-        planner = MetalHlslBufferLayouts(self.metal_hlsl_layout_type_resolver)
+        planner = MetalHlslBufferLayouts(
+            self.metal_hlsl_layout_type_resolver,
+            int_constants=getattr(self, "literal_int_constants", None),
+        )
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
             layout = declared_buffer_layout(getattr(cbuffer, "attributes", None))

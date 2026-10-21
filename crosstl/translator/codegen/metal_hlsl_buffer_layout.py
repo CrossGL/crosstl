@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from .array_utils import fold_array_type_counts
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
     SCALAR_BLOCK_LAYOUT,
@@ -150,11 +151,13 @@ class MetalLayoutPlan:
 class MetalHlslBufferLayouts:
     """Plan Metal storage for the HLSL buffers of one program."""
 
-    def __init__(self, type_resolver):
+    def __init__(self, type_resolver, int_constants=None):
         # ``type_resolver(type_name)`` returns ``("struct", name, members)`` for a
         # struct, where members are ``(member_name, raw_type)`` pairs, or the
         # Metal spelling of a value type.
         self.type_resolver = type_resolver
+        # Named integer constants that array counts such as ``float4[N * 3]`` use.
+        self.int_constants: Dict[str, int] = dict(int_constants or {})
         self.struct_plans: Dict[str, MetalLayoutPlan] = {}
         self.struct_layouts: Dict[str, str] = {}
         # Definitions of the matrix storage structs and helpers, by struct name.
@@ -176,7 +179,7 @@ class MetalHlslBufferLayouts:
     # Type descriptions -------------------------------------------------
     def layout_type(self, raw_type, stack=(), row_major=False):
         """The layout type of ``raw_type``; ``row_major`` orients a matrix (or the matrices of an array)."""
-        raw_type = str(raw_type).strip()
+        raw_type = fold_array_type_counts(str(raw_type).strip(), self.int_constants)
         array_match = re.fullmatch(r"(.+?)\s*\[\s*(\d+)\s*\]", raw_type)
         if array_match is not None:
             element = self.layout_type(array_match.group(1), stack, row_major)

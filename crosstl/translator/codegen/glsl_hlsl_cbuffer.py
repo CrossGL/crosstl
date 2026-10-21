@@ -32,7 +32,11 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 
 from ..ast import ArrayNode, FunctionNode
-from .array_utils import format_c_style_array_declaration
+from .array_utils import (
+    evaluate_literal_int_expression,
+    fold_array_type_counts,
+    format_c_style_array_declaration,
+)
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
@@ -302,6 +306,10 @@ class GLSLHlslConstantBuffers:
             )
             size = getattr(member, "size", None)
             if not isinstance(size, int) and not str(size).isdigit():
+                size = evaluate_literal_int_expression(
+                    size, getattr(self, "literal_int_constants", None)
+                )
+            if size is None or int(str(size)) < 0:
                 raise HlslLayoutError(
                     f"array '{member.name}' needs a constant size in an HLSL buffer"
                 )
@@ -313,7 +321,9 @@ class GLSLHlslConstantBuffers:
 
     def glsl_hlsl_cbuffer_layout_type(self, raw_type, stack=(), row_major=False):
         """The layout type of ``raw_type``; ``row_major`` orients a matrix (or the matrices of an array)."""
-        raw_type = str(raw_type or "").strip()
+        raw_type = fold_array_type_counts(
+            str(raw_type or "").strip(), getattr(self, "literal_int_constants", None)
+        )
         array_match = ARRAY_PATTERN.fullmatch(raw_type)
         if array_match is not None:
             element = self.glsl_hlsl_cbuffer_layout_type(

@@ -402,6 +402,53 @@ def _evaluate_literal_int_text_expression(
     return evaluate(root)
 
 
+def fold_array_type_counts(
+    type_name: str, constants: Optional[Dict[str, int]] = None
+) -> str:
+    """Rewrite each ``[count]`` of ``type_name`` that is a compile-time integer.
+
+    ``vec4[(12 * 3)]`` becomes ``vec4[36]`` and ``float[N + 1]`` becomes
+    ``float[5]`` when ``constants`` maps ``N`` to 4. A count that does not
+    evaluate, or evaluates to a negative value, is kept as written so that
+    layout planners still refuse it.
+    """
+    text = str(type_name or "")
+    if "[" not in text:
+        return text
+    constants = constants or {}
+    pieces = []
+    index = 0
+    while index < len(text):
+        open_index = text.find("[", index)
+        if open_index < 0:
+            pieces.append(text[index:])
+            break
+        depth = 0
+        close_index = -1
+        for position in range(open_index, len(text)):
+            if text[position] == "[":
+                depth += 1
+            elif text[position] == "]":
+                depth -= 1
+                if depth == 0:
+                    close_index = position
+                    break
+        if close_index < 0:
+            pieces.append(text[index:])
+            break
+        count_text = text[open_index + 1 : close_index].strip()
+        value = None
+        if count_text and not count_text.isdigit() and "[" not in count_text:
+            value = _evaluate_literal_int_text_expression(count_text, constants)
+        pieces.append(text[index:open_index])
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            pieces.append(f"[{int(value)}]")
+        else:
+            pieces.append(text[open_index : close_index + 1])
+        index = close_index + 1
+    return "".join(pieces)
+
+
 def _evaluate_literal_int_cast(target_type, expression, constants) -> Optional[int]:
     """Evaluate a narrow integer cast expression when it is compile-time safe."""
     type_name = _literal_type_name(target_type)
