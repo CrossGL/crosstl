@@ -9,6 +9,7 @@ instruction. :meth:`~SpirvFunctionStructure.structured_body` then assembles the 
 
 from __future__ import annotations
 
+from .local_shadowing import rename_shadowing_locals
 from .scoped_declarations import hoist_out_of_scope_declarations
 from .structured_cfg import StructuredEmitter, build_function_cfg, classify_phis
 from .value_ordering import values_to_materialize
@@ -56,6 +57,14 @@ class SpirvFunctionStructure:
             self.can_be_local,
             parameters,
         )
+        # A NoContraction result is assigned to a precise local where it is defined, so that every emitter keeps
+        # the operation unfused (SPIR-V 1.6 section 3.20, NoContraction; GLSL 4.60 section 4.7.1, precise).
+        self.precise = {
+            target
+            for target, entries in decorations.items()
+            if any(entry[0] == "NoContraction" for entry in entries)
+        }
+        self.forced = set(self.forced) | self.precise
         self.variable_phis = [
             (phi_id, type_id)
             for label in self.cfg.order
@@ -66,6 +75,7 @@ class SpirvFunctionStructure:
         self._phi_names = {}
         self._temporaries = 0
         self._settled = set()
+        self._settled_names = {}
         self._block_starts = []
         self._expressions = None
 
@@ -146,6 +156,7 @@ class SpirvFunctionStructure:
         name = self.parser.spirv_assembly_value_name(
             result_id, self.names, self.decorations, prefix="value"
         )
+        self._settled_names[result_id] = name
         statements.append(
             AssignmentNode(
                 VariableNode(
@@ -153,6 +164,7 @@ class SpirvFunctionStructure:
                     f"{name}{suffix}",
                     spirv_id=result_id,
                     spirv_type_id=type_id,
+                    spirv_precise=result_id in self.precise,
                 ),
                 expression,
             )
@@ -184,6 +196,13 @@ class SpirvFunctionStructure:
         return declaration, VariableNode("", name)
 
     def structured_body(self, statements, expressions):
+        body = self._structured_body(statements, expressions)
+        rename_shadowing_locals(
+            body, {**self._settled_names, **self._phi_names}, self._taken_names
+        )
+        return body
+
+    def _structured_body(self, statements, expressions):
         if not self._block_starts:
             return statements
         self._expressions = expressions

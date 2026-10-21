@@ -6536,7 +6536,9 @@ def test_glslang_precise_dot_codegen_reparse():
     parse_crossgl(generated_code)
     assert "float outValue @output @location(0);" in generated_code
     assert "float4 inputVec @input @location(0);" in generated_code
-    assert "outValue = dot(inputVec, inputVec);" in generated_code
+    # The NoContraction result is a precise local; named after its id, it must not hide dot().
+    assert "float value_dot @precise = dot(inputVec, inputVec);" in generated_code
+    assert "outValue = value_dot;" in generated_code
     assert "outValue = dot;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 

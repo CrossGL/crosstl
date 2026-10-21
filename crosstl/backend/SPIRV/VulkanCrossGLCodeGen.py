@@ -1639,8 +1639,9 @@ class VulkanToCrossGLConverter:
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(
             self.variable_type(node)
         )
+        precise = ["precise"] if getattr(node, "spirv_precise", False) else []
         attributes = self.ray_storage_attribute_suffix(
-            [*ray_attributes, *(extra_attributes or [])]
+            [*ray_attributes, *(extra_attributes or []), *precise]
         )
         return f"{self.map_type(type_name)} {override_name or node.name}{attributes}"
 
