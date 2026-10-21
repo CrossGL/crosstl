@@ -59,7 +59,8 @@ class HlslLayoutType:
 
     ``offsets`` holds the explicit byte offsets of the members of a constant
     buffer (``packoffset`` or ``offset`` qualifiers), ``None`` for a member
-    without one, and is empty when no member has one.
+    without one, and is empty when no member has one. ``alignments`` holds the
+    GLSL ``align`` qualifiers of the members in the same way.
     """
 
     kind: str
@@ -72,6 +73,7 @@ class HlslLayoutType:
     count: int = 0
     row_major: bool = False
     offsets: Tuple[Optional[int], ...] = ()
+    alignments: Tuple[Optional[int], ...] = ()
 
     @property
     def scalar_size(self):
@@ -135,14 +137,25 @@ def oriented_matrix_type(scalar, columns, rows, row_major=False):
     return matrix_type(scalar, columns, rows)
 
 
-def struct_type(name, members, offsets=()):
+def struct_type(name, members, offsets=(), alignments=()):
     members = tuple(members)
     offsets = tuple(offsets or ())
     if not any(offset is not None for offset in offsets):
         offsets = ()
     elif len(offsets) != len(members):
         raise HlslLayoutError(f"struct '{name}' has offsets for some members only")
-    return HlslLayoutType("struct", struct_name=name, members=members, offsets=offsets)
+    alignments = tuple(alignments or ())
+    if not any(alignment is not None for alignment in alignments):
+        alignments = ()
+    elif len(alignments) != len(members):
+        raise HlslLayoutError(f"struct '{name}' has alignments for some members only")
+    return HlslLayoutType(
+        "struct",
+        struct_name=name,
+        members=members,
+        offsets=offsets,
+        alignments=alignments,
+    )
 
 
 def contains_row_major_matrix(layout_type):
