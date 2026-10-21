@@ -6841,11 +6841,11 @@ jobs:
     timeout-minutes: 210
     strategy:
       fail-fast: false
-      # 330 legs, a third of them on macOS: leave runners for other pull requests.
+      # 342 legs, a third of them on macOS: leave runners for other pull requests.
       max-parallel: 24
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
         include:
           - {group: copy-0, family: copy, shard: 0}
           - {group: copy-1, family: copy, shard: 1}
@@ -6898,6 +6898,10 @@ jobs:
           - {group: quantized-qvm-1, family: quantized-qvm, shard: 1}
           - {group: quantized-qvm-2, family: quantized-qvm, shard: 2}
           - {group: quantized-qvm-3, family: quantized-qvm, shard: 3}
+          - {group: quantized-qvm-split-k-0, family: quantized-qvm-split-k, shard: 0}
+          - {group: quantized-qvm-split-k-1, family: quantized-qvm-split-k, shard: 1}
+          - {group: quantized-qvm-split-k-2, family: quantized-qvm-split-k, shard: 2}
+          - {group: quantized-qvm-split-k-3, family: quantized-qvm-split-k, shard: 3}
           - {group: gemm-family-0, family: gemm-family, shard: 0}
           - {group: gemm-family-1, family: gemm-family, shard: 1}
           - {group: gemm-family-2, family: gemm-family, shard: 2}
@@ -7782,6 +7786,38 @@ jobs:
               --basetemp=mlx-current-results/${{ matrix.group }} \
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_quantized_qvm.py
+
+      # quantized.metal's 108 affine_qvm_split_k entries, split_k 8 and 32, in
+      # four shards.
+      - name: Prove current MLX quantized split-K vector-matrix native parity
+        if: matrix.family == 'quantized-qvm-split-k'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_COUNT: "4"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized split-K vector-matrix native parity (shard ${{ matrix.shard }} of 4)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qvm_split_k.py
 
       # steel_gemm_fused.metal's 72 float32, float16 and bfloat16 entries, three
       # constant configurations each, in five shards.

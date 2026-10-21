@@ -2486,6 +2486,21 @@ must be unchanged, and Metal also runs the unchanged upstream kernels. This
 is a 162/17,832 increment; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+``quantized_qvm_split_k.current-tree.translation.json`` pins a further 108
+entries of ``quantized.metal``: ``affine_qvm_split_k`` with ``split_k`` 8 and
+32, which ``quantized.cpp``'s ``qvm`` picks for weights that are not
+transposed when ``K`` is 1,024 or more. Each ``tid.z`` runs ``qvm_impl`` on
+one part of ``ceil(K / split_k)`` rows, the last of the final block size,
+with the whole ``K`` as the activation stride, and writes its partial
+products to an intermediate. Each target executes 540 dispatches on
+``(32, 2, 1)`` threadgroups and ``(M, ceil(N / 64), B * split_k)`` grids
+that bind the host's own views and reach parts of whole blocks, of blocks
+and a last pass, of a last pass alone and a final part of another size. The
+qvm gate's lane-level model replays each part; every word is compared
+exactly, guards and inputs must be unchanged, and Metal also runs the
+unchanged upstream kernels. This is a 108/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,

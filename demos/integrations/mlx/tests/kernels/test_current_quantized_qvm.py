@@ -84,6 +84,7 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     QMV_WIDE_ENTRY_COUNT,
     QUANTIZE_ENTRY_COUNT,
     QVM_ENTRY_COUNT,
+    QVM_SPLIT_K_ENTRY_COUNT,
     SIMD_SIZE,
     UNBATCHED_BOUND,
     VARIANTS,
@@ -546,6 +547,7 @@ def _expected_scope():
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
         + len(ENTRIES)
+        + QVM_SPLIT_K_ENTRY_COUNT
     )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
@@ -554,6 +556,7 @@ def _expected_scope():
         "qmvFastGateEntryCount": len(QMV_FAST_ENTRIES),
         "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
+        "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
@@ -634,7 +637,8 @@ def test_quantized_qvm_entries_follow_mlx_instantiation():
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
         + len(ENTRIES)
-        + 1026
+        + QVM_SPLIT_K_ENTRY_COUNT
+        + 918
         == UNIT_ENTRY_COUNT
     )
 

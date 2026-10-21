@@ -2027,6 +2027,38 @@ the unchanged upstream kernels, which must produce the same words. This
 covers 162/17,832 entries; it does not run the upstream MLX test suite or
 redirect the MLX host runtime.
 
+`contracts/quantized_qvm_split_k.current-tree.translation.json` pins a
+further 108 entries of `quantized.metal` and their 324 artifacts:
+`affine_qvm_split_k` for the same element types, group sizes and bit widths
+and `split_k` 8 and 32, which `quantized.cpp`'s `qvm` picks for weights that
+are not transposed when `M` is below 4 and `K` is 1,024 or more, with
+`split_k` 32 above `K = 8,192`. The host splits `K` into `split_k` parts of
+`split_D = ceil(K / split_k)` rows, the last one of
+`final_block_size = K - (split_k - 1) * split_D`, adds a batch dimension of
+`split_k` to the activation, weight, scale and bias views, and each `tid.z`
+runs `qvm_impl` on its part with the whole `K` as the activation row stride,
+writing one partial product per column to an intermediate that a separate
+reduction sums. Required CI executes 540 dispatches and 3,229,920 checked
+elements per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`quantized-qvm-split-k-0` through `quantized-qvm-split-k-3` legs, on
+`(32, 2, 1)` threadgroups over a `(M, ceil(N / 64), B * split_k)` grid.
+The cases bind the host's own views, split sizes and final sizes; they reach
+a routed `K` of 1,100 with four blocks and a last pass per part, parts of one
+whole block, parts of a block and a last pass followed by a whole final
+part, parts that are a last pass alone and a final part of another size,
+with one or more rows, stacked weights and broadcast weights. The `split_k`
+32 entries run the same formulas at smaller `K`, which the kernel cannot
+tell apart. The intermediate keeps every float32 partial exact; only the
+final `static_cast<T>` rounds, which 273,197 float16 and bfloat16 partials
+need, 106,975 of them halfway cases. The qvm gate's lane-level model replays
+each part and must reach the dequantized partial dot products; its seven
+mutations and two more that give every part the final part's size or step
+activation rows by the part's size instead of `K` are rejected. Every word
+is compared exactly, guards and inputs must be unchanged, and Metal also
+runs the unchanged upstream kernels, which must produce the same words. This
+covers 108/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
 subgroup width. Narrow storage conversions are reflected in subsequent bounds,

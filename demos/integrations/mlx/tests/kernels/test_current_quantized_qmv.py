@@ -113,6 +113,7 @@ QUANTIZE_ENTRY_COUNT = 108
 QMV_UNALIGNED_ENTRY_COUNT = 162
 QMV_WIDE_ENTRY_COUNT = 432
 QVM_ENTRY_COUNT = 162
+QVM_SPLIT_K_ENTRY_COUNT = 108
 # Kernels of quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
     "affine_gather_qmm_n",
@@ -120,7 +121,6 @@ EXCLUDED_KERNELS = (
     "affine_gather_qmm_t",
     "affine_qmm_t",
     "affine_qmv_quad",
-    "affine_qvm_split_k",
     "affine_qmm_t_splitk",
     "affine_gather_qmm_rhs_nt",
     "affine_gather_qmm_rhs_nn",
@@ -1038,6 +1038,7 @@ def _expected_scope():
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
+        + QVM_SPLIT_K_ENTRY_COUNT
     )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
@@ -1046,6 +1047,7 @@ def _expected_scope():
         "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
         "qmvWideGateEntryCount": QMV_WIDE_ENTRY_COUNT,
         "qvmGateEntryCount": QVM_ENTRY_COUNT,
+        "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
             "count": UNIT_ENTRY_COUNT - covered,
@@ -1126,7 +1128,8 @@ def test_quantized_qmv_entries_follow_mlx_instantiation():
         + QMV_UNALIGNED_ENTRY_COUNT
         + QMV_WIDE_ENTRY_COUNT
         + QVM_ENTRY_COUNT
-        + 1026
+        + QVM_SPLIT_K_ENTRY_COUNT
+        + 918
         == UNIT_ENTRY_COUNT
     )
 
@@ -1455,8 +1458,11 @@ def _translate(root, work, target, config, record):
     return _prepare_native_package(translation, work)
 
 
-def _request(descriptor, package, target, variant, data):
-    """Bind every reflected binding by source parameter and build one dispatch."""
+def _request(descriptor, package, target, variant, data, parameters=None):
+    """Bind every reflected binding by source parameter and build one dispatch.
+
+    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters.
+    """
     from crosstl.project.runtime_value_encoding import FLOAT16_BITS
 
     values = {
@@ -1493,7 +1499,8 @@ def _request(descriptor, package, target, variant, data):
         for binding in descriptor["bindings"]
     }
     # The translation reflects every kernel parameter, batched or not.
-    assert output is not None and bound == {name for name, _ in _parameters(variant)}
+    parameters = parameters or _parameters(variant)
+    assert output is not None and bound == {name for name, _ in parameters}
     expected = _runtime_value(target, data["kinds"]["y"], data["expected"]["y"])
     request = build_native_loader_dispatch_request(
         descriptor,
@@ -1509,10 +1516,13 @@ def _request(descriptor, package, target, variant, data):
     return request, output, len(observed)
 
 
-def _upstream(work, reference, entry, variant, label, data):
-    """Run the unchanged upstream kernel on raw ``[[buffer(i)]]`` storage."""
+def _upstream(work, reference, entry, variant, label, data, parameters=None):
+    """Run the unchanged upstream kernel on raw ``[[buffer(i)]]`` storage.
+
+    ``parameters`` overrides the variant's ``[[buffer(i)]]`` parameters.
+    """
     runner, library = reference
-    parameters = _parameters(variant)
+    parameters = parameters or _parameters(variant)
     if variant == "batch_0":
         # qmv binds only buffers 0-6 when B <= 1.
         parameters = parameters[:UNBATCHED_BOUND]
