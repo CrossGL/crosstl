@@ -11,12 +11,14 @@ import re
 
 from ..ast import (
     ArrayAccessNode,
+    ArrayType,
     BinaryOpNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
     MemberAccessNode,
+    ParameterNode,
     PointerAccessNode,
     PointerType,
     PrimitiveType,
@@ -225,7 +227,24 @@ class MetalHlslResourceMixin:
             if isinstance(vtype, PointerType):
                 # A helper's buffer pointer: its pointee gets the storage of the buffers passed to it.
                 self.metal_hlsl_pointer_parameters[id(node)] = (
-                    self.metal_hlsl_pointer_storage(planner, node, vtype)
+                    self.metal_hlsl_pointer_storage(
+                        planner, node, vtype.pointee_type, "pointer"
+                    )
+                )
+                continue
+            if isinstance(vtype, ArrayType) and isinstance(node, ParameterNode):
+                if vtype.size is not None:
+                    raise metal_layout_refusal(
+                        f"Cannot reproduce the HLSL structured-buffer layout of array "
+                        f"parameter '{node.name}' in Metal: only a runtime-sized buffer "
+                        "parameter takes a buffer layout",
+                        HLSL_STRUCTURED_LAYOUT,
+                    )
+                # A bound runtime array (``var<storage> x: array<T>``) is a buffer pointer in Metal.
+                self.metal_hlsl_pointer_parameters[id(node)] = (
+                    self.metal_hlsl_pointer_storage(
+                        planner, node, vtype.element_type, "buffer parameter"
+                    )
                 )
                 continue
             type_name = str(self.resource_base_type(vtype))
@@ -249,14 +268,15 @@ class MetalHlslResourceMixin:
             self.metal_hlsl_structured_buffers[node.name] = storage
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
 
-    def metal_hlsl_pointer_storage(self, planner, node, pointer_type):
-        """The Metal storage of the pointee of a pointer parameter marked ``@buffer_layout(hlsl_structured)``."""
-        element_type = self.convert_type_node_to_string(pointer_type.pointee_type)
+    def metal_hlsl_pointer_storage(self, planner, node, element_type, kind):
+        """The Metal storage of the elements of a pointer or runtime-array parameter marked
+        ``@buffer_layout(hlsl_structured)``."""
+        element_type = self.convert_type_node_to_string(element_type)
         try:
             return planner.plan_structured_element(str(element_type))
         except HlslLayoutError as exc:
             raise metal_layout_refusal(
-                f"Cannot reproduce the HLSL layout of pointer parameter "
+                f"Cannot reproduce the HLSL layout of {kind} "
                 f"'{node.name}' in Metal: {exc}",
                 HLSL_STRUCTURED_LAYOUT,
             ) from exc

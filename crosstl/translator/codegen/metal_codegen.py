@@ -16837,6 +16837,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 element_type = self.map_resource_type_with_format(
                     raw_param_type.element_type, node
                 )
+                layout_storage = getattr(self, "metal_hlsl_pointer_parameters", {}).get(
+                    id(node)
+                )
+                if layout_storage is not None:
+                    element_type = layout_storage[0]
                 memory_qualifiers = self.resource_memory_qualifier_prefix(
                     node, raw_param_type
                 )
