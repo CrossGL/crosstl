@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .. import crossgl
+from .. import spellings
 from ..model import (
     OTHER_WIDTHS,
     VOID,
@@ -513,7 +513,7 @@ def parse(
                 name,
                 chosen,
                 group=declared[0][0],
-                crossgl=crossgl.spelling("slang", name, glsl_names),
+                crossgl=spellings.spelling("slang", name, glsl_names),
                 stage=stage,
                 note=note,
                 spelling=explicit(source, chosen) if chosen else "",

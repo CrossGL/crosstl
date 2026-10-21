@@ -21,4 +21,4 @@ keywords:
   - "cross-platform development"
   - "GPU computing"
   - "compiler"
-abstract: "CrossTL is a revolutionary universal programming language translator built around CrossGL - a powerful intermediate representation language that serves as the bridge between diverse programming languages, platforms, and computing paradigms."
+abstract: "CrossTL translates GPU shaders and compute kernels between languages through CrossGL, a small intermediate language. Frontends import GLSL, HLSL, Metal, SPIR-V, CUDA, HIP, Slang and other sources into CrossGL, and code generators write CrossGL out as GLSL, HLSL, Metal, SPIR-V, WGSL and other targets."

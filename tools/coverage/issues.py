@@ -1,7 +1,7 @@
 """Reconcile the coverage tracking and bug issues with a coverage report.
 
 There is one tracking issue per language and direction, plus one for CrossGL IR expressiveness, and one bug issue per
-cause of ``wrong`` results in a language and direction (:func:`cause`), so one translator bug that breaks many probes
+cause of ``wrong`` results in a language and direction (:func:`causes_of`), so one translator bug that breaks many probes
 is one issue. Every managed issue carries a hidden marker, ``<!-- crosstl-coverage key=... -->``, and nothing here
 edits or closes an issue without one.
 
@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 
 from . import chart, ir, publish
+from .causes import Causes, causes_of, diagnostic, grouped, headline
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -38,20 +39,6 @@ _UNSAFE = re.compile(r"[^\w.:+-]")
 TITLE_LIMIT = 120
 # A bug issue names this many of the features that share its cause.
 LISTED = 40
-# Numbers on their own, such as line and column numbers; the digits of a name such as ``float4`` stay.
-_DIGITS = re.compile(r"(?<!\w)\d+(?!\w)")
-# The buffers, locals and entry points of the generated probes (:mod:`.probes`), quoted in a diagnostic.
-_PLUMBING = re.compile(
-    r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
-)
-# A cause writes the feature's own name as FEATURE. An input row's diagnostics start with _ROUND_TRIP, whose words
-# are never the name of a feature such as ``round``.
-FEATURE = "<feature>"
-_ROUND_TRIP = "after the round trip: "
-# The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``.
-_LOCATION = re.compile(
-    r"^(?:after the round trip: )?(?:\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
-)
 
 TOOLS = {
     "cuda": "nvcc",
@@ -176,35 +163,14 @@ def tracking_key(row: dict) -> str:
     return key("tracking", row["language"], row["direction"])
 
 
-def _diagnostic(feature: dict) -> str:
-    """The first line of a wrong result's diagnostic without its line and column numbers and the names every probe
-    uses."""
-    detail = (feature.get("detail") or "no diagnostic was recorded").splitlines()[0]
-    detail = _PLUMBING.sub(lambda m: m.group(1) + "<probe>" + m.group(1), detail)
-    return _DIGITS.sub("N", detail).strip()
-
-
-def cause(feature: dict) -> str:
-    """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
-    names every probe uses, and the feature's own name or CrossGL spelling. Wrong results with one cause are one bug,
-    so a generator that emits twenty builtins unchanged has one issue rather than twenty.
-    """
-    detail = _diagnostic(feature)
-    prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
-    rest = detail[len(prefix) :]
-    names = {feature.get("name"), feature.get("crossgl")} - {None, ""}
-    for name in sorted(names, key=lambda n: (-len(n), n)):
-        rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
-    return prefix + rest
-
-
 def _covered(body: str | None) -> list[str]:
     found = _FEATURES.search(body or "")
     return found.group(1).split(",") if found and found.group(1) else []
 
 
-def bug_key(row: dict, feature: dict) -> str:
-    digest = hashlib.sha256(cause(feature).encode()).hexdigest()[:12]
+def bug_key(row: dict, text: str) -> str:
+    """The key of the bug issue for the wrong results of ``row`` whose cause is ``text`` (:func:`causes_of`)."""
+    digest = hashlib.sha256(text.encode()).hexdigest()[:12]
     return key("wrong", row["language"], row["direction"], digest)
 
 
@@ -272,6 +238,7 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
         "so edits to this description are overwritten. Each wrong result of a backend also has its own `bug` issue.",
     ]
     gaps = sorted(_gaps(row), key=lambda f: (f["category"], f["name"]))
+    causes = causes_of(row)
     used = sum(len(line) + 1 for line in lines)
     category = ""
     for index, feature in enumerate(gaps):
@@ -280,7 +247,8 @@ def tracking_body(row: dict, repository: str, bugs: dict[str, int]) -> str:
             if feature["category"] != category
             else []
         )
-        number = bugs.get(bug_key(row, feature))
+        text = causes.get(feature["name"])
+        number = bugs.get(bug_key(row, text)) if text is not None else None
         link = f" (#{number})" if number else ""
         detail = f": {publish.cell(feature['detail'])}" if feature.get("detail") else ""
         item.append(f"- [ ] `{feature['name']}` {feature['outcome']}{link}{detail}")
@@ -303,18 +271,17 @@ def _fence(text: str) -> str:
     return text.replace("```", "'''")
 
 
-def bug_title(row: dict, features: list[dict]) -> str:
-    """The title of the bug for ``features``, which share a cause; one feature's title keeps its name."""
+def bug_title(row: dict, text: str, features: list[dict]) -> str:
+    """The title of the bug for ``features``, whose cause is ``text``; one feature's title keeps its name."""
     first = features[0]
-    summary = _diagnostic(first) if len(features) == 1 else cause(first)
-    summary = _LOCATION.sub("", summary, count=1).strip()
+    summary = headline(diagnostic(first) if len(features) == 1 else text)
     if len(summary) > TITLE_LIMIT:
         summary = summary[: TITLE_LIMIT - 1].rstrip() + "…"
     return f"{_name(row)}: {summary}"
 
 
-def bug_body(row: dict, features: list[dict], repository: str) -> str:
-    """The bug issue body for the ``features`` of ``row`` that fail with one :func:`cause`."""
+def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str:
+    """The bug issue body for the ``features`` of ``row`` whose cause is ``text``."""
     language, direction = row["language"], row["direction"]
     tool = TOOLS.get(language, language)
     if direction == "input":
@@ -342,7 +309,7 @@ def bug_body(row: dict, features: list[dict], repository: str) -> str:
         else f"The coverage probes for {count} {_name(row)} features give a wrong result with the same diagnostic."
     )
     lines = [
-        MARKER.format(bug_key(row, first)),
+        MARKER.format(bug_key(row, text)),
         FEATURES.format(",".join(f["name"] for f in features)),
         f"{subject} {what}",
         "",
@@ -396,19 +363,6 @@ def _tracking(plan: _Plan, row: dict, bugs: dict[str, int]) -> None:
             )
 
 
-# A row's wrong results grouped by cause, as (cause, features) pairs.
-Causes = list[tuple[str, list[dict]]]
-
-
-def _causes(row: dict) -> Causes:
-    """The row's wrong results grouped by :func:`cause`, the cause shared by most features first."""
-    groups: dict[str, list[dict]] = {}
-    for feature in sorted(row["features"], key=lambda f: f["name"]):
-        if feature["outcome"] == "wrong":
-            groups.setdefault(cause(feature), []).append(feature)
-    return sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
-
-
 def _stale(
     plan: _Plan, row: dict, causes: Causes
 ) -> Iterator[tuple[Issue, list[str], set[str]]]:
@@ -417,9 +371,7 @@ def _stale(
     Each comes with its features that the row still lists and the keys of the causes those features fail with now.
     An issue with an untested feature is left out: a result that could not be measured says nothing about the bug.
     """
-    successor = {
-        f["name"]: bug_key(row, group[0]) for _, group in causes for f in group
-    }
+    successor = {f["name"]: bug_key(row, text) for text, group in causes for f in group}
     present = set(successor.values())
     prefix = key("wrong", row["language"], row["direction"]) + "/"
     outcomes = {f["name"]: f["outcome"] for f in row["features"]}
@@ -470,21 +422,23 @@ def _retire(plan: _Plan, row: dict, causes: Causes) -> None:
 
 def _bugs(plan: _Plan, rows: list[tuple[dict, Causes]], new_bugs: int) -> None:
     # New bugs are taken one row at a time, so a capped run files issues for every language rather than the first.
-    wanted: list[tuple[int, int, dict, list[dict]]] = []
+    wanted: list[tuple[int, int, dict, str, list[dict]]] = []
     for order, (row, causes) in enumerate(rows):
-        wanted += [(rank, order, row, group) for rank, (_, group) in enumerate(causes)]
+        wanted += [
+            (rank, order, row, text, group) for rank, (text, group) in enumerate(causes)
+        ]
         _retire(plan, row, causes)
     created = 0
-    for _, _, row, group in sorted(wanted, key=lambda w: (w[0], w[1])):
-        issue_key = bug_key(row, group[0])
+    for _, _, row, text, group in sorted(wanted, key=lambda w: (w[0], w[1])):
+        issue_key = bug_key(row, text)
         if issue_key not in plan.managed:
             if created >= new_bugs:
                 continue
             created += 1
         plan.ensure(
             issue_key,
-            bug_title(row, group),
-            bug_body(row, group, plan.repository),
+            bug_title(row, text, group),
+            bug_body(row, text, group, plan.repository),
             bug_labels(row),
             "A probe fails this way again, so this issue is reopened.",
         )
@@ -506,7 +460,7 @@ def plan(
             managed.setdefault(issue.key, issue)
     state = _Plan(managed, repository)
     rows = _rows(report)
-    measured = [(row, _causes(row)) for row in rows if row["language"] != ir.LANGUAGE]
+    measured = [(row, grouped(row)) for row in rows if row["language"] != ir.LANGUAGE]
     for row, causes in measured:
         _adopt(state, row, causes)
     bugs = {k: i.number for k, i in state.managed.items() if k.startswith("wrong/")}

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from .. import crossgl
+from .. import spellings
 from ..model import (
     OTHER_WIDTHS,
     VOID,
@@ -355,7 +355,7 @@ def parse(
                     else _immediate(name, pick(sorted(signatures, key=_preference)))
                 ),
                 group="intrinsics",
-                crossgl=crossgl.spelling("hlsl", name, glsl_names),
+                crossgl=spellings.spelling("hlsl", name, glsl_names),
                 stage=_STAGE_OF.get(name, "compute"),
                 note=note,
             )

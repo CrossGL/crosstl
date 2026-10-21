@@ -147,7 +147,7 @@ def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
 # the 2D forms; functions that only take the others stay untested. CrossGL calls texture functions as GLSL does.
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
-    # The CrossGL counterparts of WGSL's depth and array textures (:data:`.crossgl.COUNTERPARTS`) take two more.
+    # The CrossGL counterparts of WGSL's depth and array textures (:data:`.spellings.COUNTERPARTS`) take two more.
     # CrossGL spells an acceleration structure as every generator reads it.
     "crossgl": {
         **_GLSL_UNIFORMS,

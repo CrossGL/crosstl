@@ -44,6 +44,12 @@ def test_release_versions_and_notes_match():
     assert "### " in notes and "## [" not in notes and "[Unreleased]" not in notes
 
 
+def test_zenodo_record_takes_its_version_from_the_release_tag():
+    # Zenodo prefers a version in .zenodo.json over the tag, and no release step updates that file.
+    record = json.loads((ROOT / ".zenodo.json").read_text(encoding="utf-8"))
+    assert "version" not in record
+
+
 def test_package_build_contract_retains_supported_python_and_resources():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert config["build-system"] == {
