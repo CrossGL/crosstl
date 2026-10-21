@@ -69,6 +69,7 @@ from .array_utils import (
     parse_array_type,
     prepend_array_dimension,
 )
+from .ast_walk import walk_ast_values
 from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
 from .enum_utils import (
@@ -22118,31 +22119,7 @@ class VulkanSPIRVCodeGen(
         return ordered
 
     def walk_ast_nodes(self, root):
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    yield from walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    yield from walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-            yield value
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    yield from walk(child)
-
-        yield from walk(root)
+        return walk_ast_values(root)
 
     def array_dimensions(self, type_name: str):
         if not type_name or "[" not in type_name:

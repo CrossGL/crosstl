@@ -6118,24 +6118,50 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 candidate = f"{parent_scope}::{target}" if parent_scope else target
                 if candidate not in target_candidates:
                     target_candidates.append(candidate)
+            declared_names, declared_scopes = self.alias_template_declared_names()
             resolved = next(
                 (
                     candidate
                     for candidate in target_candidates
-                    if any(
-                        name == candidate or name.startswith(f"{candidate}::")
-                        for name in (
-                            *self.alias_template_declarations,
-                            *self.alias_template_plain_declarations,
-                            *self.alias_template_structs_by_qualified_name,
-                        )
-                    )
+                    if candidate in declared_names or candidate in declared_scopes
                 ),
                 target_candidates[-1],
             )
             if resolved not in targets:
                 targets.append(resolved)
         return targets
+
+    def alias_template_declared_names(self):
+        """Return the declared alias and struct names and their ``::`` scopes.
+
+        A scope is every prefix ``p`` of a declared name such that the name starts
+        with ``p + "::"``. The declaration tables are built once per program, so
+        the sets are cached against the table objects and their sizes.
+        """
+        tables = (
+            self.alias_template_declarations,
+            self.alias_template_plain_declarations,
+            self.alias_template_structs_by_qualified_name,
+        )
+        sizes = tuple(len(table) for table in tables)
+        cached = getattr(self, "_alias_template_declared_names", None)
+        if (
+            cached is not None
+            and cached[1] == sizes
+            and all(table is previous for table, previous in zip(tables, cached[0]))
+        ):
+            return cached[2], cached[3]
+        names = set()
+        scopes = set()
+        for table in tables:
+            for name in table:
+                names.add(name)
+                separator = name.find("::")
+                while separator != -1:
+                    scopes.add(name[:separator])
+                    separator = name.find("::", separator + 1)
+        self._alias_template_declared_names = (tables, sizes, names, scopes)
+        return names, scopes
 
     def alias_lookup_name_tiers(self, name):
         raw_name = self.normalize_qualified_type_name(name)
@@ -14686,13 +14712,26 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
         return candidates
 
-    def resolve_metal_free_operator(self, operator, arguments, source_location=None):
+    def resolve_metal_free_operator(
+        self, operator, arguments, source_location=None, argument_metal_types=None
+    ):
+        """Select the free operator overload for ``arguments``.
+
+        ``argument_metal_types``, when given, are the ``expression_metal_type`` of
+        each argument, so that a caller that needs them too infers each operand
+        once. Inferring them twice per binary operator doubled the work at every
+        level of a nested expression.
+        """
         candidates = self.metal_free_operator_candidates(operator, len(arguments))
         if not candidates:
             return None
+        if argument_metal_types is None:
+            argument_metal_types = [
+                self.expression_metal_type(argument) for argument in arguments
+            ]
         argument_types = [
-            self.metal_source_overload_value_type(self.expression_metal_type(argument))
-            for argument in arguments
+            self.metal_source_overload_value_type(argument_type)
+            for argument_type in argument_metal_types
         ]
         if any(argument_type is None for argument_type in argument_types):
             return None
@@ -21676,17 +21715,18 @@ float {scalar}(float value) {{
         return self.metal_common_integer_type(left_info, right_info)
 
     def metal_binary_expression_type(self, expr):
+        left_type = self.expression_metal_type(expr.left)
+        right_type = self.expression_metal_type(expr.right)
         selected_operator = self.resolve_metal_free_operator(
             expr.op,
             (expr.left, expr.right),
             getattr(expr, "source_location", None),
+            argument_metal_types=(left_type, right_type),
         )
         if selected_operator is not None:
             return self.resolve_type_alias(
                 getattr(selected_operator, "return_type", None)
             )
-        left_type = self.expression_metal_type(expr.left)
-        right_type = self.expression_metal_type(expr.right)
         bfloat_plan = self.metal_bfloat_arithmetic_plan(
             expr.op, left_type, right_type, getattr(expr, "source_location", None)
         )

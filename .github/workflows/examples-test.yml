@@ -19,31 +19,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  python-versions:
+    name: Select Python versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.select.outputs.versions }}
+    steps:
+      - name: Select Python versions
+        id: select
+        env:
+          # Pushes to main and pull requests labelled ci:full test every supported
+          # version; other pull requests test the oldest and the newest.
+          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
+          PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
+          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          else
+            echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
+          fi
+
   test-examples:
-    name: Test Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    name: Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    needs: python-versions
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-        os: [ubuntu-latest, windows-latest, macOS-latest]
-        exclude:
-          - python-version: "3.11"
+        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
+        os: [ubuntu-latest]
+        include:
+          - python-version: "3.13"
             os: windows-latest
-          - python-version: "3.12"
-            os: windows-latest
-          - python-version: "3.14"
-            os: windows-latest
-          - python-version: "3.15"
-            os: windows-latest
-          - python-version: "3.11"
-            os: macOS-latest
-          - python-version: "3.12"
-            os: macOS-latest
-          - python-version: "3.14"
-            os: macOS-latest
-          - python-version: "3.15"
+          - python-version: "3.13"
             os: macOS-latest
 
     steps:
@@ -62,415 +73,17 @@ jobs:
           pip install -e ".[test]"
         shell: bash
 
-      - name: Run comprehensive test script
-        run: |
-          cd examples
-          python test.py --summary-json "$RUNNER_TEMP/examples-summary.json"
-          python - <<'PY'
-          import os
-          import json
-          from pathlib import Path
-          import sys
-
-          summary = json.loads(Path(os.environ["RUNNER_TEMP"], "examples-summary.json").read_text())
-          failed = int(summary["failed"])
-          success_rate = float(summary["success_rate"])
-          if not summary["within_regression_budget"]:
-              print(
-                  f"Example regression detected: failed={failed}, success_rate={success_rate:.1f}%",
-                  file=sys.stderr,
-              )
-              raise SystemExit(1)
-          PY
+      # examples/test.py translates every example to every backend its category
+      # supports and fails on any outcome its EXPECTED_REJECTIONS table does not list.
+      - name: Translate the examples
+        run: python examples/test.py
         shell: bash
-
-      - name: Validate output structure and content
-        run: |
-          cd examples
-          echo "[CHECKING] Checking output directory structure..."
-          ls -la output/ || echo "No output directory found"
-          echo "[METAL] Checking Metal outputs..."
-          find output/metal -name "*.metal" -type f 2>/dev/null | head -5 || echo "No Metal outputs found"
-          echo "[CUDA] Checking CUDA outputs..."
-          find output/cuda -name "*.cu" -type f 2>/dev/null | head -5 || echo "No CUDA outputs found"
-          echo "[RUST] Checking Rust outputs..."
-          find output/rust -name "*.rs" -type f 2>/dev/null | head -5 || echo "No Rust outputs found"
-          echo "[STATS] Output file sizes (first 10):"
-          find output -type f \( -name "*.metal" -o -name "*.cu" -o -name "*.rs" \) 2>/dev/null | head -10 | xargs ls -lh 2>/dev/null || echo "No output files to check"
-        shell: bash
-        continue-on-error: true
-
-      - name: Test organized examples structure
-        run: |
-          # Graphics Examples
-          python -c "import crosstl; crosstl.translate('graphics/SimpleShader.cgl', backend='metal', save_shader='output/graphics_simple.metal')"
-          python -c "import crosstl; crosstl.translate('graphics/PerlinNoise.cgl', backend='opengl', save_shader='output/graphics_perlin.glsl')"
-
-          # Advanced Examples
-          python -c "import crosstl; crosstl.translate('advanced/ArrayTest.cgl', backend='rust', save_shader='output/advanced_array.rs')"
-
-          # Cross-Platform Examples - Test only working combinations
-          python -c "import crosstl; crosstl.translate('cross_platform/UniversalPBRShader.cgl', backend='vulkan', save_shader='output/pbr_vulkan.spvasm')" || echo "PBR shader failed, as expected for complex shaders"
-
-          # GPU Computing Examples
-          python -c "import crosstl; crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='hip', save_shader='output/gpu_matrix.hip')" || echo "Matrix multiplication failed, as expected for complex shaders"
-        shell: bash
-        working-directory: examples
-
-  backend-specific:
-    name: ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11"]
-        combination:
-          # Graphics category - Core backends (working shaders)
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "metal",
-              extension: ".metal",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "directx",
-              extension: ".hlsl",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "opengl",
-              extension: ".glsl",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "webgl",
-              extension: ".webgl.glsl",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "wgsl",
-              extension: ".wgsl",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "vulkan",
-              extension: ".spvasm",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "rust",
-              extension: ".rs",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "cuda",
-              extension: ".cu",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "hip",
-              extension: ".hip",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "mojo",
-              extension: ".mojo",
-            }
-          - {
-              category: "graphics",
-              example: "SimpleShader",
-              backend: "slang",
-              extension: ".slang",
-            }
-
-          # Graphics category - PerlinNoise
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "metal",
-              extension: ".metal",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "directx",
-              extension: ".hlsl",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "opengl",
-              extension: ".glsl",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "webgl",
-              extension: ".webgl.glsl",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "wgsl",
-              extension: ".wgsl",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "vulkan",
-              extension: ".spvasm",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "rust",
-              extension: ".rs",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "cuda",
-              extension: ".cu",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "hip",
-              extension: ".hip",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "mojo",
-              extension: ".mojo",
-            }
-          - {
-              category: "graphics",
-              example: "PerlinNoise",
-              backend: "slang",
-              extension: ".slang",
-            }
-
-          # Advanced category - ArrayTest (working shader)
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "metal",
-              extension: ".metal",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "directx",
-              extension: ".hlsl",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "opengl",
-              extension: ".glsl",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "vulkan",
-              extension: ".spvasm",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "rust",
-              extension: ".rs",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "cuda",
-              extension: ".cu",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "hip",
-              extension: ".hip",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "mojo",
-              extension: ".mojo",
-            }
-          - {
-              category: "advanced",
-              example: "ArrayTest",
-              backend: "slang",
-              extension: ".slang",
-            }
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
-        with:
-          cache: pip
-          cache-dependency-path: pyproject.toml
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-        shell: bash
-
-      - name: Create output directory
-        run: |
-          mkdir -p output/${{ matrix.combination.category }}
-        shell: bash
-        working-directory: examples
-
-      - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
-        run: |
-          python -c "import crosstl; crosstl.translate('${{ matrix.combination.category }}/${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
-        shell: bash
-        working-directory: examples
-
-      - name: Validate output
-        run: |
-          OUTPUT_FILE="output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}"
-          if [ -f "$OUTPUT_FILE" ]; then
-            FILE_SIZE=$(wc -c < "$OUTPUT_FILE")
-            echo "[SUCCESS] Output file created: $OUTPUT_FILE ($FILE_SIZE bytes)"
-            if [ "$FILE_SIZE" -gt 100 ]; then
-              echo "[SUCCESS] Output file has substantial content"
-            else
-              echo "[ERROR] Output file is too small ($FILE_SIZE bytes)"
-              exit 1
-            fi
-          else
-            echo "[ERROR] Output file not created: $OUTPUT_FILE"
-            exit 1
-          fi
-        shell: bash
-        working-directory: examples
-
-  stability-test:
-    name: Stability & Robustness Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v7
-        with:
-          cache: pip
-          cache-dependency-path: pyproject.toml
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-
-      - name: Test most stable examples
-        run: |
-          cd examples
-          echo "[TESTING] Testing most stable examples across core backends..."
-          python -c "
-          import crosstl
-          import os
-
-          # Test stable combinations that we know work
-          stable_tests = [
-              ('graphics/SimpleShader.cgl', 'metal', '.metal'),
-              ('graphics/SimpleShader.cgl', 'directx', '.hlsl'),
-              ('graphics/SimpleShader.cgl', 'opengl', '.glsl'),
-              ('graphics/SimpleShader.cgl', 'rust', '.rs'),
-              ('graphics/PerlinNoise.cgl', 'metal', '.metal'),
-              ('graphics/PerlinNoise.cgl', 'cuda', '.cu'),
-              ('advanced/ArrayTest.cgl', 'rust', '.rs'),
-              ('advanced/ArrayTest.cgl', 'opengl', '.glsl'),
-          ]
-
-          os.makedirs('output/stability', exist_ok=True)
-          success_count = 0
-
-          for shader, backend, ext in stable_tests:
-              try:
-                  filename_base = shader.replace('/', '_').replace('.cgl', '')
-                  output_file = f'output/stability/{filename_base}_{backend}{ext}'
-                  result = crosstl.translate(shader, backend=backend, save_shader=output_file)
-                  if os.path.exists(output_file) and os.path.getsize(output_file) > 100:
-                      print(f'[SUCCESS] {shader} -> {backend}')
-                      success_count += 1
-                  else:
-                      print(f'[WARNING] {shader} -> {backend} (small output)')
-              except Exception as e:
-                  print(f'[ERROR] {shader} -> {backend}: {str(e)[:50]}...')
-
-          print(f'\\nStability Score: {success_count}/{len(stable_tests)} ({(success_count/len(stable_tests)*100):.1f}%)')
-          if success_count != len(stable_tests):
-              raise SystemExit(1)
-          "
-        shell: bash
-
-      - name: Test cross-backend consistency
-        run: |
-          cd examples
-          echo "[CONSISTENCY] Testing cross-backend consistency..."
-          python -c "
-          import crosstl
-          import os
-
-          test_shader = 'graphics/SimpleShader.cgl'
-          backends = ['metal', 'directx', 'opengl', 'vulkan']
-          extensions = {
-              'metal': '.metal',
-              'directx': '.hlsl',
-              'opengl': '.glsl',
-              'vulkan': '.spvasm'
-          }
-
-          os.makedirs('output/consistency', exist_ok=True)
-          outputs = {}
-
-          for backend in backends:
-              try:
-                  output_file = f'output/consistency/SimpleShader_{backend}{extensions[backend]}'
-                  result = crosstl.translate(test_shader, backend=backend, save_shader=output_file)
-                  if os.path.exists(output_file):
-                      outputs[backend] = os.path.getsize(output_file)
-                  else:
-                      outputs[backend] = 0
-              except Exception as e:
-                  outputs[backend] = 0
-                  print(f'[ERROR] {backend}: {str(e)[:50]}...')
-
-          print(f'Output sizes: {outputs}')
-          successful_backends = [k for k, v in outputs.items() if v > 100]
-          print(f'[SUCCESS] {len(successful_backends)}/{len(backends)} backends produced substantial output')
-          print(f'Successful backends: {successful_backends}')
-          if len(successful_backends) != len(backends):
-              raise SystemExit(1)
-          "
 
   result:
     # The one check per workflow that branch protection and the merge queue require.
     name: Examples Test result
     if: always()
-    needs: [test-examples, backend-specific, stability-test]
+    needs: [python-versions, test-examples]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
