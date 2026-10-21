@@ -6,7 +6,11 @@ and ``@callable_data``, hands ``TraceRay``/``CallShader``/``ReportHit`` a value 
 attribute struct, and reads ray state through intrinsic calls. GLSL (GLSL_EXT_ray_tracing, sections 4.3.x and 8.19)
 declares module-scope ``rayPayloadEXT``, ``rayPayloadInEXT``, ``hitAttributeEXT``, ``callableDataEXT`` and
 ``callableDataInEXT`` variables, names a payload or callable data by its ``location`` and reads ray state from
-built-in variables. :func:`lower_dxr_ray_interfaces` rewrites the first spelling into the second for GLSL:
+built-in variables. :func:`lower_dxr_ray_interfaces` rewrites the first spelling into the second for GLSL and for
+SPIR-V, whose generator declares the GLSL variables in the ``IncomingRayPayloadKHR``, ``RayPayloadKHR``,
+``HitAttributeKHR``, ``CallableDataKHR`` and ``IncomingCallableDataKHR`` storage classes and the built-ins with
+their ``BuiltIn`` decorations (SPV_KHR_ray_tracing). Without it the SPIR-V generator declared an HLSL payload as a
+stage input, so a hit or miss shader wrote its result to a private copy the caller never saw:
 
 * an ``inout`` payload or callable data entry parameter becomes the ``rayPayloadInEXT`` or ``callableDataInEXT``
   variable of its type, under the parameter's name, so every read and write reaches the caller's value as DXR's
@@ -19,10 +23,14 @@ built-in variables. :func:`lower_dxr_ray_interfaces` rewrites the first spelling
   ``ReportHit(t, kind, attributes)`` stores the attributes in the stage's ``hitAttributeEXT`` variable first;
 * the ray state intrinsics become the built-in variables with the same value, converted to the DXR type where the
   two differ (``PrimitiveIndex()`` is a ``uint``, ``gl_PrimitiveID`` an ``int``), the DXR ray flag and hit kind
-  constants the GLSL names of the same values, and ``RayDesc`` a struct with DXR's members.
+  constants the GLSL names of the same values, and ``RayDesc`` a struct with DXR's members;
+* the transform intrinsics become ``gl_ObjectToWorldEXT`` and ``gl_WorldToObjectEXT``. CrossGL spells a matrix
+  with GLSL's columns-by-rows name and keeps its mathematical shape, so HLSL's 3x4 matrix ``float3x4`` is CrossGL's
+  ``mat4x3``, the type of those built-ins (both the 3x4 affine transform), and ``ObjectToWorld4x3()``, its transpose,
+  is ``transpose(gl_ObjectToWorldEXT)``, GLSL's ``gl_ObjectToWorld3x4EXT``. DXC's SPIR-V back end reads the same
+  ``ObjectToWorldKHR`` built-in for both.
 
-What has no lowering yet is refused with :class:`DxrRayInterfaceUnsupportedError`: the object/world transform
-intrinsics (their orientation is not settled yet), a payload, callable data or attribute argument whose struct type
+What has no lowering yet is refused with :class:`DxrRayInterfaceUnsupportedError`: a payload, callable data or attribute argument whose struct type
 the pass cannot tell, a trace, callable or hit report that is not a statement of its own or the operand of one,
 several DXR ray stages in one program, and a program that mixes both spellings.
 """
@@ -72,14 +80,17 @@ _INTRINSICS = {
     "InstanceID": ("gl_InstanceCustomIndexEXT", "uint"),
     "GeometryIndex": ("gl_GeometryIndexEXT", "uint"),
 }
-_UNSUPPORTED_INTRINSICS = {
-    "ObjectToWorld3x4": "the object-to-world matrix",
-    "ObjectToWorld4x3": "the object-to-world matrix",
-    "ObjectToWorld": "the object-to-world matrix",
-    "WorldToObject3x4": "the world-to-object matrix",
-    "WorldToObject4x3": "the world-to-object matrix",
-    "WorldToObject": "the world-to-object matrix",
+# DXR transform intrinsic -> (GLSL built-in, whether the DXR matrix is its transpose).
+_TRANSFORMS = {
+    "ObjectToWorld": ("gl_ObjectToWorldEXT", False),
+    "ObjectToWorld3x4": ("gl_ObjectToWorldEXT", False),
+    "ObjectToWorld4x3": ("gl_ObjectToWorldEXT", True),
+    "WorldToObject": ("gl_WorldToObjectEXT", False),
+    "WorldToObject3x4": ("gl_WorldToObjectEXT", False),
+    "WorldToObject4x3": ("gl_WorldToObjectEXT", True),
 }
+TARGETS = GLSL_TARGETS | SPIRV_TARGETS
+_TARGET_LABELS = {"opengl": "OpenGL", "glsl": "OpenGL", "vulkan": "Vulkan", "spirv": "Vulkan"}
 _DXR_CONSTANTS = {dxr: glsl for glsl, dxr in _CONSTANTS.items()}
 _RAY_DESC_MEMBERS = (
     ("Origin", A.VectorType(A.PrimitiveType("float"), 3)),
@@ -99,15 +110,16 @@ _BUILTIN_STRUCTS = {
 
 
 class DxrRayInterfaceUnsupportedError(TranslationDiagnostic):
-    """A DXR ray tracing construct CrossTL does not lower to GL_EXT_ray_tracing yet."""
+    """A DXR ray tracing construct CrossTL does not lower to GL_EXT_ray_tracing or SPV_KHR_ray_tracing yet."""
 
-    def __init__(self, stage, capability, detail):
+    def __init__(self, stage, capability, detail, target="opengl"):
+        target = "vulkan" if str(target).lower() in SPIRV_TARGETS else "opengl"
         self.stage = stage
-        self.missing_capabilities = (f"opengl.{capability}",)
+        self.missing_capabilities = (f"{target}.{capability}",)
         super().__init__(
-            f"OpenGL {stage} stage: {detail}",
-            target="opengl",
-            code=f"{CODE_PREFIX}opengl-ray-interface-unsupported",
+            f"{_TARGET_LABELS[target]} {stage} stage: {detail}",
+            target=target,
+            code=f"{CODE_PREFIX}{target}-ray-interface-unsupported",
         )
 
 
@@ -144,7 +156,7 @@ def _is_dxr_call(node):
     if isinstance(node, A.FunctionCallNode):
         function = getattr(node, "function", None)
         name = getattr(function, "name", function)
-        return name in _INTRINSICS or name in _UNSUPPORTED_INTRINSICS
+        return name in _INTRINSICS or name in _TRANSFORMS
     return isinstance(node, A.IdentifierNode) and node.name in _DXR_CONSTANTS
 
 
@@ -174,8 +186,9 @@ def _dxr_stages(program):
 
 
 class _Lowering:
-    def __init__(self, program, stage):
+    def __init__(self, program, stage, target="opengl"):
         self.program = program
+        self.target = target
         self.stage = stage
         self.label = _stage_label(stage)
         self.taken = {struct.name for struct in program.structs or []}
@@ -199,7 +212,9 @@ class _Lowering:
         self.hit_attributes = None
 
     def refuse(self, capability, detail):
-        raise DxrRayInterfaceUnsupportedError(self.label, capability, detail)
+        raise DxrRayInterfaceUnsupportedError(
+            self.label, capability, detail, self.target
+        )
 
     def unused(self, base):
         name, suffix = base, 1
@@ -286,6 +301,13 @@ class _Lowering:
             self.outgoing[key] = (variable.name, location)
         return self.outgoing[key]
 
+    def payload_operand(self, name, location):
+        """GLSL's traceRayEXT and executeCallableEXT name the variable by its location; OpTraceRayKHR and
+        OpExecuteCallableKHR take the variable itself."""
+        if self.target in SPIRV_TARGETS:
+            return A.IdentifierNode(name)
+        return _int(location)
+
     def copied_call(self, call, argument, storage, what, prefix=()):
         struct = self.argument_type(argument, what, call.operation)
         name, location = self.outgoing_variable(storage, struct)
@@ -308,22 +330,25 @@ class _Lowering:
             )
             ray = A.IdentifierNode(temporary)
         struct = self.argument_type(payload, "payload", "TraceRay")
-        _, location = self.outgoing_variable("rayPayloadEXT", struct)
+        name, location = self.outgoing_variable("rayPayloadEXT", struct)
         call.arguments = call.args = [
             *arguments[:6],
             *(
                 A.MemberAccessNode(copy.deepcopy(ray), member)
                 for member, _ in _RAY_DESC_MEMBERS
             ),
-            _int(location),
+            self.payload_operand(name, location),
         ]
         return self.copied_call(call, payload, "rayPayloadEXT", "payload", prefix)
 
     def call_shader(self, call):
         data = call.arguments[1]
         struct = self.argument_type(data, "callable data", "CallShader")
-        _, location = self.outgoing_variable("callableDataEXT", struct)
-        call.arguments = call.args = [call.arguments[0], _int(location)]
+        name, location = self.outgoing_variable("callableDataEXT", struct)
+        call.arguments = call.args = [
+            call.arguments[0],
+            self.payload_operand(name, location),
+        ]
         return self.copied_call(call, data, "callableDataEXT", "callable data")
 
     def report_hits(self, statement):
@@ -386,10 +411,13 @@ class _Lowering:
             return None
         function = getattr(node, "function", None)
         name = getattr(function, "name", function)
-        if name in _UNSUPPORTED_INTRINSICS:
-            self.refuse(
-                "ray-builtin",
-                f"{name}() ({_UNSUPPORTED_INTRINSICS[name]}) has no GLSL lowering in CrossTL yet",
+        if name in _TRANSFORMS and not node.arguments:
+            builtin, transposed = _TRANSFORMS[name]
+            value = A.IdentifierNode(builtin)
+            return (
+                A.FunctionCallNode(A.IdentifierNode("transpose"), [value])
+                if transposed
+                else value
             )
         if name not in _INTRINSICS or node.arguments:
             return None
@@ -443,8 +471,9 @@ class _Lowering:
 
 
 def lower_dxr_ray_interfaces(program, target) -> int:
-    """Rewrite DXR-style ray tracing stages of ``program`` for GLSL; returns how many stages changed."""
-    if str(target or "").lower() not in GLSL_TARGETS | SPIRV_TARGETS or not isinstance(
+    """Rewrite DXR-style ray tracing stages of ``program`` for GLSL or SPIR-V; returns how many stages changed."""
+    target = str(target or "").lower()
+    if target not in TARGETS or not isinstance(
         program, A.ShaderNode
     ):
         return 0
@@ -456,7 +485,8 @@ def lower_dxr_ray_interfaces(program, target) -> int:
         raise DxrRayInterfaceUnsupportedError(
             label,
             "ray-library",
-            "several DXR ray stages in one program; GLSL compiles each ray stage as its own shader",
+            "several DXR ray stages in one program; each ray stage is lowered as a shader of its own",
+            target,
         )
     variables = [
         variable
@@ -471,6 +501,7 @@ def lower_dxr_ray_interfaces(program, target) -> int:
             label,
             "ray-mixed-spelling",
             "the stage mixes DXR entry parameters or calls with module-scope GLSL ray interface variables",
+            target,
         )
-    _Lowering(program, stages[0]).run()
+    _Lowering(program, stages[0], target).run()
     return 1
