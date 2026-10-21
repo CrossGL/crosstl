@@ -4815,6 +4815,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         """
         if not member_is_packed(member) or str(type_text).startswith("packed_"):
             return type_text
+        template = self.metal_array_template_parts(str(type_text).strip())
+        if template is not None:
+            # metal::array<T, N> keeps its extent; its element takes the packed form.
+            prefix, element, extent = template
+            element = self.metal_packed_storage_type(member, element)
+            return f"{prefix}{element}, {extent}>"
         base, suffix = split_array_type_suffix(str(type_text))
         match = self.METAL_PACKED_VECTOR_RE.fullmatch(base.strip())
         if match is None:
@@ -4823,6 +4829,23 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "packed vector form"
             )
         return f"packed_{match.group('vector')}{suffix}"
+
+    @staticmethod
+    def metal_array_template_parts(text):
+        """``(prefix, element, extent)`` of a ``metal::array<element, extent>`` spelling, or ``None``."""
+        for prefix in ("metal::array<", "array<"):
+            if not (text.startswith(prefix) and text.endswith(">")):
+                continue
+            inner, depth = text[len(prefix) : -1], 0
+            for index in range(len(inner) - 1, -1, -1):
+                character = inner[index]
+                if character == ">":
+                    depth += 1
+                elif character == "<":
+                    depth -= 1
+                elif character == "," and depth == 0:
+                    return prefix, inner[:index].strip(), inner[index + 1 :].strip()
+        return None
 
     def metal_struct_type_dependencies(self, type_name):
         type_name = self.type_name_string(type_name)
