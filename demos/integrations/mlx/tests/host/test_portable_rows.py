@@ -374,6 +374,8 @@ def test_row_trace_checks_physical_boolean_storage(row_evidence, target, fault):
 
 
 def test_row_ci_preserves_all_three_targets_and_full_width_sets():
+    import tomllib
+
     import yaml
 
     from tools import ci_coverage
@@ -386,10 +388,10 @@ def test_row_ci_preserves_all_three_targets_and_full_width_sets():
         workflow, "portable-host", "Install CrossTL and MLX build dependencies"
     )
     assert '"PyYAML>=6,<7"' in dependencies
-    requirements = (
-        Path(__file__).resolve().parents[5] / "requirements.txt"
-    ).read_text()
-    assert "PyYAML>=6,<7" in requirements.splitlines()
+    project = tomllib.loads(
+        (Path(__file__).resolve().parents[5] / "pyproject.toml").read_text()
+    )
+    assert "PyYAML>=6,<7" in project["project"]["optional-dependencies"]["test"]
     for event in ("pull_request", "push"):
         assert_paths_covered(
             ci_coverage.workflow_event_path_filters(workflow, event),
