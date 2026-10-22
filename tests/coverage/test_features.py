@@ -1,4 +1,4 @@
-from tools.coverage import validators
+from tools.coverage import probes, validators
 from tools.coverage.features import (
     cuda,
     glsl,
@@ -1185,6 +1185,29 @@ def test_slang_types():
     assert slang.slang_type("uint64_t", {}) == Type("uint64")
     assert slang.slang_type("int64_t2", {}) == Type("int64", (2,))
     assert slang.slang_type("int8_t4_packed", {}) == Type("int8x4_packed")
+
+
+def test_slang_strings_are_literals_and_parameter_packs_are_empty():
+    text = """
+//@public:
+int getStringHash(String string);
+
+[require(cpp_cuda_glsl_hlsl_spirv_llvm, printf)]
+void printf<each T>(NativeString format, expand each T args);
+
+__generic<each T : __BuiltinIntegerType>
+[require(cuda_glsl_hlsl_spirv, raytracing_intersection)]
+bool ReportHitOptix(float tHit, uint hitKind, expand each T attribs);
+"""
+    features = by_name(slang.parse(text, ""))
+    constant = Param(STRING, "const")
+    assert features["getStringHash"].signature.params == (constant,)
+    assert features["printf"].signature.params == (constant,)
+    assert features["ReportHitOptix"].signature.params == (
+        Param(Type("float")),
+        Param(Type("uint")),
+    )
+    assert probes.build(features["printf"], "slang").source.count('printf("");') == 1
 
 
 MOJO_MATH_INIT = """

@@ -7,10 +7,11 @@ meta loop generates, such as ``Interlocked$(atomicOp.slangCallSuffix)``, is expa
 functions of resource and object types are left out.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
-integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2. A function whose every
-``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
-``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
-Direct3D allows it in; any other function stays untested.
+integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2. A string argument is
+the empty literal and a parameter pack has no elements. A function whose every ``[require(...)]`` names a stage-only
+capability is probed in that stage. Probes compile for SPIR-V. A function whose ``require`` names no SPIR-V target
+but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage Direct3D allows it in; any other
+function stays untested.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from .. import spellings
 from ..model import (
     OTHER_WIDTHS,
+    STRING,
     VOID,
     Feature,
     Param,
@@ -119,6 +121,8 @@ _TABLE = re.compile(
     re.S,
 )
 _SPLICE = re.compile(r"\$\(\s*(\w+)(?:\.(\w+))?\s*\)")
+# String parameters take a literal, which slangc folds at compile time (core.meta.slang, getStringHash).
+_STRINGS = frozenset({"String", "NativeString"})
 
 
 @dataclass(frozen=True)
@@ -384,6 +388,8 @@ def _parameter(text: str, generics: dict[str, str]) -> Param:
     while words and words[0] in _QUALIFIERS:
         direction = _QUALIFIERS[words.pop(0)] if direction == "in" else direction
     spelling = " ".join(words[:-1]) if len(words) > 1 else " ".join(words)
+    if spelling in _STRINGS:
+        return Param(STRING, "const")
     return Param(slang_type(spelling, generics), direction)
 
 
@@ -396,6 +402,8 @@ def signature(declaration: Declaration) -> Signature | None:
     params = [p for p in split(match.group("params")) if p.strip()]
     if any("..." in p for p in params):
         return None
+    # A parameter pack (``expand each T``) is probed with no elements.
+    params = [p for p in params if p.split()[0] != "expand"]
     return Signature(
         slang_type(result, generics), tuple(_parameter(p, generics) for p in params)
     )

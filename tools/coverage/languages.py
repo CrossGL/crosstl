@@ -551,6 +551,7 @@ class Slang(HLSL):
 
     language = "slang"
     suffix = ".slang"
+    string = "String"
     entry_attributes = ('[shader("compute")]', "[numthreads(1, 1, 1)]")
     fragment_attributes = ('[shader("fragment")]',)
     stage_attributes = {
