@@ -249,25 +249,79 @@ class _Strides:
         return stride
 
     def calls_to(self, function):
-        """``(caller, call)`` for each call that reaches ``function`` by name and arity."""
+        """``(caller, call)`` for each call that may reach ``function``.
+
+        A call reaches a function of its name and arity. When several overloads share both, a call is kept unless
+        one of its arguments is a structured buffer where ``function`` takes something else, or the reverse. That
+        over-approximates: a call two buffer overloads accept counts for both, so their strides must agree.
+        """
         name = getattr(function, "name", None)
         arity = len(getattr(function, "parameters", None) or [])
-        overloads = [
-            candidate
-            for candidate, _scope in self.functions
-            if getattr(candidate, "name", None) == name
-            and len(getattr(candidate, "parameters", None) or []) == arity
-        ]
-        if len(overloads) > 1:
-            self.refuse(f"{name} has several overloads with {arity} parameters")
+        overloaded = (
+            sum(
+                1
+                for candidate, _scope in self.functions
+                if getattr(candidate, "name", None) == name
+                and len(getattr(candidate, "parameters", None) or []) == arity
+            )
+            > 1
+        )
         for caller, _scope in self.functions:
             for node in _walk(getattr(caller, "body", None)):
                 if (
                     isinstance(node, A.FunctionCallNode)
                     and call_name(node) == name
                     and len(node.arguments or []) == arity
+                    and (not overloaded or self.may_accept(function, caller, node))
                 ):
                     yield caller, node
+
+    def may_accept(self, function, caller, call_node):
+        """Whether ``function`` may be the overload ``call_node`` in ``caller`` resolves to."""
+        for parameter, argument in zip(function.parameters, call_node.arguments):
+            argument_type = self.argument_type(caller, argument)
+            if argument_type is None:
+                continue
+            takes_buffer = _element_type(_declared_type(parameter)) is not None
+            if takes_buffer != (_element_type(argument_type) is not None):
+                return False
+        return True
+
+    def argument_type(self, function, expression):
+        """The declared type of the name ``expression`` indexes inside ``function``, or ``None`` when unknown."""
+        base, depth = expression, 0
+        while isinstance(base, A.ArrayAccessNode):
+            base, depth = base.array_expr, depth + 1
+        if not isinstance(base, A.IdentifierNode):
+            return None
+        name = base.name
+        declaration = next(
+            (
+                parameter
+                for parameter in getattr(function, "parameters", None) or []
+                if getattr(parameter, "name", None) == name
+            ),
+            None,
+        )
+        if declaration is None:
+            declaration = next(
+                (
+                    node
+                    for node in _walk(getattr(function, "body", None))
+                    if isinstance(node, A.VariableNode) and node.name == name
+                ),
+                None,
+            )
+        if declaration is None:
+            declaration = self.scopes.get(id(function), {}).get(name)
+        if declaration is None:
+            declaration = self.globals.get(name)
+        type_node = _declared_type(declaration) if declaration is not None else None
+        for _ in range(depth):
+            if not isinstance(type_node, A.ArrayType):
+                return None
+            type_node = type_node.element_type
+        return type_node
 
     # Rewriting -------------------------------------------------------------
 
