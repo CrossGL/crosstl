@@ -116,3 +116,24 @@ def test_metal_colour_attachments_named_by_enumerators_keep_their_index(tmp_path
     # A colour attachment may be a scalar, as MSL and HLSL allow.
     assert re.search(r"float depth\s*:\s*SV_TARGET3;", hlsl), hlsl
     assert re.search(r"albedo\s*:\s*SV_TARGET1;", hlsl), hlsl
+
+
+METAL_FUNCTION_CONSTANT_EXPRESSION = """#include <metal_stdlib>
+using namespace metal;
+#define FC_NORM 1700
+constant bool FC_use_scale [[function_constant(FC_NORM + 0)]];
+kernel void scale(device float *out [[buffer(0)]], uint id [[thread_position_in_grid]]) {
+    out[id] = FC_use_scale ? 2.0 : 1.0;
+}
+"""
+
+
+def test_spirv_specialization_id_folds_an_integer_expression(tmp_path):
+    path = tmp_path / "shader.metal"
+    path.write_text(METAL_FUNCTION_CONSTANT_EXPRESSION)
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    glsl = crosstl.translate(str(path), backend="opengl", format_output=False)
+
+    # Before, SPIR-V refused the id: "specialization constant 'FC_use_scale' requires an integer id".
+    assert re.search(r"OpDecorate %\w+ SpecId 1700\b", spirv), spirv
+    assert "layout(constant_id = 1700) const bool FC_use_scale" in glsl, glsl

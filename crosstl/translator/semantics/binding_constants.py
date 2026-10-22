@@ -12,7 +12,10 @@ decorations take one, and the GLSL and SPIR-V generators read only literal digit
 ``texture``, ``sampler``, ``location``, ``attribute``, ``color``, ``index``, ``id``, ``input_attachment_index``)
 with the integer literal it names. The name may be a program constant that folds to an integer, or an enumerator
 of a plain enum, which counts on from the previous enumerator when it has no value of its own, as in C. A scoped
-enumerator may be written ``Enum::Name``. Names that fold to no integer are left for the generators to report.
+enumerator may be written ``Enum::Name``. Specialization-constant ids (``function_constant``, ``constant_id``) fold
+the same way, and so does an integer expression over literals and such names, as in
+``[[function_constant(FC_NORM + 0)]]`` once ``FC_NORM`` has been macro-expanded. Arguments that fold to no integer
+are left for the generators to report.
 """
 
 from __future__ import annotations
@@ -35,8 +38,16 @@ _SLOT_ATTRIBUTES = frozenset(
         "index",
         "id",
         "input_attachment_index",
+        # Specialization-constant ids: [[function_constant(N)]], layout(constant_id = N), [[vk::constant_id(N)]].
+        "function_constant",
+        "constant_id",
+        "spec_id",
+        "vk_constant_id",
     }
 )
+
+# Arguments already in their final form; anything else that evaluates to an integer is folded.
+_EXPRESSION_NODES = (A.BinaryOpNode, A.UnaryOpNode, A.TernaryOpNode)
 
 
 def _stages(program):
@@ -101,6 +112,18 @@ def _name(argument):
     return None
 
 
+def _value(argument, values):
+    """The integer ``argument`` names or computes (``FC_NORM + 0`` after macro expansion), or ``None``."""
+    name = _name(argument)
+    if name is not None:
+        return values.get(name)
+    if isinstance(argument, _EXPRESSION_NODES):
+        value = evaluate_literal_int_expression(argument, values)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
 def fold_binding_constants(program) -> int:
     """Replace named integers in ``program``'s slot attributes with literals, in place; returns how many."""
     if not isinstance(program, A.ShaderNode):
@@ -115,12 +138,13 @@ def fold_binding_constants(program) -> int:
             if not arguments:
                 continue
             for position, argument in enumerate(arguments):
-                name = _name(argument)
-                if name is None:
+                if _name(argument) is None and not isinstance(
+                    argument, _EXPRESSION_NODES
+                ):
                     continue
                 if values is None:
                     values = _integer_names(program)
-                value = values.get(name)
+                value = _value(argument, values)
                 if value is None:
                     continue
                 arguments[position] = A.LiteralNode(value, A.PrimitiveType("int"))

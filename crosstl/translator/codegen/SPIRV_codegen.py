@@ -14208,6 +14208,19 @@ class VulkanSPIRVCodeGen(
         )
         return vector_info == ("float", width)
 
+    def is_spirv_colour_attachment_type(self, type_name) -> bool:
+        """Whether ``type_name`` may be a fragment colour output: a 32-bit float, int or uint scalar or vector.
+
+        A colour attachment need not be a vec4 (Vulkan specification, "Fragment Output Interface"); an output
+        with fewer components than the attachment format leaves the remaining components undefined, as in HLSL
+        ``float main() : SV_Target`` and MSL ``float depth [[color(3)]]``.
+        """
+        type_text = self.type_name_string(type_name)
+        if self.normalize_primitive_name(type_text) in {"float", "int", "uint"}:
+            return True
+        vector_info = self.vector_component_type_and_count(type_text)
+        return vector_info is not None and vector_info[0] in {"float", "int", "uint"}
+
     def is_spirv_float_scalar_type(self, type_name) -> bool:
         return (
             self.normalize_primitive_name(self.type_name_string(type_name)) == "float"
@@ -14235,12 +14248,20 @@ class VulkanSPIRVCodeGen(
         if kind is None or kind == "input_only":
             return
 
-        if kind in {"position", "color"}:
+        if kind == "position":
             if self.is_spirv_float_vector_width(type_name, 4):
                 return
             raise ValueError(
                 f"Unsupported {semantic} {context} for SPIR-V codegen; "
                 "expected vec4-compatible type"
+            )
+
+        if kind == "color":
+            if self.is_spirv_colour_attachment_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for SPIR-V codegen; "
+                "expected a float, int or uint scalar or vector"
             )
 
         if kind == "depth" and not self.is_spirv_float_scalar_type(type_name):

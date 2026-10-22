@@ -35206,8 +35206,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         if self.hlsl_gl_frag_data_semantic(semantic):
             return True
-        if re.fullmatch(r"gl_FragColor\d+", str(semantic)):
-            # MSL [[color(N)]] for N > 0, which a scalar or narrower vector may carry (float depth [[color(3)]]).
+        if re.fullmatch(r"gl_FragColor\d*", str(semantic)):
+            # A colour attachment (MSL [[color(N)]], HLSL SV_Target<N>) may be a scalar or a narrower vector, as in
+            # float depth [[color(3)]] or float main() : SV_Target; DXC accepts any numeric 1-4 component type.
             return True
         return str(semantic).upper().startswith("SV_TARGET")
 

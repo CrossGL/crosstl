@@ -17121,8 +17121,22 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
-        ("fragment", "float", "gl_FragColor", "0.0", "SV_TARGET", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
+        (
+            "fragment",
+            "bool",
+            "gl_FragColor",
+            "true",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
+        (
+            "fragment",
+            "mat2",
+            "gl_FragColor",
+            "mat2(1.0)",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         (
@@ -17564,7 +17578,11 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
     ("member_decl", "hlsl_semantic", "expected_type"),
     [
         ("float position @ gl_Position", "SV_POSITION", "float4"),
-        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
+        (
+            "bool color @ gl_FragColor",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         (
