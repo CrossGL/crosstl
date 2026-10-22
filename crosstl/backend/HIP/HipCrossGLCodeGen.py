@@ -3,12 +3,12 @@
 import hashlib
 import re
 
+from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
     normalize_threadgroup_size_option,
 )
-from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
