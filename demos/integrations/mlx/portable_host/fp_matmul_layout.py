@@ -7,9 +7,11 @@ biases. Transposed weights go to ``dispatch_qmv``: ``fp_qmv_quad`` for ``K``
 of 64 or 128, then ``fp_qmv_wide`` for two or more vectors (``use_qmv_wide``
 holds for every floating-point mode), then ``fp_qmv_fast`` when ``N`` and
 ``K`` are aligned and ``fp_qmv`` otherwise. Untransposed weights go to
-``fp_qvm`` while ``K`` is below 1024. QuantizedMatmul never passes a global
-scale, so no routed entry reads one; the pinned qmv and qvm templates still
-declare that argument, and the host binds an inert value for it.
+``fp_qvm`` while ``K`` is below 1024, and longer reductions to
+``fp_qvm_split_k``: 8 partitions of ``K`` (32 above 8192) whose partial
+products a column sum then adds. QuantizedMatmul never passes a global scale,
+so no routed entry reads one; the pinned qmv and qvm templates still declare
+that argument, and the host binds an inert value for it.
 """
 
 import re
@@ -34,6 +36,10 @@ PATTERN = re.compile(
     r"_(float|float16_t|bfloat16_t)_gs_(16|32)_b_(4|8)"
     r"(?:_d_(64|128))?(?:_nv_([2-5])_kl_16)?_batch_(0|1)"
 )
+SPLIT_PATTERN = re.compile(
+    r"(mxfp4|mxfp8|nvfp4)_qvm_split_k_(float|float16_t|bfloat16_t)"
+    r"_gs_(16|32)_b_(4|8)_spk_(8|32)"
+)
 ENTRY_PREFIXES = tuple(
     f"{mode}_{kernel}_" for mode in MODES for kernel in ("qmv", "qvm")
 )
@@ -56,12 +62,35 @@ BATCH_PARAMETERS = (
 # The inert value of the global scale qmv, qmv_fast and qvm declare.
 INACTIVE_GLOBAL_SCALE = 0
 # QuantizedMatmul::eval_gpu sends untransposed products from this K to
-# qvm_split_k, which the host does not route for floating-point modes.
+# qvm_split_k, in 32 partitions above QVM_WIDE_SPLIT and 8 below.
 QVM_SPLIT_K = matmul_layout.QVM_SPLIT_K
+QVM_WIDE_SPLIT = matmul_layout.QVM_WIDE_SPLIT
+SPLIT_SCALARS = matmul_layout.SPLIT_SCALARS
 
 
 def signature(entry):
-    """The mode, kernel, element type, group size, bits, ``D``, vectors and batching."""
+    """The mode, kernel, element type, group size, bits, ``D``, vectors and batching.
+
+    Split-K entries add their partition count and always bind batch views.
+    """
+    split = SPLIT_PATTERN.fullmatch(entry) if isinstance(entry, str) else None
+    if split is not None:
+        mode, source, group, bits, partitions = split.groups()
+        if MODES[mode] != (int(group), int(bits)):
+            raise ValueError(f"{LABEL} entry is never instantiated")
+        return {
+            "mode": mode,
+            "kernel": "qvm_split_k",
+            "dtype": next(
+                key for key, value in SOURCE_TYPES.items() if value == source
+            ),
+            "groupSize": int(group),
+            "bits": int(bits),
+            "D": None,
+            "vectors": None,
+            "batched": True,
+            "splitK": int(partitions),
+        }
     match = PATTERN.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError(f"Unsupported {LABEL.lower()} entry")
@@ -91,7 +120,7 @@ def workgroup_size(entry):
 
 def transposed(entry):
     """Whether the entry multiplies by transposed weights, ``w`` of ``(N, K)``."""
-    return signature(entry)["kernel"] != "qvm"
+    return signature(entry)["kernel"] not in ("qvm", "qvm_split_k")
 
 
 def tile_rows(entry):
@@ -106,6 +135,7 @@ def tile_rows(entry):
         "qmv_quad": 64,
         "qmv_wide": 2 * (SIMD_SIZE // WIDE_LANES),
         "qvm": 2 * min(info["groupSize"], SIMD_SIZE),
+        "qvm_split_k": 2 * min(info["groupSize"], SIMD_SIZE),
     }.get(info["kernel"], 8)
 
 
@@ -119,7 +149,7 @@ def select(mode, dtype, m, n, k, batches, transpose=True):
     """quantized.cpp QuantizedMatmul::eval_gpu's entry for one product.
 
     Raises for the products MLX sends to kernels the host does not route:
-    the matrix-matrix kernels and qvm_split_k.
+    the matrix-matrix kernels.
     """
     group, bits = MODES[mode]
     if m >= vector_limit(k, n, transpose):
@@ -128,7 +158,8 @@ def select(mode, dtype, m, n, k, batches, transpose=True):
     batch = "_batch_1" if batches > 1 else "_batch_0"
     if not transpose:
         if k >= QVM_SPLIT_K:
-            raise ValueError(f"{LABEL} split-K products are not routed")
+            partitions = 32 if k > QVM_WIDE_SPLIT else 8
+            return f"{mode}_qvm_split_k_{stem}_spk_{partitions}"
         return f"{mode}_qvm_{stem}{batch}"
     if k in QUAD_DIMENSIONS:
         # Both 4 and 8 bits are powers of two.
@@ -141,7 +172,7 @@ def select(mode, dtype, m, n, k, batches, transpose=True):
 
 def declares_global_scale(entry):
     """Whether the kernel declares the global scale argument it never reads here."""
-    return signature(entry)["kernel"] not in ("qmv_quad", "qmv_wide")
+    return signature(entry)["kernel"] not in ("qmv_quad", "qmv_wide", "qvm_split_k")
 
 
 def scalar_parameters(entry):
@@ -152,6 +183,8 @@ def scalar_parameters(entry):
 def parameter_names(entry):
     """The parameters the host binds: never the global scale."""
     names = (*MATRIX_PARAMETERS, *scalar_parameters(entry))
+    if "splitK" in signature(entry):
+        return (*names, *BATCH_PARAMETERS, *SPLIT_SCALARS)
     return (*names, *BATCH_PARAMETERS) if signature(entry)["batched"] else names
 
 
@@ -164,7 +197,7 @@ def parameter_type(entry, name):
         return "float32"
     if name in MATRIX_PARAMETERS:
         return signature(entry)["dtype"]
-    if name in scalar_parameters(entry) or name in BATCH_SCALARS:
+    if name in scalar_parameters(entry) or name in (*BATCH_SCALARS, *SPLIT_SCALARS):
         return "int32"
     if name in BATCH_PARAMETERS:
         return BATCH_VECTORS[name]
@@ -177,7 +210,7 @@ def read_storage(entry, buffers):
     return matmul_layout.read_buffers(
         buffers,
         {name: parameter_type(entry, name) for name in names},
-        (*scalar_parameters(entry), *BATCH_SCALARS),
+        (*scalar_parameters(entry), *BATCH_SCALARS, *SPLIT_SCALARS),
         LABEL,
         matrices=MATRIX_PARAMETERS,
     )
@@ -216,6 +249,19 @@ def plan(entry, counts, parameters, threads, execution):
     batch views that the translations reflect but never read.
     """
     info = signature(entry)
+    if "splitK" in info:
+        metadata = matmul_layout.plan_split(
+            entry,
+            counts,
+            parameters,
+            threads,
+            execution,
+            info,
+            lambda m, n, k, batches: select(
+                info["mode"], info["dtype"], m, n, k, batches, transpose=False
+            ),
+        )
+        return {"mode": info["mode"], **metadata}
     k, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
     group, bits = info["groupSize"], info["bits"]
     transpose = transposed(entry)

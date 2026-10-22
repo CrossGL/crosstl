@@ -124,9 +124,18 @@ def build_entries(root, packages, target, entries, jobs):
 
 
 def verification_entries():
-    from demos.integrations.mlx.portable_host import verify_upstream_fp_qmv
+    """The entries test_fp_qmv and test_fp_qvm route, sorted once each."""
+    from demos.integrations.mlx.portable_host import (
+        verify_upstream_fp_qmv,
+        verify_upstream_fp_qvm,
+    )
 
-    return verify_upstream_fp_qmv.package_entries()["quantized"]
+    return sorted(
+        {
+            *verify_upstream_fp_qmv.package_entries()["quantized"],
+            *verify_upstream_fp_qvm.package_entries()["quantized"],
+        }
+    )
 
 
 def main(argv=None):

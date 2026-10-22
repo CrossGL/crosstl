@@ -10,6 +10,7 @@ import pytest
 from demos.integrations.mlx.portable_host import (
     upstream_runner,
     verify_upstream_fp_qmv,
+    verify_upstream_fp_qvm,
     verify_upstream_qmm,
     verify_upstream_qmm_shapes,
     verify_upstream_qmv,
@@ -32,6 +33,7 @@ RUNNERS = {
     "qmm_shapes": verify_upstream_qmm_shapes,
     "qmm": verify_upstream_qmm,
     "fp_qmv": verify_upstream_fp_qmv,
+    "fp_qvm": verify_upstream_fp_qvm,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 

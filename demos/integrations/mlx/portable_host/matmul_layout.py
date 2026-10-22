@@ -341,7 +341,17 @@ def plan(entry, counts, parameters, threads, execution):
     """
     info = signature(entry)
     if "splitK" in info:
-        return _plan_split(entry, info, counts, parameters, threads, execution)
+        return plan_split(
+            entry,
+            counts,
+            parameters,
+            threads,
+            execution,
+            info,
+            lambda m, n, k, batches: select(
+                info["dtype"], info["groupSize"], info["bits"], m, n, k, batches, False
+            ),
+        )
     k, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
     group, bits = info["groupSize"], info["bits"]
     transpose = transposed(entry)
@@ -432,7 +442,8 @@ def split_views(
 
     Takes the operands' shapes and strides as MLX binds them (a 1-D ``x`` is
     not yet widened) and the scales' row width ``groups``, and returns the
-    bound batch parameters.
+    bound batch parameters. Kernels without biases pass ``b_strides`` of
+    ``None`` and bind no bias strides.
     """
     split_d = -(-k // split)
     x_shape, x_strides = list(x_shape), list(x_strides)
@@ -448,7 +459,7 @@ def split_views(
     w_shape = list(w_shape)
     w_shape.insert(w_ndim - 2, split)
     w_shape[w_ndim - 1] //= split
-    return {
+    views = {
         "x_batch_ndims": x_ndim - 1,
         "x_shape": x_shape,
         "x_strides": x_strides,
@@ -456,13 +467,25 @@ def split_views(
         "w_shape": w_shape,
         "w_strides": _inserted(w_strides, split_d * words),
         "s_strides": _inserted(s_strides, split_d * groups),
-        "b_strides": _inserted(b_strides, split_d * groups),
     }
+    if b_strides is not None:
+        views["b_strides"] = _inserted(b_strides, split_d * groups)
+    return views
 
 
-def _plan_split(entry, info, counts, parameters, threads, execution):
-    """Validate one qvm_split_k launch against quantized.cpp's partitions."""
+def plan_split(entry, counts, parameters, threads, execution, info, route):
+    """Validate one qvm_split_k launch against quantized.cpp's partitions.
+
+    ``info`` is the entry's signature and ``route(m, n, k, batches)`` the
+    entry QuantizedMatmul selects for an untransposed product. The kernel
+    binds biases and their strides exactly when ``counts`` holds ``biases``.
+    """
     split, group, bits = info["splitK"], info["groupSize"], info["bits"]
+    biased = "biases" in counts
+    batch_parameters = tuple(
+        name for name in BATCH_PARAMETERS if biased or name != "b_strides"
+    )
+    strided = ("x_strides", "w_strides", "s_strides", "b_strides")[: 3 + biased]
     split_d, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
     final = parameters.get("final_block_size")
     if any(type(value) is not int for value in (split_d, n, final)):
@@ -482,21 +505,22 @@ def _plan_split(entry, info, counts, parameters, threads, execution):
     }:
         raise ValueError("Quantized matrix-vector launch geometry is missing")
     m, tiles, batches = execution["workgroupCount"]
+    # quantized.cpp: 2 simdgroups of min(group_size, 32) output columns.
     if (
-        list(execution["workgroupSize"]) != list(workgroup_size(entry))
+        list(execution["workgroupSize"]) != [SIMD_SIZE, 2, 1]
         or any(type(value) is not int for value in (m, tiles, batches))
         or not 1 <= m <= MAX_GROUPS
         or not split <= batches <= MAX_GROUPS
         or batches % split
-        or tiles != -(-n // tile_rows(entry))
+        or tiles != -(-n // (2 * min(group, SIMD_SIZE)))
         or tiles > MAX_GROUPS
     ):
         raise ValueError("Quantized matrix-vector launch does not match MLX's grid")
-    if select(info["dtype"], group, bits, m, n, k, batches // split, False) != entry:
+    if route(m, n, k, batches // split) != entry:
         raise ValueError("Quantized matrix-vector entry differs from MLX's routing")
     if threads != m * n * batches or counts["y"] != threads:
         raise ValueError("Quantized matrix-vector output extent differs")
-    if set(parameters) != {*SCALAR_PARAMETERS, *BATCH_PARAMETERS, *SPLIT_SCALARS}:
+    if set(parameters) != {*SCALAR_PARAMETERS, *batch_parameters, *SPLIT_SCALARS}:
         raise ValueError("Quantized split-K parameters are missing")
     words, groups = n * bits // 32, n // group
     x_shape, w_shape = parameters["x_shape"], parameters["w_shape"]
@@ -507,10 +531,7 @@ def _plan_split(entry, info, counts, parameters, threads, execution):
         or w_batch != len(w_shape) - 2
         or not 1 <= w_batch <= MAX_BATCH_DIMENSIONS
         or len(parameters["x_strides"]) != len(x_shape)
-        or not len(parameters["w_strides"])
-        == len(parameters["s_strides"])
-        == len(parameters["b_strides"])
-        == len(w_shape)
+        or any(len(parameters[name]) != len(w_shape) for name in strided[1:])
         or x_shape[x_batch - 1] != split
         or w_shape[w_batch - 1] != split
     ):
@@ -524,20 +545,18 @@ def _plan_split(entry, info, counts, parameters, threads, execution):
         w_shape=[*w_shape[: w_batch - 1], k, words],
         w_strides=[*parameters["w_strides"][: w_batch - 1], words, 1],
         s_strides=[*parameters["s_strides"][: w_batch - 1], groups, 1],
-        b_strides=[*parameters["b_strides"][: w_batch - 1], groups, 1],
+        b_strides=(
+            [*parameters["b_strides"][: w_batch - 1], groups, 1] if biased else None
+        ),
     )
     expected = split_views(**original, split=split, k=k, groups=groups)
-    if {name: parameters[name] for name in BATCH_PARAMETERS} != expected:
+    if {name: parameters[name] for name in batch_parameters} != expected:
         raise ValueError("Quantized split-K views differ from quantized.cpp's")
     if math.prod(x_shape[:x_batch]) != batches or (
         math.prod(w_shape[:w_batch]) > batches
     ):
         raise ValueError("Quantized matrix-vector batch extents do not match")
-    if any(
-        stride < 0
-        for name in ("x_strides", "w_strides", "s_strides", "b_strides")
-        for stride in parameters[name]
-    ):
+    if any(stride < 0 for name in strided for stride in parameters[name]):
         raise ValueError("Quantized matrix-vector batch strides must be nonnegative")
     extents = {"x": (m - 1) * k, "w": 0, "scales": 0, "biases": 0}
     widths = {"x": None, "w": words, "scales": groups, "biases": groups}
@@ -545,8 +564,9 @@ def _plan_split(entry, info, counts, parameters, threads, execution):
         "x": (x_shape, x_strides, x_batch),
         "w": (w_shape, parameters["w_strides"], w_batch),
         "scales": (w_shape, parameters["s_strides"], w_batch),
-        "biases": (w_shape, parameters["b_strides"], w_batch),
     }
+    if biased:
+        views["biases"] = (w_shape, parameters["b_strides"], w_batch)
     for z in range(batches):
         # The last partition reads the shorter final block.
         rows = final if z % split == split - 1 else split_d
@@ -568,7 +588,7 @@ def _plan_split(entry, info, counts, parameters, threads, execution):
         "K": k,
         "batches": batches // split,
         "splitK": split,
-        "overreadPadding": {"scales": 0, "biases": 0},
+        "overreadPadding": {name: 0 for name in ("scales", "biases")[: 1 + biased]},
         "parameters": dict(parameters),
     }
 

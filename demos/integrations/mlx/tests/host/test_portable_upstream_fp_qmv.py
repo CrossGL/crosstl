@@ -191,9 +191,9 @@ def test_prepare_translates_every_family_and_indexes_the_maximum(tmp_path, monke
     assert operators == [(tmp_path / "bfloat-packages", "directx", "bfloat")]
 
 
-def test_package_verification_entries_are_the_runners_products():
+def test_package_verification_entries_include_the_runners_products():
     from demos.integrations.mlx.portable_host import fp_matmul_packages
 
-    assert fp_matmul_packages.verification_entries() == (
-        upstream.package_entries()["quantized"]
-    )
+    entries = fp_matmul_packages.verification_entries()
+    assert entries == sorted(set(entries))
+    assert set(upstream.package_entries()["quantized"]) <= set(entries)

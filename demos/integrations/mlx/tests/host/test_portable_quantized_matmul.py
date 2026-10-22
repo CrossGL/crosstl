@@ -401,7 +401,8 @@ def test_qvm_split_partitions_follow_quantized_cpp():
     }
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert 'partition_sum_type(out, split_k, "vector-matrix products");' in backend
-    assert 'std::string("affine_qvm_split_k_") +' in backend
+    assert 'std::string(mode) + "_qvm_split_k_" +' in backend
+    assert '"affine", group_size_, bits_, M, N, K);' in backend
     assert (
         'dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", storage);'
         in backend

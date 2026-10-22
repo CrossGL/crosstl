@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -2339,13 +2340,15 @@ void dispatch_qmm_split_k(
 
 // quantized.cpp qvm_split_k: the K axis in 8 partitions (32 above 8192) whose
 // partial products land on a partition axis before the matrices, then a
-// strided sum over that axis.
+// strided sum over that axis. Affine kernels bind biases; the mxfp4, mxfp8
+// and nvfp4 kernels bind uint8 scales and no biases.
 void dispatch_qvm_split_k(
     const array& x,
     const array& w,
     const array& scales,
-    const array& biases,
+    const std::optional<array>& biases,
     array& out,
+    const char* mode,
     int group_size,
     int bits,
     int M,
@@ -2377,7 +2380,6 @@ void dispatch_qvm_split_k(
   auto w_shape = w.shape();
   auto w_strides = w.strides();
   auto s_strides = scales.strides();
-  auto b_strides = biases.strides();
   x_shape.insert(x_shape.end() - 2, split_k);
   x_shape.back() /= split_k;
   x_strides.insert(x_strides.end() - 2, split_d);
@@ -2386,7 +2388,11 @@ void dispatch_qvm_split_k(
   w_shape[w.ndim() - 1] /= split_k;
   w_strides.insert(w_strides.end() - 2, int64_t(split_d) * w.shape(-1));
   s_strides.insert(s_strides.end() - 2, int64_t(split_d) * scales.shape(-1));
-  b_strides.insert(b_strides.end() - 2, int64_t(split_d) * biases.shape(-1));
+  Strides b_strides;
+  if (biases) {
+    b_strides = biases->strides();
+    b_strides.insert(b_strides.end() - 2, int64_t(split_d) * biases->shape(-1));
+  }
   int32_t final_block_size = K - (split_k - 1) * split_d;
   auto temp_shape = out.shape();
   if (temp_shape.size() == 1) {
@@ -2394,7 +2400,7 @@ void dispatch_qvm_split_k(
   }
   temp_shape.insert(temp_shape.end() - 2, split_k);
   array intermediate(temp_shape, out.dtype(), nullptr, {});
-  const std::string entry = std::string("affine_qvm_split_k_") +
+  const std::string entry = std::string(mode) + "_qvm_split_k_" +
       quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
       std::to_string(bits) + "_spk_" + std::to_string(split_k);
   require_entry(entry);
@@ -2412,22 +2418,30 @@ void dispatch_qvm_split_k(
   };
   std::vector<CrosstlMlxBuffer> buffers = {
       {"w", "uint32", data(w), matmul_span(w), 0},
-      {"scales", storage, data(scales), matmul_span(scales), 0},
-      {"biases", storage, data(biases), matmul_span(biases), 0},
-      {"x", storage, data(x), matmul_span(x), 0},
-      {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
-      {"in_vec_size", "int32", &in_vec_size, 1, 0},
-      {"out_vec_size", "int32", &out_vec_size, 1, 0},
-      {"x_batch_ndims", "int32", &x_batch_ndims, 1, 0},
-      vector("x_shape", "int32", x_shape),
-      vector("x_strides", "int64", x_strides),
-      {"w_batch_ndims", "int32", &w_batch_ndims, 1, 0},
-      vector("w_shape", "int32", w_shape),
-      vector("w_strides", "int64", w_strides),
-      vector("s_strides", "int64", s_strides),
-      vector("b_strides", "int64", b_strides),
-      {"final_block_size", "int32", &final_block_size, 1, 0},
+      {"scales", biases ? storage : "uint8", data(scales), matmul_span(scales), 0},
   };
+  if (biases) {
+    buffers.push_back({"biases", storage, data(*biases), matmul_span(*biases), 0});
+  }
+  buffers.insert(
+      buffers.end(),
+      {
+          {"x", storage, data(x), matmul_span(x), 0},
+          {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
+          {"in_vec_size", "int32", &in_vec_size, 1, 0},
+          {"out_vec_size", "int32", &out_vec_size, 1, 0},
+          {"x_batch_ndims", "int32", &x_batch_ndims, 1, 0},
+          vector("x_shape", "int32", x_shape),
+          vector("x_strides", "int64", x_strides),
+          {"w_batch_ndims", "int32", &w_batch_ndims, 1, 0},
+          vector("w_shape", "int32", w_shape),
+          vector("w_strides", "int64", w_strides),
+          vector("s_strides", "int64", s_strides),
+      });
+  if (biases) {
+    buffers.push_back(vector("b_strides", "int64", b_strides));
+  }
+  buffers.push_back({"final_block_size", "int32", &final_block_size, 1, 0});
   const CrosstlMlxLaunch launch{
       {uint32_t(M), uint32_t((N + bn - 1) / bn), uint32_t(B)}, {32, 2, 1}};
   char error[2048] = {};
@@ -2446,11 +2460,10 @@ void dispatch_qvm_split_k(
   dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", storage);
 }
 
-// quantized.cpp dispatch_qmv and qvm for mxfp4, mxfp8 and nvfp4 weights:
-// fp_quantized.metal's kernels, with uint8 scales and no biases.
+// quantized.cpp dispatch_qmv, qvm and qvm_split_k for mxfp4, mxfp8 and nvfp4
+// weights: fp_quantized.metal's kernels, with uint8 scales and no biases.
 // QuantizedMatmul passes no global scale, so qmv_wide serves two or more
-// vectors on every device. The matrix-matrix and split-K kernels are not
-// routed.
+// vectors on every device. The matrix-matrix kernels are not routed.
 void dispatch_fp_quantized_matvec(
     const array& x,
     const array& w,
@@ -2469,8 +2482,8 @@ void dispatch_fp_quantized_matvec(
         "CrossTL floating-point quantized matrix-matrix products are not routed.");
   }
   if (!transpose && K >= 1024) {
-    throw std::invalid_argument(
-        "CrossTL floating-point split-K vector-matrix products are not routed.");
+    dispatch_qvm_split_k(x, w, scales, std::nullopt, out, mode, group_size, bits, M, N, K);
+    return;
   }
   const uint64_t B = out.size() / M / N;
   const bool quad = transpose && (K == 64 || K == 128);
@@ -2584,7 +2597,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
   if (!transpose_ && K >= 1024) {
-    dispatch_qvm_split_k(x, w, scales, biases, out, group_size_, bits_, M, N, K);
+    dispatch_qvm_split_k(x, w, scales, biases, out, "affine", group_size_, bits_, M, N, K);
     return;
   }
   // dispatch_qmv without qmv_wide, which MLX selects from generation 15, and

@@ -10,7 +10,7 @@ import pytest
 from demos.integrations.mlx.portable_host import fp_matmul_layout as layout
 from demos.integrations.mlx.portable_host import fp_matmul_packages
 from demos.integrations.mlx.portable_host import matmul_dispatch as dispatch
-from demos.integrations.mlx.portable_host import runtime
+from demos.integrations.mlx.portable_host import matmul_layout, runtime
 
 HOST = Path(layout.__file__).parent
 CTYPES = {
@@ -32,6 +32,10 @@ CASES = (
     ("qmv-stacked", "nvfp4", "float32", 1, 7, 48, 8, True),
     ("qvm-rows", "mxfp4", "float32", 1, 67 * 32, 128, 1, False),
     ("qvm-stacked", "nvfp4", "float16", 3, 48, 256, 3, False),
+    # qvm_split_k: 32 partitions above K = 8192, else 8 with a shorter last.
+    ("split-rows", "mxfp4", "float32", 1, 128, 16384, 1, False),
+    ("split-stacked", "nvfp4", "float16", 2, 48, 2001, 3, False),
+    ("split-tail", "mxfp8", "bfloat16", 3, 64, 1030, 1, False),
 )
 
 
@@ -83,6 +87,31 @@ def native_binding(name):
         "workgroupCount": [columns, -(-n // layout.tile_rows(entry)), batches],
         "workgroupSize": list(layout.workgroup_size(entry)),
     }
+    split = info.get("splitK")
+    if split:
+        # qvm_split_k always binds the views, with the partition axis added
+        # and no bias strides.
+        split_d = -(-k // split)
+        x_shape = [*lead, m, k]
+        w_shape = [*lead, rows, words]
+        parameters = {
+            "in_vec_size": split_d,
+            "out_vec_size": n,
+            "final_block_size": k - (split - 1) * split_d,
+            **matmul_layout.split_views(
+                x_shape,
+                contiguous(x_shape),
+                w_shape,
+                contiguous(w_shape),
+                contiguous([*lead, rows, groups]),
+                None,
+                split,
+                k,
+                groups,
+            ),
+        }
+        counts["y"] *= split
+        execution["workgroupCount"][2] *= split
     return entry, counts, parameters, execution
 
 
@@ -118,6 +147,9 @@ def native_buffers(name, data=None):
         "mxfp8_qmv_quad_bfloat16_t_gs_32_b_8_d_128_batch_0",
         "nvfp4_qmv_wide_float_gs_16_b_4_nv_5_kl_16_batch_1",
         "mxfp8_qvm_float_gs_32_b_8_batch_1",
+        "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8",
+        "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_32",
+        "mxfp8_qvm_split_k_bfloat16_t_gs_32_b_8_spk_8",
     ),
 )
 def test_signature_accepts_the_instantiated_specializations(entry):
@@ -139,7 +171,11 @@ def test_signature_accepts_the_instantiated_specializations(entry):
         "mxfp4_qmv_wide_float_gs_32_b_4_nv_2_kl_8_batch_0",
         "mxfp4_qmv_float_gs_32_b_4_batch_0_hgs",
         "mxfp4_qmv_fast_float_gs_32_b_4_r_2_batch_0",
-        "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8",
+        "mxfp4_qvm_split_k_float_gs_32_b_4_spk_16",
+        "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8_batch_0",
+        "nvfp4_qvm_split_k_float_gs_32_b_4_spk_8",
+        "mxfp8_qvm_split_k_float_gs_32_b_4_spk_32",
+        "affine_qvm_split_k_float_gs_32_b_4_spk_8",
         "affine_qmv_float_gs_32_b_4_batch_0",
     ),
 )
@@ -189,8 +225,19 @@ def test_selection_follows_dispatch_qmv_and_qvm():
         select("mxfp4", "float32", 18, 64, 256, 1)
     with pytest.raises(ValueError, match="matrix-matrix"):
         select("mxfp4", "float32", 4, 64, 256, 1, transpose=False)
-    with pytest.raises(ValueError, match="split-K"):
-        select("mxfp4", "float32", 1, 64, 1024, 1, transpose=False)
+    # qvm_split_k from K = 1024, in 32 partitions above 8192.
+    assert select("mxfp4", "float32", 1, 64, 1024, 1, transpose=False) == (
+        "mxfp4_qvm_split_k_float_gs_32_b_4_spk_8"
+    )
+    assert select("nvfp4", "float16", 3, 48, 8192, 2, transpose=False) == (
+        "nvfp4_qvm_split_k_float16_t_gs_16_b_4_spk_8"
+    )
+    assert select("mxfp8", "float32", 1, 128, 8193, 1, transpose=False) == (
+        "mxfp8_qvm_split_k_float_gs_32_b_8_spk_32"
+    )
+    assert select("mxfp4", "float32", 1, 64, 1023, 1, transpose=False) == (
+        "mxfp4_qvm_float_gs_32_b_4_batch_0"
+    )
     assert select("mxfp4", "float32", 17, 64, 256, 1).endswith("_nv_5_kl_16_batch_0")
 
 
@@ -207,7 +254,12 @@ def test_plan_accepts_backend_launches_and_adds_inert_values(name):
         assert values["global_scale"] == [layout.INACTIVE_GLOBAL_SCALE]
     assert "b_strides" not in values
     assert set(layout.BATCH_PARAMETERS) <= set(values)
-    if batches == 1:
+    split = metadata.get("splitK")
+    assert split == layout.signature(entry).get("splitK")
+    if split:
+        assert values == parameters and metadata["overreadPadding"] == {"scales": 0}
+        assert values["x_shape"][values["x_batch_ndims"] - 1] == split
+    elif batches == 1:
         rows = n if transpose else k
         assert values["x_shape"] == [m, k] and values["w_batch_ndims"] == 0
         assert values["w_shape"][0] == rows
@@ -313,7 +365,9 @@ def physical_layout(target, dtype):
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
 @pytest.mark.parametrize("fault", (None, "guard", "unbound", "readonly", "extra"))
-@pytest.mark.parametrize("name", ("quad-stacked", "wide-rows", "qmv-stacked"))
+@pytest.mark.parametrize(
+    "name", ("quad-stacked", "wide-rows", "qmv-stacked", "split-stacked")
+)
 def test_dispatch_commits_the_output_only_after_validation(
     tmp_path, monkeypatch, target, fault, name
 ):
@@ -327,7 +381,7 @@ def test_dispatch_commits_the_output_only_after_validation(
     if fault == "unbound":
         names.remove("w_strides")
     if fault == "extra":
-        names.append("b_strides")
+        names.append("b_strides" if "b_strides" not in names else "global_scale")
     descriptor = {"artifact": {}, "bindings": []}
     for parameter in names:
         kind = (
@@ -362,7 +416,7 @@ def test_dispatch_commits_the_output_only_after_validation(
     def execute(host, outputs):
         outputs = json.loads(json.dumps(outputs))
         value = outputs["binding_y"]
-        count = batches * m * n
+        count = len(memory["y"])
         value["values"][:count] = dispatch.encode([one] * count, dtype, value["dtype"])[
             "values"
         ]
@@ -465,9 +519,54 @@ def test_backend_routes_block_modes_through_the_floating_point_kernels():
         '{"M", "int32"',
         "QuantizedBatchViews views(x, w, scales);",
         "matrix-matrix products are not routed",
-        "split-K vector-matrix products are not routed",
+        "dispatch_qvm_split_k(x, w, scales, std::nullopt, out, mode,",
     ):
         assert fragment in body
     assert '"biases"' not in body
     routing = backend[backend.index("void QuantizedMatmul::eval_gpu") :]
     assert "dispatch_fp_quantized_matvec(" in routing.split("array biases")[0]
+    # The split-K kernels of every mode share one host route, which binds
+    # biases and their strides only for affine weights.
+    start = backend.index("void dispatch_qvm_split_k(")
+    split = backend[start : backend.index("void dispatch_fp_quantized_matvec(", start)]
+    for fragment in (
+        "const std::optional<array>& biases,",
+        'std::string(mode) + "_qvm_split_k_" +',
+        '{"scales", biases ? storage : "uint8"',
+        'buffers.push_back(vector("b_strides", "int64", b_strides));',
+    ):
+        assert fragment in split
+    assert '"affine", group_size_, bits_, M, N, K);' in routing
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "final",
+        "partition-axis",
+        "partition-stride",
+        "partitions",
+        "k-view",
+        "bias-strides",
+        "short-scales",
+    ),
+)
+@pytest.mark.parametrize("name", ("split-rows", "split-stacked", "split-tail"))
+def test_split_plan_rejects_partitions_quantized_cpp_would_not_make(fault, name):
+    entry, counts, parameters, execution = native_binding(name)
+    if fault == "final":
+        parameters["final_block_size"] += 1
+    elif fault == "partition-axis":
+        parameters["x_shape"][parameters["x_batch_ndims"] - 1] += 1
+    elif fault == "partition-stride":
+        parameters["s_strides"][parameters["w_batch_ndims"] - 1] += 1
+    elif fault == "partitions":
+        execution["workgroupCount"][2] += 1
+    elif fault == "k-view":
+        parameters["w_shape"][-2] += 1
+    elif fault == "bias-strides":
+        parameters["b_strides"] = list(parameters["s_strides"])
+    else:
+        counts["scales"] -= 1
+    with pytest.raises(ValueError):
+        layout.plan(entry, counts, parameters, counts["y"], execution)
