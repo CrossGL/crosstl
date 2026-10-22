@@ -59,6 +59,7 @@ from demos.integrations.mlx.tests.kernels.test_current_ternary import (
     _metal_bytes,
     _runtime_value,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -1261,11 +1262,9 @@ def test_current_mlx_copy_family_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": workload.sha256,
-            }
-            assert artifact["generatedSizeBytes"] == workload.size_bytes
+            check_generated_artifact(
+                artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+            )
             (execution,) = artifact["execution"]["entryPoints"]
             assert execution["workgroupSize"] == [1, 1, 1]
             generated = root / artifact["path"]

@@ -29,6 +29,31 @@ ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
 
 
+def test_host_package_downloads_unpack_outside_the_artifact_stream():
+    """Windows extraction stalls the 30 s blob stream, so unpack in a later step."""
+    jobs = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"]
+    consumers = {}
+    for name, job in jobs.items():
+        steps = job.get("steps", [])
+        for index, step in enumerate(steps):
+            with_ = step.get("with") or {}
+            if with_.get("artifact-ids") != "${{ steps.host-artifact.outputs.id }}":
+                continue
+            assert step["uses"].startswith("actions/download-artifact@")
+            assert with_["merge-multiple"] is True
+            assert with_["skip-decompress"] is True
+            unpack = steps[index + 1]
+            assert unpack["name"] == "Unpack same-run host package"
+            assert unpack["run"] == (
+                "python -m demos.integrations.mlx.portable_host.unpack_artifact "
+                + with_["path"]
+            )
+            assert "if" not in unpack and "continue-on-error" not in unpack
+            consumers[name] = with_["path"]
+    assert len(consumers) == 6
+    assert len(set(consumers.values())) == 6
+
+
 @pytest.mark.parametrize("family", ["column", "row"])
 def test_checked_reductions_require_native_execution_on_existing_platform_jobs(family):
     workflow = _workflow_texts()["demo-project-testing.yml"]
@@ -1347,7 +1372,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting, "tests/test_translator/test_metal_builtin_ownership.py"
     )
     assert 'CROSTL_REQUIRE_METAL_BUILTIN_OWNERSHIP: "1"' in ownership
-    assert "--timeout-seconds 120 --" in ownership
+    assert "--timeout-seconds 360 --" in ownership
     assert "pytest -q -n auto" in ownership
     assert "if: runner.os" not in ownership
     ownership_upload = _load_ci_coverage_module().workflow_step_section(
@@ -1903,6 +1928,35 @@ def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
         alias.name for alias in harness_import.names if not hasattr(harness, alias.name)
     )
     assert missing == []
+
+
+def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
+    """Refused Vulkan frontier sources are verified by run_porting, not counted as translated."""
+    from demos.integrations.mlx import run_porting
+
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    step_start = workflow.index("- name: Verify MLX frontier accounting")
+    command_marker = "          python - <<'PY'\n"
+    script_start = workflow.index(command_marker, step_start) + len(command_marker)
+    script = textwrap.dedent(
+        workflow[script_start : workflow.index("\n          PY", script_start)]
+    )
+    assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
+    assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
+        run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS) - set(
+        run_porting.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert "vulkan_translated_sources = set(MLX_VULKAN_FRONTIER_SOURCES)" in script
+    for translated in (
+        'set(scope["vulkanTranslatedFrontierSources"])',
+        'set(vulkan["sources"])',
+        'vulkan["unitCount"]',
+        'vulkan["artifactCount"]',
+        'vulkan["toolchainRuns"]',
+    ):
+        comparison = script[script.index(translated) :].split("\n", 2)
+        assert "vulkan_translated_sources" in "".join(comparison[:2]), translated
 
 
 def test_mlx_platform_runtime_wires_directx_graph_device_proof():

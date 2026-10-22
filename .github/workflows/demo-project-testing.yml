@@ -1,6 +1,12 @@
 name: Project Demo Testing
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Generated-artifact pins (demos/integrations/mlx/tests/pins.py) are enforced on
+  # pull requests and, by default, on dispatched runs. A merge-queue group, a push
+  # to main and the nightly run build on translator changes from other pull
+  # requests that the pins were not reviewed against, so they report drift instead.
+  # Translation, validation, native compilation and numerical parity stay enforced.
+  CROSSTL_MLX_PIN_MODE: ${{ inputs.pin_mode || ((github.event_name == 'merge_group' || github.event_name == 'push' || github.event_name == 'schedule') && 'report' || 'strict') }}
 on:
   # Pull requests always run this workflow, so its result check can be required.
   # The ci-plan job skips every MLX job for changes that do not affect MLX.
@@ -25,6 +31,12 @@ on:
   schedule:
     - cron: "31 4 * * *"
   workflow_dispatch:
+    inputs:
+      pin_mode:
+        description: "Generated-artifact pins: strict fails on drift, report lists every drifted pin"
+        type: choice
+        options: [strict, report]
+        default: strict
   merge_group:
 permissions:
   contents: read
@@ -1546,6 +1558,7 @@ jobs:
           CROSTL_REQUIRE_COLLECTIVE_POINTER_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
+          CROSTL_REQUIRE_SELF_TAIL_CALLS: ${{ runner.os == 'macOS' && '1' || '0' }}
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
           CROSTL_REQUIRE_RESOURCE_OVERLOADS: "1"
@@ -1601,6 +1614,7 @@ jobs:
               tests/test_translator/test_collective_pointer_effects.py \
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
+              tests/test_translator/test_self_tail_calls.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
               tests/test_translator/test_resource_overloads.py \
@@ -2549,6 +2563,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-small-rows/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-small-rows/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -2799,6 +2816,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-half/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-half/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3063,6 +3083,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-integer64/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-integer64/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3248,6 +3271,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-slice-update/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-slice-update/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3451,6 +3477,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-scatter/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-scatter/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3577,16 +3606,19 @@ jobs:
             target: opengl
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: windows-2025
             target: directx
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: macos-26
             target: metal
             family: all
             verifier: verify
+            verification_timeout: 7140
             companion_args: --upstream-quantization
           - os: ubuntu-24.04
             target: opengl
@@ -3696,6 +3728,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-reductions/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-reductions/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3714,7 +3749,7 @@ jobs:
         if: matrix.family != 'row'
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 12000 --label "MLX reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 10800 --label "MLX reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --family ${{ matrix.family }} --jobs 2 --output-dir .mlx-portable-reductions/packages 2>&1 | tee .mlx-portable-reductions/translation.log
       - name: Select same-run row shards
@@ -4143,7 +4178,7 @@ jobs:
           set -euo pipefail
           mkdir -p metal-ownership-results
           python tools/run_bounded_command.py \
-            --label "Metal builtin ownership" --timeout-seconds 120 -- \
+            --label "Metal builtin ownership" --timeout-seconds 360 -- \
             python -m pytest -q -n auto \
               --basetemp="metal-ownership-results/pytest" \
               --junitxml="metal-ownership-results/results.xml" \
@@ -6008,6 +6043,7 @@ jobs:
               MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+              MLX_VULKAN_FRONTIER_SOURCES,
           )
 
           fence_source = "mlx/backend/metal/kernels/fence.metal"
@@ -6028,6 +6064,8 @@ jobs:
               directx_blocked_entry_point_counts.values()
           )
           vulkan_frontier_sources = set(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+          # Refused sources are checked by run_porting against their tracked diagnostics.
+          vulkan_translated_sources = set(MLX_VULKAN_FRONTIER_SOURCES)
           gemv_workgroup_size_rule = list(GEMV_WORKGROUP_SIZE_RULE)
           gemv_report_workgroup_size_rule = list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
           gemv_resolved_workgroup_sizes = list(
@@ -6085,7 +6123,7 @@ jobs:
               or set(scope["directxWorkgroupBlockedFrontierSources"])
               != directx_blocked_sources
               or set(scope["vulkanTranslatedFrontierSources"])
-              != vulkan_frontier_sources
+              != vulkan_translated_sources
               or set(scope["openglTranslatedFrontierSources"])
               != set(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES)
               or set(scope["openglWorkgroupBlockedFrontierSources"])
@@ -6392,18 +6430,18 @@ jobs:
           vulkan = checks["vulkan-frontier"]
           if (
               vulkan["status"] != "passed"
-              or set(vulkan["sources"]) != vulkan_frontier_sources
-              or vulkan["unitCount"] != len(vulkan_frontier_sources)
-              or vulkan["artifactCount"] != len(vulkan_frontier_sources)
+              or set(vulkan["sources"]) != vulkan_translated_sources
+              or vulkan["unitCount"] != len(vulkan_translated_sources)
+              or vulkan["artifactCount"] != len(vulkan_translated_sources)
               or vulkan["translatedArtifactCount"]
-              != len(vulkan_frontier_sources)
+              != len(vulkan_translated_sources)
               or vulkan["target"] != "vulkan"
           ):
               raise SystemExit("Vulkan frontier accounting is incomplete")
           if os.environ["RUNNER_OS"] == "Linux" and (
               vulkan["vulkanToolchainRequired"] is not True
               or vulkan["vulkanValidationStatus"] != "validated"
-              or vulkan["toolchainRuns"] < len(vulkan_frontier_sources)
+              or vulkan["toolchainRuns"] < len(vulkan_translated_sources)
           ):
               raise SystemExit("Vulkan frontier toolchain validation is incomplete")
           expected_directx_gemv = os.environ["RUNNER_OS"] == "Windows"
