@@ -39,6 +39,7 @@ from .struct_methods import (
     collect_struct_methods,
     method_local_names,
 )
+from .subpass_inputs import SUBPASS_INPUT_TYPES
 from .texel_access import HLSLTexelAccessMixin
 from .texel_buffers import HLSLTexelBufferMixin
 from .trigonometric_reduction import HLSLTrigonometricReductionMixin
@@ -289,7 +290,8 @@ class HLSLToCrossGLConverter(
             "TextureCubeArray": "textureCubeArray",
             "Texture2DMS": "texture2DMS",
             "Texture2DMSArray": "texture2DMSArray",
-            "SubpassInput": "sampler2d",
+            "SubpassInput": "subpassInput",
+            "SubpassInputMS": "subpassInputMS",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
             # RW Texture Types (for compute shaders)
@@ -1027,7 +1029,7 @@ class HLSLToCrossGLConverter(
             return None
         if (
             member == "SubpassLoad"
-            and self.raw_type_base(resource_type) == "SubpassInput"
+            and self.raw_type_base(resource_type) in SUBPASS_INPUT_TYPES
         ):
             return {
                 "member": member,
@@ -4024,7 +4026,7 @@ class HLSLToCrossGLConverter(
         )
         if id(node) in self.legacy_sampler_declaration_ids:
             return ""
-        if self.raw_type_base(getattr(node, "vtype", None)) == "SubpassInput":
+        if self.raw_type_base(getattr(node, "vtype", None)) in SUBPASS_INPUT_TYPES:
             code = self.format_subpass_input_attributes(
                 getattr(node, "attributes", []), 1
             )
@@ -4124,7 +4126,7 @@ class HLSLToCrossGLConverter(
                 "PointStream",
                 "LineStream",
                 "TriangleStream",
-                "SubpassInput",
+                *SUBPASS_INPUT_TYPES,
             }
         ):
             return False

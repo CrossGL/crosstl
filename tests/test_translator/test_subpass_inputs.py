@@ -8,6 +8,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics import SubpassInputUnsupportedError
+from tests.spirv_friendly_names import friendly_spirv
 
 SUBPASS_INPUTS = """#version 450
 layout (input_attachment_index = 0, set = 0, binding = 0) uniform subpassInput inputColor;
@@ -145,3 +146,64 @@ def test_spirv_keeps_input_attachments(tmp_path):
     assert "InputAttachmentIndex 0" in spirv
     assert "Dim SubpassData" in spirv or "SubpassData" in spirv
     assert "OpImageRead" in spirv
+
+
+HLSL_SUBPASS_INPUTS = """[[vk::input_attachment_index(0)]][[vk::binding(0)]] SubpassInput inputColor;
+[[vk::input_attachment_index(1)]][[vk::binding(1)]] SubpassInput<uint4> inputIds;
+[[vk::input_attachment_index(2)]][[vk::binding(2)]] SubpassInputMS<float4> inputSamples;
+float4 main() : SV_Target {
+    uint id = inputIds.SubpassLoad().r;
+    return inputColor.SubpassLoad() * float(id) + inputSamples.SubpassLoad(1);
+}
+"""
+
+
+def _translate_hlsl(tmp_path, backend):
+    path = tmp_path / "shader.frag.hlsl"
+    path.write_text(HLSL_SUBPASS_INPUTS)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def test_hlsl_import_keeps_subpass_inputs_and_their_element_types(tmp_path):
+    crossgl = _translate_hlsl(tmp_path, "cgl")
+
+    assert "subpassInput inputColor;" in crossgl
+    assert "usubpassInput inputIds;" in crossgl
+    assert "subpassInputMS inputSamples;" in crossgl
+    assert "subpassLoad(inputSamples, 1)" in crossgl
+    assert "sampler2d" not in crossgl
+
+
+def test_spirv_declares_hlsl_subpass_inputs_as_dxc_does(tmp_path):
+    spirv = friendly_spirv(_translate_hlsl(tmp_path, "vulkan"))
+
+    # DXC: OpTypeImage %float/%uint SubpassData, multisampled for SubpassInputMS.
+    images = re.findall(
+        r"OpTypeImage %(\w+) SubpassData \d+ \d+ (\d+) 2 Unknown", spirv
+    )
+    assert sorted(images) == [("float", "0"), ("float", "1"), ("uint", "0")], spirv
+    for index in range(3):
+        assert f"InputAttachmentIndex {index}" in spirv
+    if shutil.which("spirv-as") and shutil.which("spirv-val"):
+        asm, binary = tmp_path / "out.spvasm", tmp_path / "out.spv"
+        asm.write_text(spirv)
+        _run(["spirv-as", "--target-env", "vulkan1.1", str(asm), "-o", str(binary)])
+        _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)])
+
+
+@pytest.mark.parametrize(
+    "backend, reads",
+    [
+        ("opengl", ["texelFetch(inputSamples, ivec2(gl_FragCoord.xy), 1)"]),
+        ("directx", ["Texture2D<uint4> inputIds", "Texture2DMS<float4> inputSamples"]),
+        ("metal", ["texture2d<uint> inputIds", "texture2d_ms<float> inputSamples"]),
+    ],
+)
+def test_hlsl_subpass_inputs_become_textures_where_targets_lack_them(
+    tmp_path, backend, reads
+):
+    code = _translate_hlsl(tmp_path, backend)
+
+    for read in reads:
+        assert read in code, code
+    assert "subpass" not in code.lower()
