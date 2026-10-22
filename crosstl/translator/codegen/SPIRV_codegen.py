@@ -114,6 +114,7 @@ from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
@@ -29376,6 +29377,12 @@ class VulkanSPIRVCodeGen(
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if (
+                callee_name in DEBUG_PRINTF_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
                 and not self.has_function_reference(callee_name)
             ):
@@ -31206,7 +31213,7 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = [
+        debug_names = list(getattr(self, "debug_strings", ())) + [
             f'OpSourceExtension "{extension}"'
             for extension in sorted(getattr(self, "source_extensions", ()))
         ]

@@ -976,7 +976,8 @@ def test_codegen_debug_printf_string_literal_roundtrip_from_saschawillems():
     """).strip()
 
     crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
-    assert 'debugPrintfEXT("Position = %v4f", pos);' in crossgl
+    assert 'printf("Position = %v4f", pos);' in crossgl
+    assert "debugPrintfEXT" not in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert 'debugPrintfEXT("Position = %v4f", pos);' in glsl
