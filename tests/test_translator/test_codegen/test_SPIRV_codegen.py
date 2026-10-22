@@ -43,6 +43,31 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
 
+def spirv_narrowed_image_read(spv_code, component_type_id, operands=""):
+    """Whether a one-channel image read reads four components and keeps the first.
+
+    Vulkan requires the result of ``OpImageRead`` to have four components
+    (VUID-StandaloneSpirv-Result-04780), so a scalar texel is extracted from it.
+    """
+    vector_type = re.search(
+        rf"(%\d+) = OpTypeVector {re.escape(component_type_id)} 4\b", spv_code
+    )
+    if vector_type is None:
+        return False
+    reads = re.findall(
+        rf"(%\d+) = OpImageRead {re.escape(vector_type.group(1))} %\d+ %\d+" + operands,
+        spv_code,
+    )
+    return any(
+        re.search(
+            rf"= OpCompositeExtract {re.escape(component_type_id)} "
+            rf"{re.escape(read)} 0\b",
+            spv_code,
+        )
+        for read in reads
+    )
+
+
 def spirv_named_ids(spv_code, name):
     return re.findall(rf'OpName (%\d+) "{re.escape(name)}"', spv_code)
 
@@ -20589,7 +20614,7 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageWrite") == 2
         assert "OpImageSampleImplicitLod" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert f"OpImageSampleExplicitLod {vec4_type.group(1)}" in spv_code
         assert "OpFunctionCall" not in spv_code
         assert "imageLoad" not in spv_code
@@ -20628,10 +20653,7 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 R32ui", spv_code)
         assert spv_code.count("OpImageRead") == 2
         assert spv_code.count("OpImageWrite") == 2
-        assert re.search(
-            rf"OpImageRead {uint_type.group(1)} %\d+ %\d+ Sample %\d+",
-            spv_code,
-        )
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1), r" Sample %\d+")
         assert re.search(
             rf"OpImageRead {vec4_type.group(1)} %\d+ %\d+ Sample %\d+",
             spv_code,
@@ -20802,8 +20824,8 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageRead") == 4
         assert spv_code.count("OpImageWrite") == 4
         assert f"OpImageRead {vec4_type.group(1)}" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
-        assert f"OpImageRead {int_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
+        assert spirv_narrowed_image_read(spv_code, int_type.group(1))
 
         image_access_lines = [
             line
@@ -20892,8 +20914,8 @@ class TestVulkanSPIRVCodeGen:
         assert " 1D 0 0 0 2 R32f" in spv_code
         assert " 1D 0 0 0 2 R32ui" in spv_code
         assert " 1D 0 1 0 2 Rgba16f" in spv_code
-        assert f"OpImageRead {float_type.group(1)}" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, float_type.group(1))
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert spv_code.count("OpImageRead") == 3
         assert spv_code.count("OpImageWrite") == 3
         assert "OpAtomicIAdd" in spv_code
@@ -22403,7 +22425,7 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpLoad {r32ui_grid.group(1)}" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
         assert spv_code.count("OpImageRead") >= 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "OpImageQuerySizeLod" in spv_code
         assert "OpImageQuerySize" in spv_code
         assert "textureSize(" not in spv_code
@@ -26189,7 +26211,7 @@ class TestVulkanSPIRVCodeGen:
         assert len(re.findall(r"\bOpImageSampleExplicitLod\b", spv_code)) == 2
         assert len(re.findall(r"\bOpImageRead\b", spv_code)) == 3
         assert len(re.findall(r"\bOpImageWrite\b", spv_code)) == 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         for array_type in [
             sampled_inner,
             sampled_outer,
@@ -27991,7 +28013,7 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageWrite") == 2
         assert "OpImageSampleImplicitLod" not in spv_code
         assert "OpImageSampleExplicitLod" in spv_code
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "WARNING" not in spv_code
 
     def test_separate_texture_sampler_arrays_use_sampled_image_nonuniform(
@@ -28185,7 +28207,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpImageSampleExplicitLod" in spv_code
         assert spv_code.count("OpImageRead") >= 2
-        assert f"OpImageRead {uint_type.group(1)}" in spv_code
+        assert spirv_narrowed_image_read(spv_code, uint_type.group(1))
         assert "WARNING" not in spv_code
 
     def test_bitwise_and_or_xor_shift_operations(self, tmp_path):

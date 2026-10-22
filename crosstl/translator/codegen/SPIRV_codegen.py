@@ -126,6 +126,11 @@ from .spirv_exponent_builtins import (
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
+from .spirv_image_texels import (
+    atomic_storage_image_format,
+    emit_four_component_image_read,
+    narrow_image_texel,
+)
 from .spirv_inline_requirements import (
     apply_inline_spirv_requirements,
     is_inline_spirv_attribute,
@@ -166,6 +171,7 @@ from .spirv_stage_distances import (
     store_entry_point_distance,
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
+from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import spirv_semantic_location
@@ -838,6 +844,8 @@ class VulkanSPIRVCodeGen(
                 self.require_capability("Sampled1D")
         if dim == "SubpassData":
             self.require_capability("InputAttachment")
+        if dim == "Buffer":
+            self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
 
         id_value = self.get_id()
         self.emit(
@@ -6553,16 +6561,12 @@ class VulkanSPIRVCodeGen(
                     return self.default_value_for_type(result_type)
                 image_operands = f" Sample %{args[2].id}"
 
-            id_value = self.get_id()
             self.require_storage_image_without_format_capability(
                 metadata, "StorageImageReadWithoutFormat"
             )
-            self.emit(
-                f"%{id_value} = OpImageRead %{result_type.id} "
-                f"%{image_id.id} %{coord_id.id}{image_operands}"
+            return emit_four_component_image_read(
+                self, result_type, image_id, coord_id, image_operands
             )
-            self.value_types[id_value] = result_type
-            return SpirvId(id_value, result_type.type)
 
         if function_name == "imageStore":
             if len(args) < 3:
@@ -6597,7 +6601,10 @@ class VulkanSPIRVCodeGen(
                 image_operands = f" Sample %{sample_id.id}"
 
             texel_id = self.convert_storage_image_value_operand(
-                function_name, "value", texel_id, texel_type
+                function_name,
+                "value",
+                narrow_image_texel(self, texel_id, texel_type),
+                texel_type,
             )
             if texel_id is None:
                 return None
@@ -6945,6 +6952,10 @@ class VulkanSPIRVCodeGen(
                 result_type,
                 offset_id,
             )
+
+        texel_buffer_fetch = emit_texel_buffer_fetch(self, function_name, args)
+        if texel_buffer_fetch is not None:
+            return texel_buffer_fetch
 
         if function_name in {"texelFetch", "texelFetchOffset"}:
             required_extra_count = 1 if function_name == "texelFetch" else 2
@@ -13618,15 +13629,17 @@ class VulkanSPIRVCodeGen(
         if self.is_acceleration_structure_type_name(type_str):
             return {"kind": "acceleration_structure"}
 
+        texel_buffer_info = texel_buffer_type_info(type_str)
+        if texel_buffer_info is not None:
+            return texel_buffer_info
+
         sampled_image_match = re.fullmatch(
-            r"([iu]?sampler)(1D|2D|3D|Cube|Buffer)(MS)?(Array)?(?:Shadow)?",
+            r"([iu]?sampler)(1D|2D|3D|Cube)(MS)?(Array)?(?:Shadow)?",
             type_str,
         )
         if sampled_image_match:
             prefix, dim, ms_suffix, array_suffix = sampled_image_match.groups()
             if ms_suffix and dim != "2D":
-                return None
-            if dim == "Buffer" and (ms_suffix or array_suffix):
                 return None
             component_type = {
                 "sampler": "float",
@@ -14972,6 +14985,8 @@ class VulkanSPIRVCodeGen(
                 return self.register_array_type(element_type, size)
 
         if self.is_resource_type_name(type_str):
+            if explicit_format is None and node is not None:
+                explicit_format = atomic_storage_image_format(self, node, type_str)
             return self.register_resource_type(type_str, explicit_format)
 
         return self.map_crossgl_type(type_str)
