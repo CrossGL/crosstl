@@ -5292,7 +5292,9 @@ class HLSLToCrossGLConverter(
                 # Swizzle the four-component texel directly; the selected
                 # components all exist in the declared element type.
                 obj = self.generate_texel_access(expr.object, is_main, narrow=False)
-                if obj is None and isinstance(expr.object, FunctionCallNode):
+                if obj is None and isinstance(
+                    expr.object, (FunctionCallNode, TextureSampleNode)
+                ):
                     self.read_raw_texel_method_result = True
             if obj is None:
                 obj = self.generate_expression(expr.object, is_main)
@@ -5347,13 +5349,20 @@ class HLSLToCrossGLConverter(
             expression = self.generate_expression(expr.expression, is_main)
             return f"{target_type}({expression})"
         elif isinstance(expr, TextureSampleNode):
+            # Sample returns the texture's element type; CrossGL returns four.
+            narrowing = (
+                ""
+                if self.read_raw_texel_method_result
+                else self.texel_narrowing_suffix(self.expression_raw_type(expr.texture))
+            )
+            self.read_raw_texel_method_result = False
             texture = self.generate_expression(expr.texture, is_main)
             sampler = self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
             if getattr(expr, "lod", None) is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                return f"textureLod({texture}, {sampler}, {coords}, {lod})"
-            return f"texture({texture}, {sampler}, {coords})"
+                return f"textureLod({texture}, {sampler}, {coords}, {lod}){narrowing}"
+            return f"texture({texture}, {sampler}, {coords}){narrowing}"
 
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_expression(expr.condition, is_main)
