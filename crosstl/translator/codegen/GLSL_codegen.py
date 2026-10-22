@@ -250,6 +250,7 @@ from .glsl_version_requirements import (
     resolve_version_line,
     with_es_default_precisions,
 )
+from .glsl_vertex_builtins import glsl_instance_index
 from .glsl_wave_extended import (
     GLSL_CLUSTERED_BITWISE_OPERATIONS,
     GLSL_CLUSTERED_NUMERIC_OPERATIONS,
@@ -39086,6 +39087,8 @@ complex64_t crossgl_complex64_mod_assign(
                 return quadgroup_alias
         if stage_name == "vertex" and name == "gl_VertexIndex":
             return "gl_VertexID"
+        if stage_name == "vertex" and name == "gl_InstanceIndex":
+            return glsl_instance_index(self)
         return name
 
     def glsl_identifier_is_resolved(self, name):
@@ -57481,6 +57484,11 @@ complex64_t crossgl_complex64_mod_assign(
                 "sample_mask_in",
             }:
                 return "gl_SampleMaskIn"
+        if (
+            normalize_stage_name(stage_name) == "vertex"
+            and mapped == "gl_InstanceIndex"
+        ):
+            return glsl_instance_index(self)
         return mapped
 
     def stage_input_builtin_alias(self, semantic, stage_name=None):

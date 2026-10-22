@@ -16,6 +16,7 @@ _BARYCENTRIC_EXT = "GL_EXT_fragment_shader_barycentric"
 _BARYCENTRIC_NV = "GL_NV_fragment_shader_barycentric"
 _SHADING_RATE = "GL_EXT_fragment_shading_rate"
 _DENSITY = "GL_EXT_fragment_invocation_density"
+_DRAW_PARAMETERS = "GL_ARB_shader_draw_parameters"
 
 # Each extension's "New Built-in Variables" and "New Built-in Constants" sections (the Khronos GLSL extension
 # registry, GLSL_EXT_fragment_shader_barycentric.txt, GLSL_NV_fragment_shader_barycentric.txt,
@@ -33,6 +34,10 @@ BUILTIN_EXTENSIONS = {
     "gl_ShadingRateFlag4HorizontalPixelsEXT": _SHADING_RATE,
     "gl_FragSizeEXT": _DENSITY,
     "gl_FragInvocationCountEXT": _DENSITY,
+    # GLSL_ARB_shader_draw_parameters.txt.
+    "gl_BaseVertexARB": _DRAW_PARAMETERS,
+    "gl_BaseInstanceARB": _DRAW_PARAMETERS,
+    "gl_DrawIDARB": _DRAW_PARAMETERS,
 }
 
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)

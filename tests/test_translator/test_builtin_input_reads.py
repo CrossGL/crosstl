@@ -103,3 +103,90 @@ def test_targets_with_builtin_globals_keep_reading_them(tmp_path, backend):
 
     assert "gl_SampleID" in code
     assert "cgl_SampleID" not in code
+
+
+INSTANCE_INDEX = """#version 450
+layout(location = 0) in vec4 pos;
+layout(location = 0) out flat int o_id;
+vec4 offset() { return vec4(float(gl_InstanceIndex), float(gl_VertexIndex), 0.0, 0.0); }
+void main() { o_id = gl_InstanceIndex; gl_Position = pos + offset(); }
+"""
+
+
+def _translate_vertex(tmp_path, backend):
+    path = tmp_path / "shader.vert"
+    path.write_text(INSTANCE_INDEX)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+@pytest.mark.parametrize(
+    "backend, bindings",
+    [
+        ("directx", [r"uint \w+ : SV_InstanceID", r"uint \w+ : SV_VertexID"]),
+        ("metal", [r"uint \w+ \[\[instance_id\]\]", r"uint \w+ \[\[vertex_id\]\]"]),
+    ],
+)
+def test_vertex_indices_reach_the_entry_point_and_its_helpers(
+    tmp_path, backend, bindings
+):
+    code = _translate_vertex(tmp_path, backend)
+
+    assert not re.search(r"\bgl_(Instance|Vertex)Index\b", code), code
+    for binding in bindings:
+        assert re.search(binding, code), code
+    assert re.search(r"float4 offset\(int \w+, int \w+\)", code), code
+    if backend == "metal":
+        _compile_metal(tmp_path, code)
+
+
+def test_glsl_adds_the_base_instance_to_the_instance_id(tmp_path):
+    glsl = _translate_vertex(tmp_path, "opengl")
+
+    # Vulkan's gl_InstanceIndex counts from the draw's first instance; OpenGL's gl_InstanceID from 0.
+    assert "(gl_InstanceID + gl_BaseInstanceARB)" in glsl
+    assert "#extension GL_ARB_shader_draw_parameters : require" in glsl
+    assert "gl_InstanceIndex" not in glsl
+    if shutil.which("glslangValidator"):
+        _run(["glslangValidator", "--stdin", "-S", "vert"], input=glsl)
+
+
+def test_glsl_es_reads_the_instance_index_as_the_instance_id(tmp_path):
+    essl = _translate_vertex(tmp_path, "webgl")
+
+    # GLSL ES 3.00 draws have no base instance.
+    assert "gl_InstanceID" in essl
+    assert "gl_InstanceIndex" not in essl
+    assert "gl_BaseInstance" not in essl
+    if shutil.which("glslangValidator"):
+        _run(["glslangValidator", "--stdin", "-S", "vert"], input=essl)
+
+
+def test_spirv_declares_the_instance_index_builtin(tmp_path):
+    spirv = _translate_vertex(tmp_path, "vulkan")
+
+    assert re.search(r"OpDecorate %\w+ BuiltIn InstanceIndex", spirv), spirv
+    assert re.search(r"OpDecorate %\w+ BuiltIn VertexIndex", spirv), spirv
+
+
+def test_instance_index_parameters_bind_the_instance_builtin(tmp_path):
+    source = """
+    shader main {
+        vertex {
+            vec4 main(int ii @ gl_InstanceIndex, int vi @ gl_VertexIndex) @ gl_Position {
+                return vec4(float(ii), float(vi), 0.0, 1.0);
+            }
+        }
+    }
+    """
+    path = tmp_path / "shader.cgl"
+    path.write_text(source)
+
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    metal = crosstl.translate(str(path), backend="metal", format_output=False)
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    glsl = crosstl.translate(str(path), backend="opengl", format_output=False)
+
+    assert re.search(r"int ii : SV_InstanceID", hlsl), hlsl
+    assert re.search(r"\[\[instance_id\]\]", metal), metal
+    assert "BuiltIn InstanceIndex" in spirv
+    assert "(gl_InstanceID + gl_BaseInstanceARB)" in glsl

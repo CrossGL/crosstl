@@ -1,26 +1,33 @@
-"""Fragment built-in inputs read by name, passed to the HLSL and MSL entry point and on to the helpers that read them.
+"""Built-in inputs read by name, passed to the HLSL and MSL entry point and on to the helpers that read them.
 
-GLSL reads a fragment shader's built-in inputs as global variables: ``gl_FragCoord``, ``gl_FrontFacing``,
-``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), anywhere in the stage,
-helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input is a
-parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
-attribute (``[[front_facing]]``, ``[[sample_id]]``), and a helper sees it only as an argument. The generators bound
-only ``gl_FragCoord``, and the Metal one only in the entry point. Every other read was emitted verbatim, as an
+GLSL reads a shader's built-in inputs as global variables, anywhere in the stage, helpers included, and the CrossGL
+import keeps those reads. They are a fragment stage's ``gl_FragCoord``, ``gl_FrontFacing``, ``gl_PointCoord``,
+``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), and a vertex stage's ``gl_VertexID`` and
+``gl_InstanceID``, or Vulkan GLSL's ``gl_VertexIndex`` and ``gl_InstanceIndex`` (GL_KHR_vulkan_glsl). HLSL and MSL
+have no such globals. A built-in input is a parameter of the entry point carrying a system-value semantic
+(``SV_IsFrontFace``, ``SV_InstanceID``) or an attribute (``[[front_facing]]``, ``[[instance_id]]``), and a helper
+sees it only as an argument. The generators bound only ``gl_FragCoord`` and ``gl_VertexIndex``. Metal bound both
+only in the entry point, and HLSL bound ``gl_VertexIndex`` only there. Every other read was emitted verbatim, as an
 undeclared identifier.
 
-:func:`pass_builtin_inputs` rewrites each fragment stage for those targets, in place:
+:func:`pass_builtin_inputs` rewrites each vertex and fragment stage for those targets, in place:
 
 * the entry point takes each built-in input that it or a helper reads as a parameter carrying the built-in
   (``bool cgl_FrontFacing @ gl_FrontFacing``), or reuses a parameter or input-structure member that already
-  carries it. ``gl_SampleID`` and ``gl_PrimitiveID``, which HLSL and MSL deliver as ``uint``, arrive in a ``uint``
-  parameter and are converted to GLSL's ``int`` once at the start of the entry point;
+  carries it. HLSL and MSL deliver the sample, primitive, vertex and instance indices as ``uint``, so these arrive
+  in a ``uint`` parameter and are converted to GLSL's ``int`` once at the start of the entry point;
 * each helper that reads one, directly or through the helpers it calls, takes it as a trailing parameter, and every
   call passes it on.
 
 The built-in attributes are then spelled for the target by :mod:`.builtin_values`, which also refuses the ones the
 target lacks (HLSL has no point-sprite coordinate). The HLSL generator already threads ``gl_FragCoord`` through
-helpers itself, so for HLSL that one is left to it. The Metal generator binds ``gl_FragCoord`` in the entry point
-only, so for Metal it is passed here as soon as a helper reads it.
+helpers itself, so for HLSL that one is left to it. A built-in that a generator binds only in the entry point
+(``gl_VertexIndex``, and ``gl_FragCoord`` for Metal) is passed here as soon as a helper reads it.
+
+MSL's ``[[vertex_id]]`` and ``[[instance_id]]`` include the draw's base vertex and base instance, as Vulkan's
+indices do. HLSL's ``SV_VertexID`` and ``SV_InstanceID`` count from the draw's start, so the HLSL generator reads
+Vulkan's indices as if the draw started at vertex and instance 0. DXC makes the same assumption for them unless told
+otherwise (``-fvk-support-nonzero-base-vertex`` and ``-fvk-support-nonzero-base-instance``).
 """
 
 from __future__ import annotations
@@ -34,15 +41,38 @@ __all__ = ["pass_builtin_inputs"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 TARGETS = _HLSL_TARGETS | {"metal"}
-_FRAGMENT_INPUTS = {
-    "gl_FragCoord": "vec4",
-    "gl_FrontFacing": "bool",
-    "gl_PointCoord": "vec2",
-    "gl_SampleID": "int",
-    "gl_PrimitiveID": "int",
+_INPUTS = {
+    "fragment": {
+        "gl_FragCoord": "vec4",
+        "gl_FrontFacing": "bool",
+        "gl_PointCoord": "vec2",
+        "gl_SampleID": "int",
+        "gl_PrimitiveID": "int",
+    },
+    "vertex": {
+        "gl_VertexID": "int",
+        "gl_VertexIndex": "int",
+        "gl_InstanceID": "int",
+        "gl_InstanceIndex": "int",
+    },
 }
-# HLSL SV_SampleIndex and SV_PrimitiveID, and MSL [[sample_id]] and [[primitive_id]], are uint.
-_UNSIGNED = frozenset({"gl_SampleID", "gl_PrimitiveID"})
+# HLSL SV_SampleIndex, SV_PrimitiveID, SV_VertexID and SV_InstanceID, and the MSL attributes for them, are uint.
+_UNSIGNED = frozenset(
+    {
+        "gl_SampleID",
+        "gl_PrimitiveID",
+        "gl_VertexID",
+        "gl_VertexIndex",
+        "gl_InstanceID",
+        "gl_InstanceIndex",
+    }
+)
+# Built-ins a generator binds itself: everywhere, or only when the entry point alone reads them.
+_BOUND_EVERYWHERE = {"hlsl": frozenset({"gl_FragCoord"}), "metal": frozenset()}
+_BOUND_IN_ENTRY = {
+    "hlsl": frozenset({"gl_VertexIndex"}),
+    "metal": frozenset({"gl_FragCoord", "gl_VertexIndex"}),
+}
 
 
 def _stages(program):
@@ -50,9 +80,10 @@ def _stages(program):
     return list(stages.values() if isinstance(stages, dict) else stages)
 
 
-def _is_fragment(stage):
+def _stage_name(stage):
     value = getattr(stage, "stage", None)
-    return str(getattr(value, "value", value) or "").lower() in {"fragment", "pixel"}
+    name = str(getattr(value, "value", value) or "").lower()
+    return "fragment" if name == "pixel" else name
 
 
 def _walk(node, seen=None):
@@ -164,11 +195,10 @@ def _copy(expression):
 
 
 def _passes(target, builtin, helper_reads):
-    if target in _HLSL_TARGETS and builtin == "gl_FragCoord":
+    family = "hlsl" if target in _HLSL_TARGETS else "metal"
+    if builtin in _BOUND_EVERYWHERE[family]:
         return False
-    if target == "metal" and builtin == "gl_FragCoord":
-        return builtin in helper_reads
-    return True
+    return builtin in helper_reads or builtin not in _BOUND_IN_ENTRY[family]
 
 
 def pass_builtin_inputs(program, target) -> int:
@@ -180,9 +210,8 @@ def pass_builtin_inputs(program, target) -> int:
     changed = 0
     for stage in _stages(program):
         entry = getattr(stage, "entry_point", None)
-        if not _is_fragment(stage) or not isinstance(
-            getattr(entry, "body", None), A.BlockNode
-        ):
+        inputs = _INPUTS.get(_stage_name(stage))
+        if inputs is None or not isinstance(getattr(entry, "body", None), A.BlockNode):
             continue
         helpers = [
             function
@@ -191,7 +220,7 @@ def pass_builtin_inputs(program, target) -> int:
             )
             if function is not entry and getattr(function, "body", None) is not None
         ]
-        candidates = set(_FRAGMENT_INPUTS) - program_names
+        candidates = set(inputs) - program_names
         direct = {
             function.name: _reads(function, candidates - _declared(function))
             for function in [entry, *helpers]
@@ -208,12 +237,12 @@ def pass_builtin_inputs(program, target) -> int:
         )
         if not builtins:
             continue
-        _thread(program, entry, helpers, direct, builtins, _all_names(program))
+        _thread(program, entry, helpers, direct, builtins, inputs, _all_names(program))
         changed += 1
     return changed
 
 
-def _thread(program, entry, helpers, direct, builtins, taken):
+def _thread(program, entry, helpers, direct, builtins, inputs, taken):
     sources, conversions = {}, []
     for builtin in builtins:
         existing = _existing_source(program, entry, builtin)
@@ -221,7 +250,7 @@ def _thread(program, entry, helpers, direct, builtins, taken):
             sources[builtin] = existing
             continue
         name = _fresh(f"cgl_{builtin[3:]}", taken)
-        type_node = A.PrimitiveType(_FRAGMENT_INPUTS[builtin])
+        type_node = A.PrimitiveType(inputs[builtin])
         attribute = [A.AttributeNode(builtin)]
         if builtin in _UNSIGNED:
             raw = _fresh(f"{name}_bits", taken)
@@ -274,9 +303,7 @@ def _thread(program, entry, helpers, direct, builtins, taken):
             if builtin in needs[helper.name]:
                 names[builtin] = _fresh(f"cgl_{builtin[3:]}", taken)
                 helper.parameters = list(helper.parameters or []) + [
-                    A.ParameterNode(
-                        names[builtin], A.PrimitiveType(_FRAGMENT_INPUTS[builtin])
-                    )
+                    A.ParameterNode(names[builtin], A.PrimitiveType(inputs[builtin]))
                 ]
         parameter_names[helper.name] = names
 

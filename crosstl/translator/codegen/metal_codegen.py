@@ -1421,6 +1421,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "sv_vertex_id": "vertex_id",
             "sv_vertexid": "vertex_id",
             "gl_InstanceID": "instance_id",
+            # [[instance_id]] includes the base instance, as Vulkan's gl_InstanceIndex does.
+            "gl_InstanceIndex": "instance_id",
             "SV_InstanceID": "instance_id",
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",

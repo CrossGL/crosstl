@@ -109,6 +109,9 @@ _SPELLINGS = {
     "gl_pointsize": "point_size",
     "gl_vertexid": "vertex_index",
     "gl_instanceid": "instance_index",
+    # Vulkan GLSL's names (GL_KHR_vulkan_glsl): they count from the draw's first vertex and first instance.
+    "gl_vertexindex": "vertex_index",
+    "gl_instanceindex": "instance_index",
     "gl_frontfacing": "front_facing",
     "gl_fragdepth": "frag_depth",
     "gl_sampleid": "sample_index",

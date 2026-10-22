@@ -2806,6 +2806,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "gl_VertexID": "SV_VertexID",
             "gl_VertexIndex": "SV_VertexID",
             "gl_InstanceID": "SV_InstanceID",
+            "gl_InstanceIndex": "SV_InstanceID",
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_PrimitiveID": "SV_PrimitiveID",
