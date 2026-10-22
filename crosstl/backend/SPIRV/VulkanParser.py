@@ -7,6 +7,7 @@ import struct
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
+from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
 from .function_structure import SpirvFunctionStructure
 from .integer_signedness_import import (
@@ -3248,6 +3249,46 @@ class VulkanParser:
             constants,
         )
 
+    def spirv_assembly_storage_block_array_access(
+        self,
+        base_operand,
+        struct_type_id,
+        index_operands,
+        expressions,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        """``v[k][0].m...`` for an access chain into element ``k`` of an array of storage blocks."""
+        member_index = self.spirv_integer_constant_operand(index_operands[1], constants)
+        member_types = types.get(struct_type_id, {}).get("member_types", [])
+        if member_index is None or not 0 <= member_index < len(member_types):
+            return None
+
+        def operand(value):
+            return self.spirv_assembly_operand_expression(
+                value, expressions, names, decorations, constants
+            )
+
+        element = ArrayAccessNode(operand(base_operand), operand(index_operands[0]))
+        member_name = member_names.get(struct_type_id, {}).get(
+            str(member_index), f"member{member_index}"
+        )
+        access = MemberAccessNode(ArrayAccessNode(element, 0), member_name)
+        return self.spirv_assembly_member_tail(
+            access,
+            struct_type_id,
+            index_operands[1:],
+            expressions,
+            names,
+            decorations,
+            member_names,
+            types,
+            constants,
+        )
+
     def spirv_assembly_struct_member_access_expression(
         self,
         base_operand,
@@ -3285,6 +3326,25 @@ class VulkanParser:
             return self.spirv_assembly_typed_access_chain(
                 base_operand,
                 struct_type_id,
+                index_operands,
+                expressions,
+                names,
+                decorations,
+                member_names,
+                types,
+                constants,
+            )
+        array_element = block_array_element(struct_type_id, types)
+        if (
+            array_element is not None
+            and len(index_operands) >= 2
+            and self.spirv_is_structured_buffer_block_access(
+                storage_class, array_element[0], decorations
+            )
+        ):
+            return self.spirv_assembly_storage_block_array_access(
+                base_operand,
+                array_element[0],
                 index_operands,
                 expressions,
                 names,
@@ -5726,6 +5786,9 @@ class VulkanParser:
                 continue
 
             struct_type_id = pointer_type.get("type_id")
+            array_element = block_array_element(struct_type_id, types)
+            if array_element is not None:
+                struct_type_id = array_element[0]
             struct_type = types.get(struct_type_id, {})
             if struct_type.get("kind") != "struct":
                 continue
@@ -5932,6 +5995,16 @@ class VulkanParser:
         constants,
     ):
         struct_type_id = pointer_type.get("type_id")
+        instance_suffix = ""
+        array_element = block_array_element(struct_type_id, types)
+        if array_element is not None:
+            struct_type_id, length_id = array_element
+            instance_suffix = "[]"
+            if length_id is not None:
+                length = self.spirv_constant_expression_text(
+                    constants.get(length_id, str(length_id).lstrip("%"))
+                )
+                instance_suffix = f"[{length}]"
         struct_type = types.get(struct_type_id, {})
         if struct_type.get("kind") != "struct":
             return None
@@ -5962,6 +6035,12 @@ class VulkanParser:
             layout_type = "SHADER_RECORD"
         else:
             return None
+        if instance_suffix and layout_type != "BUFFER":
+            raise SpirvBlockArrayUnsupportedError(
+                self.spirv_assembly_value_name(variable_id, names, decorations)
+                or variable_id,
+                storage_class,
+            )
 
         struct_fields = []
         struct_field_indices = []
@@ -6014,6 +6093,7 @@ class VulkanParser:
             spirv_decorations=struct_decorations + variable_decorations,
             spirv_storage_class=storage_class,
         )
+        node.instance_array_suffix = instance_suffix
         if storage_class in {"Uniform", "PushConstant"} and layout_type == "UNIFORM":
             block_layout = spirv_block_layout(
                 block_name,
