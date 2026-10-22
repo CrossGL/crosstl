@@ -36,8 +36,9 @@ _STAGE_PROGRAMS = {
     "node": "node",
 }
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
-# payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
-_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
+# payload a task shader hands to its mesh workgroups, the ray payload a hit shader receives and can trace with, and
+# the data a callable shader receives and can pass to another.
+_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit", "callable"})
 # The stage that starts rays: its probe passes a user-defined inout parameter a ray payload it declares as a local.
 _TRACING_STAGE = "ray-generation"
 # A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.

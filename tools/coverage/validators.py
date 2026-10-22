@@ -420,7 +420,8 @@ def validate(
                 scratch,
             )
         if language == "rust":
-            return _run([*command("rust-gpu"), name, "--out-dir", "."], scratch)
+            compiler = rustgpu.command(rustgpu.target(stage))
+            return _run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
             # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
             # For a source target the output must follow the entry point it holds.
@@ -561,7 +562,12 @@ def lower(
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)
         filled = [a.format(**fields) for a in arguments]
-        compiled = _run([*command(tool), *filled], scratch)
+        compiler = (
+            rustgpu.command(rustgpu.target(stage))
+            if tool == "rust-gpu"
+            else command(tool)
+        )
+        compiled = _run([*compiler, *filled], scratch)
         if not compiled.accepted:
             return "", compiled.log
         try:

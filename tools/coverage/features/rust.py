@@ -83,6 +83,8 @@ _FUNCTION_STAGES = {
     "report_intersection": "intersection",
     "emit_mesh_tasks_ext": "task",
     "emit_mesh_tasks_ext_payload": "task",
+    # OpExecuteCallableKHR passes on callable data, which a callable shader receives as a parameter.
+    "execute_callable": "callable",
 }
 # Functions whose bare name is a CrossGL function that computes something else, so they have no CrossGL spelling.
 _DIFFERENT = {
@@ -187,9 +189,22 @@ def header(text: str, position: int) -> Header:
     while depth or text[end] not in "{;":
         depth += _nesting(text, end)
         end += 1
-    tail = text[position:end]
-    result = re.split(r"\bwhere\b", tail)[0].strip().removeprefix("->").strip()
-    return generics, parameters, result
+    result, *where = re.split(r"\bwhere\b", text[position:end], maxsplit=1)
+    result = result.strip().removeprefix("->").strip()
+    return _bound(generics, where[0] if where else ""), parameters, result
+
+
+def _bound(generics: str, where: str) -> str:
+    """``generics`` with the bounds a ``where`` clause gives its unbounded type parameters."""
+    bounds = {}
+    for predicate in _split(where):
+        name, _, bound = predicate.partition(":")
+        if re.fullmatch(r"\w+", name.strip()) and bound.strip():
+            bounds[name.strip()] = bound.strip()
+    return ", ".join(
+        f"{part}: {bounds[part]}" if part in bounds else part
+        for part in _split(generics)
+    )
 
 
 def clean(text: str) -> str:
@@ -208,6 +223,13 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
         name, _, bounds = part.partition(":")
         name = name.strip()
         order.append((name, False))
+        if not bounds.strip():
+            # A parameter of any type takes a struct of the probe's own: the payload a task or hit shader declares.
+            types[name] = Type.other("udt")
+            continue
+        if re.search(r"\bFn(?:Mut|Once)?\s*\(", bounds):
+            # A closure has no probe; its signature's scalars are not the parameter's type.
+            continue
         scalar = re.search(r"Scalar\s*=\s*(?:impl\s+)?(\w+)", bounds)
         if re.search(r"\bVector<\s*bool\b", bounds):
             types[name] = Type("bool", (3,))

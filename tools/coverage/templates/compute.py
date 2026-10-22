@@ -437,5 +437,23 @@ RUST = {
         params="#[spirv(tess_coord)] coord: Vec3, position: [Vec4; 3], #[spirv(position)] out_position: &mut Vec4",
         body="    *out_position = position[0] * coord.x + position[1] * coord.y + position[2] * coord.z;\n",
     ),
+    # A mesh shader that writes one triangle, and a task shader that launches one mesh workgroup with a payload.
+    "mesh": _rust_stage(
+        "mesh_ext(threads(1), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext)",
+        params="#[spirv(position)] positions: &mut [Vec4; 3], "
+        "#[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1]",
+        body="    unsafe {\n        spirv_std::arch::set_mesh_outputs_ext(3, 1);\n    }\n"
+        "    positions[0] = Vec4::new(0.0, 0.0, 0.0, 1.0);\n"
+        "    positions[1] = Vec4::new(1.0, 0.0, 0.0, 1.0);\n"
+        "    positions[2] = Vec4::new(0.0, 1.0, 0.0, 1.0);\n"
+        "    indices[0] = UVec3::new(0, 1, 2);\n",
+    ),
+    "task": _rust_stage(
+        "task_ext(threads(1))",
+        "pub struct Payload {\n    pub value: u32,\n}\n\n",
+        params="#[spirv(task_payload_workgroup_ext)] payload: &mut Payload",
+        body="    payload.value = 1;\n    unsafe {\n"
+        "        spirv_std::arch::emit_mesh_tasks_ext_payload(1, 1, 1, payload);\n    }\n",
+    ),
     **_RUST_RAYTRACING_STAGES,
 }

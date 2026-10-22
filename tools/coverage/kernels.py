@@ -322,7 +322,8 @@ class Rust(Dialect):
         )
         return self._entry(entry, buffers, ["let i = 0usize;", *body], parts)
 
-    # Hit shaders take the ray payload and the triangle's barycentrics, as the other languages' hit probes do.
+    # Hit shaders take the ray payload and the triangle's barycentrics, as the other languages' hit probes do, and a
+    # callable shader takes the data it is called with.
     _PAYLOAD = ("pub struct Payload {", "    pub color: Vec4,", "}")
     _HIT_PARAMETERS = (
         "#[spirv(incoming_ray_payload)] payload: &mut Payload",
@@ -333,22 +334,43 @@ class Rust(Dialect):
         self, stage: str, buffers: list[Buffer], body: list[str], **parts
     ) -> str:
         entry = (f"#[spirv({stage.replace('-', '_')})]",)
-        if stage in ("any-hit", "closest-hit"):
-            entry += self._HIT_PARAMETERS
+        if stage in ("any-hit", "closest-hit", "callable"):
+            entry += (
+                self._HIT_PARAMETERS
+                if stage != "callable"
+                else (f"#[spirv(incoming_callable_data)] {self.payload}: &mut Payload",)
+            )
             declarations = [*self._PAYLOAD, *parts.get("declarations", ())]
             parts = {**parts, "declarations": declarations}
         return self._entry(entry, buffers, ["let i = 0usize;", *body], parts)
 
-    # SPV_EXT_mesh_shader needs SPIR-V 1.4, and rust-gpu's libraries are built for Vulkan 1.1 (SPIR-V 1.3).
+    # A mesh shader that writes one triangle, and a task shader with a payload for the mesh workgroups it launches.
+    # rustgpu.MESH_TARGET compiles both for SPIR-V 1.4 or later, which SPV_EXT_mesh_shader needs.
     _MESH = (
-        "rust-gpu mesh and task shaders need SPIR-V 1.4; the probes target Vulkan 1.1"
+        "#[spirv(mesh_ext(threads(1), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext))]",
+        "#[spirv(position)] positions: &mut [Vec4; 3]",
+        "#[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1]",
     )
+    _TRIANGLE = (
+        "positions[0] = Vec4::new(0.0, 0.0, 0.0, 1.0);",
+        "positions[1] = Vec4::new(1.0, 0.0, 0.0, 1.0);",
+        "positions[2] = Vec4::new(0.0, 1.0, 0.0, 1.0);",
+        "indices[0] = UVec3::new(0, 1, 2);",
+    )
+    _TASK_PAYLOAD = ("pub struct Payload {", "    pub value: u32,", "}")
 
     def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        raise ProbeError(self._MESH)
+        body = ["let i = 0usize;", *body, *self._TRIANGLE]
+        return self._entry(self._MESH, buffers, body, parts)
 
     def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        raise ProbeError(self._MESH)
+        entry = (
+            "#[spirv(task_ext(threads(1)))]",
+            f"#[spirv(task_payload_workgroup_ext)] {self.payload}: &mut Payload",
+        )
+        declarations = [*self._TASK_PAYLOAD, *parts.get("declarations", ())]
+        parts = {**parts, "declarations": declarations}
+        return self._entry(entry, buffers, ["let i = 0usize;", *body], parts)
 
     def _entry(
         self,
