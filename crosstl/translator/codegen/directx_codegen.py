@@ -229,6 +229,7 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_atomic_resources import HLSLAtomicResources
+from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
@@ -52966,7 +52967,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
-                return None
+                return buffer_component_store(self, target, value, op)
             offset = access["offset"]
         else:
             offset = access["offset_expr"]
