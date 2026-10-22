@@ -1,10 +1,11 @@
-"""The dialects of the compute-kernel languages a probe can be written in: CUDA, HIP, Mojo and Rust."""
+"""The dialects of the compute-kernel languages a probe can be written in: CUDA, HIP, OpenCL C, Mojo and Rust."""
 
 from __future__ import annotations
 
 import re
 
 from .dialect import Buffer, Dialect, ProbeError
+from .model import OPENCL_ENUMERATIONS as ENUMERATIONS
 from .model import Type
 
 
@@ -69,6 +70,97 @@ class HIP(CUDA):
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         prelude = ["#include <hip/hip_runtime.h>", *parts.pop("prelude", ())]
         return super().kernel(buffers, body, prelude=prelude, **parts)
+
+
+class OpenCL(Dialect):
+    """An OpenCL C kernel: buffers are ``__global`` pointer arguments and ``get_global_id`` gives the invocation's
+    index. OpenCL C has C's casts and vector literals rather than constructors, and no references, so an out argument
+    is the address of a private local."""
+
+    language = "opencl"
+    suffix = ".cl"
+    entry = "probe"
+    wide_integers = True
+    narrow_scalars = True
+    _SCALARS = {
+        "int16": "short",
+        "uint16": "ushort",
+        "int64": "long",
+        "uint64": "ulong",
+    }
+    _HALF = re.compile(r"\bhalf\d*\b")
+    _FP16 = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
+
+    def type(self, kind: Type) -> str:
+        if kind.opaque in ENUMERATIONS:
+            return kind.opaque
+        return super().type(kind)
+
+    def scalar(self, scalar: str) -> str:
+        return self._SCALARS.get(scalar, scalar)
+
+    def vector(self, scalar: str, size: int) -> str:
+        if scalar == "bool":
+            raise ProbeError("OpenCL C has no bool vectors")
+        return f"{self.scalar(scalar)}{size}"
+
+    def matrix(self, scalar: str, columns: int, rows: int) -> str:
+        raise ProbeError("OpenCL C has no matrix types")
+
+    def literal(self, kind: Type) -> str:
+        if kind.opaque in ENUMERATIONS:
+            return ENUMERATIONS[kind.opaque]
+        if kind.scalar == "float" and not kind.shape:
+            return "0.0f"
+        return super().literal(kind)
+
+    def constant(self, kind: Type) -> str:
+        if kind.opaque in ENUMERATIONS:
+            return ENUMERATIONS[kind.opaque]
+        return super().constant(kind)
+
+    def construct(self, kind: Type, parts: list[str]) -> str:
+        return f"({self.type(kind)})({', '.join(parts)})"
+
+    def cast(self, kind: Type, value: str) -> str:
+        # A C cast converts a scalar; OpenCL C converts a vector only through convert_<type>.
+        if kind.shape:
+            return f"convert_{self.type(kind)}({value})"
+        return f"({self.type(kind)}){value}"
+
+    def positive(self, value: str) -> str:
+        return f"({value} > 0.0f)"
+
+    def out_argument(self, name: str) -> str:
+        return f"&{name}"
+
+    def address(self, name: str) -> str:
+        return f"&{name}"
+
+    def inout_argument(self) -> str:
+        return "&outp[i]"
+
+    def workgroup(self, kind: Type, name: str) -> str:
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"__local {self.type(kind.element)} {name}{count};"
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        # OpenCL C declares a __local variable in the kernel's own scope, not at program scope.
+        declarations = list(parts.get("declarations", ()))
+        shared = [line for line in declarations if line.startswith("__local ")]
+        params = [f"__global {kind}* {name}" for kind, name in buffers]
+        params += parts.get("params", ())
+        lines = [
+            *parts.get("prelude", ()),
+            *(line for line in declarations if line not in shared),
+            f"__kernel void probe({', '.join(params)}) {{",
+            "    uint i = get_global_id(0);",
+        ]
+        lines += [f"    {line}" for line in [*shared, *body]]
+        source = "\n".join(lines + ["}"]) + "\n"
+        if self._HALF.search(source) and self._FP16 not in source:
+            source = f"{self._FP16}\n{source}"
+        return source
 
 
 class Mojo(Dialect):

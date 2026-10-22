@@ -84,12 +84,13 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | Slang | `slang` | measured | measured |
 | Rust (rust-gpu) | `rust` | measured | measured |
 | Mojo | `mojo` | measured | measured |
-| OpenCL C | | not offered | available |
+| OpenCL C | | not offered | measured |
 
-A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md). An
-available direction is implemented and unit-tested but not yet measured. The language names `glsl`, `hlsl`, `msl`
-and `spirv` work as backend names too, and `cgl` writes the CrossGL a native source imports to. CrossGL has its own
-coverage row, CrossGL IR, which measures how many of the features in all the measured languages CrossGL can express.
+A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+CrossTL has no OpenCL C generator, so the OpenCL C input row checks the HLSL that CrossTL writes from each OpenCL C
+probe. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the CrossGL a
+native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of
+all the measured output languages CrossGL can express.
 
 CrossTL is meant to fail closed: a construct it cannot translate raises a diagnostic that names the construct and
 the target, instead of emitting a placeholder. Output that the reference tool rejects counts as wrong in the coverage

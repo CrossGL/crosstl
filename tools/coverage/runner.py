@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from . import probes, spirv_input, validators
-from .model import Feature, Result
+from .model import ROUND_TRIPS, Feature, Result
 from .semantic import lower
 
 OUTPUT_BACKENDS = {
@@ -35,6 +35,7 @@ INPUT_BACKENDS = {
     "hlsl": "directx",
     "metal": "metal",
     "mojo": "mojo",
+    "opencl": "opencl",
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
@@ -218,14 +219,22 @@ def run_input(feature: Feature, language: str) -> Result:
     if not native.accepted:
         return result("untested", f"the probe itself is rejected: {native.log}")
     backend = INPUT_BACKENDS[language]
+    emitted = ROUND_TRIPS.get(language, language)
     try:
-        crossgl = translate(probe.source, probe.suffix, "cgl", backend)
-        translated = translate(crossgl, ".cgl", OUTPUT_BACKENDS[language], "cgl")
+        # A language CrossTL cannot generate goes through CrossTL's own pipeline to the emitted language, which
+        # imports the probe to CrossGL and, for OpenCL C, lowers its kernel parameters for the target in one call.
+        if emitted == language:
+            crossgl = translate(probe.source, probe.suffix, "cgl", backend)
+            translated = translate(crossgl, ".cgl", OUTPUT_BACKENDS[language], "cgl")
+        else:
+            translated = translate(
+                probe.source, probe.suffix, OUTPUT_BACKENDS[emitted], backend
+            )
     except Refused as error:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
-    verdict = _validated(language, translated, feature.stage, "", feature.target)
+    verdict = _validated(emitted, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""

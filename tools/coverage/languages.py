@@ -6,7 +6,7 @@ from __future__ import annotations
 from .crossgl import DIALECT as CROSSGL
 from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
-from .kernels import CUDA, HIP, Mojo, Rust
+from .kernels import CUDA, HIP, Mojo, OpenCL, Rust
 from .model import (
     COOP_COLUMNS,
     COOP_ENUMERATORS,
@@ -622,6 +622,7 @@ DIALECTS: dict[str, Dialect] = {
         HLSL(),
         Metal(),
         Mojo(),
+        OpenCL(),
         Rust(),
         Slang(),
         WebGL(),
