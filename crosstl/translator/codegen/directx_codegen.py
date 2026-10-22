@@ -11518,9 +11518,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         is_system_include = raw_content.startswith("<") and raw_content.endswith(">")
         normalized = raw_content.strip("<>\"'").replace("\\", "/").lower()
+        # Apple's <simd/...> headers declare the vector and matrix types of Metal and its host code.
         return is_system_include and (
             normalized in self.METAL_ONLY_SYSTEM_INCLUDES
-            or normalized.startswith("metal_")
+            or normalized.startswith(("metal_", "simd/"))
         )
 
     def is_metal_only_preprocessor_line(self, line):

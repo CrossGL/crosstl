@@ -3927,6 +3927,9 @@ class GLSLCodeGen(
         match = re.match(r'^[<"]([^>"]+)[>"]', content)
         include_name = match.group(1) if match else content.split()[0]
         normalized = include_name.strip().replace("\\", "/").lower()
+        if content.startswith("<") and normalized.startswith(("metal_", "simd/")):
+            # Metal's library headers and Apple's <simd/...> type headers have no GLSL meaning.
+            return False
         return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
