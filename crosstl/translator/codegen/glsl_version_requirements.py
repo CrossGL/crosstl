@@ -248,6 +248,10 @@ _TYPE_GROUPS = (
         ),
         (420, 310, _IMAGE_LOAD_STORE, ()),
     ),
+    (
+        tuple(f"{prefix}imageBuffer" for prefix in ("", "i", "u")),
+        (420, 320, _IMAGE_LOAD_STORE, ("GL_EXT_texture_buffer",)),
+    ),
     (("atomic_uint",), (420, 310, ("GL_ARB_shader_atomic_counters",), ())),
 )
 TYPE_REQUIREMENTS = {
