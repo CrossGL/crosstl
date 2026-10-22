@@ -277,6 +277,8 @@ def test_complete_suite_balances_shards_by_the_durations_main_recorded():
     assert run["env"]["DURATIONS_KEY"] == "${{ needs.durations.outputs.key }}"
     assert f"balance=(--shard-durations {path})" in run["run"]
     assert '"${balance[@]}" --shard-durations-out' in run["run"]
+    # The long tests come first; only work stealing spreads them over the workers.
+    assert "-n auto --dist worksteal" in run["run"]
     upload = _step(shards, "Upload recorded test durations")
     assert upload["if"] == RECORDING_EVENTS
     assert upload["with"]["name"] == "pytest-durations-${{ matrix.shard }}"

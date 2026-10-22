@@ -20,7 +20,9 @@ with ``--shard-durations-out FILE``. A few tests take minutes while most take
 milliseconds, so even hashed shards differ in work by a factor of two. The
 groups are handed out longest first, each to the shard with the least work so
 far, and each shard starts its long tests first so that none of them is left
-running alone at the end.
+running alone at the end. Run such a shard with ``--dist worksteal``: the default
+xdist scheduler gives each worker a run of consecutive tests, so one worker
+would get every long test.
 """
 
 import argparse

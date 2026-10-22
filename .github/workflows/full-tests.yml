@@ -92,6 +92,9 @@ jobs:
       - name: Run complete test suite
         env:
           DURATIONS_KEY: ${{ needs.durations.outputs.key }}
+        # The default xdist scheduler hands each worker a fixed run of consecutive
+        # tests, so the long tests that a balanced shard starts with all went to one
+        # worker. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
           balance=()
@@ -101,7 +104,7 @@ jobs:
           python -m pytest tests demos/integrations \
             -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
             "${balance[@]}" --shard-durations-out "build/durations/shard-${{ matrix.shard }}.json" \
-            --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
+            --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
