@@ -54,6 +54,7 @@ from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 __all__ = [
     "TARGETS",
     "StructuredLayoutUnsupportedError",
+    "element_stride",
     "legalize_structured_layouts",
 ]
 
@@ -356,6 +357,21 @@ class _Shapes:
                 "struct", name=name, members=tuple(members), source=self.source
             )
         return self.cache[name]
+
+
+def element_stride(program, type_node, rules, context, cache=None) -> int:
+    """The array stride in bytes of ``type_node`` under ``rules`` (``hlsl``, ``std430`` or ``metal``).
+
+    ``cache`` maps rules to the :class:`_Shapes` of ``program`` already built for them. Raises
+    :class:`StructuredLayoutUnsupportedError` for a type without a layout (an unsized array member, an unknown
+    struct).
+    """
+    cache = {} if cache is None else cache
+    source = "metal" if rules == "metal" else "hlsl"
+    if source not in cache:
+        cache[source] = _Shapes(program, source)
+    size, alignment, _leaves = _layout(cache[source].of(type_node, context), rules)
+    return _round(size, alignment)
 
 
 def _packed_shape(shape, context):
