@@ -184,8 +184,10 @@ def _steps():
 
 def test_actions_are_referenced_by_release_tag():
     # Release tags keep workflows readable and let Dependabot propose upgrades.
-    # pypa/gh-action-pypi-publish publishes only its release/v1 branch.
-    release_tag = re.compile(r"^[\w.-]+/[\w.-]+@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$")
+    # pypa/gh-action-pypi-publish publishes only its release/v1 branch. actions/cache/save is a sub-action.
+    release_tag = re.compile(
+        r"^[\w.-]+/[\w.-]+(?:/[\w.-]+)?@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$"
+    )
     for name, step in _steps():
         ref = str(step.get("uses", ""))
         if ref and not ref.startswith("./"):
@@ -301,6 +303,143 @@ def test_linux_dxc_installer_pinning(
         assert not any(
             call["tool"] == "tar" and "-xzf" in call["args"] for call in calls
         )
+
+
+_APT_STUB = """\
+    import json
+    import os
+    import sys
+    from pathlib import Path
+
+    tool = Path(sys.argv[0]).name
+    args = sys.argv[1:]
+    if tool == "timeout":
+        os.execvp(args[1], args[1:])
+    if tool == "sleep":
+        sys.exit(0)
+    if args[0] != "apt-get":
+        os.execvp(args[0], args)
+    log = Path(os.environ["TEST_LOG"])
+    earlier = log.read_text().splitlines() if log.exists() else []
+    if "update" in args:
+        operation = "update"
+    elif "--download-only" in args:
+        operation = "download"
+    elif any(arg.endswith(".deb") for arg in args):
+        operation = "cached"
+    else:
+        operation = "install"
+    with log.open("a") as output:
+        output.write(json.dumps({"operation": operation, "args": args}) + "\\n")
+    failure = os.environ["TEST_FAILURE"]
+    # "first-<operation>" fails only the first call of that operation.
+    first = failure == "first-" + operation and not any(
+        json.loads(line)["operation"] == operation for line in earlier
+    )
+    if failure == operation or first:
+        sys.exit(100)
+    if operation == "download":
+        prefix = "Dir::Cache::Archives="
+        archives = next(arg[len(prefix):] for arg in args if arg.startswith(prefix))
+        Path(archives, "glslang-tools.deb").write_text("")
+    """
+
+
+def _apt_install_step(step_id):
+    document = yaml.safe_load(_local_action_text("apt-install"))
+    (step,) = (s for s in document["runs"]["steps"] if s.get("id") == step_id)
+    return step
+
+
+@pytest.mark.skipif(os.name != "posix", reason="apt installer requires POSIX tools")
+@pytest.mark.parametrize(
+    "recommends,cached,failure,success,operations",
+    [
+        ("true", [], "", True, ["update", "download", "install"]),
+        # An update that fails on one source still leaves the lists the download needs.
+        ("false", [], "first-update", True, ["update", "download", "install"]),
+        ("true", [], "update", True, ["update", "download", "install"]),
+        ("true", [], "first-download", True, ["update", "download"] * 2 + ["install"]),
+        ("true", [], "download", False, ["update", "download"] * 3),
+        ("true", [], "install", False, ["update", "download", "install"]),
+        # A warm cache installs the archives it holds and never contacts a mirror.
+        ("false", ["b.deb", "a.deb"], "", True, ["cached"]),
+        # Archives that no longer install on the image are downloaded again.
+        (
+            "true",
+            ["a.deb"],
+            "cached",
+            True,
+            ["cached", "update", "download", "install"],
+        ),
+    ],
+)
+def test_apt_installer_retries_only_the_network_steps(
+    tmp_path, recommends, cached, failure, success, operations
+):
+    bash = shutil.which("bash")
+    assert bash is not None
+    mock_bin = tmp_path / "tools"
+    mock_bin.mkdir()
+    script = f"#!{sys.executable}\n" + textwrap.dedent(_APT_STUB)
+    for name in ("sudo", "timeout", "sleep"):
+        tool = mock_bin / name
+        tool.write_text(script, encoding="utf-8")
+        tool.chmod(0o755)
+    archives = tmp_path / "apt-archives"
+    archives.mkdir()
+    for name in cached:
+        (archives / name).write_text("")
+    log = tmp_path / "calls.jsonl"
+    outputs = tmp_path / "github-output"
+    outputs.write_text("")
+    env = {
+        **os.environ,
+        "PATH": str(mock_bin) + os.pathsep + os.environ["PATH"],
+        "PACKAGES": "glslang-tools spirv-tools=2024.1-1",
+        "RECOMMENDS": recommends,
+        "CACHED": "true" if cached else "",
+        "ARCHIVES": str(archives),
+        "GITHUB_OUTPUT": str(outputs),
+        "TEST_FAILURE": failure,
+        "TEST_LOG": str(log),
+    }
+    body = _apt_install_step("install")["run"]
+    result = subprocess.run(
+        [bash, "-c", body], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [call["operation"] for call in calls] == operations
+    for call in calls:
+        assert call["args"][0] == "apt-get"
+        assert f"Dir::Cache::Archives={archives}/" in call["args"]
+        assert ("--no-install-recommends" in call["args"]) is (recommends == "false")
+        if call["operation"] == "cached":
+            assert call["args"][-len(cached) :] == [
+                str(archives / name) for name in sorted(cached)
+            ]
+        elif call["operation"] != "update":
+            assert call["args"][-2:] == ["glslang-tools", "spirv-tools=2024.1-1"]
+    downloaded = success and operations[-1] == "install"
+    assert ("downloaded=true" in outputs.read_text()) is downloaded
+    assert not (archives / "partial").exists() or not downloaded
+
+
+def test_apt_installer_saves_only_new_downloads():
+    steps = yaml.safe_load(_local_action_text("apt-install"))["runs"]["steps"]
+    restore = next(
+        s for s in steps if s.get("uses", "").startswith("actions/cache/restore")
+    )
+    save = next(s for s in steps if s.get("uses", "").startswith("actions/cache/save"))
+    assert "steps.restore.outputs.cache-hit != 'true'" in save["if"]
+    assert "steps.install.outputs.downloaded == 'true'" in save["if"]
+    archives = _apt_install_step("install")["env"]["ARCHIVES"]
+    assert restore["with"]["path"] == save["with"]["path"] == archives
+    assert restore["with"]["key"] == save["with"]["key"]
+    # A new runner image ships other packages, so its archives must not come from an older image's cache.
+    key = _apt_install_step("key")["run"]
+    assert "${ImageOS" in key and "${ImageVersion" in key
 
 
 def _workflow_job_section(workflow, job_id):
