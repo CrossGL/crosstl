@@ -10,7 +10,15 @@ from tools.coverage.features import (
     spirv,
     wgsl,
 )
-from tools.coverage.model import STRING, VOID, Param, Signature, Type
+from tools.coverage.model import (
+    COOP_COLUMNS,
+    STRING,
+    VOID,
+    Param,
+    Signature,
+    Type,
+    coop_vector,
+)
 
 GLSL_EXCERPT = """
 == Common Functions
@@ -1185,6 +1193,57 @@ def test_slang_types():
     assert slang.slang_type("uint64_t", {}) == Type("uint64")
     assert slang.slang_type("int64_t2", {}) == Type("int64", (2,))
     assert slang.slang_type("int8_t4_packed", {}) == Type("int8x4_packed")
+    # A cooperative vector keeps its element type and length; a generic length is 4.
+    assert slang.slang_type("CoopVec<T, N>", generics) == coop_vector("float", 4)
+    assert slang.slang_type("CoopVec<half, 2>", {}) == coop_vector("half", 2)
+    assert slang.slang_type("CoopVec<float, 8>", {}) == Type.other("CoopVec<float, 8>")
+
+
+SLANG_COOP = """
+//@public:
+enum CoopVecComponentType { Float32 };
+CoopVec<T, N> coopVecLoad<let N : int, T : __BuiltinArithmeticType>(ByteAddressBuffer buffer, int32_t offset = 0);
+CoopVec<T, N> coopVecLoad<let N : int, T : __BuiltinArithmeticType, L : IBufferDataLayout = DefaultDataLayout>(
+    StructuredBuffer<T, L> buffer, int32_t offset = 0);
+CoopVec<T, N> coopVecLoadGroupshared<let N : int, T : __BuiltinArithmeticType, let M : int>(
+    __constref groupshared const T[M] data, int32_t offset = 0);
+__generic<T : __BuiltinArithmeticType, let M : int, let K : int, U : __BuiltinArithmeticType>
+CoopVec<T, M> coopVecMatMul(CoopVec<U, K> input, constexpr CoopVecComponentType inputInterpretation,
+    RWByteAddressBuffer matrix, int32_t matrixOffset, constexpr bool transpose, constexpr uint matrixStride);
+void coopVecReduceSumAccumulate<T : __BuiltinArithmeticType, let N : int>(
+    CoopVec<T, N> v, RWByteAddressBuffer buffer, int32_t offset);
+__generic<T : __BuiltinArithmeticType, let M : int, let PackedK : int, U : __BuiltinArithmeticType>
+CoopVec<T, M> coopVecMatMulPacked(CoopVec<U, PackedK> input, constexpr CoopVecComponentType inputInterpretation,
+    constexpr int k, RWByteAddressBuffer matrix, int32_t matrixOffset);
+"""
+
+
+def test_slang_cooperative_vector_functions_spell_their_generic_arguments():
+    features = by_name(slang.parse("", SLANG_COOP))
+    load = features["coopVecLoad"]
+    assert load.signature.result == coop_vector("float", 4)
+    assert load.signature.params[0] == Param(Type.other("ByteAddressBuffer"))
+    # slangc infers no generic argument from the result, so the probe passes them all, and CrossGL, which calls the
+    # function by Slang's name, does too.
+    assert load.spelling == load.crossgl == "coopVecLoad<4, float>"
+    matmul = features["coopVecMatMul"]
+    assert matmul.spelling == "coopVecMatMul<float, 4, 4, float>"
+    assert matmul.signature.params[:2] == (
+        Param(coop_vector("float", 4)),
+        Param(Type.other("CoopVecComponentType"), "const"),
+    )
+    # A read-only workgroup array is a workgroup parameter of the generic length.
+    shared = features["coopVecLoadGroupshared"]
+    assert shared.signature.params[0] == Param(Type("float", count=4), "workgroup")
+    assert shared.spelling == "coopVecLoadGroupshared<4, float, 4>"
+    # The arguments fix every generic parameter of a function that returns nothing.
+    assert features["coopVecReduceSumAccumulate"].spelling == ""
+    assert (
+        features["coopVecReduceSumAccumulate"].crossgl == "coopVecReduceSumAccumulate"
+    )
+    # A packed multiply's column count k is the input vector's length.
+    packed = features["coopVecMatMulPacked"].signature.params
+    assert packed[2] == Param(COOP_COLUMNS, "const")
 
 
 MOJO_MATH_INIT = """

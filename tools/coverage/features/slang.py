@@ -7,7 +7,8 @@ meta loop generates, such as ``Interlocked$(atomicOp.slangCallSuffix)``, is expa
 functions of resource and object types are left out.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
-integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2. A function whose every
+integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2, or 4 for the length of a
+cooperative vector (``CoopVec<T, N>``), which keeps its element type and length. A function whose every
 ``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
 ``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
 Direct3D allows it in; any other function stays untested.
@@ -20,12 +21,16 @@ from dataclasses import dataclass
 
 from .. import spellings
 from ..model import (
+    COOP_COLUMNS,
+    COOP_VECTOR_LENGTH,
     OTHER_WIDTHS,
     VOID,
     Feature,
     Param,
     Signature,
     Type,
+    coop_element,
+    coop_vector,
     raytracing_stage,
 )
 from .common import pick, split
@@ -76,6 +81,8 @@ _SCALARS = {
     "int8_t4_packed": "int8x4_packed",
     "uint8_t4_packed": "uint8x4_packed",
 }
+# Slang's own spelling of each scalar, for a generic argument.
+_SCALAR_SPELLINGS = {scalar: name for name, scalar in reversed(_SCALARS.items())}
 _SHORTHAND = re.compile(
     r"(bool|int|uint|float|double|half|int32_t|uint32_t|float32_t|float64_t|float16_t|int16_t|uint16_t|int64_t"
     r"|uint64_t)([1-4])(?:x([1-4]))?"
@@ -84,7 +91,7 @@ _SHORTHAND = re.compile(
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
 # Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
 _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
-_GENERIC_TYPE = re.compile(r"(vector|matrix)\s*<(.*)>")
+_GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec)\s*<(.*)>")
 _QUALIFIERS = {
     "in": "in",
     "out": "out",
@@ -368,6 +375,14 @@ def slang_type(spelling: str, generics: dict[str, str]) -> Type:
             return int(text) if text.isdigit() else 2
 
         sizes = [size(p) for p in parts[1:]]
+        if generic.group(1) == "CoopVec" and len(parts) == 2:
+            length = parts[1].strip()
+            length = int(length) if length.isdigit() else COOP_VECTOR_LENGTH
+            return (
+                coop_vector(element.scalar, length)
+                if 2 <= length <= 4
+                else Type.other(spelling)
+            )
         if generic.group(1) == "vector" and len(sizes) == 1 and 2 <= sizes[0] <= 4:
             return Type(element.scalar, (sizes[0],))
         if generic.group(1) == "matrix" and len(sizes) >= 2:
@@ -378,12 +393,25 @@ def slang_type(spelling: str, generics: dict[str, str]) -> Type:
 
 
 def _parameter(text: str, generics: dict[str, str]) -> Param:
-    text = re.sub(r"\[[^\]]*\]", "", text.split("=")[0]).strip()
+    text = text.split("=")[0]
+    # The length of an array parameter, ``T[M] data``.
+    array = re.search(r"\[\s*(\w*)\s*\]\s*\w+\s*$", text)
+    text = re.sub(r"\[[^\]]*\]", "", text).strip()
     words = text.split()
     direction = "in"
     while words and words[0] in _QUALIFIERS:
         direction = _QUALIFIERS[words.pop(0)] if direction == "in" else direction
+    if words[:1] == ["groupshared"] and direction == "in" and array:
+        # A workgroup array the function reads, such as the one coopVecLoadGroupshared loads from.
+        element = slang_type(" ".join(w for w in words[1:-1] if w != "const"), generics)
+        if not element.opaque and not element.shape:
+            size = array.group(1)
+            count = int(size) if size.isdigit() else COOP_VECTOR_LENGTH
+            return Param(Type(element.scalar, count=count), "workgroup")
     spelling = " ".join(words[:-1]) if len(words) > 1 else " ".join(words)
+    if direction == "const" and words[-2:] == ["int", "k"]:
+        # The column count of a packed cooperative-vector multiply.
+        return Param(COOP_COLUMNS, direction)
     return Param(slang_type(spelling, generics), direction)
 
 
@@ -469,12 +497,33 @@ def _spell(kind: Type) -> str:
     return f"{kind.scalar}{kind.shape[0]}" if kind.shape else kind.scalar
 
 
+def _coop_call(declaration: Declaration) -> str:
+    """How the native probe calls a function that returns a cooperative vector: slangc infers no generic argument
+    from the result, so the probe spells each one before the first that has a default, as
+    ``coopVecLoad<4, float>``. An empty string when one of them has no probe value."""
+    arguments = []
+    for part in split(declaration.generics):
+        if "=" in part:
+            break
+        bound = _generics(part)
+        value = next(iter(bound.values()), "?")
+        if value == "size":
+            arguments.append(str(COOP_VECTOR_LENGTH))
+        elif value in _SCALARS.values():
+            arguments.append(_SCALAR_SPELLINGS[value])
+        else:
+            return ""
+    return f"{declaration.name}<{', '.join(arguments)}>"
+
+
 def explicit(declaration: Declaration, chosen: Signature) -> str:
     """How the native probe calls a function whose result type is a generic parameter no argument fixes, as
     ``bit_cast<int2>``; an empty string when the arguments fix every generic parameter.
     """
     match = _HEAD.fullmatch(declaration.head)
     generics = _generics(declaration.generics)
+    if match and coop_element(chosen.result.opaque):
+        return _coop_call(declaration)
     if not match or chosen.result.opaque:
         return ""
     params = match.group("params")
@@ -510,6 +559,8 @@ def parse(
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))
         source = next((d for s, d in candidates if s == chosen), declared[0][1])
+        spelled = explicit(source, chosen) if chosen else ""
+        crossgl = spellings.spelling("slang", name, glsl_names)
         features.append(
             Feature(
                 "slang",
@@ -517,10 +568,12 @@ def parse(
                 name,
                 chosen,
                 group=declared[0][0],
-                crossgl=spellings.spelling("slang", name, glsl_names),
+                # CrossGL calls a function it has no name of its own for by Slang's name, with the same generic
+                # arguments, which neither language infers from the result.
+                crossgl=spelled if spelled and crossgl == name else crossgl,
                 stage=stage,
                 note=note,
-                spelling=explicit(source, chosen) if chosen else "",
+                spelling=spelled,
                 target=target if chosen else "",
             )
         )

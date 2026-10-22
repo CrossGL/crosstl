@@ -174,14 +174,19 @@ def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
     # The CrossGL counterparts of WGSL's depth and array textures (:data:`.spellings.COUNTERPARTS`) take two more.
-    # CrossGL spells an acceleration structure as every generator reads it.
+    # CrossGL spells an acceleration structure as every generator reads it, and byte-address buffers as Slang does.
     "crossgl": {
         **_GLSL_UNIFORMS,
         **_same("sampler2DShadow", "sampler2DArray"),
         **_acceleration_structure("accelerationStructureEXT"),
+        **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
     },
     "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
-    "slang": _acceleration_structure("RaytracingAccelerationStructure"),
+    # Slang's cooperative-vector functions load and accumulate through byte-address buffers.
+    "slang": {
+        **_acceleration_structure("RaytracingAccelerationStructure"),
+        **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
+    },
     "wgsl": _WGSL_UNIFORMS,
     # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
