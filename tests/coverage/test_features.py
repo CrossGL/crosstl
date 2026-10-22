@@ -20,6 +20,7 @@ from tools.coverage.model import (
     Signature,
     Type,
     coop_vector,
+    tuple_of,
 )
 
 GLSL_EXCERPT = """
@@ -1269,6 +1270,30 @@ bool ReportHitOptix(float tHit, uint hitKind, expand each T attribs);
         Param(Type("uint")),
     )
     assert probes.build(features["printf"], "slang").source.count('printf("");') == 1
+
+
+def test_slang_type_packs_hold_one_int_and_tuples_are_read_through_their_first_member():
+    text = """
+//@public:
+__intrinsic_op($(kIROp_MakeTuple))
+Tuple<T> makeTuple<each T>(T v);
+
+Tuple<T, U> concat<each T, each U>(Tuple<T> t, Tuple<U> u)
+{
+    return makeTuple(expand each t, expand each u);
+}
+"""
+    features = by_name(slang.parse(text, ""))
+    make = features["makeTuple"].signature
+    assert make == Signature(tuple_of("int", 1), (Param(Type("int")),))
+    concat = features["concat"].signature
+    assert concat.result == tuple_of("int", 2)
+    assert concat.params == (Param(tuple_of("int", 1)), Param(tuple_of("int", 1)))
+    native = probes.build(features["concat"], "slang").source
+    assert "Tuple<int> a0 = Tuple<int>(iin[i + 0u]);" in native
+    assert "int r = concat(a0, a1)._0;" in native
+    crossgl = probes.build(features["makeTuple"], "crossgl").source
+    assert "int r = makeTuple(a0)._0;" in crossgl
 
 
 def test_slang_pointers_are_uniforms_and_free_value_generics_are_spelled():

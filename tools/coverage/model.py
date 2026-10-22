@@ -150,6 +150,23 @@ def coop_element(opaque: str) -> Type | None:
     return Type(match.group(1)) if match else None
 
 
+_TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")
+
+
+def tuple_of(scalar: str, length: int) -> Type:
+    """Slang's tuple of ``length`` ``scalar`` elements: an opaque type that keeps its element type as ``scalar``, so a
+    probe can fill one from the input buffers."""
+    return Type(scalar, (), "Tuple<" + ", ".join([scalar] * length) + ">")
+
+
+def tuple_element(opaque: str) -> tuple[Type, int] | None:
+    """The element type and length of the tuple the opaque spelling ``opaque`` names, or ``None``."""
+    match = _TUPLE.fullmatch(opaque)
+    if match is None or match.group(1) not in SCALARS:
+        return None
+    return Type(match.group(1)), match.group(2).count(",") + 1
+
+
 @dataclass(frozen=True)
 class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),

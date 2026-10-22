@@ -14,6 +14,7 @@ from .model import (
     Type,
     coop_element,
     coop_literal,
+    tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
 
@@ -589,6 +590,9 @@ class Slang(HLSL):
             return f"CoopVec<{self.scalar(kind.scalar)}, {kind.shape[0]}>"
         if kind.opaque in COOP_ENUMERATORS:
             return kind.opaque
+        held = tuple_element(kind.opaque)
+        if held:
+            return f"Tuple<{', '.join([self.scalar(kind.scalar)] * held[1])}>"
         return super().type(kind)
 
     def literal(self, kind: Type) -> str:
@@ -600,9 +604,12 @@ class Slang(HLSL):
         return f"uniform {self.type(kind)}* {name};"
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
-        # A cooperative vector result is read through its first element.
+        # A cooperative vector result is read through its first element, and a tuple through its first member.
         element = coop_element(opaque)
-        return (element, "{}[0]") if element else super().reading(opaque)
+        if element:
+            return element, "{}[0]"
+        held = tuple_element(opaque)
+        return (held[0], "{}._0") if held else super().reading(opaque)
 
 
 DIALECTS: dict[str, Dialect] = {

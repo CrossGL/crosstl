@@ -23,6 +23,7 @@ from .model import (
     Type,
     coop_element,
     coop_literal,
+    tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .templates import C_FAMILY, Template
@@ -283,13 +284,16 @@ class CrossGL(Dialect):
         # A Metal ballot returns a simd_vote or quad_vote mask (features.metal.VOTES), which no CrossGL type holds.
         if kind.opaque in ("simd_vote", "quad_vote"):
             raise NoSpelling(f"CrossGL has no type for Metal's {kind.opaque} mask")
-        # CrossGL spells Slang's cooperative vectors and their enumerations as Slang does.
+        # CrossGL spells Slang's cooperative vectors, their enumerations and tuples as Slang does.
         if kind == COOP_COLUMNS:
             return super().type(kind.with_scalar("int"))
         if coop_element(kind.opaque):
             return f"CoopVec<{kind.scalar}, {kind.shape[0]}>"
         if kind.opaque in COOP_ENUMERATORS:
             return kind.opaque
+        held = tuple_element(kind.opaque)
+        if held:
+            return f"Tuple<{', '.join([kind.scalar] * held[1])}>"
         return super().type(kind)
 
     def literal(self, kind: Type) -> str:
@@ -301,7 +305,10 @@ class CrossGL(Dialect):
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         element = coop_element(opaque)
-        return (element, "{}[0]") if element else None
+        if element:
+            return element, "{}[0]"
+        held = tuple_element(opaque)
+        return (held[0], "{}._0") if held else None
 
     # CrossGL spells Direct3D's hit object as HLSL does.
     def holding(self, opaque: str) -> str:

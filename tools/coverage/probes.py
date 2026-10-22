@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from . import constructs
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
-from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type
+from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type, tuple_element
 from .objects import Receiver, Uniforms, local_object
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
@@ -116,6 +116,11 @@ class _Builder:
         return read
 
     def value(self, kind: Type) -> str:
+        held = tuple_element(kind.opaque)
+        if held:
+            element, length = held
+            parts = [self.element(element.scalar) for _ in range(length)]
+            return self.dialect.construct(kind, parts)
         if not kind.shape:
             return self.element(kind.scalar)
         if len(kind.shape) == 1:

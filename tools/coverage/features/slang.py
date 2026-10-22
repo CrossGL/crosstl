@@ -9,8 +9,9 @@ functions of resource and object types are left out, and so are functions marked
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
 integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2, or 4 for the length of a
 cooperative vector (``CoopVec<T, N>``), which keeps its element type and length. A value parameter no argument fixes,
-such as the alignment of ``loadAligned``, is spelled out as 4. A string argument is the empty literal, a parameter
-pack has no elements, and a pointer is a uniform that holds a device address. A function whose every
+such as the alignment of ``loadAligned``, is spelled out as 4. A string argument is the empty literal, a pack of
+parameters (``expand each T``) is empty, a type pack (``each T``) is one ``int``, so that ``makeTuple`` makes a
+``Tuple<int>``, and a pointer is a uniform that holds a device address. A function whose every
 ``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
 ``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
 Direct3D allows it in; any other function stays untested.
@@ -35,6 +36,7 @@ from ..model import (
     coop_element,
     coop_vector,
     raytracing_stage,
+    tuple_of,
 )
 from .common import pick, split
 from .hlsl import stage_of as direct3d_stage
@@ -94,7 +96,7 @@ _SHORTHAND = re.compile(
 TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
 # Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
 _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
-_GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec)\s*<(.*)>")
+_GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec|Tuple)\s*<(.*)>")
 _QUALIFIERS = {
     "in": "in",
     "out": "out",
@@ -352,7 +354,8 @@ def _generics(text: str) -> dict[str, str]:
             continue
         name, _, constraint = part.partition(":")
         constraint = constraint.strip()
-        bound[name.strip()] = (
+        # A type pack, ``each T``, holds one element.
+        bound[name.strip().removeprefix("each ").strip()] = (
             CONSTRAINTS.get(constraint, f"?{constraint}") if constraint else "int"
         )
     return bound
@@ -392,6 +395,11 @@ def slang_type(spelling: str, generics: dict[str, str]) -> Type:
             text = text.strip()
             return int(text) if text.isdigit() else 2
 
+        if generic.group(1) == "Tuple":
+            same = all(slang_type(p, generics) == element for p in parts)
+            return (
+                tuple_of(element.scalar, len(parts)) if same else Type.other(spelling)
+            )
         sizes = [size(p) for p in parts[1:]]
         if generic.group(1) == "CoopVec" and len(parts) == 2:
             length = parts[1].strip()
