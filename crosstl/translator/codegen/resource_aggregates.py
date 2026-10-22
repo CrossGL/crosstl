@@ -58,7 +58,12 @@ from ..ast import (
 )
 from .array_utils import evaluate_literal_int_expression
 from .resource_origins import ResourceOriginAnalysis
-from .resource_storage_views import storage_view, view_load
+from .resource_storage_views import (
+    combined_load,
+    restorable_view,
+    storage_view,
+    view_load,
+)
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -1097,8 +1102,9 @@ class _Lowering:
         made. A view of the same element changes no byte and is the source
         pointer itself. A view of another element is a narrowing integer view
         of device or constant storage (see ``resource_storage_views``), or a
-        widening view that restores storage a narrowing view reads; both are
-        read-only. Any other reinterpretation stays unknown.
+        widening view whose elements every storage the source names holds
+        whole or in adjacent narrower elements; both are read-only. Any other
+        reinterpretation stays unknown.
         """
         source = self.infer(node.expression, env)
         if not isinstance(source, _Pointer):
@@ -1121,6 +1127,9 @@ class _Lowering:
         if storage_view(source.element, target.element) is None:
             if not self.widening_view(source, target, storages):
                 return None
+            if self.binds_element(source.element, space):
+                # Handles of the narrow element may name its own bindings.
+                storages = {source.element, *storages}
         else:
             # A narrowing view reads the source's own bindings too.
             storages = {source.element, *storages}
@@ -1138,8 +1147,8 @@ class _Lowering:
         if storage == element:
             # The handle's own element: load helpers read it directly.
             return
-        if storage_view(storage, element) is None:
-            # A view restores more than some storage it names holds.
+        if not restorable_view(storage, element):
+            # Neither whole nor adjacent storage elements form the element.
             raise ResourceAggregateError("widened-narrow-storage", node)
         key = element, space
         viewed = self.storage_views.setdefault(key, set())
@@ -1156,23 +1165,24 @@ class _Lowering:
         """Whether ``target`` handles can restore what ``source`` handles view.
 
         A ``source`` handle names a binding of its own element or a storage a
-        narrowing view of it reads (``storages``). Widening is exact only when
-        every such storage holds whole ``target`` elements: the handle's
-        offset then divides into the wider elements. An offset that does not
-        divide is a misaligned ``target`` pointer, whose use C++, and so MSL,
-        leaves undefined. Bindings of the narrow element itself would need
-        loads that combine elements, and fail closed.
+        narrowing view of it reads (``storages``). The handle's offset divides
+        into ``target`` elements, which each such storage holds whole or as
+        adjacent unsigned narrower elements that a load combines. An offset
+        that does not divide is a misaligned ``target`` pointer, whose use
+        C++, and so MSL, leaves undefined.
         """
         if storage_view(target.element, source.element) is None:
             return False
-        if any(
-            resource.element == source.element and resource.space == source.space
-            for _param, resource, _name in self.resources
-        ):
-            return False
+        if self.binds_element(source.element, source.space):
+            storages = {source.element, *storages}
         return bool(storages) and all(
-            storage == target.element or storage_view(storage, target.element)
-            for storage in storages
+            restorable_view(storage, target.element) for storage in storages
+        )
+
+    def binds_element(self, element, space):
+        return any(
+            resource.element == element and resource.space == space
+            for _param, resource, _name in self.resources
         )
 
     def view_helper(self, source, target):
@@ -1324,15 +1334,21 @@ class _Lowering:
                 position = BinaryOpNode(
                     _member(_id("reference"), "offset"), "+", _id("index")
                 )
-                access = (
-                    ArrayAccessNode(_id(resource_name), position)
-                    if element == pointer.element
-                    else view_load(
+                if element == pointer.element:
+                    access = ArrayAccessNode(_id(resource_name), position)
+                elif storage_view(element, pointer.element) is not None:
+                    access = view_load(
                         storage_view(element, pointer.element),
                         _id(resource_name),
                         position,
                     )
-                )
+                else:
+                    # Only read-only loads reach the storage of a widening view.
+                    access = combined_load(
+                        storage_view(pointer.element, element),
+                        _id(resource_name),
+                        position,
+                    )
                 statements = (
                     [ReturnNode(access)]
                     if operation == "load"

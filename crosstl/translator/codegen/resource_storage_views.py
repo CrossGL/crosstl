@@ -17,7 +17,10 @@ Sources also cast such a view back (``(const device uint32_t*)(bytes + n)``).
 That widening view divides the offset back into storage elements, which is
 exact for every pointer the source may use: a widened pointer whose offset does
 not divide is misaligned for its type, and using it is undefined. Its handles
-keep naming the word buffer, so loads through them read words directly.
+keep naming the word buffer, so loads through them read words directly. A byte
+handle may also name a byte binding; a word handle widened from it then names
+that binding too, and a load combines the four adjacent bytes of the word,
+lowest first. Widening views are read-only, so no store splits a word.
 """
 
 from copy import deepcopy
@@ -68,6 +71,19 @@ def storage_view(source_element, target_element):
     )
 
 
+def restorable_view(storage_element, element):
+    """Whether ``element`` handles can read ``storage_element`` storage.
+
+    The storage holds whole elements (a narrowing view of it), or the element
+    is adjacent unsigned storage elements that ``combined_load`` joins.
+    """
+    return (
+        storage_element == element
+        or storage_view(storage_element, element) is not None
+        or storage_view(element, storage_element) is not None
+    )
+
+
 def _integer(value):
     return LiteralNode(value, PrimitiveType("int"))
 
@@ -99,3 +115,25 @@ def view_load(view, storage, index):
         view.target,
         [BinaryOpNode(BinaryOpNode(word, ">>", shift), "&", mask)],
     )
+
+
+def combined_load(view, storage, index):
+    """Read element ``index`` of ``view.source`` from narrower ``storage``.
+
+    ``view`` is the narrowing view of the wide element as the storage's
+    element: wide element ``index`` holds storage elements ``index * ratio``
+    upward, the first in its lowest bits. The storage element is unsigned, so
+    each converts without sign extension. ``index`` is evaluated once per
+    storage element, so callers pass a side-effect-free expression.
+    """
+    value = None
+    for lane in range(view.ratio):
+        position = BinaryOpNode(deepcopy(index), "*", _position(view.ratio))
+        if lane:
+            position = BinaryOpNode(position, "+", _position(lane))
+        element = _call(view.source, [ArrayAccessNode(storage, position)])
+        if lane:
+            shift = _call("uint", [_integer(lane * view.width)])
+            element = BinaryOpNode(element, "<<", shift)
+        value = element if value is None else BinaryOpNode(value, "|", element)
+    return value
