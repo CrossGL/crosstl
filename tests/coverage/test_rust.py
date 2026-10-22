@@ -34,6 +34,10 @@ pub fn any<V: Vector<bool, N>, const N: usize>(vector: V) -> bool {
 
 pub unsafe fn emit_stream_vertex<const STREAM: i64>() {}
 
+pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
+    0
+}
+
 pub fn kill() -> ! {
     loop {}
 }
@@ -109,6 +113,20 @@ impl Vec3 {
     fn private_helper(self) -> Self {
         self
     }
+
+    #[cfg(feature = "i32")]
+    #[inline]
+    #[must_use]
+    pub fn as_ivec3(self) -> crate::IVec3 {
+        crate::IVec3::new(self.x as i32, self.y as i32, self.z as i32)
+    }
+
+    #[cfg(feature = "i16")]
+    #[inline]
+    #[must_use]
+    pub fn as_i16vec3(self) -> crate::I16Vec3 {
+        crate::I16Vec3::new(self.x as i16, self.y as i16, self.z as i16)
+    }
 }
 """
 
@@ -131,6 +149,7 @@ def test_rust_reads_spirv_std_arch_and_expands_its_macros():
         "emit_stream_vertex",
         "kill",
         "memory_barrier",
+        "read_clock_khr",
         "subgroup_ballot",
         "subgroup_f_add",
         "subgroup_inclusive_f_add",
@@ -192,6 +211,33 @@ def test_rust_reads_float_and_vec3_methods():
     assert features["Vec3::new"].crossgl == "vec3"
 
 
+def test_rust_leaves_out_glam_methods_spirv_std_does_not_enable():
+    features = parse()
+    # spirv-std builds glam with i32, u32 and f64 vectors only.
+    assert features["Vec3::as_ivec3"].signature == Signature(
+        Type("int", (3,)), (Param(VEC3_TYPE),)
+    )
+    assert "Vec3::as_i16vec3" not in features
+
+
+def test_rust_probes_64_bit_integer_results():
+    clock = parse()["read_clock_khr"]
+    assert clock.signature == Signature(Type("uint64"), ())
+    source = probes.build(clock, "rust").source
+    assert (
+        "let r: u64 = unsafe { read_clock_khr::<{ Scope::Subgroup as u32 }>() };"
+        in source
+    )
+    assert "outp[i] = (r) as u32;" in source
+    assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
+
+
+def test_rust_has_no_probe_for_vectors_spirv_std_lacks():
+    with pytest.raises(probes.ProbeError, match="no int16 vectors"):
+        probes.spell(Type("int16", (3,)), "rust")
+    assert probes.spell(Type("int16"), "rust") == "i16"
+
+
 def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
     features = parse()
     # Rust's fract truncates; CrossGL's floors.
@@ -247,6 +293,11 @@ SAMPLES = [
     ),
     feature("workgroup_memory_barrier_with_group_sync", VOID),
     feature("Float::nan", Type("float"), spelling="f32::nan"),
+    feature(
+        "read_clock_khr",
+        Type("uint64"),
+        spelling="unsafe read_clock_khr::<{ Scope::Subgroup as u32 }>",
+    ),
 ]
 
 
