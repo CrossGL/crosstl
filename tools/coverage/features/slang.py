@@ -4,15 +4,16 @@
 ``${`` and ``$}`` are C++ that generates the module, and ``$(expr)`` splices a value into it. The list takes every
 global function in the sections the files mark ``//@public:``, the sections Slang's own reference documents. A name a
 meta loop generates, such as ``Interlocked$(atomicOp.slangCallSuffix)``, is expanded over the loop's table. Member
-functions of resource and object types are left out.
+functions of resource and object types are left out, and so are functions marked ``internal``.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
 integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2, or 4 for the length of a
-cooperative vector (``CoopVec<T, N>``), which keeps its element type and length. A string argument is the empty
-literal and a parameter pack has no elements. A function whose every ``[require(...)]`` names a stage-only capability
-is probed in that stage. Probes compile for SPIR-V. A function whose ``require`` names no SPIR-V target but allows
-HLSL compiles for HLSL instead, which DXC then checks, in the stage Direct3D allows it in; any other function stays
-untested.
+cooperative vector (``CoopVec<T, N>``), which keeps its element type and length. A value parameter no argument fixes,
+such as the alignment of ``loadAligned``, is spelled out as 4. A string argument is the empty literal, a parameter
+pack has no elements, and a pointer is a uniform that holds a device address. A function whose every
+``[require(...)]`` names a stage-only capability is probed in that stage. Probes compile for SPIR-V. A function whose
+``require`` names no SPIR-V target but allows HLSL compiles for HLSL instead, which DXC then checks, in the stage
+Direct3D allows it in; any other function stays untested.
 """
 
 from __future__ import annotations
@@ -130,6 +131,10 @@ _TABLE = re.compile(
 _SPLICE = re.compile(r"\$\(\s*(\w+)(?:\.(\w+))?\s*\)")
 # String parameters take a literal, which slangc folds at compile time (core.meta.slang, getStringHash).
 _STRINGS = frozenset({"String", "NativeString"})
+_VALUE_GENERIC = re.compile(r"(?:int|uint)\s+(\w+)")
+# A value generic parameter no argument fixes, such as loadAligned's alignment: a power of two, and the size in bytes
+# of the 32-bit scalars the probes use.
+_FREE_VALUE = 4
 
 
 @dataclass(frozen=True)
@@ -307,7 +312,11 @@ def _closing(text: str, start: int, pair: str = "()") -> int:
 
 
 def _declarations(meta: _Meta, raw: str) -> list[Declaration]:
-    head, attributes, generics = _strip_leading(" ".join(raw.split()))
+    raw = " ".join(raw.split())
+    head, attributes, generics = _strip_leading(raw)
+    # An ``internal`` function is not part of the public module, whichever section declares it.
+    if re.search(r"\binternal\b", raw[: len(raw) - len(head)]):
+        return []
     requires = " ".join(a for a in attributes if a.startswith("require"))
     # Splices may appear in the name, the types and the constraints, so the three are expanded together.
     variants = meta.expand("\0".join([head, requires, ", ".join(generics)]))
@@ -335,6 +344,11 @@ def _generics(text: str) -> dict[str, str]:
             continue
         if part.startswith("let "):
             bound[part[4:].split(":")[0].strip()] = "size"
+            continue
+        value = _VALUE_GENERIC.fullmatch(part)
+        if value:
+            # The older spelling of a value parameter, ``int alignment`` for ``let alignment : int``.
+            bound[value.group(1)] = "size"
             continue
         name, _, constraint = part.partition(":")
         constraint = constraint.strip()
@@ -418,6 +432,11 @@ def _parameter(text: str, generics: dict[str, str]) -> Param:
         return Param(COOP_COLUMNS, direction)
     if spelling in _STRINGS:
         return Param(STRING, "const")
+    if spelling.endswith("*") and spelling.count("*") == 1:
+        # A pointer to device memory, such as loadAligned reads through.
+        pointee = slang_type(spelling[:-1], generics)
+        if not pointee.opaque:
+            return Param(pointee, "pointer")
     return Param(slang_type(spelling, generics), direction)
 
 
@@ -524,17 +543,46 @@ def _coop_call(declaration: Declaration) -> str:
     return f"{declaration.name}<{', '.join(arguments)}>"
 
 
+def _value_call(declaration: Declaration, generics: dict[str, str], params: str) -> str:
+    """How the native probe calls a function with a value generic parameter no argument fixes, such as
+    ``loadAligned<4>``: slangc infers it from nothing, so the probe spells each generic argument up to the last such
+    one. An empty string when the arguments fix every value parameter, or one of the leading ones has no probe value.
+    """
+    names = list(generics)
+    free = [
+        index
+        for index, name in enumerate(names)
+        if generics[name] == "size" and not re.search(rf"\b{re.escape(name)}\b", params)
+    ]
+    if not free:
+        return ""
+    arguments = []
+    for name in names[: free[-1] + 1]:
+        value = generics[name]
+        if value == "size":
+            arguments.append(str(_FREE_VALUE))
+        elif value in _SCALARS.values():
+            arguments.append(_SCALAR_SPELLINGS[value])
+        else:
+            return ""
+    return f"{declaration.name}<{', '.join(arguments)}>"
+
+
 def explicit(declaration: Declaration, chosen: Signature) -> str:
     """How the native probe calls a function whose result type is a generic parameter no argument fixes, as
-    ``bit_cast<int2>``; an empty string when the arguments fix every generic parameter.
+    ``bit_cast<int2>``, or that has a value generic parameter no argument fixes, as ``loadAligned<4>``; an empty
+    string when the arguments fix every generic parameter.
     """
     match = _HEAD.fullmatch(declaration.head)
     generics = _generics(declaration.generics)
     if match and coop_element(chosen.result.opaque):
         return _coop_call(declaration)
-    if not match or chosen.result.opaque:
+    if not match:
         return ""
     params = match.group("params")
+    value_call = _value_call(declaration, generics, params)
+    if value_call or chosen.result.opaque:
+        return value_call
     free = [
         name
         for name, bound in generics.items()

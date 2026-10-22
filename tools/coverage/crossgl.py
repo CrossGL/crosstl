@@ -295,6 +295,10 @@ class CrossGL(Dialect):
     def literal(self, kind: Type) -> str:
         return coop_literal(kind) or super().literal(kind)
 
+    def pointer(self, kind: Type, name: str) -> str:
+        # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
+        return f"uniform {self.type(kind)}* {name};"
+
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         element = coop_element(opaque)
         return (element, "{}[0]") if element else None

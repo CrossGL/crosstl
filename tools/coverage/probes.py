@@ -99,6 +99,8 @@ class _Builder:
         self.lines: list[str] = list(receiver.locals) if receiver else []
         # Variables the compute workgroup shares, for a parameter that takes one.
         self.shared: list[str] = []
+        # Uniforms that hold pointers to device memory, for a parameter that takes one.
+        self.pointers: list[str] = []
         # Fragment-shader inputs as ``(type spelling, name)``.
         self.inputs: list[Buffer] = []
 
@@ -128,7 +130,7 @@ class _Builder:
     def declarations(self) -> list[str]:
         """The resources the probe declares before its entry point."""
         objects = self.receiver.declarations if self.receiver else []
-        return objects + self.uniforms.declarations + self.shared
+        return objects + self.uniforms.declarations + self.shared + self.pointers
 
     def _resource(self, kind: Type) -> bool:
         if (self.payload or self.tracing) and kind.opaque == "udt":
@@ -242,6 +244,9 @@ class _Builder:
                 else:
                     self.lines.append(f"{local} = {self.value(param.type)};")
                 arguments.append(dialect.workgroup_argument(local))
+            elif param.direction == "pointer":
+                self.pointers.append(dialect.pointer(param.type, local))
+                arguments.append(local)
             else:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))

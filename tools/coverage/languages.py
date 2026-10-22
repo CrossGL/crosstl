@@ -594,6 +594,11 @@ class Slang(HLSL):
     def literal(self, kind: Type) -> str:
         return coop_literal(kind) or super().literal(kind)
 
+    def pointer(self, kind: Type, name: str) -> str:
+        # A global pointer is a uniform that holds a device address; slangc lowers it to a SPIR-V physical storage
+        # buffer pointer.
+        return f"uniform {self.type(kind)}* {name};"
+
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         # A cooperative vector result is read through its first element.
         element = coop_element(opaque)
