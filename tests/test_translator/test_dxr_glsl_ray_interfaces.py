@@ -168,13 +168,21 @@ def test_intersection_reports_its_attributes_through_the_hit_attribute_variable(
     _glslang(tmp_path, code, "rint")
 
 
-def test_object_to_world_matrices_are_refused(tmp_path):
+def test_object_and_world_transforms_keep_their_orientation(tmp_path):
+    # HLSL's float3x4 (three rows, four columns) is CrossGL's and GLSL's mat4x3, the type of gl_WorldToObjectEXT;
+    # the 4x3 intrinsics are its transpose (GLSL_EXT_ray_tracing section 7.1, gl_WorldToObject3x4EXT).
     source = CLOSEST_HIT.replace(
         "payload.color = data.tint * RayTCurrent();",
-        "payload.color = mul(WorldToObject4x3(), float4(data.tint, 1.0));",
+        "float3 local = mul(float4(data.tint, 1.0), WorldToObject4x3());"
+        " payload.color = mul(ObjectToWorld3x4(), float4(local, 1.0));",
     )
-    with pytest.raises(DxrRayInterfaceUnsupportedError, match="world-to-object"):
-        _translate(tmp_path, source, "matrix.rchit")
+    code = _translate(tmp_path, source, "matrix.rchit")
+    flat = _squash(code)
+    assert (
+        "vec3 local = (vec4(data.tint, 1.0) * transpose(gl_WorldToObjectEXT));" in flat
+    )
+    assert "payload.color = (gl_ObjectToWorldEXT * vec4(local, 1.0));" in flat
+    _glslang(tmp_path, code, "rchit")
 
 
 def test_payload_without_a_known_struct_type_is_refused(tmp_path):

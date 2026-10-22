@@ -149,7 +149,11 @@ from .spirv_push_constants import (
     is_push_constant_block,
     uniform_block_storage_layout,
 )
-from .spirv_ray_builtins import ray_builtin_info
+from .spirv_ray_builtins import (
+    ray_builtin_info,
+    ray_constant_value,
+    transposed_ray_builtin,
+)
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -2806,6 +2810,28 @@ class VulkanSPIRVCodeGen(
         component_type = self.register_primitive_type(component_type_name)
         result_type = self.register_vector_type(component_type, len(indices))
         return indices, component_type, result_type
+
+    SCALAR_SWIZZLE_COMPONENT_TYPES = frozenset(
+        {"float", "double", "int", "uint", "bool", "i64", "u64"}
+    )
+
+    def scalar_swizzle(self, base: SpirvId, member_name) -> Optional[SpirvId]:
+        """A component selection on a scalar value (HLSL, GLSL 4.20 section 5.5): ``s.x`` is ``s``, ``s.xxx`` a splat.
+
+        The scalar has one component, so only the first component name (``x``, ``r`` or ``s``) may be selected.
+        """
+        if not isinstance(member_name, str) or not 1 <= len(member_name) <= 4:
+            return None
+        if len(set(member_name)) != 1 or member_name[0] not in "xrs":
+            return None
+        scalar_name = self.normalize_primitive_name(str(base.type.base_type))
+        if scalar_name not in self.SCALAR_SWIZZLE_COMPONENT_TYPES:
+            return None
+        if len(member_name) == 1:
+            return base
+        scalar_type = self.register_primitive_type(scalar_name)
+        vector_type = self.register_vector_type(scalar_type, len(member_name))
+        return self.splat_scalar_to_vector(base, vector_type)
 
     def struct_member_info(self, struct_type: str, member_name: str):
         members = self.current_struct_members.get(struct_type)
@@ -12883,7 +12909,17 @@ class VulkanSPIRVCodeGen(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Lower min/max/clamp to typed GLSL.std.450 extinsts."""
-        result_type = self.ensure_registered_type(args[0].type)
+        # A scalar operand next to vector operands is splatted to their width, as HLSL's intrinsics promote it
+        # (``max(dot(n, l), (0.0).xxx)`` is a float3), so the first vector operand gives the result type.
+        shaped_arg = next(
+            (
+                arg
+                for arg in args
+                if self.vector_component_type_and_count(arg.type.base_type) is not None
+            ),
+            args[0],
+        )
+        result_type = self.ensure_registered_type(shaped_arg.type)
         component_type = self.scalar_or_vector_component_type(result_type.type)
         prefix = {
             "float": "F",
@@ -28937,6 +28973,21 @@ class VulkanSPIRVCodeGen(
                 if builtin_component is not None:
                     return builtin_component
 
+                ray_constant = ray_constant_value(expr)
+                if ray_constant is not None:
+                    return self.register_constant(
+                        ray_constant, self.register_primitive_type("uint")
+                    )
+
+                transposed = transposed_ray_builtin(expr)
+                if transposed is not None:
+                    # gl_ObjectToWorld3x4EXT and gl_WorldToObject3x4EXT transpose a built-in (spirv_ray_builtins).
+                    return self.process_expression(
+                        FunctionCallNode(
+                            IdentifierNode("transpose"), [IdentifierNode(transposed)]
+                        )
+                    )
+
                 builtin = self.ensure_builtin_variable(expr)
                 if builtin is not None:
                     return self.get_variable_value(builtin)
@@ -29246,7 +29297,11 @@ class VulkanSPIRVCodeGen(
                         self.map_crossgl_type(payload_type),
                     )
 
-            if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
+            if isinstance(callee_name, str) and callee_name.lower() in {
+                "nonuniformext",
+                "nonuniformresourceindex",
+            }:
+                # HLSL's NonUniformResourceIndex and GLSL's nonuniformEXT both mark a divergent descriptor index.
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if (
@@ -29488,6 +29543,10 @@ class VulkanSPIRVCodeGen(
                 )
                 return None
 
+            selected = self.scalar_swizzle(base, member_name)
+            if selected is not None:
+                return selected
+
             self.refuse_lowering(
                 f"Could not find member {member_name} in {struct_type}"
             )
@@ -29640,9 +29699,10 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
-        ray = ray_builtin_info(self, name)
-        if ray is not None:
-            return ray
+        # Before the graphics tables: gl_PrimitiveID and gl_InstanceID name other built-ins in ray stages.
+        ray_builtin = ray_builtin_info(self, name)
+        if ray_builtin is not None:
+            return ray_builtin
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
@@ -30241,6 +30301,10 @@ class VulkanSPIRVCodeGen(
             self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
         else:
             self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
+            if self.is_descriptor_type_id(element_type.id):
+                # An unsized array of images, samplers or acceleration structures is a runtime descriptor array.
+                self.require_capability("RuntimeDescriptorArray")
+                self.require_extension("SPV_EXT_descriptor_indexing")
 
         type_name = f"array_{element_type.type.base_type}_{size if size else 'rt'}"
         spirv_type = SpirvType(type_name)
@@ -30249,6 +30313,18 @@ class VulkanSPIRVCodeGen(
         if element_type.id in self.cooperative_matrix_containing_type_ids:
             self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
+
+    def is_descriptor_type_id(self, type_id) -> bool:
+        """Whether ``type_id`` is an image, sampler, sampled image or acceleration structure type."""
+        if type_id in self.sampled_image_type_ids.values():
+            return True
+        return any(
+            getattr(registered, "id", None) == type_id
+            for registered in (
+                *self.resource_types.values(),
+                *self.resource_image_types.values(),
+            )
+        )
 
     def register_layout_array_type(
         self, element_type: SpirvId, size: Optional[int], layout: str
