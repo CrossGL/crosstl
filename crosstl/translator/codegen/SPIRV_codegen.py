@@ -51,7 +51,10 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from ..matrix_shape import (
     crossgl_matrix_shape,
     length_method_object,
@@ -114,6 +117,7 @@ from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
@@ -124,8 +128,10 @@ from .spirv_exponent_builtins import (
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
+    SHADER_IMAGE_FORMATS,
     atomic_storage_image_format,
     emit_four_component_image_read,
+    image_load_in_context,
     narrow_image_texel,
 )
 from .spirv_inline_requirements import (
@@ -567,6 +573,7 @@ class VulkanSPIRVCodeGen(
         self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
+        self.module_compute_entry_config = None
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -842,6 +849,9 @@ class VulkanSPIRVCodeGen(
             self.require_capability("InputAttachment")
         if dim == "Buffer":
             self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
+        if image_format not in SHADER_IMAGE_FORMATS:
+            # SPIR-V 3.11: every other Image Format operand needs this capability.
+            self.require_capability("StorageImageExtendedFormats")
 
         id_value = self.get_id()
         self.emit(
@@ -6561,7 +6571,12 @@ class VulkanSPIRVCodeGen(
                 metadata, "StorageImageReadWithoutFormat"
             )
             return emit_four_component_image_read(
-                self, result_type, image_id, coord_id, image_operands
+                self,
+                result_type,
+                image_id,
+                coord_id,
+                image_operands,
+                metadata.get("component_count"),
             )
 
         if function_name == "imageStore":
@@ -21675,7 +21690,10 @@ class VulkanSPIRVCodeGen(
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression_with_precision(expr, precise)
+            value = self.process_expression_with_precision(expr, precise)
+            return image_load_in_context(
+                self, expr, value, self.current_expression_expected_type
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
 
@@ -29376,6 +29394,12 @@ class VulkanSPIRVCodeGen(
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if (
+                callee_name in DEBUG_PRINTF_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
                 and not self.has_function_reference(callee_name)
             ):
@@ -30635,7 +30659,10 @@ class VulkanSPIRVCodeGen(
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
         """Return compute workgroup dimensions from a stage execution config."""
-        config = getattr(stage, "execution_config", {}) or {}
+        if stage is None:
+            config = self.module_compute_entry_config or {}
+        else:
+            config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31206,7 +31233,7 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = [
+        debug_names = list(getattr(self, "debug_strings", ())) + [
             f'OpSourceExtension "{extension}"'
             for extension in sorted(getattr(self, "source_extensions", ()))
         ]
@@ -31642,6 +31669,17 @@ class VulkanSPIRVCodeGen(
             else:
                 helper_functions.append(func)
 
+        compute_entry_configs = [
+            function_entry_execution_config(func)
+            for func, qualifier in top_level_entries
+            if qualifier == "compute"
+        ]
+        if compute_entry_configs and all(
+            config == compute_entry_configs[0] for config in compute_entry_configs
+        ):
+            # Built-ins read outside a stage take the size of the module's compute entries.
+            self.module_compute_entry_config = compute_entry_configs[0]
+
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:
                 if qualifier == "tessellation_control":
@@ -31716,7 +31754,11 @@ class VulkanSPIRVCodeGen(
                     "TessellationControl",
                     "TessellationEvaluation",
                 }
-                stage_metadata = func if is_tessellation_entry else None
+                stage_metadata = (
+                    func
+                    if is_tessellation_entry or execution_model == "GLCompute"
+                    else None
+                )
                 entry_points.append(
                     (execution_model, function_id, func.name, stage_metadata)
                 )

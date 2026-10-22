@@ -33,6 +33,9 @@ class ScopedWalker:
         for constant in getattr(program, "constants", None) or []:
             self.scope.declare(constant.name, constant.const_type)
         for variable in getattr(program, "global_variables", None) or []:
+            # Layout declarations share the list and declare no value.
+            if getattr(variable, "name", None) is None:
+                continue
             self.scope.declare(variable.name, variable.var_type)
             self.scope.declare_block_members(variable)
         for cbuffer in getattr(program, "cbuffers", None) or []:
@@ -57,6 +60,8 @@ class ScopedWalker:
         scope.push()
         if stage is not None:
             for variable in getattr(stage, "local_variables", None) or []:
+                if getattr(variable, "name", None) is None:
+                    continue
                 scope.declare(variable.name, variable.var_type)
                 scope.declare_block_members(variable)
             for cbuffer in getattr(stage, "local_cbuffers", None) or []:

@@ -343,6 +343,7 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "debugPrintfEXT": "printf",
             "traceRayEXT": "TraceRay",
             "reportIntersectionEXT": "ReportHit",
             "executeCallableEXT": "CallShader",

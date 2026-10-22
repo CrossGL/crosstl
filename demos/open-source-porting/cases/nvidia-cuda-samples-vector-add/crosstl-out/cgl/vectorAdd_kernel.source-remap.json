@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 665,
+        "endLine": 16,
+        "endOffset": 426,
         "file": "crosstl-out/cgl/vectorAdd_kernel.cgl",
-        "length": 665,
+        "length": 426,
         "line": 1,
         "offset": 0
       },

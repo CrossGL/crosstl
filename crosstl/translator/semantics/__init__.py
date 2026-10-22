@@ -16,10 +16,12 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
+from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
+from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -85,11 +87,13 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 __all__ = [
     "ArrayConstructorUnsupportedError",
     "BuiltinValueUnsupportedError",
+    "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
+    "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
@@ -152,7 +156,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
-    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For MSL and
+    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
+    SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
+    (:mod:`.compute_entry_values`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
@@ -172,7 +178,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.array_parameters`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
-    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
+    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
+    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
@@ -199,6 +206,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     canonicalize_builtin_values(program, report.target)
+    lower_compute_entry_values(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
@@ -216,6 +224,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_per_vertex_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
+    refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)

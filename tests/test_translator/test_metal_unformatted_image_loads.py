@@ -59,7 +59,7 @@ def test_hlsl_texture_copies_store_all_channels(tmp_path):
     assert writes["scaled"] == "scaled.read(uint2(id.xy)) * 2.0"
     assert writes["signedCopy"] == "signedSource.read(uint2(id.xy))"
     # Scalar textures still select their single channel explicitly.
-    assert writes["single"] == "float4(single.read(uint2(id.yx)).x, 0.0, 0.0, 0.0)"
+    assert writes["single"] == "float4(single.read(uint2(id.yx)).x, 0.0, 0.0, 1.0)"
     _compile(generated, "metal", tmp_path)
 
 

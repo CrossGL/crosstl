@@ -20,13 +20,16 @@ SCALARS = (
     "uint8",
     "int8x4_packed",
     "uint8x4_packed",
+    "usize",
 )
 # Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit and 8-bit scalars,
-# and the 32-bit words that pack four 8-bit integers (HLSL shader model 6.6).
+# the 32-bit words that pack four 8-bit integers (HLSL shader model 6.6), and Rust's pointer-sized unsigned integer,
+# which rust-gpu's SPIR-V targets make 32 bits wide.
 WIDE_INTEGERS = frozenset({"int64", "uint64"})
 NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
 BYTES = frozenset({"int8", "uint8"})
 PACKED_BYTES = frozenset({"int8x4_packed", "uint8x4_packed"})
+POINTER_SIZED = frozenset({"usize"})
 # Overload selection prefers a signature without these when a function has one.
 OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS | BYTES
 OUTCOMES = ("supported", "refused", "wrong", "untested")

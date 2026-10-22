@@ -99,19 +99,19 @@ def test_storage_image_stores_widen_values_to_four_components():
     assert (
         "imageStore(coverage, ThreadIds.xy, "
         "vec4(texelFetch(depth, ThreadIds.xy, 0).x + imageLoad(coverage, "
-        "ThreadIds.xy).x, 0.0, 0.0, 0.0));"
+        "ThreadIds.xy).x, 0.0, 0.0, 1.0));"
     ) not in crossgl
     assert (
         "imageStore(coverage, ThreadIds.xy, vec4(d + imageLoad(coverage, "
-        "ThreadIds.xy).x, 0.0, 0.0, 0.0));"
+        "ThreadIds.xy).x, 0.0, 0.0, 1.0));"
     ) in crossgl
     # Compound stores keep the right operand grouped.
     assert (
         "imageStore(coverage, ThreadIds.xy, vec4(imageLoad(coverage, "
-        "ThreadIds.xy).x + (2.0 * d), 0.0, 0.0, 0.0));"
+        "ThreadIds.xy).x + (2.0 * d), 0.0, 0.0, 1.0));"
     ) in crossgl
     assert (
-        "imageStore(motion, ThreadIds.xy, vec4(vec2(d, float(o.y)), 0.0, 0.0));"
+        "imageStore(motion, ThreadIds.xy, vec4(vec2(d, float(o.y)), 0.0, 1.0));"
         in crossgl
     )
 

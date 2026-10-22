@@ -693,22 +693,22 @@ def _reverse_rust():
     return RustToCrossGLConverter()
 
 
-def _reverse_cuda():
+def _reverse_cuda(threadgroup_size=None):
     from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 
-    return CudaToCrossGLConverter()
+    return CudaToCrossGLConverter(threadgroup_size=threadgroup_size)
 
 
-def _reverse_hip():
+def _reverse_hip(threadgroup_size=None):
     from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
-    return HipToCrossGLConverter()
+    return HipToCrossGLConverter(threadgroup_size=threadgroup_size)
 
 
-def _reverse_opencl():
+def _reverse_opencl(threadgroup_size=None):
     from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
 
-    return OpenCLToCrossGLConverter()
+    return OpenCLToCrossGLConverter(threadgroup_size=threadgroup_size)
 
 
 def register_default_sources() -> None:

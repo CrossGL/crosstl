@@ -262,6 +262,12 @@ def test_causes_keep_the_digits_of_names():
     assert first != second
 
 
+def test_causes_keep_an_operator_spelling():
+    detail = "error: cannot index into a value of type `[]`"
+    feature = {"name": "vector_extract_dynamic", "crossgl": "[]", "detail": detail}
+    assert causes.cause(feature) == detail
+
+
 def test_features_whose_diagnostics_name_them_share_a_cause():
     row = _row(
         "wgsl",

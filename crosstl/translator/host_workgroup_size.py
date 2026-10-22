@@ -23,10 +23,13 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+
 __all__ = [
     "HOST_WORKGROUP_SIZE_ATTRIBUTE",
     "HOST_WORKGROUP_SIZE_KEY",
     "HostDefinedWorkgroupSizeError",
+    "function_entry_execution_config",
     "has_explicit_workgroup_size",
     "host_workgroup_size_mark",
     "host_workgroup_size_attribute_text",
@@ -242,6 +245,52 @@ def _node_reason(
     return None
 
 
+def _builtin_axis(node: Any) -> tuple[str, str] | None:
+    """``(built-in, axis)`` for a ``gl_*.x``-style component read, or ``None``."""
+    if type(node).__name__ != "MemberAccessNode":
+        return None
+    member = str(getattr(node, "member", ""))
+    base = getattr(node, "object", None)
+    if member not in ("x", "y", "z") or type(base).__name__ not in (
+        "IdentifierNode",
+        "BuiltinVariableNode",
+    ):
+        return None
+    name = getattr(base, "builtin_name", None) or _name(base) or ""
+    return name.lower(), member
+
+
+def _product_axis(node: Any, first: str, second: str) -> str | None:
+    """The axis of ``first.c * second.c`` in either operand order, or ``None``."""
+    if type(node).__name__ != "BinaryOpNode" or getattr(node, "op", None) != "*":
+        return None
+    left = _builtin_axis(getattr(node, "left", None))
+    right = _builtin_axis(getattr(node, "right", None))
+    if not left or not right or left[1] != right[1]:
+        return None
+    return left[1] if {left[0], right[0]} == {first, second} else None
+
+
+def _partition_invariant(node: Any) -> bool:
+    """Whether an expression of partition built-ins has the same value for every workgroup size.
+
+    ``gl_WorkGroupID.c * gl_WorkGroupSize.c + gl_LocalInvocationID.c`` is ``gl_GlobalInvocationID.c``, and
+    ``gl_NumWorkGroups.c * gl_WorkGroupSize.c`` is the number of invocations along ``c``, which the dispatch fixes.
+    """
+    if _product_axis(node, "gl_numworkgroups", "gl_workgroupsize"):
+        return True
+    if type(node).__name__ != "BinaryOpNode" or getattr(node, "op", None) != "+":
+        return False
+    operands = (getattr(node, "left", None), getattr(node, "right", None))
+    for local, product in (operands, operands[::-1]):
+        local_axis = _builtin_axis(local)
+        if local_axis and local_axis[0] == "gl_localinvocationid":
+            axis = _product_axis(product, "gl_workgroupid", "gl_workgroupsize")
+            if axis == local_axis[1]:
+                return True
+    return False
+
+
 def _first_reason(root: Any, functions: dict, workgroup_variables: dict) -> str | None:
     """Depth-first, in source order, through the entry and every function it calls by name."""
     seen = set()
@@ -254,6 +303,8 @@ def _first_reason(root: Any, functions: dict, workgroup_variables: dict) -> str 
         if id(node) in seen:
             continue
         seen.add(id(node))
+        if _partition_invariant(node):
+            continue
         reason = _node_reason(node, functions, workgroup_variables, builtin_parameters)
         if reason:
             return reason
@@ -265,26 +316,35 @@ def _first_reason(root: Any, functions: dict, workgroup_variables: dict) -> str 
     return None
 
 
-def workgroup_size_dependence(shader: Any, stage: Any) -> str | None:
-    """Why a compute stage's results depend on its workgroup size, or ``None`` when they do not."""
+def _entry_dependence(
+    shader: Any, entry: Any, local_functions=(), local_variables=()
+) -> str | None:
     functions: dict = {}
     for function in list(getattr(shader, "functions", None) or []) + list(
-        getattr(stage, "local_functions", None) or []
+        local_functions or []
     ):
         name = _name(function)
         if name:
             functions.setdefault(name, []).append(function)
     workgroup_variables = {}
     for variable in list(getattr(shader, "global_variables", None) or []) + list(
-        getattr(stage, "local_variables", None) or []
+        local_variables or []
     ):
         qualifiers = {
             str(item).lower() for item in getattr(variable, "qualifiers", None) or []
         } & _WORKGROUP_MEMORY_QUALIFIERS
         if qualifiers and _name(variable):
             workgroup_variables[_name(variable)] = sorted(qualifiers)[0]
-    return _first_reason(
-        getattr(stage, "entry_point", None), functions, workgroup_variables
+    return _first_reason(entry, functions, workgroup_variables)
+
+
+def workgroup_size_dependence(shader: Any, stage: Any) -> str | None:
+    """Why a compute stage's results depend on its workgroup size, or ``None`` when they do not."""
+    return _entry_dependence(
+        shader,
+        getattr(stage, "entry_point", None),
+        getattr(stage, "local_functions", None),
+        getattr(stage, "local_variables", None),
     )
 
 
@@ -323,23 +383,91 @@ def _is_compute(stage: Any) -> bool:
     return str(getattr(kind, "value", kind)).lower() == "compute"
 
 
-def resolve_host_workgroup_sizes(shader: Any) -> Any:
-    """Apply the host's size to compute entries that depend on it; drop the mark from the others."""
+def _is_compute_function(function: Any) -> bool:
+    """Whether a top-level function is a compute entry, as ``@ compute fn`` or a ``compute`` qualifier declares it."""
+    qualifiers = list(getattr(function, "qualifiers", None) or [])
+    names = qualifiers[:1] + [
+        getattr(attribute, "name", attribute)
+        for attribute in getattr(function, "attributes", None) or []
+    ]
+    for name in names:
+        stage = normalize_stage_name(name)
+        if stage in STAGE_QUALIFIER_NAMES:
+            return stage == "compute"
+    return False
+
+
+def _resolve_mark(entry: Any, mark: Any, config: dict, dependence) -> None:
+    """Record the host's size, or the reason a target cannot pick one, on a size-dependent entry's config."""
+    if has_explicit_workgroup_size(config):
+        return
+    reason = dependence()
+    if reason is None:
+        return
+    size = mark.get("size") if isinstance(mark, dict) else None
+    if size is not None:
+        config["numthreads"] = tuple(size)
+        return
+    config[HOST_WORKGROUP_SIZE_KEY] = {
+        "entry": _name(entry) or "main",
+        "reason": reason,
+    }
+
+
+def function_entry_execution_config(function: Any) -> dict:
+    """The execution metadata of a top-level ``@ compute fn`` entry, which the CrossGL parser records."""
+    return dict(getattr(function, "execution_config", None) or {})
+
+
+def _resolve_function_entries(shader: Any, render) -> None:
+    for function in getattr(shader, "functions", None) or []:
+        if not _is_compute_function(function):
+            continue
+        attributes = list(getattr(function, "attributes", None) or [])
+        config: dict = {}
+        for attribute in attributes:
+            name = str(getattr(attribute, "name", "")).lower()
+            arguments = list(getattr(attribute, "arguments", None) or [])
+            if name in _EXPLICIT_LIST_KEYS and len(arguments) == 3:
+                config["numthreads"] = tuple(render(item) for item in arguments)
+                break
+        mark = host_workgroup_size_mark(attributes, render)
+        if mark is not None:
+            function.attributes = [
+                attribute
+                for attribute in attributes
+                if str(getattr(attribute, "name", "")).lower()
+                != HOST_WORKGROUP_SIZE_ATTRIBUTE
+            ]
+            _resolve_mark(
+                function,
+                mark,
+                config,
+                lambda: _entry_dependence(shader, function),
+            )
+        function.execution_config = config
+
+
+def resolve_host_workgroup_sizes(shader: Any, render=str) -> Any:
+    """Apply the host's size to compute entries that depend on it; drop the mark from the others.
+
+    Stage entries carry the mark in their execution metadata. Top-level ``@ compute fn`` entries carry it as an
+    attribute, which ``render`` reads; their resolved metadata is recorded as the function's ``execution_config``,
+    with any ``@ workgroup_size`` the function declares, for :func:`function_entry_execution_config`.
+    """
     stages = getattr(shader, "stages", None) or {}
     for stage in list(stages.values()):
         config = getattr(stage, "execution_config", None)
         if not config or not config.get(HOST_WORKGROUP_SIZE_KEY):
             continue
         mark = config.pop(HOST_WORKGROUP_SIZE_KEY)
-        if not _is_compute(stage) or has_explicit_workgroup_size(config):
+        if not _is_compute(stage):
             continue
-        reason = workgroup_size_dependence(shader, stage)
-        if reason is None:
-            continue
-        size = mark.get("size") if isinstance(mark, dict) else None
-        if size is not None:
-            config["numthreads"] = tuple(size)
-            continue
-        entry = _name(getattr(stage, "entry_point", None)) or "main"
-        config[HOST_WORKGROUP_SIZE_KEY] = {"entry": entry, "reason": reason}
+        _resolve_mark(
+            getattr(stage, "entry_point", None),
+            mark,
+            config,
+            lambda stage=stage: workgroup_size_dependence(shader, stage),
+        )
+    _resolve_function_entries(shader, render)
     return shader

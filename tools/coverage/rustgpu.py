@@ -59,6 +59,7 @@ CAPABILITIES = (
     "ShaderClockKHR",
     "VulkanMemoryModelDeviceScope",
     "Geometry",
+    "GeometryStreams",
     "Tessellation",
     "RayTracingKHR",
 )

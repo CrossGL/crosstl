@@ -196,7 +196,7 @@ def test_hlsl_storage_texel_buffers_take_the_format_of_the_bound_view(tmp_path):
         "return texelFetch(b, i).xy;",
         "vec2 p = readPair(pairs, id.x) + texelFetch(pairs, id.x + 1).xy;",
         "int k = texelFetch(ints, id.x).x;",
-        "imageStore(ipairs, id.x, ivec4(ivec2(k, k + 1), 0, 0));",
+        "imageStore(ipairs, id.x, ivec4(ivec2(k, k + 1), 0, 1));",
         "original = imageAtomicAdd(counters, id.x, 1u);",
         "imageAtomicMax(counters, 0, original);",
         "swapped = imageAtomicCompSwap(counters, 1, 0u, id.x);",

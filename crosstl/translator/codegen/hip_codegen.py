@@ -37,6 +37,9 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from .array_utils import (
     parse_array_type,
     prepend_array_dimension,
@@ -223,6 +226,10 @@ HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
     "f32",
     "f64",
 }
+
+
+def _refuse_buffer_counter(reason):
+    raise ValueError(f"HIP buffer counter: {reason}")
 
 
 class UnsupportedHIPAstNodeError(ValueError):
@@ -777,6 +784,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Generate complete HIP source for a CrossGL AST."""
         # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         node = canonicalize_separate_textures(node)
+        # HIP has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
+        node = materialize_structured_buffer_counters(node, _refuse_buffer_counter)
         self.code_lines = []
         self.indent_level = 0
         self.validate_supported_stage_types(node)

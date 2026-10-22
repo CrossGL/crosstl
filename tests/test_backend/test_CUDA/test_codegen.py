@@ -530,10 +530,7 @@ class TestCudaCodeGen:
         assert (
             "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
         )
-        expected_pos = (
-            "var pos: u32 = "
-            "((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);"
-        )
+        expected_pos = "var pos: u32 = gl_GlobalInvocationID.x;"
         assert expected_pos in result
         assert "for (var offset: u32 = 1; (offset < size); offset <<= 1)" in result
         assert result.count("workgroupBarrier();") == 2
@@ -7956,8 +7953,7 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "for (var i: i32 = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + "
-            "gl_LocalInvocationID.x); (i < n); i += "
+            "for (var i: i32 = gl_GlobalInvocationID.x; (i < n); i += "
             "(gl_WorkGroupSize.x * gl_NumWorkGroups.x)) {"
         ) in result
         assert "data[i] = 0.0f;" in result

@@ -96,6 +96,9 @@ from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
 )
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -278,18 +281,15 @@ from .image_access_contracts import (
     image_atomic_value_kind_mismatch,
     image_format_component_kind,
     image_format_or_default_channel_count,
-    image_format_result_type,
     image_load_result_kind_error,
     image_load_result_kind_mismatch,
     image_load_result_shape_error,
-    image_load_result_shape_mismatch,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
-    image_store_value_shape_mismatch,
     integer_coordinate_dimension_from_type_name,
     is_floating_scalar_type_name,
     is_glsl_float_image_resource,
@@ -352,9 +352,7 @@ from .image_access_contracts import (
     should_validate_image_load_result_shape,
     storage_image_atomic_zero_value,
     storage_image_format_store_constructor,
-    storage_image_load_component_suffix,
     storage_image_store_constructors,
-    storage_image_store_value_expression,
     storage_image_two_component_store_expression,
     storage_image_zero_values,
     supported_image_formats,
@@ -451,6 +449,7 @@ from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
+from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
@@ -475,11 +474,20 @@ from .stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    function_entry_execution_config,
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
+)
+from .storage_image_texels import (
+    is_whole_texel_load,
+    leading_components_suffix,
+    load_context_allowed,
+    store_value_allowed,
+    texel_store_value,
+    texel_vector_type,
 )
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
@@ -8235,6 +8243,7 @@ class GLSLCodeGen(
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
+        ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         code = self.render_program_at_required_version(ast, target_stage)
         for reason in unavailable_builtin_reasons(
             code,
@@ -9871,6 +9880,7 @@ class GLSLCodeGen(
                 stage_code += self.generate_function(
                     func,
                     shader_type="compute",
+                    execution_config=function_entry_execution_config(func),
                     entry_name=combined_stage_entry_names.get(id(func)),
                 )
                 code += self.wrap_stage_guard(stage_code, "compute")
@@ -39611,9 +39621,19 @@ complex64_t crossgl_complex64_mod_assign(
                 indexed_aggregate = self.glsl_indexed_aggregate_literal_expression(expr)
                 if indexed_aggregate is not None:
                     return indexed_aggregate
-                array = self.generate_expression(expr.array)
+                if is_whole_texel_load(expr.array, self.function_call_name):
+                    # The subscript selects a component of the whole texel.
+                    array = self.generate_expression_with_expected(expr.array, None)
+                else:
+                    array = self.generate_expression(expr.array)
                 array = self.glsl_precise_selected_value(expr.array, array)
                 index = self.glsl_resource_array_index_expression(expr)
+                instance_member = self.glsl_structured_buffer_array_element_member(
+                    expr.array
+                )
+                if instance_member is not None:
+                    # One buffer of an array of storage blocks holds its elements in a member.
+                    return f"{array}.{instance_member}[{index}]"
                 return f"{array}[{index}]"
             else:
                 return str(expr)
@@ -43440,6 +43460,22 @@ complex64_t crossgl_complex64_mod_assign(
         if normalized_type and normalized_type.endswith("*"):
             return normalized_type[:-1].rstrip()
         return None
+
+    def glsl_structured_buffer_array_element_member(self, buffer_expr):
+        """The block member holding the elements of ``buffer_expr``, one buffer of a declared buffer array.
+
+        An array of structured buffers is declared as an array of blocks (``buffer B { T data[]; } b[N];``), so
+        element ``i`` of ``b[k]`` is ``b[k].data[i]``. ``None`` for any other operand.
+        """
+        if not isinstance(buffer_expr, ArrayAccessNode):
+            return None
+        base = getattr(buffer_expr, "array", None)
+        if not isinstance(base, (IdentifierNode, VariableNode)):
+            return None
+        name = self.expression_name(base)
+        if name in self.local_variable_types:
+            return None
+        return self.structured_buffer_instance_members.get(name)
 
     def structured_buffer_access_expression(self, buffer_arg, element_index):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
@@ -48584,17 +48620,8 @@ complex64_t crossgl_complex64_mod_assign(
         return storage_image_zero_values()
 
     def image_load_component_suffix(self, texture_type, image_format):
-        return storage_image_load_component_suffix(
-            image_format,
-            expected_scalar=self.is_scalar_value_type(
-                self.current_expression_expected_type
-            ),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                texture_type, image_format
-            )
-            and self.expected_component_count() != 4,
-            float_resource=self.is_float_image_resource(texture_type),
-        )
+        # imageLoad yields four components; a narrower context takes the leading ones.
+        return leading_components_suffix(self.expected_component_count())
 
     def image_format_store_constructor(self, image_format):
         return storage_image_format_store_constructor(
@@ -48642,23 +48669,18 @@ complex64_t crossgl_complex64_mod_assign(
     def image_store_value_expression(
         self, texture_type, image_format, value, value_type=None
     ):
-        if self.allows_native_glsl_image_four_component_value(
-            self.image_store_channel_count(texture_type, image_format),
-            self.value_component_count(value_type),
-        ):
+        component_kind = (
+            image_format_component_kind(image_format)
+            if image_format
+            else self.glsl_storage_image_component_kind(texture_type)
+        )
+        constructor = texel_vector_type(
+            component_kind, {"float": "vec", "int": "ivec", "uint": "uvec"}
+        )
+        if constructor is None:
             return value
-        return storage_image_store_value_expression(
-            image_format,
-            value,
-            self.is_scalar_value_type(value_type),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                texture_type, image_format
-            ),
-            float_resource=self.is_float_image_resource(texture_type),
-            integer_constructor=self.integer_image_store_constructor(texture_type),
-            float_constructor="vec4",
-            constructors_by_kind=self.image_store_constructors_by_kind(),
-            zero_values_by_kind=self.image_store_zero_values_by_kind(),
+        return texel_store_value(
+            constructor, component_kind, value, self.value_component_count(value_type)
         )
 
     def glsl_storage_image_component_kind(self, texture_type):
@@ -48688,19 +48710,13 @@ complex64_t crossgl_complex64_mod_assign(
     def image_load_result_type(self, image_arg):
         image_format = self.image_resource_format(image_arg)
         if image_format:
-            return image_format_result_type(
-                image_format,
-                vector_prefixes={"float": "vec", "int": "ivec", "uint": "uvec"},
-            )
-        image_type = self.texture_argument_resource_type(image_arg)
-        component_kind = self.glsl_storage_image_component_kind(image_type)
-        if component_kind == "float":
-            return "vec4"
-        if component_kind == "int":
-            return "ivec4"
-        if component_kind == "uint":
-            return "uvec4"
-        return None
+            component_kind = image_format_component_kind(image_format)
+        else:
+            image_type = self.texture_argument_resource_type(image_arg)
+            component_kind = self.glsl_storage_image_component_kind(image_type)
+        return texel_vector_type(
+            component_kind, {"float": "vec", "int": "ivec", "uint": "uvec"}
+        )
 
     def image_load_component_kind(self, texture_type, image_format):
         if image_format:
@@ -48714,12 +48730,6 @@ complex64_t crossgl_complex64_mod_assign(
                 self.glsl_storage_image_component_kind(texture_type)
             ),
         )
-
-    def allows_native_glsl_image_four_component_value(
-        self, image_channels, value_channels
-    ):
-        """Return true when scalar image formats use GLSL's native gvec4 value."""
-        return value_channels == 4 and image_channels == 1
 
     def expected_component_kind(self):
         return numeric_component_kind_from_type(
@@ -48773,16 +48783,7 @@ complex64_t crossgl_complex64_mod_assign(
     def validate_image_store_value_shape(self, texture_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(texture_type, image_format)
         value_channels = self.expression_component_count(value_arg)
-        if self.allows_native_glsl_image_four_component_value(
-            expected_channels,
-            value_channels,
-        ):
-            return
-        value_channels = image_store_value_shape_mismatch(
-            expected_channels,
-            value_channels,
-        )
-        if value_channels is None:
+        if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(texture_type)
         raise ValueError(
@@ -48846,16 +48847,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(texture_type, image_format)
-        if self.allows_native_glsl_image_four_component_value(
-            loaded_channels,
-            expected_channels,
-        ):
-            return
-        expected_channels = image_load_result_shape_mismatch(
-            loaded_channels,
-            expected_channels,
-        )
-        if expected_channels is None:
+        if load_context_allowed(loaded_channels, expected_channels):
             return
         raise ValueError(
             image_load_result_shape_error(
@@ -48938,9 +48930,6 @@ complex64_t crossgl_complex64_mod_assign(
                 load_expr = f"imageLoad({image_name}, {coord})"
             image_format = self.image_resource_format(args[0])
             self.validate_image_load_result_type(texture_type, image_format)
-            if self.glsl_unknown_format_image(args[0]):
-                # The source selects the components of its element type itself.
-                return load_expr
             return f"{load_expr}{self.image_load_component_suffix(texture_type, image_format)}"
 
         if func_name == "imageStore" and len(args) >= 3:
@@ -49286,12 +49275,24 @@ complex64_t crossgl_complex64_mod_assign(
         }
 
     def collect_resource_array_size_hints(self, ast):
+        texture_globals = self.collect_unsized_sampled_texture_globals(ast)
+        texture_parameters = self.collect_unsized_sampled_texture_parameters(ast)
+        buffer_globals = self.collect_unsized_structured_buffer_globals(ast)
+        functions = self.collect_functions(ast)
+        dynamic_sizes = DynamicIndexSizes(
+            global_arrays=set(texture_globals) | set(buffer_globals),
+            shared_globals=texture_globals,
+            function_arrays=texture_parameters,
+            functions=functions,
+            constants=self.visible_literal_int_constants,
+            target="opengl",
+        )
         global_hints, function_hints = collect_resource_array_size_hints(
-            global_arrays=self.collect_unsized_sampled_texture_globals(ast),
-            function_arrays=self.collect_unsized_sampled_texture_parameters(ast),
+            global_arrays=texture_globals,
+            function_arrays=texture_parameters,
             fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
             fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
-            functions=self.collect_functions(ast),
+            functions=functions,
             walk_nodes=self.walk_ast,
             expression_name=self.expression_name,
             literal_int_value=self.literal_int_value,
@@ -49300,10 +49301,16 @@ complex64_t crossgl_complex64_mod_assign(
             initial_size=0,
             format_size=lambda size: str(size) if size > 1 else "",
             initial_literal_int_constants=self.initial_literal_int_constants,
+            required_sizes=dynamic_sizes,
         )
         global_hints.update(
             self.collect_structured_buffer_global_array_size_hints(ast, function_hints)
         )
+        buffer_sizes = dynamic_sizes.result()
+        for name in sorted(set(buffer_globals) & set(buffer_sizes)):
+            hint = str(global_hints.get(name) or "")
+            if buffer_sizes[name] > (int(hint) if hint.isdigit() else 0):
+                global_hints[name] = str(buffer_sizes[name])
         return global_hints, function_hints
 
     def glsl_private_pointer_propagated_parameter_intervals(

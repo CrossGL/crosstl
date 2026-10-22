@@ -26,6 +26,7 @@ from .model import (
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
+from .spellings import SUBSCRIPT
 from .templates import C_FAMILY, Template
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -43,9 +44,10 @@ class CrossGL(Dialect):
     wide_integers = True
     narrow_scalars = True
     packed_bytes = True
+    pointer_sized = True
     string = "string"
     # The spellings CrossGL's own importers write for these scalars; the HLSL importer reads a packed 8-bit word as
-    # ``uint``, which HLSL converts to and from implicitly.
+    # ``uint``, which HLSL converts to and from implicitly, and the Rust importer reads ``usize`` as ``uint``.
     _SCALARS = {
         "int64": "int64_t",
         "uint64": "uint64_t",
@@ -54,6 +56,7 @@ class CrossGL(Dialect):
         "uint16": "uint16",
         "int8x4_packed": "uint",
         "uint8x4_packed": "uint",
+        "usize": "uint",
     }
     _PREFIX = {**Dialect._PREFIX, "half": "f16", "int16": "i16", "uint16": "u16"}
 
@@ -305,6 +308,12 @@ class CrossGL(Dialect):
     def pointer(self, kind: Type, name: str) -> str:
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
+
+    def call(self, name: str, arguments: list[str]) -> str:
+        if name == SUBSCRIPT:
+            vector, index = arguments
+            return f"{vector}[{index}]"
+        return super().call(name, arguments)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         element = coop_element(opaque)

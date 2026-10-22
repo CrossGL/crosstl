@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 60,
-        "endOffset": 1619,
+        "endLine": 55,
+        "endOffset": 1460,
         "file": "crosstl-out/cgl/reduce.cgl",
-        "length": 1619,
+        "length": 1460,
         "line": 1,
         "offset": 0
       },
