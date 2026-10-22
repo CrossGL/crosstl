@@ -7,10 +7,37 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 ### Breaking Changes
 
 - CrossTL requires Python 3.11 or later. Python 3.8, 3.9 and 3.10 have reached end of life and are no longer supported.
+- CrossGL syntax can change between releases until CrossGL expresses everything its targets can. In this release, debug prints are `printf(format, values...)` instead of `debugPrintfEXT`, comparison samplers have their own `comparison_sampler` type, and HLSL and Metal textures import as separate textures and samplers.
+- A Metal, CUDA, HIP or OpenCL kernel whose results depend on a threadgroup size that the host picks at dispatch is refused for HLSL, GLSL, SPIR-V and WGSL output, which used to fix the size at 1, 1, 1. Pass the dispatch size as `source_options={"threadgroup_size": (x, y, z)}` or in a project workgroup-size rule.
+- A CrossGL function body that does not parse is refused; it used to become an empty block. An untyped `var` whose type cannot be inferred from its initializer, or that has no initializer, is refused instead of being declared `float`.
+
+### Added
+
+- A coverage report. CI translates a probe for every feature in each language's pinned upstream feature list, checks the result with that language's reference compiler or validator, and publishes the scores and every gap to [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+- Texel buffers (`Buffer<T>`, `RWBuffer<T>`, `samplerBuffer`, `imageBuffer`) translate between HLSL, GLSL, Metal and SPIR-V.
+- DXR ray-tracing stages lower to Vulkan SPIR-V and GLSL, with hit attributes, ray payloads and callable data. HLSL output marks ray payloads with `[raypayload]` and their access qualifiers.
+- Shader debug prints translate to SPIR-V and Metal.
+- GLSL geometry stages translate to HLSL's stream form.
+- Non-uniform resource indices translate to GLSL, Metal and GLSL ES.
+- HLSL structured-buffer counters (`IncrementCounter` and `DecrementCounter`) work on Metal, GLSL, CUDA and HIP through an explicit counter buffer.
+- Built-in values can be written in their GLSL, HLSL or WGSL spelling in CrossGL and translate to every target.
+- Untyped `var name = expr;` declarations, including in `for` loop initializers and at shader scope, take their type from the initializer.
 
 ### Improved
 
 - Every supported Python version, 3.11 through 3.15, is tested.
+- Unsized HLSL resource arrays get their size on Metal and OpenGL from bounded dynamic indexes as well as constant ones, so translated shaders no longer read past the array.
+- HLSL texture samples return the texture's element type, and storage-image loads and stores use four-component texels as GLSL defines them.
+- CUDA and HIP buffer elements such as `float3` and structs with vector members keep their host layout on every target.
+- SPIR-V modules for mesh, task and ray-tracing stages, which need SPIR-V 1.4, declare storage buffers in the `StorageBuffer` storage class and pass `spirv-val`.
+- GLSL stage inputs and outputs are named so the stages link, and never redeclare a global.
+- Metal import and graphics code generation are faster on large kernels.
+
+### Fixed
+
+- The parser no longer hangs on an unterminated shader declaration, and parses `if`, `else` and loop bodies without braces.
+- HLSL output renames GLSL and Metal identifiers that HLSL reads as keywords, such as `line`, `point`, `vector` and `Buffer`.
+- Metal SIMD-group and quad-group functions declared behind `METAL_MAYBE_UNDEF` are recognized.
 
 ---
 
