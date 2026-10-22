@@ -1,4 +1,4 @@
-"""Run the unchanged pinned ``test_qmm`` on CPU and natively in float16.
+"""Run the unchanged pinned ``test_qmm`` and ``test_qmm_large_dims`` in float16.
 
 ``test_qmm`` quantizes ``K``-by-``N`` or ``N``-by-``K`` weights at every group
 size (128, 64, 32) and bit width (2, 4, 8) and multiplies them by ``M``-row
@@ -13,6 +13,13 @@ Matmul's float16 steel GEMM and split-K routes. The operands are cast to
 float16 and the error bound is a float16 difference, absolute value, maximum
 and comparison, all translated: the ``half`` and ``half-arithmetic`` families
 and a float16 whole-array maximum packaged on demand.
+
+``test_qmm_large_dims`` multiplies group-64, 4-bit transposed weights with
+32,840 columns by 16, 32 and 33 rows, and 64 columns by 33,000 rows: output
+extents past 2^15, which once wrapped the 16-bit tile edges of MLX's NAX
+kernels. Each product takes ``affine_qmm_t`` against a fused steel GEMM
+reference, and the 32,840-column weights quantize and dequantize in two
+launches of at most 65,535 groups.
 """
 
 import itertools
@@ -33,7 +40,10 @@ from demos.integrations.mlx.portable_host.verify_upstream_qmm_shapes import (
 
 MODULE = "demos.integrations.mlx.portable_host.verify_upstream_qmm"
 LABEL = "test_qmm"
-UPSTREAM_TESTS = ("test_quantized.TestQuantized.test_qmm",)
+UPSTREAM_TESTS = (
+    "test_quantized.TestQuantized.test_qmm",
+    "test_quantized.TestQuantized.test_qmm_large_dims",
+)
 # The type test_qmm computes in on the GPU device.
 DTYPE = "float16"
 # test_qmm's product axes, in its itertools.product order.
@@ -43,6 +53,10 @@ ROWS = (8, 32, 33, 64)
 COLUMNS = (128, 256)
 DEPTHS = (128, 256)
 TRANSPOSES = (True, False)
+# test_qmm_large_dims' transposed group-64, 4-bit products at K = 128: outputs
+# with more than 2^15 columns, or rows, in its (M, N) order.
+LARGE_DIMS = ((16, 32840), (32, 32840), (33, 32840), (33000, 64))
+LARGE_GROUP, LARGE_BITS, LARGE_DEPTH = 64, 4, 128
 REDUCTIONS = ("all_reduce_maxfloat16",)
 OPERATORS = ("half", "half-arithmetic")
 TIMEOUTS = {"random": 600, "packages": 5400, "cpu": 600, "native": 5400}
@@ -53,7 +67,9 @@ PREFIXES = ("affine_", *gemv_layout.ENTRY_PREFIXES, "steel_gemm_", "col_reduce_"
 
 def products():
     """``(group, bits, M, N, K, transpose)`` for every compared product."""
-    return itertools.product(GROUPS, BITS, ROWS, COLUMNS, DEPTHS, TRANSPOSES)
+    yield from itertools.product(GROUPS, BITS, ROWS, COLUMNS, DEPTHS, TRANSPOSES)
+    for m, n in LARGE_DIMS:
+        yield LARGE_GROUP, LARGE_BITS, m, n, LARGE_DEPTH, True
 
 
 def weight_shape(n, k, transpose):

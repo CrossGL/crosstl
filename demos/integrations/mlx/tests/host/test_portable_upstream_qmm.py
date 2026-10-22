@@ -36,13 +36,23 @@ def trace(target="opengl"):
 
 def test_products_follow_the_upstream_test():
     rows = list(upstream.products())
-    # 3 group sizes, 3 widths, 4 row counts, 2 by 2 shapes, both layouts.
-    assert len(rows) == 3 * 3 * 4 * 2 * 2 * 2 == 288
+    # test_qmm: 3 group sizes, 3 widths, 4 row counts, 2 by 2 shapes, both
+    # layouts; then test_qmm_large_dims' four transposed products.
+    assert len(rows) == 3 * 3 * 4 * 2 * 2 * 2 + 4 == 292
     assert rows[0] == (128, 2, 8, 128, 128, True)
-    assert rows[-1] == (32, 8, 64, 256, 256, False)
+    assert rows[287] == (32, 8, 64, 256, 256, False)
+    assert rows[288:] == [
+        (64, 4, 16, 32840, 128, True),
+        (64, 4, 32, 32840, 128, True),
+        (64, 4, 33, 32840, 128, True),
+        (64, 4, 33000, 64, 128, True),
+    ]
     assert upstream.weight_shape(128, 256, True) == (128, 256)
     assert upstream.weight_shape(128, 256, False) == (256, 128)
-    assert upstream.UPSTREAM_TESTS == ("test_quantized.TestQuantized.test_qmm",)
+    assert upstream.UPSTREAM_TESTS == (
+        "test_quantized.TestQuantized.test_qmm",
+        "test_quantized.TestQuantized.test_qmm_large_dims",
+    )
 
 
 def test_products_take_every_float16_route():
@@ -74,13 +84,32 @@ def test_products_take_every_float16_route():
         assert "_float16_" in route["entry"]
     assert kinds == {
         ("qmm", "affine_qmm_n"): 144,
-        ("qmm", "affine_qmm_t"): 18,
+        ("qmm", "affine_qmm_t"): 18 + 4,
         ("qmm", "affine_qmm_t_splitk"): 90,
         ("quantized", "affine_qmv"): 12,
         ("quantized", "affine_qmv_fast"): 6,
         ("quantized", "affine_qmv_quad"): 18,
     }
-    assert families == {"gemm": 72, "splitk": 216}
+    assert families == {"gemm": 72 + 4, "splitk": 216}
+
+
+def test_large_dims_take_the_unsplit_transposed_kernel():
+    # Outputs past 2^15 columns or rows: affine_qmm_t, unaligned N for the
+    # 32,840 columns, against fused steel GEMM references without split-K.
+    large = list(upstream.routes())[288:]
+    entries = [quantized[1] for _, quantized, _, _ in large]
+    stem = "affine_qmm_t_float16_t_gs_64_b_4"
+    assert entries == [f"{stem}_alN_false_batch_0"] * 3 + [f"{stem}_alN_true_batch_0"]
+    assert all(quantized[2] is None for _, quantized, _, _ in large)
+    assert [family for _, _, family, _ in large] == ["gemm"] * 4
+    assert all(
+        route["entry"].startswith("steel_gemm_fused_nt_float16_") for *_, route in large
+    )
+    # 32,840 rows of two 64-value groups need two launches of 65,535 groups.
+    assert [
+        quantization_layout.launches(n * k, 64)
+        for _, _, _, n, k, _ in upstream.products()
+    ][288:] == [2, 2, 2, 1]
 
 
 def test_16_bit_split_k_products_refuse_looped_partition_sums():
@@ -97,12 +126,14 @@ def test_16_bit_split_k_products_refuse_looped_partition_sums():
 def test_expected_dispatches_follow_every_upstream_product():
     counts = upstream.expected_dispatches()
     entries = upstream.package_entries()
-    # Every product's weights fit one quantization launch.
+    # Every test_qmm product's weights fit one quantization launch; the
+    # large-dims weights add three two-launch and one one-launch product.
     for group in upstream.GROUPS:
         for bits in upstream.BITS:
             stem = f"float16_t_gs_{group}_b_{bits}"
-            assert counts[f"affine_quantize_{stem}"] == 32
-            assert counts[f"affine_dequantize_{stem}"] == 32
+            large = 3 * 2 + 1 if (group, bits) == (64, 4) else 0
+            assert counts[f"affine_quantize_{stem}"] == 32 + large
+            assert counts[f"affine_dequantize_{stem}"] == 32 + large
             assert all(
                 quantization_layout.launches(n * k, group) == 1
                 for n in upstream.COLUMNS
@@ -112,7 +143,8 @@ def test_expected_dispatches_follow_every_upstream_product():
     accumulations = counts[ACCUM]
     assert splits == counts[SMALL] == 90
     assert accumulations == 216
-    assert sum(counts.values()) == 2 * 288 + 2 * 288 + splits + accumulations
+    quantizations = 2 * (288 + 7)
+    assert sum(counts.values()) == quantizations + 2 * 292 + splits + accumulations
     # A group of 128 leaves K = 128 one partition, so it stays unsplit.
     assert counts[SPLIT] == 12 and counts[UNSPLIT] == 6
     assert ACCUM in entries["splitk"]
