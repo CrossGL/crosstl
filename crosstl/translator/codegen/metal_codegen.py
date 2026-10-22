@@ -361,6 +361,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
@@ -5079,6 +5080,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         value_array_parameter_copy_statements = []
         vertex_stage_input_alias_declarations = []
         fragment_stage_input_alias_declarations = []
+        self.metal_entry_buffer_array_declarations = []
+        self.metal_entry_buffer_array_names = set()
         stage_output_parameters = []
         stage_output_struct_name = None
         previous_function_name = self.current_function_name
@@ -6144,6 +6147,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             code += self.generate_metal_mesh_output_accumulator_declarations()
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
+        for declaration in self.metal_entry_buffer_array_declarations:
+            code += f"    {declaration}\n"
         for declaration in stage_builtin_parameter_alias_declarations:
             code += f"    {declaration}\n"
         for statement in value_array_parameter_copy_statements:
@@ -7569,7 +7574,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_parameter(
                     buffer_type, buffer_name, array_size, buffer_variable
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.structured_buffer_length_variables:
             for (
                 buffer_variable,
@@ -7583,7 +7595,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_length_parameter(
                     buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.structured_buffer_counter_variables:
             for (
                 buffer_variable,
@@ -7597,7 +7616,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_counter_parameter(
                     buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.glsl_buffer_block_variables:
             for (
                 buffer_variable,
@@ -7611,7 +7637,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_glsl_buffer_block_parameter(
                     block, buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
@@ -15719,7 +15752,16 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
             if len(args) >= 2:
                 target = self.generate_expression(args[1])
-                return f"{target} = {length_expr}"
+                if len(args) < 3:
+                    return f"{target} = {length_expr}"
+                # GetDimensions(count, stride): the element stride is the size of the element type the buffer
+                # is declared with, which carries the source layout; sizeof does not read the element.
+                buffer = self.generate_expression(args[0])
+                stride = self.generate_expression(args[2])
+                return (
+                    f"{target} = {length_expr}, "
+                    f"{stride} = uint(sizeof({buffer}[0]))"
+                )
             return length_expr
         return None
 
