@@ -12225,6 +12225,8 @@ class VulkanSPIRVCodeGen(
                 "sqrt": "Sqrt",
                 "inversesqrt": "InverseSqrt",
                 "abs": "FAbs",
+                # Metal and C spell the floating-point absolute value fabs.
+                "fabs": "FAbs",
                 "floor": "Floor",
                 "ceil": "Ceil",
                 "fract": "Fract",
