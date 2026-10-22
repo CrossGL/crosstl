@@ -451,6 +451,7 @@ from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
+from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
@@ -49286,12 +49287,24 @@ complex64_t crossgl_complex64_mod_assign(
         }
 
     def collect_resource_array_size_hints(self, ast):
+        texture_globals = self.collect_unsized_sampled_texture_globals(ast)
+        texture_parameters = self.collect_unsized_sampled_texture_parameters(ast)
+        buffer_globals = self.collect_unsized_structured_buffer_globals(ast)
+        functions = self.collect_functions(ast)
+        dynamic_sizes = DynamicIndexSizes(
+            global_arrays=set(texture_globals) | set(buffer_globals),
+            shared_globals=texture_globals,
+            function_arrays=texture_parameters,
+            functions=functions,
+            constants=self.visible_literal_int_constants,
+            target="opengl",
+        )
         global_hints, function_hints = collect_resource_array_size_hints(
-            global_arrays=self.collect_unsized_sampled_texture_globals(ast),
-            function_arrays=self.collect_unsized_sampled_texture_parameters(ast),
+            global_arrays=texture_globals,
+            function_arrays=texture_parameters,
             fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
             fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
-            functions=self.collect_functions(ast),
+            functions=functions,
             walk_nodes=self.walk_ast,
             expression_name=self.expression_name,
             literal_int_value=self.literal_int_value,
@@ -49300,10 +49313,16 @@ complex64_t crossgl_complex64_mod_assign(
             initial_size=0,
             format_size=lambda size: str(size) if size > 1 else "",
             initial_literal_int_constants=self.initial_literal_int_constants,
+            required_sizes=dynamic_sizes,
         )
         global_hints.update(
             self.collect_structured_buffer_global_array_size_hints(ast, function_hints)
         )
+        buffer_sizes = dynamic_sizes.result()
+        for name in sorted(set(buffer_globals) & set(buffer_sizes)):
+            hint = str(global_hints.get(name) or "")
+            if buffer_sizes[name] > (int(hint) if hint.isdigit() else 0):
+                global_hints[name] = str(buffer_sizes[name])
         return global_hints, function_hints
 
     def glsl_private_pointer_propagated_parameter_intervals(

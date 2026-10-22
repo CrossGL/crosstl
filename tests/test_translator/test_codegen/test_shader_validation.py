@@ -1543,7 +1543,7 @@ shader DynamicSampledTextureArrayValidation {
 
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
-            return sampleDynamic(textures, samplers, input.layer, input.uv);
+            return sampleDynamic(textures, samplers, clamp(input.layer, 0, 3), input.uv);
         }
     }
 }
