@@ -7579,7 +7579,7 @@ class VulkanSPIRVCodeGen(
                 return pointer_arg
 
         if function_name in self.buffer_atomic_function_names() and arg_index == 0:
-            pointer_arg = self.variable_pointer_from_expression(arg)
+            pointer_arg = self.storage_reference_pointer(arg)
             if pointer_arg is not None:
                 return pointer_arg
 
@@ -24889,7 +24889,9 @@ class VulkanSPIRVCodeGen(
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is None:
             return None
-        if metadata.get("_access_path") == "member":
+        # A pointer to one element (or a member of one) is no longer the buffer: a further
+        # subscript selects a component, column or array element of that value.
+        if metadata.get("_access_path") in {"element", "member"}:
             return None
 
         pointee_type = self.variable_value_types.get(buffer_pointer.id)
@@ -26891,7 +26893,12 @@ class VulkanSPIRVCodeGen(
             base_pointer = self.assignable_pointer_from_expression(expr.object)
             if base_pointer is None:
                 return None
-            return self.create_member_access_pointer(base_pointer, expr.member)
+            access = self.create_member_access_pointer(base_pointer, expr.member)
+            if access is None:
+                access = self.vector_component_reference_pointer(
+                    base_pointer, expr.member
+                )
+            return access
         if isinstance(expr, ArrayAccessNode):
             index = self.process_expression(expr.index)
             if index is None:
@@ -27492,12 +27499,132 @@ class VulkanSPIRVCodeGen(
         if component_value is None:
             return True
 
-        vector_value = self.load_from_variable(base_pointer, vector_type)
-        updated_value = self.composite_insert(
-            vector_value, component_value, vector_type, member_index
+        self.store_vector_components(
+            base_pointer,
+            vector_type,
+            None,
+            [(member_index, component_value)],
+            member_type,
         )
-        self.store_to_variable(base_pointer, updated_value)
         return True
+
+    # Storage other invocations can access while this one runs: buffers and workgroup memory (Vulkan 1.3
+    # appendix B, "Memory Model"). A write to part of a vector there must not store the other components.
+    SHARED_VECTOR_STORAGE_CLASSES = frozenset(
+        {
+            "StorageBuffer",
+            "Uniform",
+            "Workgroup",
+            "PhysicalStorageBuffer",
+            "CrossWorkgroup",
+            "TaskPayloadWorkgroupEXT",
+        }
+    )
+
+    def shared_vector_component_pointer(
+        self, base_pointer: SpirvId, member_index: int, member_type: SpirvId
+    ) -> Optional[SpirvId]:
+        """A pointer to one component of a vector in shared storage, or None for invocation-private storage.
+
+        A store through the vector pointer writes every component, so another invocation's write to a
+        different component of the same vector could be lost: the source wrote only some components.
+        glslang and DXC store each component through its own ``OpAccessChain`` (SPIR-V 1.6, ``OpAccessChain``
+        indexes into a vector).
+        """
+        if base_pointer.type.storage_class not in self.SHARED_VECTOR_STORAGE_CLASSES:
+            return None
+        return self.vector_component_pointer(base_pointer, member_index, member_type)
+
+    def vector_component_pointer(
+        self, base_pointer: SpirvId, member_index: int, member_type: SpirvId
+    ) -> SpirvId:
+        storage_class = base_pointer.type.storage_class
+        index = self.register_constant(member_index, self.primitive_types["int"])
+        ptr_type = self.register_pointer_type(member_type, storage_class)
+        access = self.access_chain(base_pointer, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        self.propagate_storage_buffer_access_metadata(base_pointer, access)
+        self.propagate_readonly_builtin_pointer_name(base_pointer, access)
+        self.propagate_readonly_pointer_name(base_pointer, access)
+        return access
+
+    def vector_component_reference_pointer(
+        self, base_pointer: SpirvId, member_name: str
+    ) -> Optional[SpirvId]:
+        """``v.y`` as storage, for an atomic's memory, an increment or an ``inout`` argument.
+
+        A single component of a vector in memory is addressable (SPIR-V 1.6, ``OpAccessChain``; GLSL 4.60
+        section 5.8 and HLSL allow a one-component swizzle as an l-value), so it gets its own pointer.
+        """
+        if not base_pointer.type.storage_class:
+            return None
+        update_info = self.vector_component_update_info(base_pointer, member_name)
+        if update_info is None:
+            return None
+        _, member_index, member_type = update_info
+        return self.vector_component_pointer(base_pointer, member_index, member_type)
+
+    def storage_reference_pointer(self, expr) -> Optional[SpirvId]:
+        """A pointer to the memory ``expr`` names, where that may be one component of a vector."""
+        if not isinstance(expr, MemberAccessNode):
+            return self.variable_pointer_from_expression(expr)
+        base_pointer = self.variable_pointer_from_expression(expr.object)
+        if base_pointer is None:
+            return None
+        access = self.create_member_access_pointer(base_pointer, expr.member)
+        if access is None:
+            access = self.vector_component_reference_pointer(base_pointer, expr.member)
+        return access
+
+    def load_vector_components(
+        self,
+        base_pointer: SpirvId,
+        member_indices: List[int],
+        member_type: SpirvId,
+    ) -> Optional[List[SpirvId]]:
+        """The selected components of a vector in shared storage, each read through its own pointer.
+
+        None for invocation-private storage, where the caller loads the whole vector.
+        """
+        if base_pointer.type.storage_class not in self.SHARED_VECTOR_STORAGE_CLASSES:
+            return None
+        return [
+            self.load_from_variable(
+                self.shared_vector_component_pointer(
+                    base_pointer, member_index, member_type
+                ),
+                member_type,
+            )
+            for member_index in member_indices
+        ]
+
+    def store_vector_components(
+        self,
+        base_pointer: SpirvId,
+        vector_type: SpirvId,
+        vector_value: Optional[SpirvId],
+        updates: List[Tuple[int, SpirvId]],
+        member_type: SpirvId,
+    ) -> None:
+        """Store ``(component index, value)`` updates into the vector ``base_pointer`` points to.
+
+        Shared storage gets one store per component. Private storage gets the vector with the components
+        inserted, starting from ``vector_value`` or, when that is None, a fresh load.
+        """
+        if base_pointer.type.storage_class in self.SHARED_VECTOR_STORAGE_CLASSES:
+            for member_index, component_value in updates:
+                component_pointer = self.shared_vector_component_pointer(
+                    base_pointer, member_index, member_type
+                )
+                self.store_to_variable(component_pointer, component_value)
+            return
+        if vector_value is None:
+            vector_value = self.load_from_variable(base_pointer, vector_type)
+        for member_index, component_value in updates:
+            vector_value = self.composite_insert(
+                vector_value, component_value, vector_type, member_index
+            )
+        self.store_to_variable(base_pointer, vector_value)
 
     def vector_swizzle_update_info(self, base_pointer: SpirvId, member_name: str):
         vector_type = self.variable_value_types.get(base_pointer.id)
@@ -27561,12 +27688,13 @@ class VulkanSPIRVCodeGen(
         if component_values is None:
             return True
 
-        updated_value = self.load_from_variable(base_pointer, vector_type)
-        for member_index, component_value in zip(member_indices, component_values):
-            updated_value = self.composite_insert(
-                updated_value, component_value, vector_type, member_index
-            )
-        self.store_to_variable(base_pointer, updated_value)
+        self.store_vector_components(
+            base_pointer,
+            vector_type,
+            None,
+            list(zip(member_indices, component_values)),
+            member_type,
+        )
         return True
 
     def convert_vector_swizzle_assignment_components(
@@ -27652,10 +27780,19 @@ class VulkanSPIRVCodeGen(
                 return True
 
             rhs_vector = self.composite_construct(swizzle_type, rhs_components)
-            vector_value = self.load_from_variable(base_pointer, vector_type)
-            current_value = self.vector_shuffle(
-                vector_value, swizzle_type, member_indices
+            shared_components = self.load_vector_components(
+                base_pointer, member_indices, member_type
             )
+            if shared_components is not None:
+                vector_value = None
+                current_value = self.composite_construct(
+                    swizzle_type, shared_components
+                )
+            else:
+                vector_value = self.load_from_variable(base_pointer, vector_type)
+                current_value = self.vector_shuffle(
+                    vector_value, swizzle_type, member_indices
+                )
             result = self.binary_operation(
                 spv_operator, swizzle_type, current_value, rhs_vector
             )
@@ -27663,6 +27800,21 @@ class VulkanSPIRVCodeGen(
             if target_is_precise:
                 self.precise_expression_depth -= 1
 
+        if vector_value is None:
+            self.store_vector_components(
+                base_pointer,
+                vector_type,
+                None,
+                [
+                    (
+                        member_index,
+                        self.composite_extract(result, member_type, position),
+                    )
+                    for position, member_index in enumerate(member_indices)
+                ],
+                member_type,
+            )
+            return True
         updated_value = vector_value
         for result_index, member_index in enumerate(member_indices):
             component_value = self.composite_extract(result, member_type, result_index)
@@ -27710,10 +27862,17 @@ class VulkanSPIRVCodeGen(
             self.precise_expression_depth += 1
 
         try:
-            vector_value = self.load_from_variable(base_pointer, vector_type)
-            current_value = self.composite_extract(
-                vector_value, member_type, member_index
+            shared_components = self.load_vector_components(
+                base_pointer, [member_index], member_type
             )
+            if shared_components is not None:
+                vector_value = None
+                current_value = shared_components[0]
+            else:
+                vector_value = self.load_from_variable(base_pointer, vector_type)
+                current_value = self.composite_extract(
+                    vector_value, member_type, member_index
+                )
             rhs_value = self.process_expression(value_expr)
             if rhs_value is None:
                 return True
@@ -27730,6 +27889,11 @@ class VulkanSPIRVCodeGen(
             if target_is_precise:
                 self.precise_expression_depth -= 1
 
+        if vector_value is None:
+            self.store_vector_components(
+                base_pointer, vector_type, None, [(member_index, result)], member_type
+            )
+            return True
         updated_value = self.composite_insert(
             vector_value, result, vector_type, member_index
         )
@@ -28805,7 +28969,7 @@ class VulkanSPIRVCodeGen(
                 self.process_expression(node.operand)
             variable_id, _ = self.cooperative_matrix_element_pointer(node.operand)
         else:
-            variable_id = self.variable_pointer_from_expression(node.operand)
+            variable_id = self.storage_reference_pointer(node.operand)
         if variable_id is None:
             self.refuse_lowering("increment target is not assignable")
             int_type = self.register_primitive_type("int")
