@@ -193,7 +193,8 @@ class Dialect:
 
     def workgroup(self, kind: Type, name: str) -> str:
         """The declaration of a variable ``name`` that a compute workgroup shares."""
-        return f"shared {self.type(kind)} {name};"
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"shared {self.type(kind.element)} {name}{count};"
 
     def workgroup_argument(self, name: str) -> str:
         """The workgroup variable ``name``, for a parameter that takes one."""

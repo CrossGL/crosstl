@@ -30,7 +30,8 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         language = backend["language"]
         lender = BORROWED.get(language, "")
         for feature in backend["features"]:
-            spelled = feature.get("crossgl") or feature["name"]
+            # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name.
+            spelled = (feature.get("crossgl") or feature["name"]).split("<", 1)[0]
             # Without an id, features one language spells alike in CrossGL are one: CUDA ``erff`` and ``erf``.
             key = (
                 feature.get("semantic")

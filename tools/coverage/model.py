@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 SCALARS = (
@@ -112,6 +113,39 @@ class Type:
 VOID = Type.other("void")
 # A constant string argument, such as the tag a C library ``nan`` takes; probes pass the empty string.
 STRING = Type.other("string")
+_COOP_VECTOR = re.compile(r"CoopVec<(\w+), ([2-4])>")
+# The length a probe gives a cooperative vector whose length is a generic size.
+COOP_VECTOR_LENGTH = 4
+# The column count ``k`` that Slang's packed cooperative-vector multiplies take as a constant. For the unpacked 32-bit
+# floats every probe passes, it must equal the input vector's length (hlsl.meta.slang, coopVecMatMulPacked).
+COOP_COLUMNS = Type("int", opaque="CoopVecColumns")
+# The constant a probe passes for each enumeration parameter of Slang's cooperative-vector functions: a vector's and a
+# matrix's elements are the 32-bit floats every probe fills them with, in row-major order.
+COOP_ENUMERATORS = {
+    "CoopVecComponentType": "CoopVecComponentType.Float32",
+    "CoopVecMatrixLayout": "CoopVecMatrixLayout.RowMajor",
+}
+
+
+def coop_vector(scalar: str, length: int) -> Type:
+    """Slang's cooperative vector of ``length`` ``scalar`` elements: an opaque type that keeps its element type and
+    length as ``scalar`` and ``shape``, so a probe can fill one from the input buffers.
+    """
+    return Type(scalar, (length,), f"CoopVec<{scalar}, {length}>")
+
+
+def coop_literal(kind: Type) -> str:
+    """The constant a probe passes for a cooperative-vector enumeration or column count ``kind``, or an empty
+    string."""
+    if kind == COOP_COLUMNS:
+        return str(COOP_VECTOR_LENGTH)
+    return COOP_ENUMERATORS.get(kind.opaque, "")
+
+
+def coop_element(opaque: str) -> Type | None:
+    """The element type of the cooperative vector the opaque spelling ``opaque`` names, or ``None``."""
+    match = _COOP_VECTOR.fullmatch(opaque)
+    return Type(match.group(1)) if match else None
 
 
 @dataclass(frozen=True)

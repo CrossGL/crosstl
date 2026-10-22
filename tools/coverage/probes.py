@@ -233,7 +233,14 @@ class _Builder:
                 arguments.append(dialect.address(local))
             elif param.direction == "workgroup":
                 self.shared.append(dialect.workgroup(param.type, local))
-                self.lines.append(f"{local} = {self.value(param.type)};")
+                if param.type.count:
+                    element = param.type.element
+                    self.lines += [
+                        f"{local}[{n}] = {self.value(element)};"
+                        for n in range(param.type.count)
+                    ]
+                else:
+                    self.lines.append(f"{local} = {self.value(param.type)};")
                 arguments.append(dialect.workgroup_argument(local))
             else:
                 value = self.value(param.type)

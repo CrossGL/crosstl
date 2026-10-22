@@ -7,7 +7,14 @@ from .crossgl import DIALECT as CROSSGL
 from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .kernels import CUDA, HIP, Mojo, Rust
-from .model import RAYTRACING_STAGES, Type
+from .model import (
+    COOP_COLUMNS,
+    COOP_ENUMERATORS,
+    RAYTRACING_STAGES,
+    Type,
+    coop_element,
+    coop_literal,
+)
 from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
 
 
@@ -110,6 +117,10 @@ class HLSL(Dialect):
 
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
         return self.resource(spelling, name, f"t{binding}")
+
+    def workgroup(self, kind: Type, name: str) -> str:
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"groupshared {self.type(kind.element)} {name}{count};"
 
     def flat(self, kind: str) -> str:
         return f"nointerpolation {kind}"
@@ -565,6 +576,27 @@ class Slang(HLSL):
     def buffer(self, kind: str, name: str, binding: int) -> str:
         # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.
         return f"RWStructuredBuffer<{kind}> {name};"
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        # As for buffers; slangc also rejects a t register for a writable resource such as RWByteAddressBuffer.
+        return f"{spelling} {name};"
+
+    def type(self, kind: Type) -> str:
+        if kind == COOP_COLUMNS:
+            return super().type(kind.with_scalar("int"))
+        if coop_element(kind.opaque):
+            return f"CoopVec<{self.scalar(kind.scalar)}, {kind.shape[0]}>"
+        if kind.opaque in COOP_ENUMERATORS:
+            return kind.opaque
+        return super().type(kind)
+
+    def literal(self, kind: Type) -> str:
+        return coop_literal(kind) or super().literal(kind)
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        # A cooperative vector result is read through its first element.
+        element = coop_element(opaque)
+        return (element, "{}[0]") if element else super().reading(opaque)
 
 
 DIALECTS: dict[str, Dialect] = {
