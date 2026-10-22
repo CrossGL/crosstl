@@ -1,6 +1,12 @@
 name: Project Demo Testing
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Generated-artifact pins (demos/integrations/mlx/tests/pins.py) are enforced on
+  # pull requests and, by default, on dispatched runs. A merge-queue group, a push
+  # to main and the nightly run build on translator changes from other pull
+  # requests that the pins were not reviewed against, so they report drift instead.
+  # Translation, validation, native compilation and numerical parity stay enforced.
+  CROSSTL_MLX_PIN_MODE: ${{ inputs.pin_mode || ((github.event_name == 'merge_group' || github.event_name == 'push' || github.event_name == 'schedule') && 'report' || 'strict') }}
 on:
   # Pull requests always run this workflow, so its result check can be required.
   # The ci-plan job skips every MLX job for changes that do not affect MLX.
@@ -25,6 +31,12 @@ on:
   schedule:
     - cron: "31 4 * * *"
   workflow_dispatch:
+    inputs:
+      pin_mode:
+        description: "Generated-artifact pins: strict fails on drift, report lists every drifted pin"
+        type: choice
+        options: [strict, report]
+        default: strict
   merge_group:
 permissions:
   contents: read

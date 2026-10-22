@@ -3852,17 +3852,23 @@ compile with unchanged reflection; Windows numerical execution of the new
 source identities remains required. Earlier Windows results are retained under
 their original artifact hashes and do not certify these revised artifacts.
 
-A dedicated project replay now translates the complete pinned `fft.metal`
-source to one standalone OpenGL compute shader with a 4,096-specialization
-limit and a 2,097,152-item materialization work budget. The report records 99
-unique reachable template specializations, 22 function constants, no unsupported
-materializations, and no project diagnostics. Four unsigned host-index
-assertions and five entry-point-scoped workgroup access assertions make the
-required dispatch preconditions explicit for memory extents from 256 through
-4,096 elements. The Linux proof compiles the emitted GLSL to OpenGL SPIR-V 1.3
-with `glslangValidator` and validates the binary with `spirv-val`. This proves
-artifact construction and native toolchain acceptance; OpenGL runtime dispatch
-and numerical parity with MLX's Metal backend remain outside this check.
+A dedicated project replay now selects `fft_mem_256_float2_float2` from the
+pinned `fft.metal` source and translates it to one standalone OpenGL compute
+shader, as the DirectX replay does. GLSL fixes `local_size` in the shader and
+the kernel uses threadgroup memory and barriers, so the translator refuses a
+host-sized workgroup; the replay supplies the `(1, 1, 64)` entry workgroup-size
+rule and the function constants MLX uses for a power-of-two 256-point
+transform. The report records 24 unique reachable template specializations, 21
+concrete function constants, no unsupported materializations, and no project
+diagnostics. Four signed host-index assertions and one entry-point-scoped
+workgroup access assertion make the dispatch preconditions explicit. The
+generated workgroup and storage load/store helpers do not yet inherit those
+bounds (issue #2178), so four helper-scoped assertions restate the 256-element
+`shared_in` extent and the signed device range. The Linux proof compiles the
+emitted GLSL to OpenGL SPIR-V 1.3 with `glslangValidator` and validates the
+binary with `spirv-val`. This proves artifact construction and native toolchain
+acceptance; OpenGL runtime dispatch and numerical parity with MLX's Metal
+backend remain outside this check.
 
 The pinned `gemv.metal` DirectX compiler frontier verifies source SHA-256
 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f` and

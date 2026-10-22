@@ -42,6 +42,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -414,11 +415,9 @@ def _build_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": generated_sha256,
-    }
-    assert artifact["generatedSizeBytes"] == generated_size_bytes
+    check_generated_artifact(
+        artifact, sha256=generated_sha256, size_bytes=generated_size_bytes
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "concrete",
         "mode": "concrete-crossgl-variant",
@@ -1015,11 +1014,11 @@ def _build_current_opengl_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
-    }
-    assert artifact["generatedSizeBytes"] == CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES
+    check_generated_artifact(
+        artifact,
+        sha256=CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
+        size_bytes=CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES,
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "deferred",
         "mode": "deferred",

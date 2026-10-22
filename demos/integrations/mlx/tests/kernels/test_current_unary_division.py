@@ -28,6 +28,7 @@ from demos.integrations.mlx.tests.kernels.test_unary_complete_directx import (
     UNARY_DIRECTX_WORKLOADS,
     _project_config,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_bfloat_buffer_runtime import _storage
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
@@ -297,10 +298,7 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             assert data["project"]["sourceOptions"] == options
             identity = ARTIFACTS[target]
             generated = (root / artifact["path"]).read_bytes()
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": identity["sha256"],
-            }
+            check_generated_artifact(artifact, sha256=identity["sha256"])
             assert hashlib.sha256(generated).hexdigest() == identity["sha256"]
             assert (
                 len(generated)

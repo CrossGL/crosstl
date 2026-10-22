@@ -5425,7 +5425,7 @@ def _dynamic_workgroup_report(
     toolchain_available=True,
     reverse=False,
 ):
-    extensions = {"directx": ".hlsl", "opengl": ".glsl"}
+    extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
     units = [_frontier_unit(source, index) for index, source in enumerate(sources)]
     units_by_source = {unit["path"]: unit for unit in units}
     diagnostics = []
@@ -5528,7 +5528,11 @@ def _dynamic_workgroup_report(
         "diagnostics": diagnostics,
     }
     if validated:
-        tool_name = {"directx": "dxc", "opengl": "glslangValidator"}[target]
+        tool_name = {
+            "directx": "dxc",
+            "opengl": "glslangValidator",
+            "vulkan": "spirv-val",
+        }[target]
         report["validation"] = {
             "summary": {"failedCount": source_count},
             "toolchains": [
@@ -6566,6 +6570,114 @@ def test_fft_directx_toolchain_rejects_changed_workgroup_axis(tmp_path, monkeypa
         )
 
 
+@pytest.mark.parametrize("field", ["sha256", "size_bytes"])
+def test_generated_pin_fails_on_drift_in_strict_mode(monkeypatch, field):
+    module = _load_harness()
+    monkeypatch.delenv("CROSSTL_MLX_PIN_MODE", raising=False)
+    values = {"sha256": "a" * 64, "size_bytes": 10}
+    actual = dict(values, **{field: "b" * 64 if field == "sha256" else 11})
+
+    assert module._check_generated_pin(
+        "artifact",
+        **values,
+        expected_sha256=values["sha256"],
+        expected_size_bytes=values["size_bytes"],
+    )
+    with pytest.raises(module.PortingCheckError, match="update the pin"):
+        module._check_generated_pin(
+            "artifact",
+            **actual,
+            expected_sha256=values["sha256"],
+            expected_size_bytes=values["size_bytes"],
+        )
+
+
+def test_generated_pin_reports_drift_in_report_mode(monkeypatch, capsys):
+    module = _load_harness()
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "report")
+
+    assert not module._check_generated_pin(
+        "artifact",
+        sha256="b" * 64,
+        size_bytes=11,
+        expected_sha256="a" * 64,
+        expected_size_bytes=10,
+    )
+    lines = [
+        json.loads(line.removeprefix("MLX-PIN-DRIFT "))
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("MLX-PIN-DRIFT ")
+    ]
+    assert lines == [
+        {
+            "subject": "artifact",
+            "field": "generatedHash",
+            "expected": "a" * 64,
+            "actual": "b" * 64,
+        },
+        {
+            "subject": "artifact",
+            "field": "generatedSizeBytes",
+            "expected": 10,
+            "actual": 11,
+        },
+    ]
+
+
+def test_generated_pin_rejects_unknown_mode(monkeypatch):
+    module = _load_harness()
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "lenient")
+
+    with pytest.raises(module.PortingCheckError, match="strict or report"):
+        module._check_generated_pin(
+            "artifact",
+            sha256="b" * 64,
+            size_bytes=10,
+            expected_sha256="a" * 64,
+            expected_size_bytes=10,
+        )
+
+
+def _fft_entry_scoped_record(
+    module, entry_point, target_entry_point, workgroup_size, *, deferred
+):
+    rules_path = f'project.entry_workgroup_size_rules["{module.MLX_FFT_SOURCE}"]'
+    return {
+        "entryPoint": {
+            "source": entry_point,
+            "stage": "compute",
+            "target": target_entry_point,
+        },
+        "execution": {
+            "sourceEntryPoints": [entry_point],
+            "provenance": {
+                "kind": "materialized-template-entry-rules",
+                "path": rules_path,
+            },
+            "entryPoints": [
+                {
+                    "sourceEntryPoint": entry_point,
+                    "materializedEntryPoint": entry_point,
+                    "targetEntryPoint": target_entry_point,
+                    "workgroupSize": list(workgroup_size),
+                    "rule": {
+                        "components": [str(value) for value in workgroup_size],
+                        "entryPattern": entry_point,
+                        "path": f"{rules_path}.{entry_point}",
+                        "sourcePattern": module.MLX_FFT_SOURCE,
+                    },
+                }
+            ],
+        },
+        "specializationConstants": [
+            {"id": constant_id, "concreteValue": value, "deferred": deferred}
+            for constant_id, value in (
+                module.FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS.items()
+            )
+        ],
+    }
+
+
 def _prepare_fft_opengl_toolchain_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
@@ -6576,13 +6688,19 @@ def _prepare_fft_opengl_toolchain_check(module, tmp_path):
         path.mkdir(parents=True, exist_ok=True)
 
     artifact_path = (
-        work_dir / "out-fft-opengl" / "opengl" / module.MLX_FFT_SOURCE
-    ).with_suffix(".glsl")
+        work_dir
+        / "out-fft-opengl"
+        / "opengl"
+        / Path(module.MLX_FFT_SOURCE).with_suffix("")
+        / f"{module.FFT_OPENGL_ENTRY_POINT}.glsl"
+    )
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(
         """#version 450 core
-void radix_butterfly_2_radix2(vec2 value) {
+shared vec2 crosstl_workgroup_shared_in[256];
+void radix_butterfly_2_radix2_glsl_crosstl_resource_in_vec2(vec2 value) {
 }
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 64) in;
 void main() {
 }
 """,
@@ -6641,7 +6759,7 @@ void main() {
                 "status": "translated",
                 "provenance": {
                     "intermediate": "crossgl",
-                    "pipeline": "single-file-translate",
+                    "pipeline": "entry-scoped-translate",
                 },
                 "sourceHash": {
                     "algorithm": "sha256",
@@ -6653,12 +6771,13 @@ void main() {
                     "value": module._sha256(artifact_path),
                 },
                 "generatedSizeBytes": artifact_path.stat().st_size,
-                "specializationConstants": [
-                    {"id": index}
-                    for index in range(
-                        module.FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT
-                    )
-                ],
+                **_fft_entry_scoped_record(
+                    module,
+                    module.FFT_OPENGL_ENTRY_POINT,
+                    "main",
+                    module.FFT_OPENGL_WORKGROUP_SIZE,
+                    deferred=True,
+                ),
                 "templateMaterialization": {
                     "status": "materialized",
                     "specializations": [
@@ -6728,6 +6847,8 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
         "source": module.MLX_FFT_SOURCE,
         "sourceHash": module.MLX_FFT_SHA256,
         "target": "opengl",
+        "entryPoint": "fft_mem_256_float2_float2",
+        "workgroupSize": [1, 1, 64],
         "artifactStatus": "translated",
         "artifactEmitted": True,
         "generatedHash": module._sha256(artifact_path),
@@ -6738,12 +6859,12 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
         "nativeCompiler": "glslangValidator",
         "spirvValidator": "spirv-val",
         "templateMaterializationStatus": "materialized",
-        "templateSpecializationCount": 99,
-        "functionConstantCount": 22,
+        "templateSpecializationCount": 24,
+        "functionConstantCount": 21,
         "indexRangeAssertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": True,
-        "trackedIssues": [],
+        "trackedIssues": ["https://github.com/CrossGL/crosstl/issues/2178"],
         "maxTemplateSpecializations": 4096,
         "maxTemplateMaterializationWork": 2097152,
         "runtimeIntegrationIncluded": False,
@@ -6759,7 +6880,7 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
     assert (
         commands[0][2]["timeout_seconds"]
         == module.FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS
-        == 900
+        == 300
     )
     assert commands[0][1][-1] == "--no-format"
     assert commands[1][2] == {"check": False}
@@ -6767,6 +6888,10 @@ def test_fft_opengl_toolchain_records_translation_and_native_validation(
     config = (paths[2] / "fft-opengl-toolchain.toml").read_text(encoding="utf-8")
     assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
+    assert f'[project.entry_workgroup_size_rules."{module.MLX_FFT_SOURCE}"]' in config
+    assert '"fft_mem_256_float2_float2" = [1, 1, 64]' in config
+    assert config.count('function = "crosstl_workgroup_') == 2
+    assert config.count('function = "crosstl_resource_') == 2
     assert config.count("[[project.index_range_assertions]]") == len(
         module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS
     )
@@ -6803,6 +6928,59 @@ def test_fft_opengl_toolchain_rejects_changed_portability_precondition(
         module.PortingCheckError,
         match="portability preconditions changed",
     ):
+        module._check_fft_opengl_toolchain(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("damage", "message"),
+    [
+        ("workgroup", "execution contract changed"),
+        ("folded-constant", "function-constant materialization changed"),
+        ("local-size", "lost its host workgroup size"),
+    ],
+)
+def test_fft_opengl_toolchain_rejects_changed_host_contract(
+    tmp_path, monkeypatch, damage, message
+):
+    module = _load_harness()
+    paths, artifact_path, _expected_workgroup_assertions = (
+        _prepare_fft_opengl_toolchain_check(module, tmp_path)
+    )
+    report_path = paths[3] / "fft-opengl-toolchain.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    artifact = report["artifacts"][0]
+    generated = artifact_path.read_text(encoding="utf-8")
+    if damage == "workgroup":
+        artifact["execution"]["entryPoints"][0]["workgroupSize"] = [1, 1, 32]
+    elif damage == "folded-constant":
+        artifact["specializationConstants"][0]["deferred"] = False
+    else:
+        generated = generated.replace("local_size_z = 64", "local_size_z = 1")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        if name == "translate-fft-opengl":
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(generated, encoding="utf-8")
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["artifacts"][0]["generatedHash"]["value"] = module._sha256(
+                artifact_path
+            )
+            report["artifacts"][0]["generatedSizeBytes"] = artifact_path.stat().st_size
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(module.PortingCheckError, match=message):
         module._check_fft_opengl_toolchain(
             *paths,
             "python",
@@ -9004,9 +9182,11 @@ def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(
     refusals = module.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(refusals) <= set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
     assert not set(refusals) & set(module.MLX_VULKAN_FRONTIER_SOURCES)
-    assert len(module.MLX_VULKAN_FRONTIER_SOURCES) + len(refusals) == len(
-        module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    )
+    blocked = module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    assert not set(blocked) & (set(refusals) | set(module.MLX_VULKAN_FRONTIER_SOURCES))
+    assert len(module.MLX_VULKAN_FRONTIER_SOURCES) + len(refusals) + len(
+        blocked
+    ) == len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
     for code, issue in refusals.values():
         assert code.startswith("project.translate.vulkan-")
         assert issue.startswith("https://github.com/CrossGL/crosstl/issues/")
@@ -9065,6 +9245,20 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
             return module.CommandResult(
                 name, list(command), 1, log_dir / "r.out", log_dir / "r.err"
             )
+        if name == "vulkan-workgroup-frontier":
+            assert check is False
+            _write_dynamic_workgroup_report(
+                module,
+                report_dir / f"{name}.json",
+                mlx_root,
+                work_dir / "out-vulkan-workgroup-frontier",
+                target="vulkan",
+                sources=module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+                validated=True,
+            )
+            return module.CommandResult(
+                name, list(command), 1, log_dir / "w.out", log_dir / "w.err"
+            )
         output_dir = (
             work_dir / "out-vulkan-frontier"
             if name == "vulkan-frontier"
@@ -9119,14 +9313,26 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert result["scope"] == "target-split-frontier"
     assert result["vulkanValidationStatus"] == "validated"
     assert result["semanticReadinessStatus"] == "not-established"
-    assert result["regressionEvidence"] == [alias_evidence]
+    # Attention is a dynamic-workgroup source, so no Vulkan artifact carries the
+    # local-alias regression until per-entry sizes reach Vulkan.
+    assert (
+        alias_evidence["source"] in module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert result["regressionEvidence"] == []
     assert result["runtimeParityClaimed"] is False
     assert result["sources"] == list(module.MLX_VULKAN_FRONTIER_SOURCES)
     assert result["trackedRefusals"] == [
         {"source": source, "code": code, "issue": issue}
         for source, (code, issue) in module.MLX_VULKAN_FRONTIER_REFUSALS.items()
     ]
-    assert commands[-1][0] == "vulkan-frontier-refusals"
+    assert result["workgroupBlockedSources"] == list(
+        module.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    # arg_reduce, layer_norm, logsumexp, rms_norm, attention and softmax entries.
+    assert result["workgroupBlockedEntryPointCount"] == 24 + 12 + 6 + 12 + 42 + 10
+    assert commands[-2][0] == "vulkan-frontier-refusals"
+    assert commands[-1][0] == "vulkan-workgroup-frontier"
+    assert "--validate" in commands[-1][1]
     assert commands[0][0] == "vulkan-frontier"
     assert "--validate" in commands[0][1]
     assert "--run-toolchains" not in commands[0][1]
@@ -9136,7 +9342,8 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
         config_dir / "validate-vulkan-frontier-toolchain.toml"
     ).read_text(encoding="utf-8")
     assert 'targets = ["vulkan"]' in toolchain_config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in toolchain_config
+    assert module.MLX_ARANGE_SOURCE in toolchain_config
+    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in toolchain_config
 
 
 def test_reduced_frontier_requires_all_directx_entries_per_artifact(
@@ -13792,22 +13999,27 @@ def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
     assert status["source_sha256"] == module.MLX_FFT_SHA256
     assert status["source_size_bytes"] == module.MLX_FFT_SOURCE_SIZE_BYTES
     assert status["target"] == "opengl"
+    assert status["entry_point"] == module.FFT_OPENGL_ENTRY_POINT
+    assert status["workgroup_size"] == [1, 1, 64]
+    assert status["specialization_constants"] == dict(
+        module.FFT_OPENGL_SPECIALIZATION_CONSTANTS
+    )
     assert status["project_translation"] == {
         "unit_count": 1,
         "artifact_count": 1,
         "translated_count": 1,
         "failed_count": 0,
         "project_diagnostic_count": 0,
-        "index_range_assertion_count": 4,
-        "workgroup_access_assertion_count": 5,
+        "index_range_assertion_count": 8,
+        "workgroup_access_assertion_count": 1,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
     }
     assert status["materialization"] == {
         "status": "materialized",
-        "specialization_count": 99,
+        "specialization_count": 24,
         "unsupported_specialization_count": 0,
-        "function_constant_count": 22,
+        "function_constant_count": 21,
     }
     assert status["portability_preconditions"] == {
         "index_range_assertions": list(module.FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
@@ -13823,15 +14035,17 @@ def test_fft_opengl_evidence_records_toolchain_proof_without_runtime_claims():
         "validator_target": "SPIR-V 1.3",
         "status": "passed",
     }
-    assert status["tracked_issues"] == []
+    assert status["tracked_issues"] == [
+        "https://github.com/CrossGL/crosstl/issues/2178"
+    ]
     assert status["runtime_integration_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "the complete pinned `fft.metal` source to one standalone OpenGL" in readme
-    assert "99 unique reachable template specializations" in readme
-    assert "five entry-point-scoped workgroup access assertions" in readme
+    assert "selects `fft_mem_256_float2_float2` from the pinned `fft.metal`" in readme
+    assert "24 unique reachable template specializations" in readme
+    assert "`(1, 1, 64)` entry workgroup-size rule" in readme
     assert "validates the binary with `spirv-val`" in readme
     assert "OpenGL runtime dispatch and numerical parity" in readme
 

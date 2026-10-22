@@ -1944,7 +1944,9 @@ def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
     assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
         run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS)
+    ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS) - set(
+        run_porting.MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
     assert "vulkan_translated_sources = set(MLX_VULKAN_FRONTIER_SOURCES)" in script
     for translated in (
         'set(scope["vulkanTranslatedFrontierSources"])',
