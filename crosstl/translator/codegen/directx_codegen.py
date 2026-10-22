@@ -15260,6 +15260,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if pointer_array_base_unary is not None:
                     return f"{indent_str}{pointer_array_base_unary};\n"
+                pointer_step = self.generate_hlsl_resource_pointer_step(
+                    stmt.expression, statement_context=True
+                )
+                if pointer_step is not None:
+                    return f"{indent_str}{pointer_step};\n"
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
                     self.hlsl_storage_struct_view_write_error(
                         getattr(
@@ -15360,6 +15365,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if pointer_array_base_unary is not None:
                 return f"{indent_str}{pointer_array_base_unary};\n"
+            pointer_step = self.generate_hlsl_resource_pointer_step(
+                stmt, statement_context=True
+            )
+            if pointer_step is not None:
+                return f"{indent_str}{pointer_step};\n"
             aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
                 stmt,
                 self.expression_result_type(stmt),
@@ -24157,6 +24167,70 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         delta_type = self.hlsl_resource_pointer_delta_type(value)
         return f"{base_index} {op} {delta_type}({rendered})"
 
+    def generate_hlsl_resource_pointer_step(
+        self, expression, *, statement_context=False
+    ):
+        """``p++``, ``++p``, ``p--`` or ``--p`` of a storage or workgroup pointer.
+
+        Such a pointer lowers to its backing object and an element offset, so
+        a step whose value is discarded moves the offset by one element, as
+        ``p += 1`` does. A step whose value is used needs the pointer as a
+        first-class value and is refused.
+        """
+        if not isinstance(expression, UnaryOpNode):
+            return None
+        operator = self.map_operator(expression.op)
+        if expression.op in {"PRE_INCREMENT", "POST_INCREMENT"}:
+            operator = "++"
+        elif expression.op in {"PRE_DECREMENT", "POST_DECREMENT"}:
+            operator = "--"
+        if operator not in {"++", "--"}:
+            return None
+        operand = expression.operand
+        if not isinstance(operand, (str, IdentifierNode, VariableNode)):
+            return None
+        name = operand if isinstance(operand, str) else getattr(operand, "name", None)
+        binding = self.current_hlsl_resource_pointer_aliases.get(name)
+        if (
+            binding is None
+            or binding.get("kind") not in {None, "resource-pointer", "workgroup-pointer"}
+            or not isinstance(binding.get("offset"), str)
+        ):
+            return None
+        workgroup = binding.get("kind") == "workgroup-pointer"
+        if not statement_context or binding.get("deferred_unbound"):
+            message = (
+                f"DirectX cannot step pointer '{self.current_function_name}.{name}' "
+                + (
+                    "before a concrete backing object is assigned"
+                    if binding.get("deferred_unbound")
+                    else "where the step's value is used"
+                )
+            )
+            reason = (
+                "deferred-use-before-assignment"
+                if binding.get("deferred_unbound")
+                else "step-value-unsupported"
+            )
+            if workgroup:
+                raise self.hlsl_workgroup_pointer_error(
+                    message,
+                    function_name=self.current_function_name,
+                    parameter_name=name,
+                    reason=reason,
+                    node=expression,
+                )
+            raise DirectXResourcePointerParameterError(
+                message,
+                function_name=self.current_function_name,
+                parameter_name=name,
+                address_space=binding.get("address_space"),
+                expected_access=binding.get("access"),
+                reason=reason,
+                source_location=getattr(expression, "source_location", None),
+            )
+        return f"{binding['offset']} {'+=' if operator == '++' else '-='} 1"
+
     def generate_hlsl_resource_pointer_array_base_unary(
         self, expression, *, statement_context=False
     ):
@@ -25509,11 +25583,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     update = node.update
                 elif isinstance(node.update, list):
                     update = ", ".join(
-                        self.generate_expression(expr).strip().rstrip(";")
+                        self.generate_hlsl_discarded_update(expr)
                         for expr in node.update
                     )
                 else:
-                    update = self.generate_expression(node.update).strip().rstrip(";")
+                    update = self.generate_hlsl_discarded_update(node.update)
 
             code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
@@ -25580,6 +25654,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_hlsl_texture_offset_constants = (
                 previous_texture_offset_constants
             )
+
+    def generate_hlsl_discarded_update(self, expression):
+        """A for-loop update, whose value the loop discards."""
+        step = self.generate_hlsl_resource_pointer_step(
+            expression, statement_context=True
+        )
+        if step is not None:
+            return step
+        return self.generate_expression(expression).strip().rstrip(";")
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
@@ -27406,6 +27489,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if pointer_array_base_unary is not None:
                 return pointer_array_base_unary
+            self.generate_hlsl_resource_pointer_step(expr, statement_context=False)
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
             if mapped_op in {"++", "--"}:
