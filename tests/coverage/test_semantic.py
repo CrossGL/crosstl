@@ -62,6 +62,11 @@ def test_identify_subtracts_the_baseline_and_the_plumbing():
     bitcast = Counter({"OpLoad": 3, "OpStore": 2, "OpIAdd": 2, "OpBitcast": 1})
     assert semantic.identify(bitcast, baseline) == "OpBitcast"
     assert semantic.identify(baseline, baseline) == ""
+    # The block after a call that never returns is unreachable, which is control flow rather than the call.
+    killed = Counter(
+        {"OpLoad": 3, "OpStore": 1, "OpIAdd": 2, "OpKill": 1, "OpUnreachable": 1}
+    )
+    assert semantic.identify(killed, baseline) == "OpKill"
 
 
 def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeypatch):
