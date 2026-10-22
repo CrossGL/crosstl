@@ -114,6 +114,8 @@ def test_complete_suite_runs_one_job_per_shard():
     )
     assert "-p tools.pytest_shard" in command
     assert '--shard "${{ matrix.shard }}/${{ strategy.job-total }}"' in command
+    # Test times range from milliseconds to minutes; idle workers take queued tests.
+    assert "-n auto --dist worksteal" in command
 
 
 def test_translator_shard_legs_cover_every_shard():
