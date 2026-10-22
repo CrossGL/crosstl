@@ -87,6 +87,7 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter
 
 
@@ -1500,6 +1501,8 @@ class MojoCodeGen:
 
     def generate(self, ast):
         """Generate complete Mojo-like shader source for a CrossGL AST."""
+        # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
+        ast = canonicalize_separate_textures(ast)
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}

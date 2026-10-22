@@ -142,7 +142,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "sampler2D g_texture;",
+            "texture2D g_texture;",
             "sampler g_sampler;",
             "vec2 uv @ TexCoord;",
             "return texture(g_texture, g_sampler, input.uv);",
@@ -168,7 +168,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "@ RootSignature(Present_RootSig)",
-            "sampler2D ColorTex;",
+            "texture2D ColorTex;",
             "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0).xyz;",
         ),
     ),
@@ -572,7 +572,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "samplerCube cube;",
+            "textureCube cube;",
             "w = uint(textureSize(cube, 0).x);",
             "float lod = textureQueryLod(cube, g_sam, vec3(uv, 1)).x;",
         ),

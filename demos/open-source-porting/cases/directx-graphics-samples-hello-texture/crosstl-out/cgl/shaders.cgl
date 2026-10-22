@@ -4,7 +4,7 @@ shader main {
         vec2 uv @ TexCoord;
     }
     @ register(t0)
-    sampler2D g_texture;
+    texture2D g_texture;
     @ register(s0)
     sampler g_sampler;
     // vertex Shader

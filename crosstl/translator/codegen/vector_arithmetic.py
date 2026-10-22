@@ -57,8 +57,7 @@ class VectorArithmeticMixin:
             spec = self.dimension_query_spec(resource_type)
             if spec is None:
                 return None
-            dimensions = spec[0]
-            return self.query_return_type(dimensions)
+            return self.query_return_type(spec["dimensions"])
 
         if func_name in {"textureSamples", "imageSamples", "textureQueryLevels"}:
             return "int"

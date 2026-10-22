@@ -118,6 +118,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .relational_builtins import lower_relational_builtins
+from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
     generate_slang_projected_compare,
@@ -367,6 +368,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         """
         if self._generating:
             return self.generate_program(ast)
+        # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
+        ast = canonicalize_separate_textures(ast)
         try:
             return self.refusals.run(self.generate_program, ast)
         finally:

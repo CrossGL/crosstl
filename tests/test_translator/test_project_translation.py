@@ -8037,7 +8037,7 @@ def test_translate_project_wgsl_hlsl_texture_sampler_register_pair(
     assert texture_binding.group(1) != sampler_binding.group(1)
     assert "return textureSample(g_texture, g_sampler, input.uv);" in wgsl
 
-    assert "@ register(t0)\n    sampler2D g_texture;" in cgl
+    assert "@ register(t0)\n    texture2D g_texture;" in cgl
     assert "@ register(s0)\n    sampler g_sampler;" in cgl
 
     artifacts_by_target = {

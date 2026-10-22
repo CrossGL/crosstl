@@ -266,15 +266,15 @@ class HLSLTexelAccessMixin:
         return True
 
     SAMPLED_TEXTURE_TYPES = {
-        "Texture1D": "sampler1D",
-        "Texture1DArray": "sampler1DArray",
-        "Texture2D": "sampler2D",
-        "Texture2DArray": "sampler2DArray",
-        "Texture3D": "sampler3D",
-        "TextureCube": "samplerCube",
-        "TextureCubeArray": "samplerCubeArray",
-        "Texture2DMS": "sampler2DMS",
-        "Texture2DMSArray": "sampler2DMSArray",
+        "Texture1D": "texture1D",
+        "Texture1DArray": "texture1DArray",
+        "Texture2D": "texture2D",
+        "Texture2DArray": "texture2DArray",
+        "Texture3D": "texture3D",
+        "TextureCube": "textureCube",
+        "TextureCubeArray": "textureCubeArray",
+        "Texture2DMS": "texture2DMS",
+        "Texture2DMSArray": "texture2DMSArray",
     }
 
     def map_sampled_texture_type(self, base_type, generic_type):

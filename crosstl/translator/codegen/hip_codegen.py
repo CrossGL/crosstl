@@ -101,6 +101,7 @@ from .match_utils import (
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -774,6 +775,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def generate(self, node: ASTNode) -> str:
         """Generate complete HIP source for a CrossGL AST."""
+        # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
+        node = canonicalize_separate_textures(node)
         self.code_lines = []
         self.indent_level = 0
         self.validate_supported_stage_types(node)

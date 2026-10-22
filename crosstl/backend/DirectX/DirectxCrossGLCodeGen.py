@@ -275,17 +275,18 @@ class HLSLToCrossGLConverter(
             # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0004)
             **hlsl_matrix_type_map(),
             # Texture Types
-            "Texture1D": "sampler1D",
-            "Texture1DArray": "sampler1DArray",
-            "Texture2D": "sampler2D",
+            # HLSL textures are separate from their samplers (SRVs): CrossGL's separate texture types.
+            "Texture1D": "texture1D",
+            "Texture1DArray": "texture1DArray",
+            "Texture2D": "texture2D",
             "sampler2D_half": "sampler2D",
             "sampler2D_float": "sampler2D",
-            "Texture3D": "sampler3D",
-            "TextureCube": "samplerCube",
-            "Texture2DArray": "sampler2DArray",
-            "TextureCubeArray": "samplerCubeArray",
-            "Texture2DMS": "sampler2DMS",
-            "Texture2DMSArray": "sampler2DMSArray",
+            "Texture3D": "texture3D",
+            "TextureCube": "textureCube",
+            "Texture2DArray": "texture2DArray",
+            "TextureCubeArray": "textureCubeArray",
+            "Texture2DMS": "texture2DMS",
+            "Texture2DMSArray": "texture2DMSArray",
             "SubpassInput": "sampler2d",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
@@ -334,10 +335,12 @@ class HLSLToCrossGLConverter(
         }
         self.type_map.update(self.minimum_precision_type_map())
         self.shadow_texture_type_map = {
-            "Texture2D": "sampler2DShadow",
-            "Texture2DArray": "sampler2DArrayShadow",
-            "TextureCube": "samplerCubeShadow",
-            "TextureCubeArray": "samplerCubeArrayShadow",
+            "Texture1D": "texture1DShadow",
+            "Texture1DArray": "texture1DArrayShadow",
+            "Texture2D": "texture2DShadow",
+            "Texture2DArray": "texture2DArrayShadow",
+            "TextureCube": "textureCubeShadow",
+            "TextureCubeArray": "textureCubeArrayShadow",
         }
         self.function_map = {
             "countbits": "bitCount",
@@ -4110,6 +4113,9 @@ class HLSLToCrossGLConverter(
             (
                 "sampler",
                 "isampler",
+                "texture",
+                "itexture",
+                "utexture",
                 "usampler",
                 "image",
                 "iimage",
