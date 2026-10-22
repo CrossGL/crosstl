@@ -73,6 +73,11 @@ def _translate(path, backend, **options):
     return crosstl.translate(str(path), backend=backend, source_options=options or None)
 
 
+def _flat(code):
+    """``code`` with every whitespace run as one space: the formatter may wrap long signatures."""
+    return " ".join(code.split())
+
+
 def test_short_thread_attributes_keep_their_kernel_entry(tmp_path):
     crossgl = _translate(_metal(tmp_path, METAL_LIBRARY), "cgl")
 
@@ -114,11 +119,11 @@ def test_hlsl_entry_narrows_the_32_bit_system_values(tmp_path):
         _metal(tmp_path, METAL_LIBRARY), "directx", threadgroup_size=(64, 1, 1)
     )
 
-    assert "uint3 tpig_wide : SV_DispatchThreadID" in hlsl
-    assert "uint tiitg_wide : SV_GroupIndex" in hlsl
-    assert "uint16_t3 tpig = (uint16_t3)tpig_wide.xyz;" in hlsl
-    assert "uint16_t tiitg = (uint16_t)tiitg_wide;" in hlsl
-    assert not re.search(r"uint16_t3? \w+ : SV_", hlsl)
+    assert "uint3 tpig_wide : SV_DispatchThreadID" in _flat(hlsl)
+    assert "uint tiitg_wide : SV_GroupIndex" in _flat(hlsl)
+    assert "uint16_t3 tpig = (uint16_t3)tpig_wide.xyz;" in _flat(hlsl)
+    assert "uint16_t tiitg = (uint16_t)tiitg_wide;" in _flat(hlsl)
+    assert not re.search(r"uint16_t3? \w+ : SV_", _flat(hlsl))
 
     dxc = shutil.which("dxc")
     if dxc is None:
@@ -150,8 +155,8 @@ def test_hlsl_wave_lane_index_narrows_explicitly(tmp_path):
         _metal(tmp_path, METAL_LANE), "directx", threadgroup_size=(32, 1, 1)
     )
 
-    assert "uint16_t tiisg = (uint16_t)(WaveGetLaneIndex());" in hlsl
-    assert "uint16_t2 tpig = (uint16_t2)tpig_wide.xy;" in hlsl
+    assert "uint16_t tiisg = (uint16_t)(WaveGetLaneIndex());" in _flat(hlsl)
+    assert "uint16_t2 tpig = (uint16_t2)tpig_wide.xy;" in _flat(hlsl)
 
 
 def test_lane_index_without_threadgroup_size_is_refused(tmp_path):
@@ -163,9 +168,9 @@ def test_crossgl_16_bit_compute_system_values_are_accepted_by_hlsl():
     ast = Parser(Lexer(CROSSGL_COMPUTE).get_tokens()).parse()
     hlsl = HLSLCodeGen().generate(ast)
 
-    assert "uint3 tpig_wide : SV_DispatchThreadID" in hlsl
-    assert "uint index_wide : SV_GroupIndex" in hlsl
-    assert "uint16_t index = (uint16_t)index_wide;" in hlsl
+    assert "uint3 tpig_wide : SV_DispatchThreadID" in _flat(hlsl)
+    assert "uint index_wide : SV_GroupIndex" in _flat(hlsl)
+    assert "uint16_t index = (uint16_t)index_wide;" in _flat(hlsl)
 
 
 @pytest.mark.parametrize(
