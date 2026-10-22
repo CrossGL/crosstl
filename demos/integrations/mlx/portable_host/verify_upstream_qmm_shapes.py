@@ -109,8 +109,8 @@ def quantized_route(
 ):
     """The product entry and its partition sum, with a small sum's cache key.
 
-    A 16-bit split-K product sums its partitions in the element type, which
-    the host offers in the small pass only.
+    A 16-bit split-K product sums its partitions in the element type, in the
+    small pass below 32 partitions and the looped pass from 32.
     """
     if m < matmul_layout.vector_limit(k, n, transpose):
         entry = matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose)
@@ -123,7 +123,7 @@ def quantized_route(
     split = qmm_layout.split_k(m, n, k, group)
     kind = qmm_layout.partition_sum(m, n, split)
     small, looped = partition_sums(dtype)
-    if kind == "looped" and dtype == "float32":
+    if kind == "looped":
         return "qmm", entry, looped, None
     if kind != "small":
         raise ValueError(f"The quantized upstream tests need no {kind} partition sum")

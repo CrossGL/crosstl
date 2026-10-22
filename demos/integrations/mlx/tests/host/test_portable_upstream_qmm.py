@@ -112,15 +112,18 @@ def test_large_dims_take_the_unsplit_transposed_kernel():
     ][288:] == [2, 2, 2, 1]
 
 
-def test_16_bit_split_k_products_refuse_looped_partition_sums():
-    # 128 partitions of K = 8192: float32 sums them in the looped pass.
+def test_split_k_products_take_looped_partition_sums_in_their_type():
+    # 128 partitions of K = 8192: every element type sums them in the looped
+    # pass; 512 partitions of K = 32,768 need the two-pass sum, unrouted here.
     m, n, k = 32, 32, 8192
     assert qmm_layout.partition_sum(m, n, qmm_layout.split_k(m, n, k, 64)) == "looped"
-    assert shapes.quantized_route(m, n, k, 1, True)[2] == (
-        "col_reduce_looped_1_32_32_reduce_sumfloat32"
-    )
-    with pytest.raises(ValueError, match="no looped partition sum"):
-        shapes.quantized_route(m, n, k, 1, True, dtype="float16")
+    for dtype in ("float32", "float16", "bfloat16"):
+        assert shapes.quantized_route(m, n, k, 1, True, dtype=dtype)[2:] == (
+            f"col_reduce_looped_1_32_32_reduce_sum{dtype}",
+            None,
+        )
+    with pytest.raises(ValueError, match="no two-pass partition sum"):
+        shapes.quantized_route(m, n, 4 * k, 1, True, dtype="float16")
 
 
 def test_expected_dispatches_follow_every_upstream_product():
