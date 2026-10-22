@@ -205,12 +205,12 @@ def read_storage(entry, buffers):
     )
 
 
-def read_buffers(buffers, types, scalars, label):
+def read_buffers(buffers, types, scalars, label, matrices=MATRIX_PARAMETERS):
     """``read_storage`` for the parameters ``types`` names, in their order.
 
     ``scalars`` names the single-value parameters; the matrix buffers are
-    ``MATRIX_PARAMETERS`` with ``y`` the only output, and the other names
-    are integer vectors of at most ``MAX_BATCH_DIMENSIONS + 2`` values.
+    ``matrices`` with ``y`` the only output, and the other names are integer
+    vectors of at most ``MAX_BATCH_DIMENSIONS + 2`` values.
     """
     if set(buffers) != set(types):
         raise ValueError(f"{label} buffers do not match the entry")
@@ -235,7 +235,7 @@ def read_buffers(buffers, types, scalars, label):
         ):
             raise ValueError(f"{label} buffer storage or direction does not match")
         spans[name] = (buffer.data, buffer.data + count * itemsize)
-        if name in MATRIX_PARAMETERS:
+        if name in matrices:
             counts[name] = count
             continue
         values = list(
@@ -278,11 +278,13 @@ def batch_offsets(parameters, m, k, rows, words, groups, batches, label=LABEL):
     """Per ``tid.z`` element offsets of x, w, scales and biases.
 
     ``rows`` is the weight matrices' row count: ``N`` for transposed weights,
-    ``K`` otherwise.
+    ``K`` otherwise. Without ``b_strides`` (kernels without biases) the
+    biases' offsets follow the scales'.
     """
     x_shape, x_strides = parameters["x_shape"], parameters["x_strides"]
     w_shape, w_strides = parameters["w_shape"], parameters["w_strides"]
-    s_strides, b_strides = parameters["s_strides"], parameters["b_strides"]
+    s_strides = parameters["s_strides"]
+    b_strides = parameters.get("b_strides", s_strides)
     x_batch, w_batch = parameters["x_batch_ndims"], parameters["w_batch_ndims"]
     if (
         x_batch != len(x_shape) - 2

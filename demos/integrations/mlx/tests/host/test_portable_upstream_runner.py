@@ -9,6 +9,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     upstream_runner,
+    verify_upstream_fp_qmv,
     verify_upstream_qmm,
     verify_upstream_qmm_shapes,
     verify_upstream_qmv,
@@ -30,6 +31,7 @@ RUNNERS = {
     "qvm_splitk": verify_upstream_qvm_splitk,
     "qmm_shapes": verify_upstream_qmm_shapes,
     "qmm": verify_upstream_qmm,
+    "fp_qmv": verify_upstream_fp_qmv,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
@@ -195,8 +197,11 @@ def test_operator_families_are_the_ones_the_worker_loads():
     assert upstream_runner.operator_directory(Path("o/r"), "half") == Path(
         "o/half-packages"
     )
+    assert upstream_runner.operator_directory(Path("o/r"), "bfloat") == Path(
+        "o/bfloat-packages"
+    )
     with pytest.raises(ValueError, match="operator package family"):
-        upstream_runner.operator_directory(Path("o/r"), "bfloat")
+        upstream_runner.operator_directory(Path("o/r"), "integer64")
 
 
 def test_cli_worker_loads_every_reduction_directory(monkeypatch):
@@ -205,7 +210,7 @@ def test_cli_worker_loads_every_reduction_directory(monkeypatch):
         upstream_runner,
         "worker",
         lambda args, tests, trace_values: seen.append(
-            (args.reductions, args.half, args.half_arithmetic)
+            (args.reductions, args.half, args.half_arithmetic, args.bfloat)
         ),
     )
     common = ["--mlx-root", "m", "--packages", "p", "--output-dir", "o"]
@@ -219,10 +224,15 @@ def test_cli_worker_loads_every_reduction_directory(monkeypatch):
         [*common, "--worker", "native", "--reductions", "h"]
         + ["--half", "a", "--half-arithmetic", "b"],
     )
+    upstream_runner.main(
+        verify_upstream_fp_qmv,
+        [*common, "--worker", "native", "--reductions", "r", "--bfloat", "f"],
+    )
     assert seen == [
-        ([Path("r"), Path("c")], None, None),
-        (None, None, None),
-        ([Path("h")], Path("a"), Path("b")),
+        ([Path("r"), Path("c")], None, None, None),
+        (None, None, None, None),
+        ([Path("h")], Path("a"), Path("b"), None),
+        ([Path("r")], None, None, Path("f")),
     ]
 
 
@@ -307,7 +317,7 @@ def test_runner_prepares_packages_before_both_workers(
             assert loaded == expected_reductions
             operators = {
                 option: command[command.index(option) + 1]
-                for option in ("--half", "--half-arithmetic")
+                for option in upstream_runner.OPERATOR_OPTIONS.values()
                 if option in command
             }
             assert operators == {

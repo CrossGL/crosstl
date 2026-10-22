@@ -15,8 +15,8 @@ test and passes itself here. It provides:
   translates into ``column_directory(reductions)``, which the native worker
   also loads;
 - optionally ``OPERATORS``: element-wise package families (``packages.py``'s
-  ``half`` and ``half-arithmetic``) for a test that computes in a 16-bit float
-  type. ``prepare_packages`` translates each into
+  ``half``, ``half-arithmetic`` and ``bfloat``) for a test that computes in,
+  or converts from, a 16-bit float type. ``prepare_packages`` translates each into
   ``operator_directory(reductions, family)`` and the native worker loads them.
 
 ``run`` translates the random packages, then the module's packages, then runs
@@ -42,7 +42,11 @@ RANDOM_PACKAGES = "demos.integrations.mlx.portable_host.random_packages"
 # Whole-array reduction families, in the order the worker loads them.
 MAXIMA_FAMILIES = ("all", "half", "bfloat")
 # The worker option that loads each element-wise package family.
-OPERATOR_OPTIONS = {"half": "--half", "half-arithmetic": "--half-arithmetic"}
+OPERATOR_OPTIONS = {
+    "half": "--half",
+    "half-arithmetic": "--half-arithmetic",
+    "bfloat": "--bfloat",
+}
 
 
 def row_strides(shape):
@@ -253,6 +257,7 @@ def main(spec, argv=None):
     parser.add_argument("--random", type=Path)
     parser.add_argument("--half", type=Path)
     parser.add_argument("--half-arithmetic", type=Path)
+    parser.add_argument("--bfloat", type=Path)
     parser.add_argument("--jobs", type=int, default=3)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--worker", choices=("cpu", "native"))

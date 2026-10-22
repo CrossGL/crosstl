@@ -99,6 +99,7 @@ def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
             random=args.random,
             half=getattr(args, "half", None),
             half_arithmetic=getattr(args, "half_arithmetic", None),
+            bfloat=getattr(args, "bfloat", None),
             trace_values=trace_values,
         )
         host.install()

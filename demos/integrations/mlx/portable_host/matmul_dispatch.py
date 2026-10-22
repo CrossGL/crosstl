@@ -22,7 +22,7 @@ GUARD_COUNT = 8
 # Exactly representable in every element type; no route may read it into an
 # output that MLX keeps.
 POISON = {"float32": 0x3FC00000, "float16": 0x3E00, "bfloat16": 0x3FC0}
-WORD_POISON = 0xA5A5A5A5
+POISON.update(uint8=0x5A, uint32=0xA5A5A5A5)
 STRIDES = {"uint8": 1, "uint16": 2, "uint32": 4, "float16": 2}
 STRIDES.update(bfloat16=2, float32=4, int32=4, int64=8)
 
@@ -40,6 +40,9 @@ def encode_binding(dtype, words, host_target, layout, kind):
         ):
             raise ValueError("Matrix-vector reflected encoding differs")
         value = encode(words, dtype, storage)
+    elif dtype == "uint8":
+        # Byte storage may widen each byte to one 32-bit element.
+        value = encode(words, dtype, physical)
     else:
         if physical != dtype:
             raise ValueError("Matrix-vector reflected integer type differs")
@@ -75,8 +78,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
 def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
     """Run one launch of ``layout``'s quantized product kernels through ``cache``.
 
-    ``layout`` is ``matmul_layout`` or ``qmm_layout``: both bind the matrix
-    buffers ``w``, ``scales``, ``biases``, ``x`` and the output ``y``.
+    ``layout`` is ``matmul_layout``, ``qmm_layout`` or ``fp_matmul_layout``:
+    each binds the weights ``w``, the ``scales``, the input ``x``, the output
+    ``y`` and, for affine kernels, the ``biases``, all in
+    ``layout.MATRIX_PARAMETERS``.
     """
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -103,8 +108,8 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
         name: (
             [GUARDS[dtype]] * (counts["y"] + GUARD_COUNT)
             if name == "y"
-            else _words(supplied[name], "uint32" if name == "w" else dtype)
-            + [WORD_POISON if name == "w" else POISON[dtype]]
+            else _words(supplied[name], layout.parameter_type(entry, name))
+            + [POISON[layout.parameter_type(entry, name)]]
             * (GUARD_COUNT + metadata["overreadPadding"].get(name, 0))
         )
         for name in layout.MATRIX_PARAMETERS
@@ -194,7 +199,8 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in ("w", "scales", "biases", "x")
+            for name in layout.MATRIX_PARAMETERS
+            if name != "y"
         },
         "outputValues": words[:size] if size <= 4096 else None,
         "outputHash": hashlib.sha256(payload).hexdigest(),

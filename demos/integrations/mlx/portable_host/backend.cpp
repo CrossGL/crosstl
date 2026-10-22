@@ -847,37 +847,26 @@ const char* storage_type(mlx::core::Dtype dtype) {
   return nullptr;
 }
 
-void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array& out) {
-  require_runtime();
-  if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
-    throw std::invalid_argument("CrossTL cast input must match output shape.");
-  }
-  const char* source_type = inputs[0].dtype() == mlx::core::float16 ?
-      "float16" : inputs[0].dtype() == mlx::core::bfloat16 ?
-      "bfloat16" : storage_type(inputs[0].dtype());
-  const char* destination_type = out.dtype() == mlx::core::float16 ?
-      "float16" : out.dtype() == mlx::core::bfloat16 ?
-      "bfloat16" : storage_type(out.dtype());
-  if (!source_type || !destination_type) {
-    throw std::invalid_argument("CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
-  }
-  if (inputs[0].dtype() == out.dtype()) {
-    out.copy_shared_buffer(inputs[0]);
-    return;
-  }
-  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
-  if (out.size() == 0) {
-    return;
-  }
-  auto in = dense_input(inputs[0]);
+const char* cast_type(mlx::core::Dtype dtype) {
+  return dtype == mlx::core::float16 ? "float16" :
+      dtype == mlx::core::bfloat16 ? "bfloat16" : storage_type(dtype);
+}
+
+// Converts the first `count` elements of `in`'s data into `out`'s data.
+void cast_elements(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    uint64_t count) {
+  const char* source_type = cast_type(in.dtype());
+  const char* destination_type = cast_type(out.dtype());
   std::string entry = std::string("v_copy") + source_type + destination_type;
   require_entry(entry);
   // v_copy specializes one independent conversion per invocation.
-  for (uint64_t first = 0; first < out.size();) {
+  for (uint64_t first = 0; first < count;) {
     uint32_t size = static_cast<uint32_t>(
-        std::min<uint64_t>(out.size() - first, 65535));
+        std::min<uint64_t>(count - first, 65535));
     CrosstlMlxBuffer buffers[] = {
-        {"src", source_type, in.data<uint8_t>() + first * in.itemsize(), size, 0},
+        {"src", source_type, const_cast<uint8_t*>(in.data<uint8_t>()) + first * in.itemsize(), size, 0},
         {"dst", destination_type, out.data<uint8_t>() + first * out.itemsize(), size, 1},
         {"size", "uint32", &size, 1, 0},
     };
@@ -890,6 +879,61 @@ void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array
       throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
     }
     first += size;
+  }
+}
+
+// Returns true when `inputs` names a castable pair; same-dtype casts share.
+bool prepare_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL cast input must match output shape.");
+  }
+  if (!cast_type(inputs[0].dtype()) || !cast_type(out.dtype())) {
+    throw std::invalid_argument("CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
+  }
+  if (inputs[0].dtype() == out.dtype()) {
+    out.copy_shared_buffer(inputs[0]);
+    return false;
+  }
+  return true;
+}
+
+// A row-contiguous conversion of `inputs[0]`, densifying strided views.
+void dispatch_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array& out) {
+  if (!prepare_cast(inputs, out)) {
+    return;
+  }
+  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  cast_elements(dense_input(inputs[0]), out, out.size());
+}
+
+// gpu/primitives.cpp AsType: a contiguous input converts as a vector copy
+// whose output keeps the input's strides and flags (common/copy.h
+// set_copy_output_data); any other input converts through a dense copy.
+void dispatch_astype(const std::vector<mlx::core::array>& inputs, mlx::core::array& out) {
+  if (!prepare_cast(inputs, out)) {
+    return;
+  }
+  const auto& in = inputs[0];
+  if (!in.flags().contiguous) {
+    dispatch_cast(inputs, out);
+    return;
+  }
+  const uint64_t elements = in.data_size();
+  if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+      elements > (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
+    throw std::invalid_argument("CrossTL cast input exceeds its allocation.");
+  }
+  out.set_data(
+      mlx::core::allocator::malloc(elements * out.itemsize()),
+      elements,
+      in.strides(),
+      in.flags());
+  if (elements > 0) {
+    cast_elements(in, out, elements);
   }
 }
 
@@ -1107,7 +1151,7 @@ void Slice::eval_gpu(const std::vector<array>& inputs, array& out) {
 }
 
 void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
-  dispatch_cast(inputs, out);
+  dispatch_astype(inputs, out);
 }
 
 void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -2100,6 +2144,7 @@ const char* quantized_source(Dtype dtype) {
 }
 
 // add_strides_and_shapes' batch parameters, kept alive through the dispatch.
+// Kernels without biases bind no bias strides.
 struct QuantizedBatchViews {
   int32_t x_batch_ndims;
   Shape x_shape;
@@ -2109,9 +2154,16 @@ struct QuantizedBatchViews {
   Strides w_strides;
   Strides s_strides;
   Strides b_strides;
+  bool biased;
 
   QuantizedBatchViews(
       const array& x, const array& w, const array& scales, const array& biases)
+      : QuantizedBatchViews(x, w, scales) {
+    b_strides = biases.strides();
+    biased = true;
+  }
+
+  QuantizedBatchViews(const array& x, const array& w, const array& scales)
       : x_batch_ndims(int32_t(x.ndim()) - 2),
         x_shape(x.shape()),
         x_strides(x.strides()),
@@ -2119,7 +2171,7 @@ struct QuantizedBatchViews {
         w_shape(w.shape()),
         w_strides(w.strides()),
         s_strides(scales.strides()),
-        b_strides(biases.strides()) {}
+        biased(false) {}
 
   void bind(std::vector<CrosstlMlxBuffer>& buffers) {
     auto vector = [](const char* name, const char* type, auto& values) {
@@ -2132,7 +2184,9 @@ struct QuantizedBatchViews {
     buffers.push_back(vector("w_shape", "int32", w_shape));
     buffers.push_back(vector("w_strides", "int64", w_strides));
     buffers.push_back(vector("s_strides", "int64", s_strides));
-    buffers.push_back(vector("b_strides", "int64", b_strides));
+    if (biased) {
+      buffers.push_back(vector("b_strides", "int64", b_strides));
+    }
   }
 };
 
@@ -2392,21 +2446,109 @@ void dispatch_qvm_split_k(
   dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", storage);
 }
 
+// quantized.cpp dispatch_qmv and qvm for mxfp4, mxfp8 and nvfp4 weights:
+// fp_quantized.metal's kernels, with uint8 scales and no biases.
+// QuantizedMatmul passes no global scale, so qmv_wide serves two or more
+// vectors on every device. The matrix-matrix and split-K kernels are not
+// routed.
+void dispatch_fp_quantized_matvec(
+    const array& x,
+    const array& w,
+    const array& scales,
+    array& out,
+    const char* mode,
+    bool transpose,
+    int group_size,
+    int bits,
+    int M,
+    int N,
+    int K,
+    int vector_limit) {
+  if (M >= vector_limit) {
+    throw std::invalid_argument(
+        "CrossTL floating-point quantized matrix-matrix products are not routed.");
+  }
+  if (!transpose && K >= 1024) {
+    throw std::invalid_argument(
+        "CrossTL floating-point split-K vector-matrix products are not routed.");
+  }
+  const uint64_t B = out.size() / M / N;
+  const bool quad = transpose && (K == 64 || K == 128);
+  const bool wide = transpose && !quad && M >= 2;
+  const bool fast = N % 8 == 0 && K % ((32 / bits) * 2 * 32) == 0;
+  // qmv_wide's vecs_per_tg: the fewest tiles of at most 5 vectors.
+  const int vector_tiles = (M + 4) / 5;
+  const int vectors = (M + vector_tiles - 1) / vector_tiles;
+  const char* kernel = !transpose ? "_qvm_"
+      : quad                      ? "_qmv_quad_"
+      : wide                      ? "_qmv_wide_"
+      : fast                      ? "_qmv_fast_"
+                                  : "_qmv_";
+  const std::string entry = std::string(mode) + kernel + quantized_source(out.dtype()) +
+      "_gs_" + std::to_string(group_size) + "_b_" + std::to_string(bits) +
+      (quad ? "_d_" + std::to_string(K) : "") +
+      (wide ? "_nv_" + std::to_string(vectors) + "_kl_16" : "") +
+      (B > 1 ? "_batch_1" : "_batch_0");
+  require_entry(entry);
+  // qvm: 2 simdgroups of min(group_size, 32) columns; qmv_quad: 8 quads of 8
+  // rows; qmv_wide: 2 simdgroups of 2 rows; qmv: 2 simdgroups of 4 rows.
+  const int rows = !transpose ? 2 * std::min(group_size, 32) : quad ? 64 : wide ? 4 : 8;
+  const uint32_t tiles = (uint32_t(N) + rows - 1) / rows;
+  const uint32_t columns = wide ? uint32_t(vector_tiles) : uint32_t(M);
+  if (out.size() > max_matmul_elements || B > 65535 || columns > 65535) {
+    throw std::invalid_argument("CrossTL quantized matmul launch exceeds its bounds.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  const char* storage = matmul_storage(out.dtype());
+  int32_t in_vec_size = K;
+  int32_t out_vec_size = N;
+  int32_t vector_count = M;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"w", "uint32", data(w), matmul_span(w), 0},
+      {"scales", "uint8", data(scales), matmul_span(scales), 0},
+      {"x", storage, data(x), matmul_span(x), 0},
+      {"y", storage, out.data<void>(), out.size(), 1},
+      {"in_vec_size", "int32", &in_vec_size, 1, 0},
+      {"out_vec_size", "int32", &out_vec_size, 1, 0},
+  };
+  if (wide) {
+    buffers.push_back({"M", "int32", &vector_count, 1, 0});
+  }
+  QuantizedBatchViews views(x, w, scales);
+  if (B > 1) {
+    views.bind(buffers);
+  }
+  const CrosstlMlxLaunch launch{{columns, tiles, uint32_t(B)}, {32, quad ? 1u : 2u, 1}};
+  quantized_dispatch(
+      entry, buffers, out.size(), launch, "floating-point quantized matmul");
+}
+
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  if (mode_ != QuantizationMode::Affine || inputs.size() != 4) {
-    throw std::invalid_argument("CrossTL quantized matmul supports affine quantization only.");
+  const bool affine = mode_ == QuantizationMode::Affine;
+  // fp_quantized.metal's modes and their group sizes and bits.
+  const char* fp_mode = mode_ == QuantizationMode::Mxfp4 ? "mxfp4"
+      : mode_ == QuantizationMode::Mxfp8                 ? "mxfp8"
+      : mode_ == QuantizationMode::Nvfp4                 ? "nvfp4"
+                                                         : nullptr;
+  if (affine ? inputs.size() != 4
+             : fp_mode == nullptr || inputs.size() != 3 ||
+                 group_size_ != (mode_ == QuantizationMode::Nvfp4 ? 16 : 32) ||
+                 bits_ != (mode_ == QuantizationMode::Mxfp8 ? 8 : 4)) {
+    throw std::invalid_argument(
+        "CrossTL quantized matmul parameters do not match a pinned mode.");
   }
   const auto dtype = out.dtype();
   if ((dtype != float32 && dtype != float16 && dtype != bfloat16) ||
       inputs[0].dtype() != dtype || inputs[1].dtype() != uint32 ||
-      inputs[2].dtype() != dtype || inputs[3].dtype() != dtype) {
+      inputs[2].dtype() != (affine ? dtype : uint8) ||
+      (affine && inputs[3].dtype() != dtype)) {
     throw std::invalid_argument("CrossTL quantized matmul requires matching floating types.");
   }
   array x = matmul_operand(inputs[0]);
   array w = matmul_operand(inputs[1]);
   array scales = matmul_operand(inputs[2]);
-  array biases = matmul_operand(inputs[3]);
   // quantized.cpp QuantizedMatmul::eval_gpu's shapes.
   const bool non_batched = w.ndim() == 2 && x.flags().row_contiguous;
   if (x.ndim() < 1 || w.ndim() < 2 || (!non_batched && x.ndim() < 2)) {
@@ -2424,6 +2566,12 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       : K <= 2048 && N <= 2048        ? 18
       : K <= 4096 && N <= 4096        ? 12
                                       : 10;
+  if (!affine) {
+    dispatch_fp_quantized_matvec(
+        x, w, scales, out, fp_mode, transpose_, group_size_, bits_, M, N, K, vector_limit);
+    return;
+  }
+  array biases = matmul_operand(inputs[3]);
   if (M >= vector_limit) {
     // qmm_splitk for single matrices with transposed weights, which falls
     // back to qmm when K admits no split; there is no NAX unit for qmm_nax.

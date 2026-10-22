@@ -35,6 +35,7 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     column_small_layout,
     copy_layout,
+    fp_matmul_layout,
     gather_dispatch,
     gemm_dispatch,
     gemm_layout,
@@ -60,6 +61,12 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
+)
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    FpQuantizedMatmulPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
@@ -360,6 +367,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.fp_quantized_matmuls = (
+            FpQuantizedMatmulPackageCache(
+                mlx_root, self.directory / FP_QUANTIZED_MATMUL_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.quantized_qmms = (
             QuantizedQmmPackageCache(
                 mlx_root, self.directory / QUANTIZED_QMM_CACHE, self.target
@@ -545,6 +559,12 @@ class HostRuntime:
                 matmul_layout.signature(name)
                 return 1
             if (
+                name.startswith(fp_matmul_layout.ENTRY_PREFIXES)
+                and self.fp_quantized_matmuls is not None
+            ):
+                fp_matmul_layout.signature(name)
+                return 1
+            if (
                 name.startswith(qmm_layout.ENTRY_PREFIXES)
                 and self.quantized_qmms is not None
             ):
@@ -616,6 +636,17 @@ class HostRuntime:
         if entry.startswith(matmul_layout.ENTRY_PREFIXES):
             return matmul_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(fp_matmul_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                fp_matmul_layout,
+                self.fp_quantized_matmuls,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
             )
         if entry.startswith(qmm_layout.ENTRY_PREFIXES):
             return matmul_dispatch.dispatch_with(
