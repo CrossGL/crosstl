@@ -387,6 +387,7 @@ class WGSLCodeGen:
         "samplerstate",
     }
     COMPARISON_SAMPLER_TYPE_NAMES = {
+        "comparison_sampler",
         "samplercomparisonstate",
     }
     TEXTURE_FUNCTION_NAMES = {
@@ -3804,7 +3805,7 @@ class WGSLCodeGen:
         if not self.is_comparison_sampler_type(sampler_type):
             raise ValueError(
                 f"WGSL target requires {function_name}() explicit sampler operand "
-                "to use samplerComparisonState"
+                "to be a comparison_sampler"
             )
 
     def require_zero_compare_level_operand(self, args, function_name, *, implicit):

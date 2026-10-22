@@ -6270,7 +6270,10 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "texture2DArrayShadow shadowArray;" in crossgl
     assert "textureCubeShadow shadowCube;" in crossgl
     assert "texture2DShadow shadowMap;" in crossgl
-    assert "float helper(texture2DShadow localShadow, sampler localSampler" in crossgl
+    assert (
+        "float helper(texture2DShadow localShadow, comparison_sampler localSampler"
+        in crossgl
+    )
     assert (
         "textureCompareLod(shadowArray, compareSampler, uvLayer, depth, 0.0)" in crossgl
     )
@@ -6544,7 +6547,8 @@ def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():
     assert "texture2DShadow tex;" not in crossgl
     assert "vec4 readRegular(texture2D regularSource, sampler localSampler" in crossgl
     assert (
-        "float readShadow(texture2DShadow shadowSource, sampler localSampler" in crossgl
+        "float readShadow(texture2DShadow shadowSource, comparison_sampler localSampler"
+        in crossgl
     )
     assert "readRegular(tex, samp, uv)" in crossgl
     assert "readShadow(tex, compareSampler, uv, depth)" in crossgl
@@ -6597,10 +6601,11 @@ def test_codegen_sample_cmp_infers_cube_array_shadow_through_nested_wrappers():
 
     assert "textureCubeArrayShadow cubeShadowArray;" in crossgl
     assert (
-        "float leaf(textureCubeArrayShadow leafShadow, sampler leafSampler" in crossgl
+        "float leaf(textureCubeArrayShadow leafShadow, comparison_sampler leafSampler"
+        in crossgl
     )
     assert (
-        "float wrapper(textureCubeArrayShadow wrappedShadow, sampler wrappedSampler"
+        "float wrapper(textureCubeArrayShadow wrappedShadow, comparison_sampler wrappedSampler"
         in crossgl
     )
     assert (
@@ -6674,7 +6679,7 @@ def test_codegen_nested_cube_array_helper_mixed_use_stays_non_shadow():
     assert "textureCubeArrayShadow cubeTex;" not in crossgl
     assert "vec4 regularLeaf(textureCubeArray source, sampler localSampler" in crossgl
     assert (
-        "float shadowLeaf(textureCubeArrayShadow source, sampler localSampler"
+        "float shadowLeaf(textureCubeArrayShadow source, comparison_sampler localSampler"
         in crossgl
     )
     assert "regularWrapper(cubeTex, samp, cubeLayer)" in crossgl

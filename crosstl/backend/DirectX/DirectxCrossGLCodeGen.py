@@ -331,7 +331,7 @@ class HLSLToCrossGLConverter(
             "samplerCUBE": "samplerCube",
             "Sampler": "sampler",
             "SamplerState": "sampler",
-            "SamplerComparisonState": "sampler",
+            "SamplerComparisonState": "comparison_sampler",
         }
         self.type_map.update(self.minimum_precision_type_map())
         self.shadow_texture_type_map = {

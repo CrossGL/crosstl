@@ -871,8 +871,15 @@ class VulkanSPIRVCodeGen(
             info.get("component_type"),
             info.get("format"),
         )
+        if info["kind"] == "sampler":
+            # SPIR-V has one sampler type: a comparison_sampler differs only in the
+            # descriptor's compare state, and OpTypeSampler must not be declared twice.
+            cache_key = ("sampler", "sampler", None, None)
         if cache_key in self.resource_types:
-            return self.resource_types[cache_key]
+            spirv_id = self.resource_types[cache_key]
+            if info["kind"] == "sampler":
+                self.resource_types.setdefault(type_name, spirv_id)
+            return spirv_id
 
         if info["kind"] == "acceleration_structure":
             return self.register_acceleration_structure_type(type_name)
