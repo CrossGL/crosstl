@@ -232,7 +232,11 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
-from .hlsl_texel_buffers import HLSL_TEXEL_BUFFER_TYPES, HLSLTexelBuffers
+from .hlsl_texel_buffers import (
+    HLSL_TEXEL_BUFFER_TYPES,
+    HLSLTexelBuffers,
+    texel_buffer_base_type,
+)
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -27032,7 +27036,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if matrix_access is not None:
                 return matrix_access
-            array = self.generate_expression(array_expr)
+            if isinstance(array_expr, FunctionCallNode) and self.expression_name(
+                array_expr.name
+            ) in {"imageLoad", "texelFetch"}:
+                # The subscript selects a component of the whole texel, so the
+                # element's context does not narrow the load.
+                array = self.generate_expression_with_expected(array_expr, None)
+            else:
+                array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             index = self.hlsl_resource_pointer_offset_index(array, index)
             index = self.hlsl_resource_index_expression(
@@ -43818,6 +43829,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_resource_array_hint_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
+            or texel_buffer_base_type(vtype) is not None
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)
             or str(self.resource_base_type(vtype))

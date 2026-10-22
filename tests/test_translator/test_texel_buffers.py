@@ -283,7 +283,9 @@ def test_hlsl_unformatted_atomic_texel_buffer_is_single_channel(tmp_path):
     hlsl = _translate(tmp_path, HLSL_TEXEL_BUFFERS, ".hlsl", "directx")
     assert "RWBuffer<uint> counters : register(u0);" in hlsl
     assert "RWBuffer<int4> ipairs : register(u1);" in hlsl
-    assert "InterlockedCompareExchange(buffer[coord], value0, value1, original);" in hlsl
+    assert (
+        "InterlockedCompareExchange(buffer[coord], value0, value1, original);" in hlsl
+    )
 
 
 def test_metal_texel_buffers_use_texture_buffer_members(tmp_path):
@@ -352,3 +354,69 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     code = _translate(tmp_path, source, ".hlsl", "vulkan")
     assert _image_operands(code, "histogram") == ("uint", "2D", "2", "R32ui")
     _validate(tmp_path, code)
+
+
+HLSL_TEXEL_COMPONENT_ACCESSES = """RWBuffer<float4> rb : register(u0);
+RWTexture2D<float4> rt : register(u1);
+Buffer<float4> sb : register(t0);
+RWTexture2D<float4> images[2] : register(u2);
+RWStructuredBuffer<float> o : register(u4);
+[numthreads(1, 1, 1)]
+void CSMain(uint3 t : SV_DispatchThreadID)
+{
+    float a = rb[t.x][2];
+    float b = rt[t.xy][1];
+    float c = sb[t.x][3];
+    float d = images[1][t.xy][2];
+    rt[t.xy][1] = a + b;
+    rb[t.x][3] = c + d;
+    o[0] = a + b + c + d;
+}
+"""
+
+
+def test_hlsl_texel_component_subscripts_import_after_the_texel_load(tmp_path):
+    """``image[p][i]`` is component ``i`` of the texel at ``p``, not image ``p``'s texel ``i``."""
+    cgl = _crossgl(tmp_path, HLSL_TEXEL_COMPONENT_ACCESSES, ".hlsl")
+    assert "float a = imageLoad(rb, t.x)[2];" in cgl
+    assert "float b = imageLoad(rt, t.xy)[1];" in cgl
+    assert "float c = texelFetch(sb, t.x)[3];" in cgl
+    assert "float d = imageLoad(images[1], t.xy)[2];" in cgl
+    # A component store reads, modifies and writes the whole texel.
+    assert re.search(
+        r"vec4 (\w+) = imageLoad\(rt, t\.xy\);\s*\1\.y = a \+ b;\s*"
+        r"imageStore\(rt, t\.xy, \1\);",
+        cgl,
+    ), cgl
+    assert re.search(
+        r"vec4 (\w+) = imageLoad\(rb, t\.x\);\s*\1\.w = c \+ d;\s*"
+        r"imageStore\(rb, t\.x, \1\);",
+        cgl,
+    ), cgl
+
+
+def test_hlsl_texel_component_subscripts_round_trip(tmp_path):
+    hlsl = _translate(tmp_path, HLSL_TEXEL_COMPONENT_ACCESSES, ".hlsl", "directx")
+    # A subscripted load is not narrowed to the element's scalar context.
+    assert "float b = rt[t.xy][1];" in hlsl
+    assert "float d = images[1][t.xy][2];" in hlsl
+    _compile_compute_hlsl(tmp_path, hlsl, "CSMain")
+    _validate_compute_glsl(
+        tmp_path, _translate(tmp_path, HLSL_TEXEL_COMPONENT_ACCESSES, ".hlsl", "opengl")
+    )
+
+
+def test_unsized_texel_buffer_arrays_are_resource_arrays(tmp_path):
+    source = """shader main {
+    samplerBuffer coefficients[][2];
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uvec3 t @gl_GlobalInvocationID) {
+            vec4 v = texelFetch(coefficients[t.x][1], 0);
+        }
+    }
+}
+"""
+    hlsl = _translate(tmp_path, source, ".cgl", "directx")
+    assert "Buffer<float4> coefficients[][2] : register(t0);" in hlsl
+    assert "coefficients[t.x][1].Load(0)" in hlsl

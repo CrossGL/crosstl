@@ -88,6 +88,17 @@ def texel_buffer_base_type(type_name):
     return prefix + base
 
 
+def explicit_hlsl_texel_buffer_type(type_name):
+    """The HLSL ``Buffer<T>``-family spelling of ``type_name``, or ``None``."""
+    text = str(type_name or "").strip()
+    if "[" in text:
+        text = text.split("[", 1)[0].strip()
+    match = _HLSL_TEXEL_BUFFER.fullmatch(text)
+    if match is None:
+        return None
+    return re.sub(r"\s+", "", text)
+
+
 def hlsl_texel_buffer_element(hlsl_type):
     """``(scalar, component count)`` of an HLSL ``Buffer<T>``/``RWBuffer<T>``."""
     text = str(hlsl_type)
@@ -122,11 +133,16 @@ class HLSLTexelBuffers:
 
     def declaration_type(self, var_name, vtype, node, mapped_type):
         """HLSL declaration type of a global texel buffer, or ``mapped_type``."""
-        crossgl_type = texel_buffer_base_type(self.codegen.type_name_string(vtype))
+        type_text = self.codegen.type_name_string(vtype)
+        crossgl_type = texel_buffer_base_type(type_text)
         if crossgl_type is None:
             return mapped_type
         family = TEXEL_BUFFER_TYPES[crossgl_type]
-        if crossgl_type in SAMPLED_TEXEL_BUFFER_TYPES:
+        spelled = explicit_hlsl_texel_buffer_type(type_text)
+        if spelled is not None:
+            # An HLSL spelling states the element type, as a format would.
+            hlsl_type = self.codegen.rasterizer_ordered_resource_type(spelled, node)
+        elif crossgl_type in SAMPLED_TEXEL_BUFFER_TYPES:
             hlsl_type = HLSL_TEXEL_BUFFER_TYPES[crossgl_type]
         else:
             hlsl_type = self.storage_declaration_type(

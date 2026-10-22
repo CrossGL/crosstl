@@ -48877,9 +48877,23 @@ complex64_t crossgl_complex64_mod_assign(
                     f"'{func_name}' requires 2 argument(s), got {len(args)}"
                 )
             texture_name = self.generate_expression(args[0])
-            # A texel-buffer coordinate is a texel coordinate, as for imageLoad:
-            # every in-range unsigned coordinate converts to int unchanged.
-            coordinate = self.glsl_signed_coordinate_expression(args[1])
+            # A 32-bit texel-buffer coordinate is a texel coordinate, as for
+            # imageLoad: every in-range unsigned value converts to int
+            # unchanged. Other widths need the index range proof.
+            coordinate_info = self.glsl_value_type_info(
+                self.glsl_source_expression_type(args[1])
+            )
+            if (
+                coordinate_info is not None
+                and coordinate_info["width"] == 1
+                and coordinate_info["bits"] == 32
+                and coordinate_info["narrow"] is None
+            ):
+                coordinate = self.glsl_signed_coordinate_expression(args[1])
+            else:
+                coordinate = self.glsl_index_expression(
+                    args[1], args[0], target_signed=True
+                )
             return f"texelFetch({texture_name}, {coordinate})"
 
         self.validate_texture_call_arity(func_name, args)

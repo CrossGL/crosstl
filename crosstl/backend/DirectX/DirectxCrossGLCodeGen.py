@@ -2773,7 +2773,12 @@ class HLSLToCrossGLConverter(
             return False
         if not self.is_rw_texture_type(self.expression_raw_type(expr)):
             return False
-        return self.array_access_depth(expr) > self.expression_resource_array_dims(expr)
+        # One index after the resource-array indices selects the texel; a
+        # further index subscripts a component of the loaded texel.
+        return (
+            self.array_access_depth(expr)
+            == self.expression_resource_array_dims(expr) + 1
+        )
 
     def generate_without_storage_index_lowering(self, expr, is_main=False):
         previous = self.suppress_storage_image_index_lowering
@@ -2830,6 +2835,18 @@ class HLSLToCrossGLConverter(
         return f"imageStore({image}, {coord}, {rendered_value})"
 
     def storage_image_component_assignment_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            # ``image[p][i]`` writes component ``i`` of a texel.
+            index = expr.index
+            index = getattr(index, "value", index)
+            text = str(index).rstrip("uU") if isinstance(index, (int, str)) else ""
+            if (
+                text.isdigit()
+                and int(text) < 4
+                and self.is_storage_image_texel_access(expr.array)
+            ):
+                return expr.array, "xyzw"[int(text)]
+            return None
         if not isinstance(expr, MemberAccessNode):
             return None
         if not isinstance(expr.member, str):
