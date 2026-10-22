@@ -29,6 +29,7 @@ from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
 )
+from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_geometry_streams import (
@@ -180,6 +181,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
@@ -199,6 +201,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
+    rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
