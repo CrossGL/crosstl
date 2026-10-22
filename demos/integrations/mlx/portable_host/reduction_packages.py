@@ -64,14 +64,26 @@ COLUMN_ENTRIES = {
     for dimension in (1, 2, 5)
     for entry, dtype in ENTRIES.items()
 }
+# The 16-bit float sums over one axis that quantized.cpp's split-K products
+# run over 32 or more partitions: the looped pass, and above 256 partitions
+# of fewer than 32,768 outputs the two-pass reduction. reduce.metal
+# accumulates them in the element type, so each addition rounds. Column
+# packages translate them on request; a column package without named entries
+# holds COLUMN_ENTRIES alone.
+PARTITION_SUM_ENTRIES = {
+    f"col_reduce_{mode}_1_32_32_reduce_sum{dtype}": dtype
+    for mode in ("looped", "2pass")
+    for dtype in ("float16", "bfloat16")
+}
 ENTRY_GROUPS = {
     "all": ENTRIES,
     "bfloat": BFLOAT_ENTRIES,
     "half": HALF_ENTRIES,
     "row": ROW_ENTRIES,
-    "column": COLUMN_ENTRIES,
+    "column": {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES},
     "init": INIT_ENTRIES,
 }
+DEFAULT_ENTRIES = {"column": COLUMN_ENTRIES}
 # Families whose whole-array or row entries the on-demand cache translates.
 ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row"})
 WIDTHS = tuple(range(32, 1025, 32))
@@ -169,7 +181,9 @@ def build_packages(
     supported = ENTRY_GROUPS[family]
     allowed_widths = FAMILY_WIDTHS[family]
     widths = tuple(allowed_widths if widths is None else widths)
-    entries = tuple(supported if entries is None else entries)
+    entries = tuple(
+        DEFAULT_ENTRIES.get(family, supported) if entries is None else entries
+    )
     if (
         not widths
         or len(set(widths)) != len(widths)

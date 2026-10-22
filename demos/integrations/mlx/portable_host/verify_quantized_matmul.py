@@ -7,8 +7,11 @@ Every case routes one ``mx.quantized_matmul`` call to one translated entry and
 checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
 16-bit float split-K products round each partition's product to their type and
-sum the partitions in it; their reference rounds at the same points, in the
-order the column sum adds.
+sum the partitions in it. Below 32 partitions their reference rounds at the
+same points, in the order the small column sum adds. From 32 partitions the
+looped column sum adds through simd reductions, whose order Metal leaves
+unspecified, so those cases keep every partial product and every sum of them
+an integer that the element type holds exactly (``order_free``).
 """
 
 import argparse
@@ -86,7 +89,9 @@ CASES = (
     ("qvm-split-k-wide", "float32", 128, 2, 9000, 256, (2, 1), (2,), "dense", False),
     ("qvm-split-k-strided", "float32", 32, 8, 1024, 32, (3, 1), (3,), "strided", False),
     # 16-bit float qvm_split_k: 8 partitions summed in float16 over folded
-    # rows, and in bfloat16 over an outer batch axis.
+    # rows, and in bfloat16 over an outer batch axis; 32 partitions (looped
+    # sums) of stacked float16 weights, and of bfloat16 folded rows with a
+    # short final partition.
     ("qvm-split-k-half", "float16", 64, 4, 2048, 128, (3,), (), "dense", False),
     (
         "qvm-split-k-bfloat-strided",
@@ -100,6 +105,19 @@ CASES = (
         "strided",
         False,
     ),
+    (
+        "qvm-split-k-half-wide",
+        "float16",
+        128,
+        2,
+        9000,
+        256,
+        (2, 1),
+        (2,),
+        "dense",
+        False,
+    ),
+    ("qvm-split-k-bfloat-wide", "bfloat16", 64, 3, 8200, 64, (3,), (), "dense", False),
 )
 # Products the host refuses, as (case, the error it raises). quantized.cpp
 # sends a strided x batch over 2-D weights to qvm_split_k, whose single weight
@@ -121,25 +139,11 @@ REFUSALS = (
         ),
         "batched inputs and 2-D weights",
     ),
-    # 32 partitions take the looped column sum, which the host translates for
-    # float32 alone.
-    (
-        (
-            "qvm-split-k-half-wide",
-            "float16",
-            128,
-            2,
-            9000,
-            256,
-            (2, 1),
-            (2,),
-            "dense",
-            False,
-        ),
-        "sum 16-bit float partitions only below 32 partitions",
-    ),
 )
 SCALES = (1.0, 0.5, 0.25, 0.125)
+# The significant bits of each 16-bit float type: it holds every integer up
+# to 2 ** PRECISION[dtype] in magnitude exactly.
+PRECISION = {"float16": 11, "bfloat16": 8}
 
 
 def case_record(case):
@@ -213,11 +217,16 @@ def case_data(record, seed):
     # Quantization groups run along w's last axis: K when transposed, N not.
     rows, columns = (n, k) if record["transpose"] else (k, n)
     codes = rng.integers(0, bins + 1, size=(*w_batch, rows, columns))
-    scales = rng.choice(SCALES, size=(*w_batch, rows, columns // group)) * rng.choice(
-        (-1.0, 1.0), size=(*w_batch, rows, columns // group)
-    )
+    magnitudes = rng.choice(SCALES, size=(*w_batch, rows, columns // group))
+    signs = rng.choice((-1.0, 1.0), size=magnitudes.shape)
+    # Unit scales keep an order-free case's dequantized weights integers.
+    scales = signs if order_free(record) else magnitudes * signs
     biases = -rng.integers(0, bins + 1, size=scales.shape) * scales
     x = rng.integers(-4, 5, size=x_shape) / 4.0
+    if order_free(record):
+        x = sparse_rows(
+            rng, x_shape, record["partitions"], 2 ** PRECISION[record["dtype"]] // bins
+        )
     packed = np.stack(
         [
             np.frombuffer(packed_reference([int(c) for c in row], bits), dtype="<u4")
@@ -233,9 +242,8 @@ def case_data(record, seed):
     if bound >= 2**19:
         raise ValueError("Quantized matmul case exceeds the exact float32 budget")
     bound_x = x[::2] if record["layout"] == "strided" else x
-    if record["dtype"] != "float32" and len(record["partitions"]) >= 32:
-        # The host refuses these products, so they have no reference.
-        expected = None
+    if order_free(record):
+        expected = exact_sum(np, record, bound_x, weights)
     elif record["dtype"] != "float32" and len(record["partitions"]) > 1:
         expected = partition_sum(np, record, bound_x, weights)
     else:
@@ -247,6 +255,53 @@ def case_data(record, seed):
         "x": x,
         "expected": expected,
     }
+
+
+def order_free(record):
+    """Whether a 16-bit float split-K case's partition sum has no fixed order.
+
+    From 32 partitions reduce.cpp sums them in the looped column pass, and
+    above 256 in the two-pass reduction; both add through simd reductions.
+    """
+    return record["dtype"] != "float32" and len(record["partitions"]) >= 32
+
+
+def sparse_rows(rng, shape, partitions, budget):
+    """x rows that hold one -1 or 1 in each active partition, zeros elsewhere.
+
+    With unit scales each active partition's product is then one dequantized
+    weight, an integer of at most ``2 ** bits - 1`` in magnitude. ``budget``
+    partitions at most, spread evenly over K, are active.
+    """
+    import numpy as np
+
+    count = min(len(partitions), budget)
+    active = [partitions[index * len(partitions) // count] for index in range(count)]
+    x = np.zeros(shape)
+    for row in x.reshape(-1, shape[-1]):
+        for start, stop in active:
+            row[rng.integers(start, stop)] = rng.choice((-1.0, 1.0))
+    return x
+
+
+def exact_sum(np, record, x, weights):
+    """A 16-bit float split-K product that every summation order gives exactly.
+
+    Each partition's product is an integer and, for each output, their
+    magnitudes total at most ``2 ** PRECISION[dtype]``: every partial product
+    and every sum of some of them is an integer the element type holds, so
+    no store or addition rounds.
+    """
+    dtype = record["dtype"]
+    partials = np.stack(
+        [np.matmul(x[..., a:b], weights[..., a:b, :]) for a, b in record["partitions"]]
+    )
+    if (
+        not np.array_equal(partials, np.rint(partials))
+        or np.abs(partials).sum(axis=0).max() > 2 ** PRECISION[dtype]
+    ):
+        raise ValueError("16-bit float partition sums are not exact in every order")
+    return rounded(partials.sum(axis=0), dtype)
 
 
 def partition_sum(np, record, x, weights):
@@ -441,10 +496,9 @@ def validate_trace(trace, records, target):
         kernels != {"qmv_quad", "qmv_fast", "qmv", "qvm", "qvm_split_k"}
         or batched != {False, True}
         or sums != {
-            "col_reduce_small_1_reduce_sumfloat32",
-            "col_reduce_looped_1_32_32_reduce_sumfloat32",
-            "col_reduce_small_1_reduce_sumfloat16",
-            "col_reduce_small_1_reduce_sumbfloat16",
+            f"col_reduce_{kind}_reduce_sum{dtype}"
+            for kind in ("small_1", "looped_1_32_32")
+            for dtype in ("float32", "float16", "bfloat16")
         }
     ):
         raise RuntimeError("Quantized matmul cases do not cover every route")

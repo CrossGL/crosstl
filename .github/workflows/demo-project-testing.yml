@@ -3202,9 +3202,15 @@ jobs:
             python -m demos.integrations.mlx.portable_host.column_small_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/small-column-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX looped column package" -- \
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX split-K column packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family column --entry col_reduce_looped_1_32_32_reduce_sumfloat32 \
+              --target "${{ matrix.target }}" --family column \
+              --entry col_reduce_looped_1_32_32_reduce_sumfloat32 \
+              --entry col_reduce_looped_1_32_32_reduce_sumfloat16 \
+              --entry col_reduce_looped_1_32_32_reduce_sumbfloat16 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumfloat32 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumfloat16 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumbfloat16 \
               --jobs 2 --output-dir .mlx-portable-quantized/column-reductions \
               2>&1 | tee .mlx-portable-quantized/column-translation.log
       - name: Execute affine quantized matrix-vector products through MLX

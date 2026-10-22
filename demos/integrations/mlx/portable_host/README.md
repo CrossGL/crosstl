@@ -372,11 +372,13 @@ take `affine_qmm_t`, as batched transposed products do. Untransposed products
 take `affine_qmm_n`. The host has no NAX unit, so it never selects `qmm_nax`.
 Split-K products of float16 and bfloat16 write partial products in the element
 type, and MLX sums them in it: the host routes them to the unchanged
-`col_reduce_small_1_reduce_sumfloat16` and `..._sumbfloat16` entries, which
-round every addition. Those 16-bit sums are translated for the small pass only,
-so 16-bit split-K products in 32 or more partitions fail with an explicit error
-before any dispatch, as do gathers and the floating-point modes. Partition sums
-bind up to 2^28 - 1 partial products, the bound of the products themselves.
+`col_reduce_small_1_reduce_sum{float16,bfloat16}` entries below 32 partitions,
+`col_reduce_looped_1_32_32_reduce_sum...` from 32, and above 256 partitions of
+fewer than 32,768 outputs to `col_reduce_2pass_1_32_32_reduce_sum...` followed
+by the looped pass over its 32 partials, as reduce.cpp does. Each of them
+rounds every addition. Column packages hold these 16-bit entries only when
+asked for them by name (`reduction_packages.PARTITION_SUM_ENTRIES`). Partition
+sums bind up to 2^28 - 1 partial products, the bound of the products themselves.
 
 `matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound shapes, strides and buffer extents.
@@ -390,25 +392,31 @@ batch parameters MLX does not bind; the host supplies inert unbatched values.
 The three-platform `MLX quantized host` jobs translate every routed entry ahead
 of execution with `python -m demos.integrations.mlx.portable_host.matmul_packages
 --verification --jobs 3`, then run `verify_quantized_matmul.py` through
-`mx.quantized_matmul`. Its twenty-one cases cover every route and batch variant,
+`mx.quantized_matmul`. Its twenty-three cases cover every route and batch variant,
 all three element types and every width. The transposed cases include a partial
 `qmv_quad` tile, broadcast weights, a strided activation batch and two batch
 axes; the untransposed ones a `K` tail, a `K` shorter than one 32-row block, a
 half-empty last tile, broadcast and shared weights and two batch axes. Inputs
 lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
-match MLX's CPU backend. Two more `qvm_split_k` cases sum float16 and bfloat16
-partitions. The same jobs translate the matrix-matrix entries with
-`qmm_packages --verification` and run `verify_quantized_qmm.py`: seventeen cases
-over `affine_qmm_t`, `affine_qmm_t_splitk` with small and looped partition sums,
+match MLX's CPU backend. Four more `qvm_split_k` cases sum float16 and bfloat16
+partitions in the small and the looped pass. The same jobs translate the matrix-matrix entries with
+`qmm_packages --verification` and run `verify_quantized_qmm.py`: twenty-two cases
+over `affine_qmm_t`, `affine_qmm_t_splitk` with small, looped and two-pass
+partition sums,
 and `affine_qmm_n`, in all three element types, with stacked, broadcast and
 shared weights, folded rows, partial row and column tiles and `K` tails. Split-K
 cases cover float16 and bfloat16 partition sums, sixteen partitions that each
 threadgroup row adds two of, and 65,536 and 131,072 partial products (`test_qmm`'s
-float16 shape). A 16-bit product rounds each partition and each addition; its
-reference repeats those roundings in the column sum's order, and they change
-hundreds of outputs against a single rounding of the exact product. Each
-verifier also checks the looped 16-bit refusal above. The unchanged upstream `test_qmv` and `test_qvm` also
+float16 shape), and the looped and two-pass sums of 64 to 512 partitions in
+every element type. A 16-bit product rounds each partition and each addition.
+Below 32 partitions its reference repeats those roundings in the small column
+sum's order, and they change hundreds of outputs against a single rounding of
+the exact product. The looped and two-pass sums add through simd reductions,
+whose order Metal leaves unspecified, so their 16-bit cases use unit scales and
+at most one nonzero activation per partition: every partial product and every
+sum of them is an integer the element type holds, and each output must equal
+the exact product bit for bit in any order. The unchanged upstream `test_qmv` and `test_qvm` also
 need the floating-point `Matmul` route below for their reference products;
 `test_qmv`'s unbatched references are matrix-matrix products, which take the
 steel GEMM or split-K route.

@@ -372,10 +372,8 @@ def test_refused_products_build_their_inputs(refusal):
     record = verify.case_record(case)
     data = verify.case_data(record, 0)
     assert data["x"].shape[-1] == record["K"]
-    # A 16-bit product beyond the small column pass has no reference.
-    looped = record["dtype"] != "float32" and len(record["partitions"]) >= 32
-    assert (data["expected"] is None) == looped
-    assert looped == ("16-bit" in message)
+    # Every refusal is a layout the host cannot bind, never a 16-bit sum.
+    assert data["expected"] is not None and "16-bit" not in message
 
 
 def test_qvm_split_partitions_follow_quantized_cpp():
@@ -391,16 +389,21 @@ def test_qvm_split_partitions_follow_quantized_cpp():
         assert record["partitions"][0] == [0, width]
         assert record["partitions"][-1] == [(info["splitK"] - 1) * width, record["K"]]
     halves = {
-        record["dtype"]: record["dispatches"][1:]
+        (record["dtype"], len(record["partitions"]), *record["dispatches"][1:])
         for record in map(verify.case_record, verify.CASES)
         if record["dtype"] != "float32" and len(record["partitions"]) > 1
     }
     assert halves == {
-        "float16": ["col_reduce_small_1_reduce_sumfloat16"],
-        "bfloat16": ["col_reduce_small_1_reduce_sumbfloat16"],
+        ("float16", 8, "col_reduce_small_1_reduce_sumfloat16"),
+        ("bfloat16", 8, "col_reduce_small_1_reduce_sumbfloat16"),
+        ("float16", 32, "col_reduce_looped_1_32_32_reduce_sumfloat16"),
+        ("bfloat16", 32, "col_reduce_looped_1_32_32_reduce_sumbfloat16"),
     }
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert 'partition_sum_type(out, split_k, "vector-matrix products");' in backend
+    # reduce.cpp sums 16-bit partitions in their type in every pass.
+    assert "partition_sum_type" not in backend
+    assert "16-bit float partitions only below" not in backend
+    assert backend.count("const char* storage = matmul_storage(out.dtype());") >= 2
     assert 'std::string(mode) + "_qvm_split_k_" +' in backend
     assert '"affine", group_size_, bits_, M, N, K);' in backend
     assert (
@@ -913,7 +916,18 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
     assert "portable_host.column_small_packages" in sums["run"]
     assert "--verification" in sums["run"]
     assert "--family column" in sums["run"]
-    assert "--entry col_reduce_looped_1_32_32_reduce_sumfloat32" in sums["run"]
+    # Each looped and two-pass sum the quantized verifications launch.
+    from demos.integrations.mlx.portable_host import verify_quantized_qmm
+
+    launched = {
+        entry
+        for module in (verify, verify_quantized_qmm)
+        for case in module.CASES
+        for entry in module.case_record(case)["dispatches"][1:]
+        if not entry.startswith("col_reduce_small_")
+    }
+    assert set(re.findall(r"--entry (\S+)", sums["run"])) == launched
+    assert len(launched) == 6
     assert "--output-dir .mlx-portable-quantized/column-reductions" in sums["run"]
     assert "--reductions .mlx-portable-quantized/column-reductions" in step["run"]
     assert (
@@ -925,3 +939,78 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
     # The half host job no longer runs the products.
     half = [item.get("name") for item in workflow["jobs"]["half-host"]["steps"]]
     assert name not in half
+
+
+def _order_free_records():
+    from demos.integrations.mlx.portable_host import verify_quantized_qmm
+
+    records = [
+        module.case_record(case)
+        for module in (verify, verify_quantized_qmm)
+        for case in module.CASES
+    ]
+    return [record for record in records if verify.order_free(record)]
+
+
+def test_order_free_cases_cover_the_looped_and_two_pass_sums():
+    sums = {
+        entry for record in _order_free_records() for entry in record["dispatches"][1:]
+    }
+    assert sums == {
+        f"col_reduce_{mode}_1_32_32_reduce_sum{dtype}"
+        for mode in ("looped", "2pass")
+        for dtype in ("float16", "bfloat16")
+    }
+
+
+@pytest.mark.parametrize(
+    "record", _order_free_records(), ids=lambda record: record["name"]
+)
+def test_order_free_cases_keep_every_partition_sum_exact(record):
+    import numpy as np
+
+    data = verify.case_data(record, 3)
+    bins = (1 << record["bits"]) - 1
+    # Unit scales: each dequantized weight is an integer of at most bins.
+    assert set(np.unique(np.abs(data["scales"]))) == {1.0}
+    assert np.abs(data["biases"]).max() <= bins
+    # At most one -1 or 1 per partition of each x row, so each partition's
+    # product is one weight and the magnitudes total at most active * bins.
+    rows = data["x"].reshape(-1, record["K"])
+    assert set(np.unique(rows)) == {-1.0, 0.0, 1.0}
+    active = {
+        index
+        for index, (start, stop) in enumerate(record["partitions"])
+        if np.abs(rows[:, start:stop]).sum(axis=1).max() == 1
+    }
+    for start, stop in record["partitions"]:
+        assert np.abs(rows[:, start:stop]).sum(axis=1).max() <= 1
+    assert len(active) * bins <= 2 ** verify.PRECISION[record["dtype"]]
+    # Every partition is active unless the element type's budget runs out.
+    assert len(active) == min(
+        len(record["partitions"]),
+        2 ** verify.PRECISION[record["dtype"]] // bins,
+    )
+    expected = data["expected"]
+    assert expected.shape[-1] == record["N"] and np.abs(expected).max() > 0
+
+
+def test_exact_sums_refuse_partials_that_some_order_rounds():
+    import numpy as np
+
+    record = {"dtype": "bfloat16", "partitions": [[0, 1], [1, 2]]}
+    x = np.array([[1.0, 1.0]])
+    # 128 + -128 = 0: every order is exact within bfloat16's 256.
+    weights = np.array([[128.0], [-128.0]])
+    assert verify.exact_sum(np, record, x, weights).tolist() == [[0.0]]
+    # 256 + 1 rounds to 256 in bfloat16; 0.5 is not an integer.
+    for weights in (np.array([[256.0], [1.0]]), np.array([[0.5], [1.0]])):
+        with pytest.raises(ValueError, match="every order"):
+            verify.exact_sum(np, record, x, weights)
+    # float16 holds every integer to 2048 exactly, but not 2049.
+    record["dtype"] = "float16"
+    assert verify.exact_sum(np, record, x, np.array([[1024.0], [1024.0]])).tolist() == [
+        [2048.0]
+    ]
+    with pytest.raises(ValueError, match="every order"):
+        verify.exact_sum(np, record, x, np.array([[2048.0], [1.0]]))

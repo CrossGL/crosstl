@@ -12,7 +12,10 @@ dyadic grids with power-of-two scales, so every dequantized weight is exact in
 the element type the kernels dequantize into and every float32 partial sum is
 exact, whatever its order; only the final cast rounds. 16-bit float split-K
 products also round each partition's product and every addition of their
-partition sum, which the reference repeats in the column sum's order.
+partition sum. Below 32 partitions the reference repeats those roundings in
+the small column sum's order; the looped and two-pass sums' simd reductions
+have no fixed order, so their cases keep every partial product and sum exact
+in the element type (``verify_quantized_matmul.order_free``).
 """
 
 import argparse
@@ -23,10 +26,7 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import column_small_layout, qmm_layout
 from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
-from demos.integrations.mlx.portable_host.verify_quantized_matmul import (
-    run_case,
-    run_refusal,
-)
+from demos.integrations.mlx.portable_host.verify_quantized_matmul import run_case
 
 # (name, dtype, group, bits, K, N, x shape before K, w batch shape, layout,
 # transpose), as in verify_quantized_matmul. Layouts: "dense" binds x as
@@ -59,9 +59,13 @@ CASES = (
     ("qmm-t-split-looped", "float32", 32, 2, 2048, 32, (20,), (), "dense", True),
     ("qmm-t-split-tiles", "float32", 128, 5, 512, 99, (129,), (), "dense", True),
     ("qmm-t-split-wide-sum", "float32", 32, 6, 2048, 32, (32,), (), "dense", True),
+    # 512 partitions of one tile: the two-pass sum.
+    ("qmm-t-split-two-pass", "float32", 32, 4, 16384, 32, (20,), (), "dense", True),
     # 16-bit float partitions, summed in their type: 4 partitions, 16
-    # partitions that each threadgroup row adds two of, and test_qmm's
-    # 8 partitions of 131,072 float16 partial products.
+    # partitions that each threadgroup row adds two of, test_qmm's 8
+    # partitions of 131,072 float16 partial products, 64 partitions of one
+    # and of four tiles (looped sums), and 512 and 384 partitions of one tile
+    # (two-pass sums), the bfloat16 one over folded rows.
     ("qmm-t-split-half", "float16", 64, 4, 256, 8, (30,), (), "dense", True),
     (
         "qmm-t-split-bfloat-interleaved",
@@ -76,6 +80,43 @@ CASES = (
         True,
     ),
     ("qmm-t-split-half-wide", "float16", 32, 4, 256, 256, (64,), (), "dense", True),
+    ("qmm-t-split-half-looped", "float16", 32, 3, 2048, 32, (20,), (), "dense", True),
+    (
+        "qmm-t-split-bfloat-looped",
+        "bfloat16",
+        64,
+        2,
+        4096,
+        40,
+        (33,),
+        (),
+        "dense",
+        True,
+    ),
+    (
+        "qmm-t-split-half-two-pass",
+        "float16",
+        32,
+        2,
+        16384,
+        32,
+        (20,),
+        (),
+        "dense",
+        True,
+    ),
+    (
+        "qmm-t-split-bfloat-two-pass",
+        "bfloat16",
+        64,
+        3,
+        24576,
+        24,
+        (2, 6),
+        (),
+        "dense",
+        True,
+    ),
     # qmm_n: a K tail over two row tiles, stacked, broadcast and shared
     # weights, and a single row tile at the vector limit. MLX gives every
     # broadcast unit axis a zero stride, so broadcast weights keep two groups
@@ -87,32 +128,21 @@ CASES = (
     ("qmm-n-shared-weights", "float16", 32, 5, 33, 32, (3, 10), (), "strided", False),
     ("qmm-n-limit", "float32", 64, 6, 13, 64, (4,), (), "dense", False),
 )
-# Products the host refuses, as (case, the error it raises): 16-bit float
-# partial products in 32 or more partitions take the looped column sum, which
-# the host translates for float32 alone.
-REFUSALS = (
-    (
-        (
-            "qmm-t-split-half-looped",
-            "float16",
-            32,
-            2,
-            2048,
-            32,
-            (20,),
-            (),
-            "dense",
-            True,
-        ),
-        "sum 16-bit float partitions only below 32 partitions",
-    ),
-)
-SUM_KINDS = {"small": "col_reduce_small_1", "looped": "col_reduce_looped_1_32_32"}
+# The column sums of each qmm_layout.partition_sum plan, in dispatch order:
+# col_reduce_2pass leaves 32 partials of each output for a looped pass.
+SUM_KINDS = {
+    "small": ("col_reduce_small_1",),
+    "looped": ("col_reduce_looped_1_32_32",),
+    "two-pass": ("col_reduce_2pass_1_32_32", "col_reduce_looped_1_32_32"),
+}
 SUM_ENTRIES = {
-    "col_reduce_small_1_reduce_sumfloat32",
-    "col_reduce_looped_1_32_32_reduce_sumfloat32",
-    "col_reduce_small_1_reduce_sumfloat16",
-    "col_reduce_small_1_reduce_sumbfloat16",
+    f"{kind}_reduce_sum{dtype}"
+    for kind in (
+        "col_reduce_small_1",
+        "col_reduce_looped_1_32_32",
+        "col_reduce_2pass_1_32_32",
+    )
+    for dtype in ("float32", "float16", "bfloat16")
 }
 
 
@@ -131,8 +161,8 @@ def case_record(case):
     )
     sums = []
     if split > 1:
-        kind = SUM_KINDS[qmm_layout.partition_sum(m, n, split)]
-        sums = [f"{kind}_reduce_sum{dtype}"]
+        kinds = SUM_KINDS[qmm_layout.partition_sum(m, n, split)]
+        sums = [f"{kind}_reduce_sum{dtype}" for kind in kinds]
     width = k // split
     return {
         "name": name,
@@ -216,7 +246,7 @@ def verify(root, packages, output, reductions=None):
         packages, output / "trace.jsonl", mlx_root=root, reductions=reductions
     )
     host.install()
-    records, refusals = [], []
+    records = []
     try:
         for seed, case in enumerate(CASES):
             record = run_case(mx, np, host, case_record(case), seed)
@@ -225,16 +255,6 @@ def verify(root, packages, output, reductions=None):
                 json.dumps({"target": host.target, "cases": records}, indent=2)
             )
             print(json.dumps(record), flush=True)
-        for seed, refusal in enumerate(REFUSALS, start=len(CASES)):
-            refusals.append(
-                run_refusal(mx, np, host, refusal, seed, record_for=case_record)
-            )
-        (output / "results.json").write_text(
-            json.dumps(
-                {"target": host.target, "cases": records, "refusals": refusals},
-                indent=2,
-            )
-        )
     finally:
         close = getattr(host.executor.runtime_adapter.runtime, "close", None)
         if close:

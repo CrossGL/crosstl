@@ -2277,18 +2277,6 @@ void dispatch_qmm(
   quantized_dispatch(entry, buffers, out.size(), launch, "quantized matrix product");
 }
 
-// reduce.cpp sums 16-bit float partitions in their own type. The host
-// translates that sum only for strided_reduce_small, which reduces fewer than
-// 32 partitions; refuse before the product runs.
-const char* partition_sum_type(const array& out, int partitions, const char* label) {
-  if (out.dtype() != float32 && partitions >= 32) {
-    throw std::invalid_argument(
-        std::string("CrossTL split-K ") + label +
-        " sum 16-bit float partitions only below 32 partitions.");
-  }
-  return matmul_storage(out.dtype());
-}
-
 // quantized.cpp qmm_splitk: K in split_k partitions whose partial products
 // land on a leading partition axis, then a strided sum over that axis.
 void dispatch_qmm_split_k(
@@ -2304,8 +2292,7 @@ void dispatch_qmm_split_k(
     int N,
     int K,
     int split_k) {
-  const char* storage =
-      partition_sum_type(out, split_k, "quantized matrix products");
+  const char* storage = matmul_storage(out.dtype());
   auto temp_shape = out.shape();
   if (temp_shape.size() == 1) {
     temp_shape.insert(temp_shape.begin(), 1);
@@ -2372,8 +2359,7 @@ void dispatch_qvm_split_k(
     int N,
     int K) {
   const int split_k = K > 8192 ? 32 : 8;
-  const char* storage =
-      partition_sum_type(out, split_k, "vector-matrix products");
+  const char* storage = matmul_storage(out.dtype());
   // adjust_matrix_offsets moves a single weight batch axis by tid.z without
   // wrapping it, so 2-D weights (the partition axis alone) under batched x
   // read past the last partition in quantized.h.

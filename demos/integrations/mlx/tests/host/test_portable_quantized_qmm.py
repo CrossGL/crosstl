@@ -228,12 +228,19 @@ def test_verification_cases_cover_every_route():
         for record in RECORDS
         if record["splitK"] > 1
     }
+    two_pass = "col_reduce_2pass_1_32_32_reduce_sum"
+    looped = "col_reduce_looped_1_32_32_reduce_sum"
     assert splits == {
         (4, "float32", "col_reduce_small_1_reduce_sumfloat32"),
-        (64, "float32", "col_reduce_looped_1_32_32_reduce_sumfloat32"),
+        (64, "float32", looped + "float32"),
+        (512, "float32", two_pass + "float32", looped + "float32"),
         (4, "float16", "col_reduce_small_1_reduce_sumfloat16"),
         (8, "float16", "col_reduce_small_1_reduce_sumfloat16"),
         (16, "bfloat16", "col_reduce_small_1_reduce_sumbfloat16"),
+        (64, "float16", looped + "float16"),
+        (64, "bfloat16", looped + "bfloat16"),
+        (512, "float16", two_pass + "float16", looped + "float16"),
+        (384, "bfloat16", two_pass + "bfloat16", looped + "bfloat16"),
     }
     assert verify.small_column_variants() == {
         "col_reduce_small_1_reduce_sumfloat32@32x4",
@@ -259,12 +266,17 @@ def test_verification_cases_cover_every_route():
         assert record["partitions"] == [
             [start, start + width] for start in range(0, record["K"], width)
         ]
-    # 16-bit float partitions beyond the small column pass are refused.
-    ((case, _),) = verify.REFUSALS
-    looped = verify.case_record(case)
-    assert layout.signature(looped["entry"])["kernel"] == "qmm_t_splitk"
-    assert looped["dtype"] == "float16" and looped["splitK"] == 64
-    assert case_data(looped, 0)["expected"] is None
+    # Every split-K plan runs: the two-pass sum above 256 partitions of fewer
+    # than 32,768 outputs, the bfloat16 one over a folded 3-D x.
+    plans = {
+        layout.partition_sum(record["M"], record["N"], record["splitK"])
+        for record in RECORDS
+        if record["splitK"] > 1
+    }
+    assert plans == {"small", "looped", "two-pass"}
+    (folded,) = (r for r in RECORDS if r["name"] == "qmm-t-split-bfloat-two-pass")
+    assert folded["xShape"] == [2, 6, 24576] and folded["M"] == 12
+    assert not hasattr(verify, "REFUSALS")
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
@@ -584,10 +596,9 @@ def test_backend_routes_matrix_products_as_quantized_cpp():
         "{{tiles_n, tiles_m, uint32_t(split_k)}, {32, 2, 2}}",
         "{{tiles_n, tiles_m, uint32_t(B)}, {32, 2, 2}}",
         'dispatch_column_reduce(intermediate, out, plan, {0}, "sum", storage);',
-        "sum 16-bit float partitions only below 32 partitions",
-        "if (out.dtype() != float32 && partitions >= 32) {",
     ):
         assert text in backend, text
+    assert "partition_sum_type" not in backend
 
 
 def test_trace_validation_requires_the_routed_entries():

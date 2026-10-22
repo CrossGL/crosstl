@@ -157,6 +157,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
     INIT_ENTRIES,
+    PARTITION_SUM_ENTRIES,
     ROW_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -714,7 +715,9 @@ class HostRuntime:
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
         small_column = entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
-        column_reduction = entry in COLUMN_ENTRIES or small_column
+        column_reduction = (
+            entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES or small_column
+        )
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
             (column_small_layout if small_column else column_reduction_layout)

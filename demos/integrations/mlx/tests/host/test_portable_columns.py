@@ -4,6 +4,7 @@ import copy
 import ctypes
 import json
 import struct
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -114,8 +115,6 @@ def test_column_cases_cover_upstream_thresholds_and_repeated_tiles():
 
 
 def test_column_ci_includes_metadata_tests_on_changes():
-    from pathlib import Path
-
     from tools import ci_coverage
 
     workflow = (
@@ -130,8 +129,6 @@ def test_column_ci_includes_metadata_tests_on_changes():
 
 
 def test_column_rejection_messages_match_the_host_backend():
-    from pathlib import Path
-
     from demos.integrations.mlx.portable_host import verify_columns
 
     source = (Path(verify_columns.__file__).with_name("backend.cpp")).read_text()
@@ -477,3 +474,38 @@ def test_column_evidence_checks_every_native_pass(column_evidence, fault):
             column_workloads.validate(records, trace=trace)
     else:
         column_workloads.validate(records, trace=trace)
+
+
+@pytest.mark.parametrize("two_pass", (False, True))
+@pytest.mark.parametrize("dtype", ("float16", "bfloat16"))
+def test_partition_sums_validate_their_16_bit_passes(two_pass, dtype):
+    entry, buffers, count, execution, _ = _buffers(two_pass)
+    entry = entry.replace("float32", dtype)
+    assert reduction_packages.PARTITION_SUM_ENTRIES[entry] == dtype
+    # The column workloads reduce MLX arrays, whose 16-bit sums stay refused.
+    assert entry not in reduction_packages.COLUMN_ENTRIES
+    assert entry in reduction_packages.ENTRY_GROUPS["column"]
+    for name in ("in", "out"):
+        old = buffers[name]
+        buffers[name] = runtime.Buffer(
+            old.name, dtype.encode(), old.data, old.count, old.output
+        )
+    metadata = column_reduction_layout.validate(entry, buffers, count, execution)
+    assert metadata["reduction_stride"] == [33]
+    with pytest.raises(ValueError, match="buffer layout"):
+        column_reduction_layout.validate(
+            entry.replace(dtype, "float32"), buffers, count, execution
+        )
+
+
+def test_column_packages_translate_partition_sums_only_on_request():
+    assert set(reduction_packages.PARTITION_SUM_ENTRIES) == {
+        f"col_reduce_{mode}_1_32_32_reduce_sum{dtype}"
+        for mode in ("looped", "2pass")
+        for dtype in ("float16", "bfloat16")
+    }
+    assert reduction_packages.DEFAULT_ENTRIES == {
+        "column": reduction_packages.COLUMN_ENTRIES
+    }
+    source = Path(runtime.__file__).read_text(encoding="utf-8")
+    assert "entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES" in source

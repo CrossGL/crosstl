@@ -3,7 +3,10 @@
 import ctypes
 import math
 
-from demos.integrations.mlx.portable_host.reduction_packages import COLUMN_ENTRIES
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    COLUMN_ENTRIES,
+    PARTITION_SUM_ENTRIES,
+)
 
 LOOPED = {
     "in": None,
@@ -131,7 +134,7 @@ def template_dimension(reduce_ndim):
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
     metadata, (size, stride, total, outer, reduce_ndim) = read_metadata(
-        entry, COLUMN_ENTRIES, spec, buffers, logical_size
+        entry, {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES}, spec, buffers, logical_size
     )
     output_size = outer * stride
     two_pass = spec is TWO_PASS
