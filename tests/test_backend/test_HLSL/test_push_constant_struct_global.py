@@ -63,3 +63,32 @@ def test_vk_push_constant_struct_global_reparses():
     assert "@ push_constant" in crossgl
     assert "ConstantBuffer<PushConstants> push_constants;" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_fixed_cbuffer_register_is_reserved_before_push_constants(tmp_path):
+    # Source shape: SaschaWillems/Vulkan hlsl/pushconstants/pushconstants.vert. The push-constant block has no
+    # register, so it must not take b0 from the cbuffer declared after it.
+    import re
+
+    import crosstl
+
+    source = tmp_path / "shader.vert.hlsl"
+    source.write_text(textwrap.dedent("""
+            struct UBO { float4x4 projection; };
+            cbuffer ubo : register(b0) { UBO ubo; }
+            struct PushConsts { float4 color; };
+            [[vk::push_constant]] PushConsts pushConsts;
+            struct VSOutput { float4 Pos : SV_POSITION; };
+            VSOutput main(float3 pos : POSITION0)
+            {
+                VSOutput output = (VSOutput)0;
+                output.Pos = mul(ubo.projection, float4(pos + pushConsts.color.xyz, 1.0));
+                return output;
+            }
+        """))
+
+    hlsl = crosstl.translate(str(source), backend="directx", format_output=False)
+
+    assert re.search(r"cbuffer ubo : register\(b0\)", hlsl)
+    push = re.search(r"pushConsts : register\(b(\d+)\)", hlsl)
+    assert push is not None and push.group(1) != "0"

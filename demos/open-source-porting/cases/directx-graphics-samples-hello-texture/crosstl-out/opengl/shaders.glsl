@@ -3,7 +3,7 @@
 layout(location = 4) out vec2 out_uv;
 #endif
 #ifdef GL_FRAGMENT_SHADER
-layout(location = 4) in vec2 in_out_uv;
+layout(location = 4) in vec2 out_uv;
 #endif
 #ifdef GL_VERTEX_SHADER
 layout(location = 0) in vec4 position;
@@ -25,7 +25,7 @@ void main() {
 // Fragment Shader
 layout(location = 0) out vec4 fragColor;
 void main() {
-    fragColor = texture(g_texture, in_out_uv);
+    fragColor = texture(g_texture, out_uv);
     return;
 }
 

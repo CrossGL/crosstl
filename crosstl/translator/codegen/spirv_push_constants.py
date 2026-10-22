@@ -9,6 +9,10 @@ one with ``@ buffer_layout(std140)`` or ``@ buffer_layout(scalar)`` (GLSL ``layo
 GL_EXT_scalar_block_layout); a ``Uniform`` block at the ``std140`` offsets would both bind through the wrong interface
 and move every array and scalar after a vector.
 
+A member with an explicit ``@ offset(N)`` (GLSL ``layout(offset = N)``, as in a push-constant range that several
+stages share) keeps that offset: such a block is decorated member by member through
+:func:`spirv_placed_blocks.placed_uniform_block`, with the block's layout as the rules for every other member.
+
 A stage statically uses at most one push-constant variable (VUID-StandaloneSpirv-OpEntryPoint-06674), and GLSL and
 HLSL both allow a single push-constant block per stage, so a second block is refused.
 """
@@ -100,16 +104,33 @@ def declare_push_constant_block(codegen, cbuffer_node, members):
     :func:`push_constant_layout`) so the logical types used by function and workgroup variables keep no explicit
     layout decorations. Returns the variable and the laid-out members.
     """
+    from .spirv_placed_blocks import (
+        decorate_placed_uniform_block,
+        placed_member_type,
+        placed_uniform_block,
+    )
+
     layout = push_constant_layout(cbuffer_node)
     _claim_push_constant_slot(codegen, cbuffer_node.name)
+    placed = placed_uniform_block(codegen, cbuffer_node, plain_layout=layout)
     laid_out = [
-        (codegen.storage_layout_type(member_type, layout), member_name)
+        (
+            (
+                placed_member_type(codegen, member_type, member_name, placed)
+                if placed is not None
+                else codegen.storage_layout_type(member_type, layout)
+            ),
+            member_name,
+        )
         for member_type, member_name in members
     ]
     block_type = codegen.register_struct_type(cbuffer_node.name, laid_out)
-    codegen.decorate_storage_buffer_block_type(
-        block_type, layout, block_decoration="Block"
-    )
+    if placed is not None:
+        decorate_placed_uniform_block(codegen, block_type, placed)
+    else:
+        codegen.decorate_storage_buffer_block_type(
+            block_type, layout, block_decoration="Block"
+        )
     variable = codegen.create_variable(
         block_type, PUSH_CONSTANT_STORAGE_CLASS, cbuffer_node.name
     )

@@ -7715,9 +7715,9 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "fragment void fragment_main" not in metal
 
     assert "layout(location = 4) out vec2 out_uv;" in opengl
-    assert "layout(location = 4) in vec2 in_out_uv;" in opengl
+    assert "layout(location = 4) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
-    assert "fragColor = texture(g_texture, in_out_uv);" in opengl
+    assert "fragColor = texture(g_texture, out_uv);" in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
     assert "void main() {\n}" not in opengl
     assert "PSInput" not in opengl

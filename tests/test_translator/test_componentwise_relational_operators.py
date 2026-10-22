@@ -36,8 +36,7 @@ from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
-RELATIONAL_PROGRAM = textwrap.dedent(
-    """
+RELATIONAL_PROGRAM = textwrap.dedent("""
     shader S {
       struct FragmentInput { vec3 v @ TEXCOORD0; }
       struct FragmentOutput { vec4 color @ gl_FragColor; }
@@ -57,8 +56,7 @@ RELATIONAL_PROGRAM = textwrap.dedent(
         }
       }
     }
-    """
-)
+    """)
 
 GLSL_RELATIONAL_BUILTINS = (
     "lessThan(",
@@ -126,7 +124,11 @@ def require_tool(name):
             "f(v) == v",
             "all(f(v) == v)",
         ),
-        ("uniform vec3 v;\n", "normalize(v) == v * 2.0", "all(normalize(v) == (v * 2.0))"),
+        (
+            "uniform vec3 v;\n",
+            "normalize(v) == v * 2.0",
+            "all(normalize(v) == (v * 2.0))",
+        ),
         ("uniform vec3 v;\n", "(v + 1.0) != -v", "any((v + 1.0) != (-v))"),
         ("uniform ivec4 i;\n", "i == ivec4(0)", "all(i == ivec4(0))"),
         ("uniform bvec2 b;\n", "b != bvec2(true)", "any(b != bvec2(true))"),
@@ -147,9 +149,7 @@ def require_tool(name):
 def test_glsl_importer_reduces_vector_equality_to_one_bool(
     declarations, expression, expected
 ):
-    code = import_glsl(
-        glsl_fragment(declarations, f"bool r = {expression};\n")
-    )
+    code = import_glsl(glsl_fragment(declarations, f"bool r = {expression};\n"))
     assert statement_lines(code, "bool r =") == [f"bool r = {expected};"]
 
 
@@ -231,9 +231,7 @@ def test_glsl_equality_operand_kinds(type_name, structs, expected):
 
 
 def test_glsl_importer_refuses_equality_whose_operand_types_are_unknown():
-    source = glsl_fragment(
-        "", "bool r = externalValue(1.0) == externalValue(2.0);\n"
-    )
+    source = glsl_fragment("", "bool r = externalValue(1.0) == externalValue(2.0);\n")
     with pytest.raises(GlslAggregateEqualityError, match="operand types"):
         import_glsl(source)
 
@@ -329,10 +327,7 @@ def test_spirv_lowers_relational_builtins_and_boolean_reductions():
 
 
 def test_spirv_reduces_numeric_vectors_and_scalars():
-    code = VulkanSPIRVCodeGen().generate(
-        parse(
-            textwrap.dedent(
-                """
+    code = VulkanSPIRVCodeGen().generate(parse(textwrap.dedent("""
                 shader S {
                   struct FragmentInput { vec3 v @ TEXCOORD0; }
                   struct FragmentOutput { vec4 color @ gl_FragColor; }
@@ -346,10 +341,7 @@ def test_spirv_reduces_numeric_vectors_and_scalars():
                     }
                   }
                 }
-                """
-            )
-        )
-    )
+                """)))
     assert code.count("OpAny") == 1
     assert "OpAll" not in code
     # float(bool) selects 1.0 or 0.0 (GLSL 4.60 section 5.4.1).
@@ -359,16 +351,16 @@ def test_spirv_reduces_numeric_vectors_and_scalars():
 def test_glsl_emitter_spells_vector_logical_not_with_not():
     code = GLSLCodeGen().generate(parse(RELATIONAL_PROGRAM))
     lines = {line.strip() for line in code.splitlines()}
+    # The local v is renamed so that it does not hide the stage input v it is copied from.
+    assert "vec3 v_2 = v;" in lines
     assert "bvec3 ne = not(eq);" in lines
-    assert "bvec3 nv = not(bvec3(v));" in lines
+    assert "bvec3 nv = not(bvec3(v_2));" in lines
     assert "bvec3 nb = not(lt);" in lines
-    assert "bvec3 lt = lessThan(v, vec3(0.5));" in lines
+    assert "bvec3 lt = lessThan(v_2, vec3(0.5));" in lines
 
 
 def test_user_functions_named_like_relational_builtins_are_not_lowered():
-    program = parse(
-        textwrap.dedent(
-            """
+    program = parse(textwrap.dedent("""
             shader S {
               struct FragmentInput { vec3 v @ TEXCOORD0; }
               struct FragmentOutput { vec4 color @ gl_FragColor; }
@@ -383,9 +375,7 @@ def test_user_functions_named_like_relational_builtins_are_not_lowered():
                 }
               }
             }
-            """
-        )
-    )
+            """))
     assert lower_relational_builtins(program) == 1
     hlsl = HLSLCodeGen().generate(program)
     assert "equal(input.v, float3(0.0, 0.0, 0.0))" in hlsl
@@ -458,7 +448,16 @@ def test_relational_program_compiles_with_xcrun_metal(tmp_path):
     source = tmp_path / "relational.metal"
     source.write_text(MetalCodeGen().generate(parse(RELATIONAL_PROGRAM)), "utf-8")
     run_tool(
-        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(tmp_path / "r.air")]
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(source),
+            "-o",
+            str(tmp_path / "r.air"),
+        ]
     )
 
 

@@ -290,24 +290,28 @@ def _check_validator_extents(
             _check_validator_extents(nested.struct_name, nested_placements, layout)
 
 
-def _std140_signature(layout_type):
-    """The std140 placements of a block's members, or ``None`` when std140 has no layout for one (a packed
-    vector)."""
-    std140_type = replace(layout_type, offsets=(), alignments=())
+def _plain_signature(layout_type, layout):
+    """The placements of a block's members under ``layout`` without explicit offsets or alignments, or ``None``
+    when ``layout`` has no layout for one (a packed vector)."""
+    plain_type = replace(layout_type, offsets=(), alignments=())
     try:
-        std140 = _root_placements(std140_type, STD140_LAYOUT)
-        return _placements_signature(std140, STD140_LAYOUT)
+        plain = _root_placements(plain_type, layout)
+        return _placements_signature(plain, layout)
     except HlslLayoutError:
         return None
 
 
-def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
-    """The placements of a ``cbuffer`` whose bytes differ from std140, or ``None`` for the std140 path.
+def placed_uniform_block(
+    codegen, node, plain_layout=STD140_LAYOUT
+) -> PlacedUniformBlock | None:
+    """The placements of a ``cbuffer`` whose bytes differ from ``plain_layout``, or ``None`` for that path.
 
-    Blocks without explicit placements that declare std430 or scalar keep their own path, and so does a block
-    the planners place exactly as std140 does.
+    ``plain_layout`` is the layout the generator's own path gives the block: std140 for a uniform block, and the
+    declared layout or std430 for a push-constant block, which is also the rule set its members follow. Blocks
+    without explicit placements that declare std430 or scalar keep their own path, and so does a block the
+    planners place exactly as ``plain_layout`` does.
     """
-    layout = declared_buffer_layout(getattr(node, "attributes", None)) or STD140_LAYOUT
+    layout = declared_buffer_layout(getattr(node, "attributes", None)) or plain_layout
     members = _block_members(node)
     explicit = _has_explicit_placement(members)
     if layout not in ALWAYS_PLACED_LAYOUTS and not explicit:
@@ -322,7 +326,9 @@ def placed_uniform_block(codegen, node) -> PlacedUniformBlock | None:
     try:
         layout_type = _block_layout_type(codegen, node, members)
         placements = _root_placements(layout_type, layout)
-        if _placements_signature(placements, layout) == _std140_signature(layout_type):
+        if _placements_signature(placements, layout) == _plain_signature(
+            layout_type, plain_layout
+        ):
             return None
         column_arrays = _column_array_members(placements, layout)
         _check_validator_extents(node.name, placements, layout, column_arrays)

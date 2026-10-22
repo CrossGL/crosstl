@@ -18777,11 +18777,12 @@ def test_glsl_fragment_stage_declares_shared_vertex_fragment_output_struct():
     combined_code = GLSLCodeGen().generate(ast)
     fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
 
+    # Each guarded stage section is its own compilation unit, so the fragment input keeps the vertex output's name.
     assert "layout(location = 13) out vec4 color;" in combined_code
-    assert "layout(location = 13) in vec4 in_color;" in combined_code
+    assert "layout(location = 13) in vec4 color;" in combined_code
     assert "layout(location = 13) out vec4 out_color;" in combined_code
-    assert "out_color = in_color;" in combined_code
-    assert "layout(location = 13) in vec4 color;" not in combined_code
+    assert "out_color = color;" in combined_code
+    assert "in_color" not in combined_code
 
     assert "layout(location = 13) in vec4 color;" in fragment_code
     assert "layout(location = 13) out vec4 out_color;" in fragment_code
@@ -22312,7 +22313,7 @@ def test_generate_stage_splits_combined_vertex_fragment_units():
     assert "input." not in fragment_code
 
 
-def test_glsl_combined_struct_io_renames_fragment_input_colliding_with_vertex_output():
+def test_glsl_combined_struct_io_fragment_input_keeps_renamed_vertex_output_name():
     shader = """
     shader CombinedStructIOAvoidsSameUnitInputOutputCollision {
         struct VSInput {
@@ -22341,10 +22342,12 @@ def test_glsl_combined_struct_io_renames_fragment_input_colliding_with_vertex_ou
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
+    # The vertex output is renamed away from the vertex input ``uv``; the fragment input, in its own guarded
+    # compilation unit, takes the same name so that it also links by name.
     assert "layout(location = 5) out vec2 out_uv;" in generated_code
-    assert "layout(location = 5) in vec2 in_out_uv;" in generated_code
-    assert "fragColor = vec4(in_out_uv, 0.0, 1.0);" in generated_code
-    assert "layout(location = 5) in vec2 out_uv;" not in generated_code
+    assert "layout(location = 5) in vec2 out_uv;" in generated_code
+    assert "fragColor = vec4(out_uv, 0.0, 1.0);" in generated_code
+    assert "in_out_uv" not in generated_code
 
 
 def test_glsl_combined_multi_stage_entries_use_distinct_names():
@@ -26139,7 +26142,9 @@ def test_stage_tail_struct_constructor_returns_stage_output():
     assert "struct VertexInput {" not in generated_code
     assert "struct VertexOutput {" not in generated_code
     assert "void main()" in generated_code
-    assert "out_position = vec4(position, 1.0);" in generated_code
+    # ``position`` is a float4 without a semantic, so it carries the clip position, as in HLSL and Metal.
+    assert "gl_Position = vec4(position, 1.0);" in generated_code
+    assert "out_position" not in generated_code
     assert "out_color = color;" in generated_code
     assert "return;" in generated_code
     assert "ConstructorNode(" not in generated_code
@@ -26169,7 +26174,8 @@ def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
 
     assert "struct VertexOutput {" in generated_code
     assert "float readColor(VertexOutput value)" in generated_code
-    assert "position = vec4(1.0);" in generated_code
+    assert "gl_Position = vec4(1.0);" in generated_code
+    assert "out vec4 position;" not in generated_code
     assert "color = vec4(0.25);" in generated_code
     assert "return VertexOutput" not in generated_code
 

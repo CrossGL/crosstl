@@ -77,6 +77,12 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.hlsl_ray_payloads import (
+    PAYLOAD_ACCESS_ATTRIBUTES,
+    PAYLOAD_STAGES,
+    RAY_PAYLOAD_ATTRIBUTE,
+    HlslRayPayloadUnsupportedError,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -220,7 +226,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
-from .hlsl_buffer_layout import HlslLayoutError
+from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
@@ -2474,6 +2480,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.fragment_entry_output_struct_names = set()
+        self.geometry_entry_vertex_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -3844,6 +3851,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
+        self.geometry_entry_vertex_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -4050,6 +4058,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         )
         self.fragment_entry_output_struct_names = (
             self.collect_hlsl_fragment_entry_output_struct_names(ast, target_stage)
+        )
+        self.geometry_entry_vertex_struct_names = (
+            self.collect_hlsl_geometry_entry_vertex_struct_names(ast, target_stage)
         )
         self.function_return_types = {
             func.name: self.hlsl_function_return_type_name(
@@ -4353,7 +4364,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         cbuffer_registers = {}
         used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
-            global_vars, used_resource_registers
+            global_vars, used_resource_registers, cbuffers
         )
         for i, node in enumerate(global_vars):
             resource_count = 1
@@ -10148,7 +10159,12 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         if union_layout is not None:
             return self.generate_hlsl_union_storage_declaration(node, union_layout)
 
-        code = f"struct {node.name} {{\n"
+        payload = (
+            "[raypayload] "
+            if self.hlsl_union_attribute(node, RAY_PAYLOAD_ATTRIBUTE)
+            else ""
+        )
+        code = f"struct {payload}{node.name} {{\n"
         members = [
             member
             for member in getattr(node, "members", [])
@@ -10197,7 +10213,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                     declaration_type,
                     semantic,
                 )
-                semantic_attr = self.map_semantic(semantic)
+                semantic_attr = self.map_semantic(
+                    semantic
+                ) + self.hlsl_payload_access_qualifiers(member)
                 interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
                 precise_prefix = self.hlsl_precise_modifier_prefix(member)
                 precise_prefix += self.hlsl_matrix_orientation_prefix(member)
@@ -10281,7 +10299,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
                 member_type,
                 semantic,
             )
-            semantic_attr = self.map_semantic(semantic)
+            semantic_attr = self.map_semantic(
+                semantic
+            ) + self.hlsl_payload_access_qualifiers(member)
             interpolation_prefix = self.hlsl_interpolation_modifier_prefix(member)
             precise_prefix = self.hlsl_precise_modifier_prefix(member)
             precise_prefix += self.hlsl_matrix_orientation_prefix(member)
@@ -10314,6 +10334,28 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             f"    {layout['storage_type']} {layout['storage_field']};\n"
             "};\n"
         )
+
+    def hlsl_payload_access_qualifiers(self, member):
+        """``member``'s ray payload access qualifiers, `` : read(caller) : write(closesthit)``, or ``""``."""
+        qualifiers = ""
+        for attribute in getattr(member, "attributes", None) or []:
+            keyword = PAYLOAD_ACCESS_ATTRIBUTES.get(
+                str(getattr(attribute, "name", "")).lower()
+            )
+            if keyword is None:
+                continue
+            stages = []
+            for argument in getattr(attribute, "arguments", None) or []:
+                stage = str(getattr(argument, "name", argument)).strip().lower()
+                if stage not in PAYLOAD_STAGES:
+                    raise HlslRayPayloadUnsupportedError(
+                        f"'{stage}' in the {keyword} qualifier of payload field "
+                        f"'{getattr(member, 'name', '')}' is not a payload stage; "
+                        f"the stages are {', '.join(PAYLOAD_STAGES)}"
+                    )
+                stages.append(stage)
+            qualifiers += f" : {keyword}({', '.join(stages)})"
+        return qualifiers
 
     def hlsl_union_attribute(self, node, name):
         for attribute in getattr(node, "attributes", []) or []:
@@ -12602,7 +12644,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """
         layout = declared_buffer_layout(getattr(node, "attributes", None))
         if layout not in BLOCK_LAYOUTS:
-            return {}
+            return self.hlsl_cbuffer_explicit_packoffsets(ast, node)
         structs = {
             struct.name: struct
             for struct in getattr(ast, "structs", []) or []
@@ -12649,6 +12691,85 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name: packoffset_text(offset)
             for (name, _member_type), offset in zip(layout_type.members, offsets)
         }
+
+    def hlsl_cbuffer_explicit_packoffsets(self, ast, node):
+        """``packoffset`` arguments for the ``@ offset(N)`` members of a constant buffer packed by HLSL rules.
+
+        A constant buffer imported from SPIR-V (``@ buffer_layout(hlsl_cbuffer)`` with ``@ offset`` on its
+        members) or written in CrossGL can move a member past the byte HLSL packing gives it. Each member keeps
+        its offset; a member without one follows the previous member by the packing rules, as GLSL's
+        ``layout(offset = N)`` places the members after it (GLSL 4.60 section 4.4.5). Returns ``{}`` when no
+        member names an offset or HLSL packing already agrees.
+        """
+        members = [
+            member
+            for member in getattr(node, "members", []) or []
+            if getattr(member, "name", None) and not isinstance(member, FunctionNode)
+        ]
+        if not any(member_explicit_offset(member) is not None for member in members):
+            return {}
+        structs = {
+            struct.name: struct
+            for struct in getattr(ast, "structs", []) or []
+            if getattr(struct, "name", None)
+        }
+
+        def struct_members(name):
+            struct = structs.get(name)
+            if struct is None:
+                return None
+            return [
+                self.hlsl_block_member(member)
+                for member in getattr(struct, "members", []) or []
+                if getattr(member, "name", None)
+                and not isinstance(member, FunctionNode)
+            ]
+
+        try:
+            layout_type = crossgl_struct_layout_type(
+                node.name,
+                [self.hlsl_block_member(member) for member in members],
+                struct_members,
+                (node.name,),
+                self.hlsl_constant_int_value,
+            )
+            offsets = []
+            natural = []
+            cursor = natural_cursor = 0
+            for (name, member_type), explicit in zip(
+                layout_type.members, layout_type.offsets
+            ):
+                natural_start, natural_size = cbuffer_placement(
+                    member_type, natural_cursor
+                )
+                natural.append(natural_start)
+                natural_cursor = natural_start + natural_size
+                if explicit is None:
+                    start, size = cbuffer_placement(member_type, cursor)
+                else:
+                    if explicit < cursor:
+                        raise HlslLayoutError(
+                            f"member '{name}' at byte {explicit} overlaps the member before it"
+                        )
+                    start, size = cbuffer_placement(member_type, explicit)
+                    if start != explicit:
+                        raise HlslLayoutError(
+                            f"member '{name}' at byte {explicit} breaks the constant-buffer "
+                            f"packing of its type, which starts at byte {start}"
+                        )
+                offsets.append(start)
+                cursor = start + size
+            if offsets == natural:
+                return {}
+            return {
+                name: packoffset_text(offset)
+                for (name, _member_type), offset in zip(layout_type.members, offsets)
+            }
+        except HlslLayoutError as exc:
+            raise ValueError(
+                f"Cannot reproduce the explicit member offsets of constant buffer "
+                f"'{node.name}' in HLSL: {exc}"
+            ) from exc
 
     def hlsl_block_member(self, member):
         """``(name, type, row_major, offset, alignment, packed)`` of a uniform-block or struct member."""
@@ -14997,6 +15118,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "column_major",
             # MSL's packed vector storage is a buffer layout, which the layout planners read.
             "packed",
+            # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
+            *PAYLOAD_ACCESS_ATTRIBUTES,
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata
@@ -38206,7 +38329,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             not in self.fragment_entry_input_struct_names
         ):
             return {}
+        return self.hlsl_default_location_member_semantics(struct_node)
 
+    def hlsl_default_geometry_vertex_member_semantics(self, struct_node):
+        # A geometry stage's input and output vertices link with the neighbouring stages' varyings, which
+        # take TEXCOORD<location> (vertex outputs and fragment inputs above).
+        if (
+            getattr(struct_node, "name", None)
+            not in self.geometry_entry_vertex_struct_names
+        ):
+            return {}
+        return self.hlsl_default_location_member_semantics(struct_node)
+
+    def hlsl_default_location_member_semantics(self, struct_node):
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
@@ -38305,6 +38440,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         defaults.update(self.hlsl_default_vertex_output_member_semantics(struct_node))
         defaults.update(self.hlsl_default_fragment_input_member_semantics(struct_node))
         defaults.update(self.hlsl_default_fragment_output_member_semantics(struct_node))
+        defaults.update(self.hlsl_default_geometry_vertex_member_semantics(struct_node))
         return defaults
 
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
@@ -39034,6 +39170,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             base_type = return_type.split("<", 1)[0].split("[", 1)[0].strip()
             if base_type in self.structs_by_name:
                 struct_names.add(base_type)
+        return struct_names
+
+    def collect_hlsl_geometry_entry_vertex_struct_names(self, ast, target_stage=None):
+        """Structures a geometry entry receives its primitive's vertices in or appends to a stream."""
+        if not stage_matches(target_stage, "geometry"):
+            return set()
+
+        struct_names = set()
+        stream_types = {"PointStream", "LineStream", "TriangleStream"}
+        primitives = {"point", "line", "triangle", "lineadj", "triangleadj"}
+        for func in self.hlsl_stage_entry_functions(ast, "geometry"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                if self.hlsl_parameter_type_base(parameter) in stream_types:
+                    type_name = self.hlsl_parameter_type_generic_argument(parameter, 0)
+                elif set(self.hlsl_parameter_qualifiers(parameter)) & primitives:
+                    type_name = self.type_name_string(
+                        getattr(
+                            parameter, "param_type", getattr(parameter, "vtype", None)
+                        )
+                    )
+                else:
+                    continue
+                base_type = (
+                    str(type_name or "").split("<", 1)[0].split("[", 1)[0].strip()
+                )
+                if base_type in self.structs_by_name:
+                    struct_names.add(base_type)
         return struct_names
 
     def hlsl_program_hull_output_control_points(self, ast):
@@ -43994,11 +44159,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.directx_resource_register_allocator = allocator
         return allocator
 
-    def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
+    def reserve_explicit_global_resource_registers(
+        self, global_vars, used_registers, cbuffers=()
+    ):
         self.directx_resource_register_overrides = {}
         relocatable_metadata = []
-        for node in global_vars:
-            metadata = self.global_resource_register_metadata(node)
+        # Fixed cbuffer registers are emitted after the globals, but an implicitly bound global resource must not
+        # take them first, so they are reserved here too (generate_cbuffers re-reserves them idempotently).
+        fixed_cbuffers = [
+            (node, self.cbuffer_resource_register_metadata(node))
+            for node in cbuffers
+            if not self.directx_binding_allows_register_relocation(node)
+        ]
+        candidates = [
+            (node, self.global_resource_register_metadata(node)) for node in global_vars
+        ] + fixed_cbuffers
+        for node, metadata in candidates:
             if metadata is None:
                 continue
             if self.directx_binding_allows_register_relocation(node):

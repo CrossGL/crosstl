@@ -122,7 +122,11 @@ from .spirv_exponent_builtins import (
     spirv_output_operand_call,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
-from .spirv_hlsl_registers import reserve_hlsl_descriptor_slots
+from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
+from .spirv_inline_requirements import (
+    apply_inline_spirv_requirements,
+    is_inline_spirv_attribute,
+)
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
@@ -145,6 +149,7 @@ from .spirv_push_constants import (
     is_push_constant_block,
     uniform_block_storage_layout,
 )
+from .spirv_ray_builtins import ray_builtin_info
 from .spirv_refusals import SpirvRefusals
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -620,6 +625,10 @@ class VulkanSPIRVCodeGen(
         self.next_resource_bindings = {}
         self.reserved_resource_bindings = set()
         self.used_resource_bindings = set()
+        # The (combined-sampler half, node id) claims of each exactly bound slot, and the ids of the nodes that
+        # share a slot as the image and sampler halves of one combined image sampler.
+        self.binding_occupants = {}
+        self.shared_binding_nodes = set()
         # Descriptor slots of resources bound by HLSL register or vk::binding, by node id.
         self.hlsl_descriptor_slots = {}
         # Uniform-block arrays of matrix columns, by array type id, with the matrix type a load rebuilds.
@@ -13985,7 +13994,7 @@ class VulkanSPIRVCodeGen(
             if not attr_name:
                 continue
             normalized = self.normalized_metadata_name(attr_name)
-            if normalized in ignored:
+            if normalized in ignored or is_inline_spirv_attribute(attr_name):
                 continue
             return str(attr_name)
         return None
@@ -18748,6 +18757,7 @@ class VulkanSPIRVCodeGen(
             execution_model_hint = self.spirv_execution_model(
                 self.get_function_qualifier(function_node)
             )
+        apply_inline_spirv_requirements(self, function_node)
         return_semantic = self.semantic_from_node(function_node)
         has_direct_return_semantic = is_entry_point and return_semantic is not None
         if return_semantic is not None:
@@ -20331,6 +20341,10 @@ class VulkanSPIRVCodeGen(
 
         if explicit_binding is not None:
             key = (descriptor_set, explicit_binding)
+            if id(node) in self.shared_binding_nodes:
+                # One half of a combined image sampler whose other half holds the same slot.
+                self.used_resource_bindings.add(key)
+                return key
             if key in self.used_resource_bindings or (
                 allow_binding_reassignment and key in self.reserved_resource_bindings
             ):
@@ -20396,13 +20410,12 @@ class VulkanSPIRVCodeGen(
                 continue
 
             descriptor_set = self.resource_descriptor_set(node)
-            key = (descriptor_set, explicit_binding)
-            if key in self.reserved_resource_bindings:
-                raise ValueError(
-                    f"Duplicate SPIR-V resource binding set {descriptor_set} "
-                    f"binding {explicit_binding}"
-                )
-            self.reserved_resource_bindings.add(key)
+            reserve_exact_binding(
+                self,
+                (descriptor_set, explicit_binding),
+                node,
+                getattr(node, "name", "resource"),
+            )
         self.hlsl_descriptor_slots = reserve_hlsl_descriptor_slots(
             self,
             self.global_descriptor_binding_nodes(ast),
@@ -29692,6 +29705,9 @@ class VulkanSPIRVCodeGen(
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
+        ray = ray_builtin_info(self, name)
+        if ray is not None:
+            return ray
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
@@ -29933,7 +29949,7 @@ class VulkanSPIRVCodeGen(
             ),
             "gl_GeometryIndexEXT": (
                 "int",
-                "GeometryIndexKHR",
+                "RayGeometryIndexKHR",
                 "Input",
                 {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
             ),
@@ -30117,9 +30133,10 @@ class VulkanSPIRVCodeGen(
         elif builtin_name == "ViewportIndex":
             self.require_capability("MultiViewport")
         elif (
-            builtin_name == "Layer"
+            builtin_name in {"Layer", "PrimitiveId"}
             and self.current_stage_builtin_execution_model() == "Fragment"
         ):
+            # A fragment stage reads both through the Geometry capability (SPIR-V section 3.2.20, BuiltIn).
             self.require_capability("Geometry")
 
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:

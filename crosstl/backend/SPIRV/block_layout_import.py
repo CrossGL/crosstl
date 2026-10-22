@@ -11,11 +11,20 @@ read as std140, or as the natural MSL layout, reads its members from other bytes
 (GLSL 4.60 section 7.6.2.2 and GL_EXT_scalar_block_layout) and the HLSL constant-buffer packing rules, and returns
 the first rule set that reproduces all of them: std140 first for a uniform block and std430 first for push
 constants, the rules GLSL gives them by default. A decoration the module omits constrains nothing, and a block
-without any ``Offset`` keeps CrossGL's default; a block whose decorations no rule set reproduces, or whose members
-this module cannot size, is refused.
+without any ``Offset`` keeps CrossGL's default.
+
+GLSL's ``layout(offset = N)`` (GLSL 4.60 section 4.4.5) places a block member at an explicit byte offset, which
+compiles to an ``Offset`` no rule set produces by itself: a push-constant range shared between stages commonly
+starts a stage's members at byte 12 or 64. When no rule set reproduces a block's decorations as they stand,
+:func:`spirv_block_layout` tries each rule set again with the block's own member offsets as explicit offsets, which
+CrossGL spells ``@ offset(N)``; the rule set must still reproduce every alignment, array stride, matrix stride and
+nested struct. A block that no rule set reproduces either way, or whose members this module cannot size, is
+refused.
 """
 
 from __future__ import annotations
+
+from typing import NamedTuple
 
 from ...translator.codegen.glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
@@ -38,7 +47,12 @@ from ...translator.codegen.hlsl_buffer_layout import (
 )
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
-__all__ = ["SpirvBlockLayoutUnsupportedError", "spirv_block_buffer_layout"]
+__all__ = [
+    "SpirvBlockLayout",
+    "SpirvBlockLayoutUnsupportedError",
+    "spirv_block_buffer_layout",
+    "spirv_block_layout",
+]
 
 UNIFORM_LAYOUTS = (
     STD140_LAYOUT,
@@ -61,6 +75,13 @@ _SCALARS = {
     "i64": "long",
     "u64": "ulong",
 }
+
+
+class SpirvBlockLayout(NamedTuple):
+    """A block's rule set, and the explicit byte offset of each top-level member when the rule set needs them."""
+
+    layout: str
+    member_offsets: tuple[int | None, ...] | None = None
 
 
 class SpirvBlockLayoutUnsupportedError(TranslationDiagnostic):
@@ -182,6 +203,16 @@ def _layout_type(module, type_id, row_major=False):
     raise _Unknown(f"a {kind or 'unknown'} member")
 
 
+def _member_offsets(module, struct_id):
+    """The ``Offset`` of each top-level member of a block (``None`` where the module omits it)."""
+    count = len(module.types.get(struct_id, {}).get("member_types", ()))
+    return tuple(module.member(struct_id, index, "Offset") for index in range(count))
+
+
+def _with_offsets(layout_type, offsets):
+    return struct_type(layout_type.struct_name, layout_type.members, offsets)
+
+
 def _matrix_stride(layout_type, layout):
     if layout in GLSL_BLOCK_LAYOUTS:
         return block_matrix_vector_stride(layout_type, layout)
@@ -227,7 +258,19 @@ def _mismatch(module, type_id, layout_type, layout, path, root=False):
     return None
 
 
-def spirv_block_buffer_layout(
+def _first_reproducing_layout(module, struct_id, layout_type, layouts, reasons):
+    for layout in layouts:
+        try:
+            reason = _mismatch(module, struct_id, layout_type, layout, "", root=True)
+        except HlslLayoutError as error:
+            reason = str(error)
+        if reason is None:
+            return layout
+        reasons.append(f"{layout}: {reason}")
+    return None
+
+
+def spirv_block_layout(
     block,
     struct_id,
     push_constant,
@@ -236,7 +279,7 @@ def spirv_block_buffer_layout(
     member_decorations,
     array_length,
 ):
-    """The ``@ buffer_layout`` of a uniform (``push_constant`` false) or push-constant block, or ``None``.
+    """The :class:`SpirvBlockLayout` of a uniform (``push_constant`` false) or push-constant block, or ``None``.
 
     ``array_length(length_id)`` returns the integer value of an array length operand, or ``None``.
     """
@@ -249,17 +292,32 @@ def spirv_block_buffer_layout(
         raise SpirvBlockLayoutUnsupportedError(
             block, f"has explicit offsets the layout rules cannot check: {error}"
         ) from None
+    layouts = PUSH_CONSTANT_LAYOUTS if push_constant else UNIFORM_LAYOUTS
     reasons = []
-    for layout in PUSH_CONSTANT_LAYOUTS if push_constant else UNIFORM_LAYOUTS:
-        try:
-            reason = _mismatch(module, struct_id, layout_type, layout, "", root=True)
-        except HlslLayoutError as error:
-            reason = str(error)
-        if reason is None:
-            return layout
-        reasons.append(f"{layout}: {reason}")
+    layout = _first_reproducing_layout(module, struct_id, layout_type, layouts, reasons)
+    if layout is not None:
+        return SpirvBlockLayout(layout)
+    offsets = _member_offsets(module, struct_id)
+    if any(offset is not None for offset in offsets):
+        placed_reasons = []
+        layout = _first_reproducing_layout(
+            module,
+            struct_id,
+            _with_offsets(layout_type, offsets),
+            layouts,
+            placed_reasons,
+        )
+        if layout is not None:
+            return SpirvBlockLayout(layout, offsets)
+        reasons.extend(f"{reason} with explicit offsets" for reason in placed_reasons)
     raise SpirvBlockLayoutUnsupportedError(
         block,
         "has Offset, ArrayStride or MatrixStride decorations that no std140, std430, scalar or HLSL "
         f"constant-buffer layout reproduces ({'; '.join(reasons)})",
     )
+
+
+def spirv_block_buffer_layout(*arguments):
+    """The ``@ buffer_layout`` rule set of a block (see :func:`spirv_block_layout`), or ``None``."""
+    found = spirv_block_layout(*arguments)
+    return None if found is None else found.layout

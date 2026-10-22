@@ -14,6 +14,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics import (
+    HlslGeometryStreamUnsupportedError,
     PerVertexInputUnsupportedError,
     UnsizedArrayUnsupportedError,
 )
@@ -202,7 +203,14 @@ def test_per_vertex_inputs_are_refused_where_no_emitter_lowers_them(tmp_path, ta
     )
 
 
-@pytest.mark.parametrize("target", ["glsl", "hlsl"])
-def test_geometry_inputs_without_a_primitive_are_still_refused(tmp_path, target):
-    with pytest.raises(UnsizedArrayUnsupportedError):
+@pytest.mark.parametrize(
+    "target, error",
+    [
+        ("glsl", UnsizedArrayUnsupportedError),
+        # HLSL needs the primitive for the entry's input parameter before any array is sized.
+        ("hlsl", HlslGeometryStreamUnsupportedError),
+    ],
+)
+def test_geometry_inputs_without_a_primitive_are_still_refused(tmp_path, target, error):
+    with pytest.raises(error):
         translate(tmp_path, NO_PRIMITIVE, ".cgl", target)

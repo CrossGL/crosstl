@@ -30,6 +30,14 @@ from .dxr_ray_interfaces import (
 )
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
+from .hlsl_geometry_streams import (
+    HlslGeometryStreamUnsupportedError,
+    raise_glsl_geometry_streams,
+)
+from .hlsl_ray_payloads import (
+    HlslRayPayloadUnsupportedError,
+    annotate_hlsl_ray_payloads,
+)
 from .hlsl_stage_interfaces import (
     HlslStageInterfaceUnsupportedError,
     legalize_hlsl_stage_interfaces,
@@ -88,6 +96,8 @@ __all__ = [
     "FixedSamplerStateUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "HlslGeometryStreamUnsupportedError",
+    "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
@@ -147,7 +157,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
-    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`), and HLSL-style hull and domain stages
+    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
+    becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
     become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
     hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
@@ -163,7 +174,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
-    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`).
+    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
+    the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
@@ -192,6 +204,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     expand_struct_scalar_splats(program, report.source, report.target)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
+    raise_glsl_geometry_streams(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
@@ -206,6 +219,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_texture_lod_clamp(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
+    annotate_hlsl_ray_payloads(program, report.target)
     legalize_opaque_struct_members(program, report.target)
     flatten_descriptor_arrays(program, report.target)
     legalize_shadow_samples(program, report.target)
