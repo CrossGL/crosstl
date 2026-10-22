@@ -13,6 +13,7 @@ before the native worker starts; the maximum is packaged on demand at the
 widths the run launches.
 """
 
+import math
 import sys
 from collections import Counter
 from itertools import product
@@ -22,6 +23,7 @@ from demos.integrations.mlx.portable_host import (
     gemm_layout,
     gemv_layout,
     matmul_layout,
+    quantization_layout,
     upstream_runner,
 )
 
@@ -109,14 +111,19 @@ def routes():
 def expected_dispatches():
     """The affine, column and matrix-product entries the tests dispatch.
 
-    Each product quantizes and dequantizes ``w`` once, multiplies through
-    QuantizedMatmul's split-K route and its partition sum, and forms the
-    reference with Matmul; a split-K reference also launches its accumulation.
+    Each product quantizes and dequantizes ``w`` in launches of at most
+    65,535 groups, multiplies through QuantizedMatmul's split-K route and its
+    partition sum, and forms the reference with Matmul; a split-K reference
+    also launches its accumulation.
     """
     counts = Counter()
-    for group, bits, quantized, (column, _), family, route in routes():
+    for (*_, w_shape), (group, bits, quantized, (column, _), family, route) in zip(
+        products(), routes()
+    ):
         for operation in ("quantize", "dequantize"):
-            counts[f"affine_{operation}_float_gs_{group}_b_{bits}"] += 1
+            counts[
+                f"affine_{operation}_float_gs_{group}_b_{bits}"
+            ] += quantization_layout.launches(math.prod(w_shape), group)
         counts[quantized] += 1
         counts[column] += 1
         counts[route["entry"]] += 1

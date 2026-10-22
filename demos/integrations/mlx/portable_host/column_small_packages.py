@@ -98,15 +98,17 @@ def build_entries(root, packages, target, keys, jobs):
 
 
 def verification_entries():
-    """The variants the column and quantized matmul verifications launch."""
+    """The variants the column and quantized product verifications launch."""
     from demos.integrations.mlx.portable_host import (
         column_workloads,
         verify_quantized_matmul,
+        verify_quantized_qmm,
     )
 
     return sorted(
         column_workloads.small_variants()
         | verify_quantized_matmul.small_column_variants()
+        | verify_quantized_qmm.small_column_variants()
     )
 
 

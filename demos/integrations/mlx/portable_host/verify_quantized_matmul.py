@@ -297,10 +297,13 @@ def run_case(mx, np, host, record, seed):
     }
 
 
-def run_refusal(mx, np, host, refusal, seed):
-    """Check that one product raises ``message`` before any dispatch."""
+def run_refusal(mx, np, host, refusal, seed, record_for=None):
+    """Check that one product raises ``message`` before any dispatch.
+
+    ``record_for`` describes the case; it defaults to ``case_record``.
+    """
     case, message = refusal
-    record = case_record(case)
+    record = (record_for or case_record)(case)
     data = case_data(record, seed)
     dtype = getattr(mx, record["dtype"])
     arrays = {

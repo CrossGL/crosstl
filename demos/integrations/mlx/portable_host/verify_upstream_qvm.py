@@ -8,6 +8,7 @@ whole-array maximum. Every package is translated before the native worker
 starts; the maximum is packaged on demand at the widths the run launches.
 """
 
+import math
 import sys
 from collections import Counter
 from itertools import product
@@ -15,6 +16,7 @@ from itertools import product
 from demos.integrations.mlx.portable_host import (
     gemv_layout,
     matmul_layout,
+    quantization_layout,
     upstream_runner,
 )
 
@@ -40,13 +42,16 @@ def products():
 def expected_dispatches():
     """The affine and matrix-vector entries the test dispatches, with counts.
 
-    Each product quantizes and dequantizes ``w`` once, multiplies through
+    Each product quantizes and dequantizes ``w`` in launches of at most
+    65,535 groups, multiplies through
     QuantizedMatmul's untransposed route and forms the reference with Matmul.
     """
     counts = Counter()
     for group, bits, m, n, b, x_shape, w_shape in products():
         for operation in ("quantize", "dequantize"):
-            counts[f"affine_{operation}_float_gs_{group}_b_{bits}"] += 1
+            counts[
+                f"affine_{operation}_float_gs_{group}_b_{bits}"
+            ] += quantization_layout.launches(math.prod(w_shape), group)
         counts[
             matmul_layout.select(
                 "float32", group, bits, 1, m, n, max(b, 1), transpose=False

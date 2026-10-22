@@ -1,4 +1,4 @@
-"""Execute affine matrix-vector packages and commit guarded MLX outputs."""
+"""Execute affine quantized product packages and commit guarded MLX outputs."""
 
 import ctypes
 import hashlib
@@ -49,13 +49,6 @@ def encode_binding(dtype, words, host_target, layout, kind):
     return value
 
 
-def _value(entry, name, words, host_target, layout, kind):
-    """The runtime value of one reflected binding."""
-    return encode_binding(
-        matmul_layout.parameter_type(entry, name), words, host_target, layout, kind
-    )
-
-
 def _words(buffer, dtype):
     size = ITEM_SIZES.get(dtype, 4)
     return list(
@@ -66,31 +59,46 @@ def _words(buffer, dtype):
 
 
 def dispatch(host, entry, buffers, count, threads, launch):
+    """Run one affine matrix-vector launch through its translated package."""
+    return dispatch_with(
+        host,
+        matmul_layout,
+        host.quantized_matmuls,
+        entry,
+        buffers,
+        count,
+        threads,
+        launch,
+    )
+
+
+def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
+    """Run one launch of ``layout``'s quantized product kernels through ``cache``.
+
+    ``layout`` is ``matmul_layout`` or ``qmm_layout``: both bind the matrix
+    buffers ``w``, ``scales``, ``biases``, ``x`` and the output ``y``.
+    """
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    names = matmul_layout.parameter_names(entry)
-    if (
-        host.quantized_matmuls is None
-        or count != len(names)
-        or not buffers
-        or launch is None
-    ):
+    label = layout.LABEL
+    names = layout.parameter_names(entry)
+    if cache is None or count != len(names) or not buffers or launch is None:
         raise ValueError(
-            "Quantized matrix-vector dispatch requires pinned packages, buffers and geometry"
+            f"{label} dispatch requires pinned packages, buffers and geometry"
         )
     supplied = {}
     for index in range(count):
         buffer = buffers[index]
         if not buffer.name or not buffer.dtype:
-            raise ValueError("Quantized matrix-vector buffer identity is missing")
+            raise ValueError(f"{label} buffer identity is missing")
         name = buffer.name.decode("ascii")
         if name in supplied:
-            raise ValueError("Quantized matrix-vector buffer names must be unique")
+            raise ValueError(f"{label} buffer names must be unique")
         supplied[name] = buffer
-    counts, parameters = matmul_layout.read_storage(entry, supplied)
+    counts, parameters = layout.read_storage(entry, supplied)
     execution = launch.execution()
-    metadata = matmul_layout.plan(entry, counts, parameters, threads, execution)
-    dtype = matmul_layout.signature(entry)["dtype"]
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    dtype = layout.signature(entry)["dtype"]
     storage = {
         name: (
             [GUARDS[dtype]] * (counts["y"] + GUARD_COUNT)
@@ -99,11 +107,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
             + [WORD_POISON if name == "w" else POISON[dtype]]
             * (GUARD_COUNT + metadata["overreadPadding"].get(name, 0))
         )
-        for name in matmul_layout.MATRIX_PARAMETERS
+        for name in layout.MATRIX_PARAMETERS
     }
     for name, value in metadata["parameters"].items():
         storage[name] = [value] if isinstance(value, int) else list(value)
-    descriptor, directory = host.quantized_matmuls.get(entry)
+    descriptor, directory = cache.get(entry)
     inputs, observed, output, bound = {}, [], None, set()
     for binding in descriptor["bindings"]:
         provenance = binding.get("provenance", {})
@@ -115,12 +123,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
             or binding["name"] in inputs
         ):
             raise ValueError(
-                "Reflected quantized matrix-vector binding differs from its source"
+                f"Reflected {label.lower()} binding differs from its source"
             )
         bound.add(name)
-        value = _value(
-            entry,
-            name,
+        value = encode_binding(
+            layout.parameter_type(entry, name),
             storage[name],
             host.target,
             binding["scalarLayout"],
@@ -129,13 +136,13 @@ def dispatch(host, entry, buffers, count, threads, launch):
         inputs[binding["name"]] = value
         if name == "y":
             if binding.get("access") != "read_write":
-                raise ValueError("Quantized matrix-vector output is not writable")
+                raise ValueError(f"{label} output is not writable")
             output = binding["name"]
         else:
             observed.append(binding["name"])
     # The translation reflects every kernel parameter, batched or not.
     if bound != set(storage) or output is None:
-        raise ValueError("Quantized matrix-vector reflection is incomplete")
+        raise ValueError(f"{label} reflection is incomplete")
     outputs = {output: inputs[output]}
     request = build_native_loader_dispatch_request(
         descriptor,
@@ -148,21 +155,19 @@ def dispatch(host, entry, buffers, count, threads, launch):
     )
     result = execute(host, request)
     if result.status != "ok" or set(result.outputs) != {output}:
-        raise RuntimeError(
-            "Native quantized matrix-vector execution returned no output"
-        )
+        raise RuntimeError(f"Native {label.lower()} execution returned no output")
     initial, value = outputs[output], result.outputs[output]
     if {key: item for key, item in value.items() if key != "values"} != {
         key: item for key, item in initial.items() if key != "values"
     }:
-        raise RuntimeError("Native quantized matrix-vector output layout differs")
+        raise RuntimeError(f"Native {label.lower()} output layout differs")
     words = decode(value, dtype, initial["dtype"])
     size = counts["y"]
     if (
         len(words) != size + GUARD_COUNT
         or words[size:] != [GUARDS[dtype]] * GUARD_COUNT
     ):
-        raise RuntimeError("Native quantized matrix-vector output guard differs")
+        raise RuntimeError(f"Native {label.lower()} output guard differs")
     payload = struct.pack(
         "<" + str(size) + WORD_FORMATS[ITEM_SIZES[dtype]], *words[:size]
     )
@@ -185,7 +190,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
                     ctypes.string_at(
                         supplied[name].data,
                         supplied[name].count
-                        * ITEM_SIZES.get(matmul_layout.parameter_type(entry, name), 4),
+                        * ITEM_SIZES.get(layout.parameter_type(entry, name), 4),
                     )
                 ).hexdigest()
             )

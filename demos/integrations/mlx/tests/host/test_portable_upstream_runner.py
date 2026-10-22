@@ -9,6 +9,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     upstream_runner,
+    verify_upstream_qmm_shapes,
     verify_upstream_qmv,
 )
 from demos.integrations.mlx.portable_host import (
@@ -26,6 +27,7 @@ RUNNERS = {
     "qvm": verify_upstream_qvm,
     "qmv": verify_upstream_qmv,
     "qvm_splitk": verify_upstream_qvm_splitk,
+    "qmm_shapes": verify_upstream_qmm_shapes,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
@@ -242,8 +244,10 @@ def test_runner_module_names_itself(name):
     assert spec.LABEL == "test_" + name
     first, *others = spec.UPSTREAM_TESTS
     assert first == f"test_quantized.TestQuantized.test_{name}"
-    # Further tests are the named test's variants, such as its multi-row form.
-    assert all(test.startswith(first + "_") for test in others)
+    # Further tests are distinct tests of the same pinned suite, such as the
+    # named test's multi-row form.
+    assert len(set(spec.UPSTREAM_TESTS)) == len(spec.UPSTREAM_TESTS)
+    assert all(test.startswith("test_quantized.TestQuantized.test_") for test in others)
     assert set(spec.TIMEOUTS) == {"random", "packages", "cpu", "native"}
 
 

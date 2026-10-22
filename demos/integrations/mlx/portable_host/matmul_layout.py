@@ -36,6 +36,7 @@ SPLIT_PATTERN = re.compile(
     r"_b_(2|3|4|5|6|8)_spk_(8|32)"
 )
 ENTRY_PREFIXES = ("affine_qmv_", "affine_qvm_")
+LABEL = "Quantized matrix-vector"
 # QuantizedMatmul::eval_gpu sends untransposed products with K at or above
 # this through qvm_split_k, in 32 partitions above QVM_WIDE_SPLIT and 8 below.
 QVM_SPLIT_K = 1024
@@ -196,19 +197,32 @@ def read_storage(entry, buffers):
     the integer values of the scalar and vector parameters.
     """
     names = parameter_names(entry)
-    if set(buffers) != set(names):
-        raise ValueError("Quantized matrix-vector buffers do not match the entry")
+    return read_buffers(
+        buffers,
+        {name: parameter_type(entry, name) for name in names},
+        (*SCALAR_PARAMETERS, *BATCH_SCALARS, *SPLIT_SCALARS),
+        LABEL,
+    )
+
+
+def read_buffers(buffers, types, scalars, label):
+    """``read_storage`` for the parameters ``types`` names, in their order.
+
+    ``scalars`` names the single-value parameters; the matrix buffers are
+    ``MATRIX_PARAMETERS`` with ``y`` the only output, and the other names
+    are integer vectors of at most ``MAX_BATCH_DIMENSIONS + 2`` values.
+    """
+    if set(buffers) != set(types):
+        raise ValueError(f"{label} buffers do not match the entry")
     address_limit = 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
     counts, parameters, spans = {}, {}, {}
-    for name in names:
-        buffer, dtype = buffers[name], parameter_type(entry, name)
+    for name, dtype in types.items():
+        buffer = buffers[name]
         itemsize = ITEM_SIZES.get(dtype) or ctypes.sizeof(
             INTEGER_TYPES.get(dtype, ctypes.c_uint32)
         )
         count = buffer.count
-        scalar = (
-            name in SCALAR_PARAMETERS or name in BATCH_SCALARS or name in SPLIT_SCALARS
-        )
+        scalar = name in scalars
         if (
             not buffer.data
             or buffer.data % itemsize
@@ -219,9 +233,7 @@ def read_storage(entry, buffers):
             or (name in BATCH_VECTORS and count > MAX_BATCH_DIMENSIONS + 2)
             or buffer.data + count * itemsize > address_limit
         ):
-            raise ValueError(
-                "Quantized matrix-vector buffer storage or direction does not match"
-            )
+            raise ValueError(f"{label} buffer storage or direction does not match")
         spans[name] = (buffer.data, buffer.data + count * itemsize)
         if name in MATRIX_PARAMETERS:
             counts[name] = count
@@ -237,7 +249,7 @@ def read_storage(entry, buffers):
         other != "y" and max(low, start) < min(high, end)
         for other, (start, end) in spans.items()
     ):
-        raise ValueError("Quantized matrix-vector output overlaps another buffer")
+        raise ValueError(f"{label} output overlaps another buffer")
     return counts, parameters
 
 
@@ -262,7 +274,7 @@ def _matrix_offset(index, shape, strides):
     return _location(index, shape, strides)
 
 
-def _batch_offsets(parameters, m, k, rows, words, groups, batches):
+def batch_offsets(parameters, m, k, rows, words, groups, batches, label=LABEL):
     """Per ``tid.z`` element offsets of x, w, scales and biases.
 
     ``rows`` is the weight matrices' row count: ``N`` for transposed weights,
@@ -280,9 +292,9 @@ def _batch_offsets(parameters, m, k, rows, words, groups, batches):
         or not 0 <= w_batch <= MAX_BATCH_DIMENSIONS
         or not len(w_strides) == len(s_strides) == len(b_strides) == len(w_shape)
     ):
-        raise ValueError("Quantized matrix-vector batch ranks do not match")
+        raise ValueError(f"{label} batch ranks do not match")
     if x_shape[-2:] != [m, k] or w_shape[-2:] != [rows, words]:
-        raise ValueError("Quantized matrix-vector matrix shapes do not match")
+        raise ValueError(f"{label} matrix shapes do not match")
     # ensure_row_contiguous_matrix: unit columns and dense rows.
     for strides, extent, columns in (
         (x_strides, m, k),
@@ -291,11 +303,11 @@ def _batch_offsets(parameters, m, k, rows, words, groups, batches):
         (b_strides, rows, groups),
     ):
         if strides[-1] != 1 or (extent > 1 and strides[-2] != columns):
-            raise ValueError("Quantized matrix-vector matrices are not row contiguous")
+            raise ValueError(f"{label} matrices are not row contiguous")
     if math.prod(x_shape[:x_batch]) != batches or (
         w_batch and math.prod(w_shape[:w_batch]) != batches
     ):
-        raise ValueError("Quantized matrix-vector batch extents do not match")
+        raise ValueError(f"{label} batch extents do not match")
     if any(
         extent < 1 or stride < 0
         for shape, strides, ndim in (
@@ -306,7 +318,7 @@ def _batch_offsets(parameters, m, k, rows, words, groups, batches):
         )
         for extent, stride in zip(shape[:ndim], strides[:ndim])
     ):
-        raise ValueError("Quantized matrix-vector batch strides must be nonnegative")
+        raise ValueError(f"{label} batch strides must be nonnegative")
     return [
         (
             _matrix_offset(z, x_shape[:x_batch], x_strides[:x_batch]),
@@ -365,7 +377,7 @@ def plan(entry, counts, parameters, threads, execution):
     if info["batched"]:
         if supplied != set(BATCH_PARAMETERS):
             raise ValueError("Batched quantized matrix-vector parameters are missing")
-        offsets = _batch_offsets(parameters, m, k, rows, words, groups, batches)
+        offsets = batch_offsets(parameters, m, k, rows, words, groups, batches)
         values = dict(parameters)
     else:
         if supplied or batches != 1:

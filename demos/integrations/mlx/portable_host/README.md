@@ -358,9 +358,22 @@ a power of two, `affine_qmv_fast` when `N` and `K` are aligned, otherwise
 `affine_qmv`. Untransposed weights with fewer than four vectors and `K` below
 1024 go to `affine_qvm`. Each kernel has its `batch_0` and `batch_1` variants.
 The host reports no Apple GPU generation, so it uses the lowest generation's
-batch limits and never selects `affine_qmv_wide`. Split-K vector-matrix
-products (`qvm_split_k` and a sum), matrix-matrix products, gathers and the
-floating-point modes still fail with an explicit error.
+batch limits and never selects `affine_qmv_wide`. Untransposed vector products
+with `K` of 1024 or more go to `affine_qvm_split_k` in 8 partitions (32 above
+`K` of 8192), whose partial products a translated column sum adds:
+`col_reduce_small` below 32 partitions, `col_reduce_looped` otherwise.
+
+Products with at least the vector limit's rows go to `qmm_layout.py`'s
+matrix-matrix kernels. Single matrices with transposed weights take
+`qmm_splitk`: `affine_qmm_t_splitk` writes partial products over whole
+`BK`-wide, whole-group partitions of `K`, chosen to target about 512
+threadgroups, and the same column sums add them; when `K` admits no split they
+take `affine_qmm_t`, as batched transposed products do. Untransposed products
+take `affine_qmm_n`. The host has no NAX unit, so it never selects `qmm_nax`.
+Split-K products of half-precision types, whose partition sums MLX forms in
+the element type, and split-K products with more than 65,535 partial products,
+which exceed the column sum's buffers, fail with an explicit error before any
+dispatch, as do gathers and the floating-point modes.
 
 `matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound shapes, strides and buffer extents.
@@ -381,22 +394,33 @@ axes; the untransposed ones a `K` tail, a `K` shorter than one 32-row block, a
 half-empty last tile, broadcast and shared weights and two batch axes. Inputs
 lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
-match MLX's CPU backend. The unchanged upstream `test_qmv` and `test_qvm` also
+match MLX's CPU backend. The same jobs translate the matrix-matrix entries with
+`qmm_packages --verification` and run `verify_quantized_qmm.py`: thirteen cases
+over `affine_qmm_t`, `affine_qmm_t_splitk` with small and looped partition sums,
+and `affine_qmm_n`, in all three element types, with stacked, broadcast and
+shared weights, folded rows, partial row and column tiles and `K` tails, plus
+the two refusals above. The unchanged upstream `test_qmv` and `test_qvm` also
 need the floating-point `Matmul` route below for their reference products;
 `test_qmv`'s unbatched references are matrix-matrix products, which take the
 steel GEMM or split-K route.
 
-`verify_upstream_qvm.py` and `verify_upstream_qmv.py` run those two tests
-unchanged, first on MLX's CPU and then through the translated host, with the
-shared steps in `upstream_runner.py`. Each runner translates every quantized and
+`verify_upstream_qvm.py`, `verify_upstream_qmv.py`,
+`verify_upstream_qvm_splitk.py` (`test_qvm_splitk` and
+`test_qvm_splitk_multi_row`) and `verify_upstream_qmm_shapes.py`
+(`test_qmm_shapes`, `test_small_matrix` and `test_non_multiples`) run those
+tests unchanged, first on MLX's CPU and then through the translated host, with
+the shared steps in `upstream_runner.py`. Each runner translates every quantized and
 floating-point product entry the test reaches before the native worker starts,
 and packages the whole-array maximum of its error bound on demand. The native
 trace must hold exactly the affine, `gemv` and steel dispatches that
 quantized.cpp and matmul.cpp would make for every subtest: `test_qmv` reaches
 60 `affine_qmv_quad`, `affine_qmv_fast` and `affine_qmv` entries, both `gemv`
-tiles, two fused GEMM entries and the split-K product with its accumulation.
-The `MLX upstream` jobs run each test on Metal, Direct3D 12 (WARP) and OpenGL
-(Mesa) in the heavy tier.
+tiles, two fused GEMM entries and the split-K product with its accumulation;
+the quantized-shape tests reach `affine_qmv`, `affine_qvm`, `affine_qmm_n` and
+`affine_qmm_t_splitk` with its small partition sum. `test_qmm` and
+`test_qmm_large_dims` multiply float16 operands on the GPU device and are not
+run yet. The `MLX upstream` jobs run each test on Metal, Direct3D 12 (WARP) and
+OpenGL (Mesa) in the heavy tier.
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \

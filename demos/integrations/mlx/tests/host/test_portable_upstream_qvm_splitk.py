@@ -1,6 +1,7 @@
 """The unchanged upstream split-K test_qvm runner: routing, trace and package checks."""
 
 import json
+import math
 from collections import Counter
 
 import pytest
@@ -95,9 +96,21 @@ def test_products_split_k_and_sum_their_partitions():
 def test_expected_dispatches_follow_every_upstream_product():
     counts = upstream.expected_dispatches()
     entries = upstream.package_entries()
-    # Quantize, dequantize, product, partition sum and reference, plus 16
-    # split-K accumulations.
-    assert sum(counts.values()) == 35 * 5 + 16
+    # backend.cpp quantizes and dequantizes w in launches of at most 65,535
+    # groups; the 128 by 16,384 weights at group 32 take two each.
+    launches = sum(
+        -(-math.prod(w_shape) // group // 65535)
+        for group, *_, w_shape in upstream.products()
+    )
+    assert launches == 52
+    for operation in ("quantize", "dequantize"):
+        assert (
+            sum(n for e, n in counts.items() if e.startswith(f"affine_{operation}_"))
+            == launches
+        )
+    # Product, partition sum and reference per product, plus 16 split-K
+    # accumulations.
+    assert sum(counts.values()) == 2 * launches + 35 * 3 + 16
     assert counts[LOOPED] == 18 and counts[SMALL] == 17
     assert counts[SPLITK] == counts[ACCUM] == 16
     assert entries["small"] == [column_small_layout.variant(SMALL, (32, 8, 1))]

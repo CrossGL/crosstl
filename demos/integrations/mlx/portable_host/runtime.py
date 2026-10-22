@@ -45,6 +45,7 @@ from demos.integrations.mlx.portable_host import (
     half_storage,
     matmul_dispatch,
     matmul_layout,
+    qmm_layout,
     quantization_dispatch,
     quantization_layout,
     random_dispatch,
@@ -121,6 +122,10 @@ from demos.integrations.mlx.portable_host.packages import (
     SLICE_UPDATE_ENTRIES,
     UNARY_ENTRIES,
 )
+from demos.integrations.mlx.portable_host.qmm_packages import (
+    CACHE_DIRECTORY as QUANTIZED_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.qmm_packages import QuantizedQmmPackageCache
 from demos.integrations.mlx.portable_host.quantization_packages import (
     QuantizationPackageCache,
 )
@@ -355,6 +360,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.quantized_qmms = (
+            QuantizedQmmPackageCache(
+                mlx_root, self.directory / QUANTIZED_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gemvs = (
             GemvPackageCache(mlx_root, self.directory / GEMV_CACHE, self.target)
             if mlx_root is not None
@@ -532,6 +544,12 @@ class HostRuntime:
             ):
                 matmul_layout.signature(name)
                 return 1
+            if (
+                name.startswith(qmm_layout.ENTRY_PREFIXES)
+                and self.quantized_qmms is not None
+            ):
+                qmm_layout.signature(name)
+                return 1
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
@@ -598,6 +616,17 @@ class HostRuntime:
         if entry.startswith(matmul_layout.ENTRY_PREFIXES):
             return matmul_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                qmm_layout,
+                self.quantized_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
             )
         if entry.startswith(gemv_layout.ENTRY_PREFIXES):
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
