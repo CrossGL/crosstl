@@ -55,6 +55,23 @@ float4 __ovld __purefn read_imagef(read_only image2d_t, sampler_t, float2);
 void __ovld write_imagef(write_only image2d_t, int2, float4);
 int __ovld __cnfn get_image_depth(read_only image3d_t);
 
+// OpenCL v1.1 s6.11.10, v1.2 s6.12.10, v2.0 s6.13.10 - Async Copies from Global to Local Memory, Local to Global Memory, and Prefetch
+event_t __ovld async_work_group_copy(__local char *, const __global char *, size_t, event_t);
+event_t __ovld async_work_group_copy(__local float *, const __global float *, size_t, event_t);
+event_t __ovld async_work_group_copy(__local float2 *, const __global float2 *, size_t, event_t);
+void __ovld wait_group_events(int, event_t *);
+
+// OpenCL v2.0 s6.13.9 - Address Space Qualifier Functions
+cl_mem_fence_flags __ovld get_fence(const void *ptr);
+
+// OpenCL v2.0 s6.13.16 - Pipe Functions
+bool __ovld is_valid_reserve_id(reserve_id_t reserve_id);
+
+// OpenCL v2.0 s6.13.17 - Enqueue Kernels
+ndrange_t __ovld ndrange_2D(const size_t[2]);
+int __ovld enqueue_marker(queue_t, uint, const clk_event_t*, clk_event_t*);
+void __ovld capture_event_profiling_info(clk_event_t, clk_profiling_info, __global void*);
+
 #ifdef __OPENCL_CPP_VERSION__
 float __ovld cpp_only(float);
 #else
@@ -137,7 +154,7 @@ def test_opencl_parameter_names_are_not_types():
         Param(Type("float"), "out"),
         "",
     )
-    # A probe has no global or local pointer to pass outside an atomic.
+    # A global or local pointer outside an atomic stays opaque, for the dialect to pass (OpenCL.handle).
     assert opencl.parameter("__global float *cosval", False, False) == (
         Param(Type.other("__global float *")),
         "__global",
@@ -215,8 +232,52 @@ def test_opencl_passes_2d_images_as_kernel_arguments():
     assert ", read_only image2d_t u0) {" in source
     assert "float4 r = read_imagef(u0, u1, a2);" in source
     assert ", write_only image2d_t u0) {" in _probe("write_imagef")
-    with pytest.raises(probes.ProbeError, match="image3d_t"):
-        _probe("get_image_depth")
+    # Images no other function takes are kernel arguments of the probe's own.
+    assert ", read_only image3d_t a0) {" in _probe("get_image_depth")
+
+
+def test_opencl_makes_events_and_queues_with_the_built_ins_that_return_them():
+    source = _probe("enqueue_marker")
+    assert "queue_t a0 = get_default_queue();" in source
+    assert "clk_event_t a2 = create_user_event();" in source
+    assert "int r = enqueue_marker(a0, a1, &a2, &a3);" in source
+    ranged = _probe("ndrange_2D")
+    assert "size_t a0[2] = {1, 1};" in ranged
+    assert "ndrange_t r = ndrange_2D(a0);" in ranged
+    assert "event_t a1 = 0;" in _probe("wait_group_events")
+    profiled = _probe("capture_event_profiling_info")
+    assert (
+        "capture_event_profiling_info(a0, CLK_PROFILING_COMMAND_EXEC_TIME, (__global void*)outp);"
+        in profiled
+    )
+
+
+def test_opencl_passes_local_and_global_pointers_by_their_address_space():
+    feature = by_name(opencl.parse(HEADER))["async_work_group_copy"]
+    # The pointers are opaque, so the type they point at ranks the overload.
+    assert feature.signature.params[0] == Param(Type.other("__local float *"))
+    source = _probe("async_work_group_copy")
+    kernel = source.index("__kernel void probe(")
+    assert source.index("__local float a0[1];") > kernel
+    assert (
+        "event_t r = async_work_group_copy(a0, (const __global float *)outp, a2, a3);"
+        in source
+    )
+    assert "uint r = (uint)get_fence(outp);" in _probe("get_fence")
+    constant = Feature(
+        "opencl",
+        "function",
+        "f",
+        Signature(VOID, (Param(Type.other("__constant float *")),)),
+    )
+    with pytest.raises(probes.ProbeError, match="__constant float"):
+        probes.build(constant, "opencl")
+
+
+def test_opencl_reserves_pipe_packets_from_a_pipe_kernel_argument():
+    source = _probe("is_valid_reserve_id")
+    assert ", read_only pipe int a0_pipe) {" in source
+    assert "reserve_id_t a0 = reserve_read_pipe(a0_pipe, 1u);" in source
 
 
 def test_opencl_declares_workgroup_variables_inside_the_kernel():
@@ -247,6 +308,14 @@ def test_opencl_probes_are_valid_opencl_c():
         "atomic_flag_test_and_set",
         "read_imagef",
         "write_imagef",
+        "get_image_depth",
+        "async_work_group_copy",
+        "wait_group_events",
+        "get_fence",
+        "is_valid_reserve_id",
+        "ndrange_2D",
+        "enqueue_marker",
+        "capture_event_profiling_info",
     ):
         verdict = validators.validate("opencl", _probe(name))
         assert verdict.accepted, (name, verdict.log)

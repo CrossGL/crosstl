@@ -6,10 +6,22 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from .model import BYTES, NARROW_SCALARS, PACKED_BYTES, STRING, WIDE_INTEGERS, Type
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
+
+
+class Handle(NamedTuple):
+    """An argument the language makes itself, such as an event or a queue that another built-in returns: the
+    argument, the statements before the call that make it, and the declarations before the entry point it needs.
+    """
+
+    argument: str
+    lines: tuple[str, ...] = ()
+    declarations: tuple[str, ...] = ()
 
 
 class ProbeError(ValueError):
@@ -209,6 +221,11 @@ class Dialect:
     def workgroup_argument(self, name: str) -> str:
         """The workgroup variable ``name``, for a parameter that takes one."""
         return name
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        """How a probe makes an argument of the opaque type ``kind`` in a local ``name``, or ``None`` when the
+        language has no built-in that makes one."""
+        return None
 
     def inout_argument(self) -> str:
         return "outp[i]"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .dialect import Buffer, Dialect, ProbeError
+from .dialect import Buffer, Dialect, Handle, ProbeError
 from .model import OPENCL_ATOMICS as ATOMIC_TYPES
 from .model import OPENCL_ENUMERATIONS as ENUMERATIONS
 from .model import Type
@@ -73,6 +73,22 @@ class HIP(CUDA):
         return super().kernel(buffers, body, prelude=prelude, **parts)
 
 
+# The OpenCL C handle types a built-in makes, and the call a probe makes one with. An event_t is zero where no copy
+# made it (OpenCL C 3.0, section 6.15.11); the others come from the device-side enqueue functions (section 6.15.16).
+_HANDLES = {
+    "event_t": "0",
+    "queue_t": "get_default_queue()",
+    "clk_event_t": "create_user_event()",
+    "ndrange_t": "ndrange_1D(1)",
+}
+# A reservation of packets in a pipe, which the kernel takes as an argument (section 6.15.17).
+_PIPE = "read_only pipe int"
+# A pointer into one named address space, a generic pointer, and a constant array, as the header spells them.
+_SPACE_POINTER = re.compile(r"(?:const )?(__local|__global) (\w+) ?\*")
+_POINTER = re.compile(r"(?:const )?(\w+) ?\*")
+_ARRAY = re.compile(r"const (\w+)\[(\d+)\]")
+
+
 class OpenCL(Dialect):
     """An OpenCL C kernel: buffers are ``__global`` pointer arguments and ``get_global_id`` gives the invocation's
     index. OpenCL C has C's casts and vector literals rather than constructors, and no references, so an out argument
@@ -94,8 +110,8 @@ class OpenCL(Dialect):
     }
     _HALF = re.compile(r"\bhalf\d*\b")
     _FP16 = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
-    # An image is a kernel argument, declared with its access qualifier.
-    _IMAGE = re.compile(r"(?:read_only|write_only|read_write) image")
+    # An image or a pipe is a kernel argument, declared with its access qualifier.
+    _IMAGE = re.compile(r"(?:read_only|write_only|read_write) (?:image|pipe)")
     # A sampler every image read accepts: integer and floating-point coordinates, and integer image formats.
     _SAMPLER = (
         "CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST"
@@ -160,6 +176,46 @@ class OpenCL(Dialect):
     def workgroup(self, kind: Type, name: str) -> str:
         count = f"[{kind.count}]" if kind.count else ""
         return f"__local {self.type(kind.element)} {name}{count};"
+
+    def holding(self, opaque: str) -> str:
+        return opaque if opaque in _HANDLES else ""
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        # An enumeration is an unsigned integer: get_fence returns the cl_mem_fence_flags of a pointer.
+        return (Type("uint"), "(uint){}") if opaque in ENUMERATIONS else None
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        """A handle the built-in that makes it returns; an image or a pipe the kernel takes; a ``__local`` pointer
+        to a work-group array, or a ``__global`` one into the output buffer; a generic pointer to a handle; and a
+        constant array of ones."""
+        spelling = kind.opaque
+        if kind.scalar or not spelling:
+            return None
+        if spelling in _HANDLES:
+            return Handle(name, (f"{spelling} {name} = {_HANDLES[spelling]};",))
+        if spelling == "reserve_id_t":
+            pipe = f"{name}_pipe"
+            line = f"reserve_id_t {name} = reserve_read_pipe({pipe}, 1u);"
+            return Handle(name, (line,), (f"{_PIPE} {pipe};",))
+        if self._IMAGE.match(spelling):
+            return Handle(name, declarations=(f"{spelling} {name};",))
+        space = _SPACE_POINTER.fullmatch(spelling)
+        if space and space.group(1) == "__local":
+            return Handle(name, declarations=(f"__local {space.group(2)} {name}[1];",))
+        if space:
+            return Handle(f"({spelling})outp")
+        pointer = _POINTER.fullmatch(spelling)
+        if pointer and pointer.group(1) == "void":
+            return Handle("outp")
+        if pointer and pointer.group(1) in _HANDLES:
+            pointee = pointer.group(1)
+            return Handle(f"&{name}", (f"{pointee} {name} = {_HANDLES[pointee]};",))
+        array = _ARRAY.fullmatch(spelling)
+        if array:
+            element, count = array.group(1), int(array.group(2))
+            ones = ", ".join(["1"] * count)
+            return Handle(name, (f"{element} {name}[{count}] = {{{ones}}};",))
+        return None
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         # OpenCL C declares a __local variable in the kernel's own scope, not at program scope.

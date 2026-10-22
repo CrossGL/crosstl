@@ -169,6 +169,16 @@ def parameter(text: str, atomic: bool, first: bool) -> tuple[Param, str]:
     return Param(kind, "out"), space
 
 
+def _pointee(kind: Type) -> Type:
+    """The type an opaque pointer ``kind`` points at, or ``VOID`` when ``kind`` is no such pointer."""
+    text = kind.opaque
+    if not text.endswith("*") or text.count("*") > 1:
+        return VOID
+    return opencl_type(
+        " ".join(w for w in text[:-1].split() if w not in _ADDRESS_SPACES)
+    )
+
+
 def _rank(declaration: _Declaration) -> tuple:
     """Lower is plainer: spellable types, the preferred scalars, scalars before vectors, then the address space a
     probe can pass (a local's generic address, or a global buffer element for an atomic).
@@ -177,7 +187,8 @@ def _rank(declaration: _Declaration) -> tuple:
     kinds = [signature.result, *(p.type for p in signature.params)]
     spelled = [k for k in kinds if k != VOID and k.opaque not in ENUMERATIONS]
     opaque = sum(1 for k in spelled if not k.scalar and k.opaque not in _SPELLED)
-    values = [k for k in spelled if k.scalar]
+    # A pointer into a named address space stays opaque; the type it points at ranks the overload.
+    values = [k for k in [*spelled, *map(_pointee, spelled)] if k.scalar]
     preference = (
         _ATOMIC_PREFERENCE
         if declaration.name.startswith(("atomic_", "atom_"))

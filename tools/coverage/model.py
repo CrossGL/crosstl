@@ -118,12 +118,13 @@ class Type:
 
 
 VOID = Type.other("void")
-# The OpenCL C enumerated types of the synchronization and atomic functions, whose arguments are named constants, and
-# the constant a probe passes. They are kept as ``uint`` types with the enumeration as ``opaque``.
+# The OpenCL C enumerated types of the synchronization, atomic and event-profiling functions, whose arguments are named
+# constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as ``opaque``.
 OPENCL_ENUMERATIONS = {
     "cl_mem_fence_flags": "CLK_LOCAL_MEM_FENCE",
     "memory_scope": "memory_scope_work_group",
     "memory_order": "memory_order_relaxed",
+    "clk_profiling_info": "CLK_PROFILING_COMMAND_EXEC_TIME",
 }
 # The C11 atomic types of OpenCL C (OpenCL C 3.0, section 6.15.12.6), by the type of the value each holds. They are
 # kept as that type with the atomic type as ``opaque``; a probe passes the address of an element of an output buffer
