@@ -272,11 +272,8 @@ class _Builder:
         reading = dialect.reading(result.opaque) if result.opaque else None
         held = dialect.holding(result.opaque) if result.opaque else ""
         if output is None and reading:
-            output, read = reading
-            stores = [
-                dialect.declare(output, "r", read.format(call)),
-                dialect.store("r"),
-            ]
+            kind, read = reading
+            output, stores = self._stored(kind, read.format(call))
         elif output is None and held:
             output = Type("uint")
             stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
@@ -293,21 +290,28 @@ class _Builder:
             ]
             output = Type("int")
         else:
-            output, value = result, "r"
-            if len(result.shape) == 2:
-                columns, rows = result.shape
-                output = Type(result.scalar, (columns if dialect.rows_first else rows,))
-                value = dialect.part("r")
-            if _storage(result.scalar) != result.scalar:
-                output = output.with_scalar(_storage(result.scalar))
-                value = dialect.cast(output, value)
-            stores = [
-                dialect.declare(result, "r", call),
-                dialect.store(dialect.stored(output, value)),
-            ]
+            output, stores = self._stored(result, call)
         if baseline:
             stores = [line for line in [dialect.keep(atomic)] if line]
         return self.lines + stores, output
+
+    def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:
+        """Statements that keep ``value``, of type ``kind``, in a local and store it, and the output buffer's element
+        type: a matrix's first column or row, and a scalar the buffers cannot hold widened or narrowed.
+        """
+        dialect = self.dialect
+        output, stored = kind, "r"
+        if len(kind.shape) == 2:
+            columns, rows = kind.shape
+            output = Type(kind.scalar, (columns if dialect.rows_first else rows,))
+            stored = dialect.part("r")
+        if _storage(kind.scalar) != kind.scalar:
+            output = output.with_scalar(_storage(kind.scalar))
+            stored = dialect.cast(output, stored)
+        return output, [
+            dialect.declare(kind, "r", value),
+            dialect.store(dialect.stored(output, stored)),
+        ]
 
 
 def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:

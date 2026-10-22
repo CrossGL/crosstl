@@ -13,6 +13,7 @@ import re
 
 from .. import spellings
 from ..model import VOID, Feature, Param, Signature, Type
+from .common import prototype
 
 # The scalar type a probe uses for a parameter bounded by each spirv_std trait; atomics and subgroup integer
 # operations on unsigned values are the ones every target has.
@@ -86,6 +87,19 @@ _DIFFERENT = {
     "Float::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
     "Vec3::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
     "Float::log": "Float::log takes a base; CrossGL's log is the natural logarithm",
+}
+# Functions that return several values, or an optional one, where no CrossGL function does.
+_UNSPELLED = {
+    "Float::integer_decode": (
+        "no CrossGL function returns a float's mantissa, exponent and sign as integers"
+    ),
+    "Vec3::any_orthonormal_pair": (
+        "no CrossGL function returns two vectors orthonormal to a vector"
+    ),
+    "Vec3::normalize_and_length": (
+        "no CrossGL function returns a vector's direction and length together"
+    ),
+    "Vec3::try_normalize": "no CrossGL function returns an optional value",
 }
 # CrossGL builds vectors with constructors rather than functions.
 _CONSTRUCTORS = {"Vec3::new": "vec3", "Vec3::splat": "vec3"}
@@ -212,7 +226,27 @@ def rust_type(
         element = rust_type(vector.group(1), generics, self_type)
         if not element.opaque and not element.shape:
             return Type(element.scalar, (3,))
+    # A tuple or an option stays opaque, spelled with the types it holds so that a probe can read its first value.
+    held = re.fullmatch(r"\((.+)\)|Option<(.+)>", spelling)
+    if held:
+        parts = [
+            _spelling(rust_type(part, generics, self_type, aliases))
+            for part in _split(held.group(1) or held.group(2))
+        ]
+        if held.group(1):
+            return Type.other(f"({', '.join(parts)})")
+        return Type.other(f"Option<{parts[0]}>")
     return Type.other(spelling)
+
+
+def _spelling(kind: Type) -> str:
+    """The Rust spelling of a type :func:`rust_type` returns: a scalar, a glam vector or an opaque type."""
+    if kind.opaque:
+        return kind.opaque
+    if kind.shape:
+        prefixes = {scalar: prefix for prefix, scalar in _GLAM.items()}
+        return f"{prefixes.get(kind.scalar, kind.scalar)}Vec{kind.shape[0]}"
+    return {scalar: name for name, scalar in _SCALARS.items()}[kind.scalar]
 
 
 def signature(
@@ -397,10 +431,15 @@ def _feature(
             for index, p in enumerate(found.params)
         )
         found = Signature(found.result, params)
+    counterpart = None
     if name in _CONSTRUCTORS:
         spelled = _CONSTRUCTORS[name]
     elif name in _DIFFERENT:
         spelled, note = "", note or _DIFFERENT[name]
+    elif name in _UNSPELLED:
+        spelled, note = "", note or _UNSPELLED[name]
+    elif name in spellings.COUNTERPARTS["rust"]:
+        spelled, counterpart = prototype(spellings.COUNTERPARTS["rust"][name])
     else:
         renamed = spellings.spelling("rust", name, glsl_names)
         spelled = renamed if renamed != name else bare
@@ -414,6 +453,7 @@ def _feature(
         stage=stage,
         note=note,
         spelling=spelling,
+        counterpart=counterpart,
     )
 
 

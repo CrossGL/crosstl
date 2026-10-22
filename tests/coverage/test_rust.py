@@ -80,6 +80,7 @@ pub trait Float: Num + Copy + NumCast + PartialOrd + Neg<Output = Self> {
     fn fract(self) -> Self;
     fn powi(self, n: i32) -> Self;
     fn sin_cos(self) -> (Self, Self);
+    fn integer_decode(self) -> (u64, i16, i8);
     fn to_degrees(self) -> Self {
         unimplemented!()
     }
@@ -108,6 +109,18 @@ impl Vec3 {
 
     pub fn lerp(self, rhs: Self, s: f32) -> Self {
         self
+    }
+
+    pub fn sin_cos(self) -> (Self, Self) {
+        (self, self)
+    }
+
+    pub fn normalize_and_length(self) -> (Self, f32) {
+        (self, 1.0)
+    }
+
+    pub fn try_normalize(self) -> Option<Self> {
+        None
     }
 
     fn private_helper(self) -> Self {
@@ -198,7 +211,7 @@ def test_rust_reads_float_and_vec3_methods():
     assert features["Float::nan"].signature == Signature(Type("float"), ())
     assert features["Float::ln"].crossgl == "log"
     assert features["Float::powi"].signature.params[1] == Param(Type("int"))
-    assert features["Float::sin_cos"].signature.unsupported == "(Self, Self)"
+    assert features["Float::sin_cos"].signature.unsupported == "(f32, f32)"
     assert features["Float::to_degrees"].group == "float"
     vec3 = Type("float", (3,))
     assert features["Vec3::dot"].signature == Signature(
@@ -236,6 +249,44 @@ def test_rust_has_no_probe_for_vectors_spirv_std_lacks():
     with pytest.raises(probes.ProbeError, match="no int16 vectors"):
         probes.spell(Type("int16", (3,)), "rust")
     assert probes.spell(Type("int16"), "rust") == "i16"
+
+
+def test_rust_probes_read_the_first_value_of_a_tuple_or_an_option():
+    features = parse()
+    vec3 = probes.build(features["Vec3::sin_cos"], "rust").source
+    assert "let r: Vec3 = a0.sin_cos().0;" in vec3
+    assert "outp[i] = r.extend(0.0);" in vec3
+    decoded = probes.build(features["Float::integer_decode"], "rust").source
+    assert "let r: u64 = a0.integer_decode().0;" in decoded
+    assert "outp[i] = (r) as u32;" in decoded
+    optional = probes.build(features["Vec3::try_normalize"], "rust").source
+    assert "let r: Vec3 = a0.try_normalize().unwrap_or_default();" in optional
+    assert features["Vec3::normalize_and_length"].signature.unsupported == (
+        "(Vec3, f32)"
+    )
+
+
+def test_rust_sin_cos_is_crossgl_sincos_with_output_parameters():
+    features = parse()
+    assert features["Float::sin_cos"].crossgl == "sincos"
+    source = probes.build(features["Float::sin_cos"], "crossgl").source
+    assert "sincos(a0, a1, a2);" in source
+    vec3 = probes.build(features["Vec3::sin_cos"], "crossgl").source
+    assert "vec3 a1;\n" in vec3
+    assert "vec3 a2;\n" in vec3
+
+
+def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
+    features = parse()
+    for name in (
+        "Float::integer_decode",
+        "Vec3::normalize_and_length",
+        "Vec3::try_normalize",
+    ):
+        assert features[name].crossgl == ""
+        assert features[name].note.startswith("no CrossGL function returns")
+        with pytest.raises(probes.NoSpelling):
+            probes.build(features[name], "crossgl")
 
 
 def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():

@@ -225,6 +225,11 @@ COUNTERPARTS = {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
     },
+    # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters.
+    "rust": {
+        "Float::sin_cos": "void sincos(float, out float, out float)",
+        "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
+    },
 }
 # Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a
 # pointer and returns whether it swapped, where CrossGL's atomicCompSwap, like GLSL's, takes it by value and returns
