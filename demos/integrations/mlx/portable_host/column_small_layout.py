@@ -6,8 +6,13 @@ appends the column axis to the reduction loop, so ``reduce_shape`` ends with
 ``reduction_size``, and sizes the threadgroup to the columns: up to 32 lanes
 of four columns each along ``x`` and up to 8 rows along ``y``. The kernel reads
 the threadgroup size at run time, so every geometry is its own translation.
-The host's buffers hold at most 65535 elements, so it never selects the
-``_large`` (64-bit index) variants.
+The host's buffers hold at most ``column_reduction_layout.MAX_ELEMENTS``
+elements, far below ``INT32_MAX``, so it never selects the ``_large`` (64-bit
+index) variants.
+
+``PARTITION_SUM_ENTRIES`` are the 16-bit float sums over one axis that
+quantized.cpp's split-K products run over their partial products. Their
+accumulator is the element type, as in reduce.metal: each addition rounds.
 """
 
 from demos.integrations.mlx.portable_host.column_reduction_layout import (
@@ -23,6 +28,10 @@ SMALL_COLUMN_ENTRIES = {
     for dimension in (1, 2, 5)
     for entry, dtype in ENTRIES.items()
 }
+PARTITION_SUM_ENTRIES = {
+    f"{ENTRY_PREFIX}1_reduce_sum{dtype}": dtype for dtype in ("float16", "bfloat16")
+}
+ALL_SMALL_COLUMN_ENTRIES = {**SMALL_COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES}
 N_READS = 4
 MAX_LANES = 32
 MAX_ROWS = 8
@@ -33,7 +42,7 @@ SEPARATOR = "@"
 
 
 def signature(entry):
-    if entry not in SMALL_COLUMN_ENTRIES:
+    if entry not in ALL_SMALL_COLUMN_ENTRIES:
         raise ValueError("Unsupported small column reduction entry")
     return LOOPED
 
@@ -77,7 +86,7 @@ def validate(entry, buffers, logical_size, execution):
     """Check one launch against strided_reduce_small and return its metadata."""
     spec = signature(entry)
     metadata, (size, stride, total, outer, reduce_ndim) = read_metadata(
-        entry, SMALL_COLUMN_ENTRIES, spec, buffers, logical_size
+        entry, ALL_SMALL_COLUMN_ENTRIES, spec, buffers, logical_size
     )
     if buffers["out"].count != outer * stride:
         raise ValueError(

@@ -366,10 +366,54 @@ def test_split_plan_rejects_partitions_quantized_cpp_would_not_make(fault, name)
         layout.plan(record["entry"], counts, parameters, counts["y"], execution)
 
 
+@pytest.mark.parametrize("refusal", verify.REFUSALS, ids=lambda refusal: refusal[0][0])
+def test_refused_products_build_their_inputs(refusal):
+    case, message = refusal
+    record = verify.case_record(case)
+    data = verify.case_data(record, 0)
+    assert data["x"].shape[-1] == record["K"]
+    # A 16-bit product beyond the small column pass has no reference.
+    looped = record["dtype"] != "float32" and len(record["partitions"]) >= 32
+    assert (data["expected"] is None) == looped
+    assert looped == ("16-bit" in message)
+
+
+def test_qvm_split_partitions_follow_quantized_cpp():
+    # split_d = ceil(K / split_k) columns each, the last partition shorter.
+    for case in verify.CASES:
+        record = verify.case_record(case)
+        info = layout.signature(record["entry"])
+        if "splitK" not in info:
+            assert record["partitions"] == [[0, record["K"]]]
+            continue
+        width = -(-record["K"] // info["splitK"])
+        assert len(record["partitions"]) == info["splitK"]
+        assert record["partitions"][0] == [0, width]
+        assert record["partitions"][-1] == [(info["splitK"] - 1) * width, record["K"]]
+    halves = {
+        record["dtype"]: record["dispatches"][1:]
+        for record in map(verify.case_record, verify.CASES)
+        if record["dtype"] != "float32" and len(record["partitions"]) > 1
+    }
+    assert halves == {
+        "float16": ["col_reduce_small_1_reduce_sumfloat16"],
+        "bfloat16": ["col_reduce_small_1_reduce_sumbfloat16"],
+    }
+    backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
+    assert 'partition_sum_type(out, split_k, "vector-matrix products");' in backend
+    assert 'std::string("affine_qvm_split_k_") +' in backend
+    assert (
+        'dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", storage);'
+        in backend
+    )
+
+
 def test_split_plan_refuses_batched_inputs_over_two_dimensional_weights():
     # adjust_matrix_offsets moves a single weight batch axis (the partitions of
     # 2-D weights) by tid.z without wrapping it: later batches read past w.
-    ((case, message),) = verify.REFUSALS
+    ((case, message),) = (
+        refusal for refusal in verify.REFUSALS if refusal[0][0].endswith("weights")
+    )
     record = verify.case_record(case)
     counts, parameters, execution = native_binding(record)
     assert parameters["w_batch_ndims"] == 1 and record["batches"] > 1

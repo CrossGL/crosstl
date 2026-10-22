@@ -6,6 +6,9 @@ of 1024 and more qvm_split_k and the column sum over its partitions.
 Every case routes one ``mx.quantized_matmul`` call to one translated entry and
 checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
+16-bit float split-K products round each partition's product to their type and
+sum the partitions in it; their reference rounds at the same points, in the
+order the column sum adds.
 """
 
 import argparse
@@ -82,6 +85,21 @@ CASES = (
     ("qvm-split-k-tail", "float32", 64, 4, 1100, 64, (1,), (), "dense", False),
     ("qvm-split-k-wide", "float32", 128, 2, 9000, 256, (2, 1), (2,), "dense", False),
     ("qvm-split-k-strided", "float32", 32, 8, 1024, 32, (3, 1), (3,), "strided", False),
+    # 16-bit float qvm_split_k: 8 partitions summed in float16 over folded
+    # rows, and in bfloat16 over an outer batch axis.
+    ("qvm-split-k-half", "float16", 64, 4, 2048, 128, (3,), (), "dense", False),
+    (
+        "qvm-split-k-bfloat-strided",
+        "bfloat16",
+        32,
+        3,
+        1024,
+        64,
+        (3, 1),
+        (3,),
+        "strided",
+        False,
+    ),
 )
 # Products the host refuses, as (case, the error it raises). quantized.cpp
 # sends a strided x batch over 2-D weights to qvm_split_k, whose single weight
@@ -103,6 +121,23 @@ REFUSALS = (
         ),
         "batched inputs and 2-D weights",
     ),
+    # 32 partitions take the looped column sum, which the host translates for
+    # float32 alone.
+    (
+        (
+            "qvm-split-k-half-wide",
+            "float16",
+            128,
+            2,
+            9000,
+            256,
+            (2, 1),
+            (2,),
+            "dense",
+            False,
+        ),
+        "sum 16-bit float partitions only below 32 partitions",
+    ),
 )
 SCALES = (1.0, 0.5, 0.25, 0.125)
 
@@ -115,6 +150,8 @@ def case_record(case):
         # w.ndim() == 2 and a row-contiguous x: MLX folds every x row into M.
         m, batches = math.prod(x_prefix), 1
     entry = matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose)
+    split = matmul_layout.signature(entry).get("splitK")
+    width = -(-k // split) if split else k
     return {
         "name": name,
         "dtype": dtype,
@@ -130,6 +167,8 @@ def case_record(case):
         "batches": batches,
         "entry": entry,
         "dispatches": [entry, *split_sum(entry, m, n)],
+        # qvm_split_k's partitions: split_d columns each, the last shorter.
+        "partitions": [[start, min(start + width, k)] for start in range(0, k, width)],
     }
 
 
@@ -151,7 +190,7 @@ def small_column_variants():
     for case in CASES:
         record = case_record(case)
         for entry in record["dispatches"][1:]:
-            if entry in column_small_layout.SMALL_COLUMN_ENTRIES:
+            if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
                 split = matmul_layout.signature(record["entry"])["splitK"]
                 lanes, rows = column_small_layout.geometry(
                     record["M"] * record["N"], split
@@ -194,14 +233,52 @@ def case_data(record, seed):
     if bound >= 2**19:
         raise ValueError("Quantized matmul case exceeds the exact float32 budget")
     bound_x = x[::2] if record["layout"] == "strided" else x
-    total = np.matmul(bound_x, weights)
+    if record["dtype"] != "float32" and len(record["partitions"]) >= 32:
+        # The host refuses these products, so they have no reference.
+        expected = None
+    elif record["dtype"] != "float32" and len(record["partitions"]) > 1:
+        expected = partition_sum(np, record, bound_x, weights)
+    else:
+        expected = rounded(np.matmul(bound_x, weights), record["dtype"])
     return {
         "w": packed.astype(np.uint32),
         "scales": scales,
         "biases": biases,
         "x": x,
-        "expected": rounded(total, record["dtype"]),
+        "expected": expected,
     }
+
+
+def partition_sum(np, record, x, weights):
+    """A 16-bit float split-K product as the kernels round and sum it.
+
+    Each partition's exact float32 product rounds to the element type when the
+    product kernel stores it. strided_reduce_small then gives threadgroup row
+    ``j`` the partitions ``j``, ``j + rows``, ... to add into an accumulator of
+    the element type from zero, and row 0 adds rows 1, 2, ... into its own.
+    Every addition rounds: a float32 sum of two such values rounds once to
+    float16 or bfloat16 correctly, as the targets' 16-bit additions do.
+    """
+    from demos.integrations.mlx.portable_host import column_small_layout
+
+    dtype, partitions = record["dtype"], record["partitions"]
+    if len(partitions) >= 32:
+        raise ValueError("16-bit float partition sums take the small column pass")
+    partials = [
+        rounded(np.matmul(x[..., a:b], weights[..., a:b, :]), dtype)
+        for a, b in partitions
+    ]
+    _, rows = column_small_layout.geometry(record["M"] * record["N"], len(partials))
+    sums = []
+    for row in range(rows):
+        total = np.zeros_like(partials[0])
+        for partial in partials[row::rows]:
+            total = rounded(partial + total, dtype)
+        sums.append(total)
+    result = sums[0]
+    for total in sums[1:]:
+        result = rounded(total + result, dtype)
+    return result
 
 
 def rounded(values, dtype):
@@ -363,7 +440,12 @@ def validate_trace(trace, records, target):
     if (
         kernels != {"qmv_quad", "qmv_fast", "qmv", "qvm", "qvm_split_k"}
         or batched != {False, True}
-        or len(sums) != 2
+        or sums != {
+            "col_reduce_small_1_reduce_sumfloat32",
+            "col_reduce_looped_1_32_32_reduce_sumfloat32",
+            "col_reduce_small_1_reduce_sumfloat16",
+            "col_reduce_small_1_reduce_sumbfloat16",
+        }
     ):
         raise RuntimeError("Quantized matmul cases do not cover every route")
 

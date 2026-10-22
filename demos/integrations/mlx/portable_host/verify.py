@@ -112,7 +112,7 @@ NEGATIVE_CHECKS = {
 REDUCTION_NEGATIVE_CHECKS = {
     "reduce-dtype": "matching float32/int32/uint32",
     "reduce-large-allocation": "storage does not match",
-    "reduce-row-limit": "row and column reductions support at most 65535",
+    "reduce-row-limit": "row reductions support at most 65535",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "No translated reduction variant",
     "reduce-row": "Small-row dispatch requires the pinned MLX source root",

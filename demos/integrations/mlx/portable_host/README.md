@@ -370,10 +370,13 @@ matrix-matrix kernels. Single matrices with transposed weights take
 threadgroups, and the same column sums add them; when `K` admits no split they
 take `affine_qmm_t`, as batched transposed products do. Untransposed products
 take `affine_qmm_n`. The host has no NAX unit, so it never selects `qmm_nax`.
-Split-K products of half-precision types, whose partition sums MLX forms in
-the element type, and split-K products with more than 65,535 partial products,
-which exceed the column sum's buffers, fail with an explicit error before any
-dispatch, as do gathers and the floating-point modes.
+Split-K products of float16 and bfloat16 write partial products in the element
+type, and MLX sums them in it: the host routes them to the unchanged
+`col_reduce_small_1_reduce_sumfloat16` and `..._sumbfloat16` entries, which
+round every addition. Those 16-bit sums are translated for the small pass only,
+so 16-bit split-K products in 32 or more partitions fail with an explicit error
+before any dispatch, as do gathers and the floating-point modes. Partition sums
+bind up to 2^28 - 1 partial products, the bound of the products themselves.
 
 `matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound shapes, strides and buffer extents.
@@ -387,19 +390,25 @@ batch parameters MLX does not bind; the host supplies inert unbatched values.
 The three-platform `MLX quantized host` jobs translate every routed entry ahead
 of execution with `python -m demos.integrations.mlx.portable_host.matmul_packages
 --verification --jobs 3`, then run `verify_quantized_matmul.py` through
-`mx.quantized_matmul`. Its fifteen cases cover every route and batch variant,
+`mx.quantized_matmul`. Its twenty-one cases cover every route and batch variant,
 all three element types and every width. The transposed cases include a partial
 `qmv_quad` tile, broadcast weights, a strided activation batch and two batch
 axes; the untransposed ones a `K` tail, a `K` shorter than one 32-row block, a
 half-empty last tile, broadcast and shared weights and two batch axes. Inputs
 lie on dyadic grids that keep every float32 partial sum exact, so each output
 must match an exact float64 reference bit for bit, and float32 results must also
-match MLX's CPU backend. The same jobs translate the matrix-matrix entries with
-`qmm_packages --verification` and run `verify_quantized_qmm.py`: thirteen cases
+match MLX's CPU backend. Two more `qvm_split_k` cases sum float16 and bfloat16
+partitions. The same jobs translate the matrix-matrix entries with
+`qmm_packages --verification` and run `verify_quantized_qmm.py`: seventeen cases
 over `affine_qmm_t`, `affine_qmm_t_splitk` with small and looped partition sums,
 and `affine_qmm_n`, in all three element types, with stacked, broadcast and
-shared weights, folded rows, partial row and column tiles and `K` tails, plus
-the two refusals above. The unchanged upstream `test_qmv` and `test_qvm` also
+shared weights, folded rows, partial row and column tiles and `K` tails. Split-K
+cases cover float16 and bfloat16 partition sums, sixteen partitions that each
+threadgroup row adds two of, and 65,536 and 131,072 partial products (`test_qmm`'s
+float16 shape). A 16-bit product rounds each partition and each addition; its
+reference repeats those roundings in the column sum's order, and they change
+hundreds of outputs against a single rounding of the exact product. Each
+verifier also checks the looped 16-bit refusal above. The unchanged upstream `test_qmv` and `test_qvm` also
 need the floating-point `Matmul` route below for their reference products;
 `test_qmv`'s unbatched references are matrix-matrix products, which take the
 steel GEMM or split-K route.
@@ -1053,8 +1062,9 @@ rows followed by a 32-thread final reduction; larger inputs use 4,096 partial
 rows followed by a 1,024-thread final reduction. The threshold uses MLX's logical
 item size, including one byte for Boolean values, independently of widened target
 storage. Whole-array inputs must fit their backing allocation and the signed
-32-bit buffer-index range; native device buffer limits also apply. Row and column
-reductions retain their 65,535-element bound. Intermediate values are staged synchronously, not
+32-bit buffer-index range; native device buffer limits also apply. Row
+reductions retain their 65,535-element bound; column reductions are bounded as
+described under Column Reductions. Intermediate values are staged synchronously, not
 kept in persistent GPU allocations. Unsupported column plans still produce
 explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
@@ -1288,13 +1298,18 @@ The column family connects upstream looped and two-pass column plans to generate
 kernels. The default build includes all 84 entries: fourteen operation/type
 combinations, three template ranks, and two dispatch modes, each at 256 threads.
 Selection follows upstream's reduction count and contiguous output span. Small
-columns and the separate long-column algorithm still report explicit errors.
+columns take `col_reduce_small`; the separate long-column algorithm still reports
+an explicit error.
 
 The adapter preserves reduction strides, broadcast strides, allocation offsets
 and output geometry. Ranks, metadata array lengths, source spans and logical
 sizes are checked before dispatch. Two-pass plans write 32 intermediate rows;
 the second native dispatch consumes those actual results without host reduction
-arithmetic. The existing 65,535-element logical and physical bounds still apply.
+arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
+below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
+and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
+Row plans, unlike column plans, retain the 65,535-element bound. The workloads
+include small, looped and two-pass plans over 76,800 to 131,072 elements.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages

@@ -1,11 +1,13 @@
 """Small column reductions: plan geometry, launch validation and packaging."""
 
 import ctypes
+import math
 from pathlib import Path
 
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    column_reduction_layout,
     column_small_layout,
     column_small_packages,
     column_workloads,
@@ -15,16 +17,17 @@ from demos.integrations.mlx.portable_host import (
 ENTRY = "col_reduce_small_1_reduce_sumfloat32"
 
 
-def _buffers(rows=5, columns=130, prefix=(), outer=1):
+def _buffers(rows=5, columns=130, prefix=(), outer=1, dtype="float32"):
     """One rank-``len(prefix) + 1`` launch over ``outer`` dense output rows."""
     reductions = [*prefix, rows]
     steps, extent = [], columns
     for size in reversed(reductions):
         steps.insert(0, extent)
         extent *= size
+    one = {"float32": 1.0, "float16": 0x3C00, "bfloat16": 0x3F80}[dtype]
     data = {
-        "in": ("float32", [1.0] * (extent * outer)),
-        "out": ("float32", [0.0] * (columns * outer)),
+        "in": (dtype, [one] * (extent * outer)),
+        "out": (dtype, [0 * one] * (columns * outer)),
         "reduction_size": ("uint64", [rows]),
         "reduction_stride": ("int64", [columns]),
         "shape": ("int32", [outer] if outer > 1 else [0]),
@@ -152,6 +155,105 @@ def test_validate_rejects_launches_upstream_would_not_make(fault):
         column_small_layout.validate(entry, buffers, count, launch)
 
 
+@pytest.mark.parametrize("dtype", ("float16", "bfloat16"))
+def test_partition_sums_accept_their_16_bit_launches(dtype):
+    entry = f"col_reduce_small_1_reduce_sum{dtype}"
+    assert column_small_layout.PARTITION_SUM_ENTRIES[entry] == dtype
+    # The column workloads reduce MLX arrays, whose 16-bit sums stay refused.
+    assert entry not in column_small_layout.SMALL_COLUMN_ENTRIES
+    # test_qmm's 8 partitions of 64 by 256 outputs: 131,072 partial products.
+    buffers, count, _ = _buffers(8, 16384, dtype=dtype)
+    assert count == 131072
+    metadata = column_small_layout.validate(entry, buffers, count, _launch(16384, 8))
+    assert metadata["reduce_strides"] == [16384]
+    key = column_small_layout.variant(entry, (32, 8, 1))
+    assert column_small_layout.split_variant(key) == (entry, (32, 8, 1))
+    # A float32 view under a 16-bit entry is another kernel's layout.
+    buffers, count, _ = _buffers(8, 16384)
+    with pytest.raises(ValueError, match="buffer layout"):
+        column_small_layout.validate(entry, buffers, count, _launch(16384, 8))
+    # Only the partition axis's rank-one sum is translated.
+    for other in (
+        f"col_reduce_small_2_reduce_sum{dtype}",
+        f"col_reduce_small_1_reduce_max{dtype}",
+        f"col_reduce_small_1_reduce_prod{dtype}",
+    ):
+        with pytest.raises(ValueError):
+            column_small_layout.signature(other)
+
+
+def _view(shape, strides, rows, columns):
+    """A float32 launch over an explicit outer view of ``rows`` by ``columns``."""
+    extent = columns + sum((size - 1) * step for size, step in zip(shape, strides))
+    extent += (rows - 1) * columns
+    data = {
+        "in": ("float32", [1.0] * extent),
+        "out": ("float32", [0.0] * (columns * math.prod(shape))),
+        "reduction_size": ("uint64", [rows]),
+        "reduction_stride": ("int64", [columns]),
+        "shape": ("int32", list(shape)),
+        "strides": ("int64", list(strides)),
+        "ndim": ("int32", [len(shape)]),
+        "reduce_shape": ("int32", [rows]),
+        "reduce_strides": ("int64", [columns]),
+        "reduce_ndim": ("int32", [1]),
+        "non_col_reductions": ("uint64", [1]),
+    }
+    memory = {
+        name: (runtime.TYPES[dtype] * len(values))(*values)
+        for name, (dtype, values) in data.items()
+    }
+    buffers = {
+        name: runtime.Buffer(
+            name.encode(),
+            dtype.encode(),
+            ctypes.addressof(memory[name]),
+            len(values),
+            int(name == "out"),
+        )
+        for name, (dtype, values) in data.items()
+    }
+    return buffers, rows * columns * math.prod(shape), memory
+
+
+def test_validate_bounds_elements_and_launch_axes(monkeypatch):
+    # 90,000 outputs exceed the 65,535 workgroups of the launch's second axis.
+    buffers, count, _ = _view((300, 300), (600, 2), 2, 1)
+    assert count == 180000 == buffers["in"].count
+    with pytest.raises(ValueError, match="65535 workgroups"):
+        column_small_layout.validate(ENTRY, buffers, count, _launch(1, 2, 90000))
+    # 60,000 outputs fit.
+    buffers, count, _ = _view((200, 300), (600, 2), 2, 1)
+    column_small_layout.validate(ENTRY, buffers, count, _launch(1, 2, 60000))
+    # The element bound covers the logical size and both views.
+    monkeypatch.setattr(column_reduction_layout, "MAX_ELEMENTS", count - 1)
+    with pytest.raises(ValueError, match="metadata does not match"):
+        column_small_layout.validate(ENTRY, buffers, count, _launch(1, 2, 60000))
+
+
+def test_backend_bounds_column_passes_by_elements_and_workgroups():
+    source = Path(column_small_layout.__file__).with_name("backend.cpp").read_text()
+    assert "constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;" in source
+    start = source.index("void dispatch_column_pass(")
+    body = source[start : source.index("\n}\n", start)]
+    for text in (
+        "in.size() > max_column_elements || out.size() > max_column_elements",
+        "outer * (two_pass ? 32 : 1) > 65535",
+        "if (span > max_column_elements || in.offset() < 0 ||",
+    ):
+        assert text in body, text
+    assert "65535 ||\n      in.size() > 65535" not in body
+    assert column_reduction_layout.MAX_ELEMENTS == 2**28 - 1
+    # MLX's reductions refuse row plans over 65,535 elements before a general
+    # plan's dense copy, and leave column plans to their passes' bounds.
+    start = source.index("void Reduce::eval_gpu(")
+    body = source[start : source.index("\n}\n", start)]
+    refusal = body.index("row reductions support at most 65535 elements")
+    assert body.index("const bool column_plan =") < refusal
+    assert refusal < body.index("in = dense_input(in);")
+    assert "row and column reductions support" not in source
+
+
 def test_package_config_translates_one_entry_at_its_threadgroup(tmp_path):
     key = column_small_layout.variant(ENTRY, (4, 3, 1))
     config = column_small_packages.project_config(tmp_path, "out", "opengl", key)
@@ -180,7 +282,7 @@ def test_workload_variants_match_their_launches():
         assert key in variants
     for case in column_workloads._small_cases():
         total, columns, _ = column_workloads.small_plan(case)
-        assert total < 32 and 1 <= columns <= 2048
+        assert total < 32 and 1 <= columns <= 16384
 
 
 def test_backend_routes_small_plans_before_the_looped_passes():

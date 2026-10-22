@@ -25,6 +25,12 @@ METADATA_TYPES = {
     "uint64": ctypes.c_uint64,
 }
 ARRAYS = {"shape", "strides", "reduce_shape", "reduce_strides"}
+# The largest input, output or logical size a column launch binds: the bound
+# the host's matrix products use, far below the INT32_MAX at which reduce.cpp
+# switches to 64-bit indexing. Each shape axis and stride stays below 65536
+# and each launch axis at most 65535 workgroups.
+MAX_ELEMENTS = 2**28 - 1
+MAX_GROUPS = 65535
 
 
 def signature(entry):
@@ -42,11 +48,11 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
         entry not in entries
         or set(buffers) != set(spec)
         or type(logical_size) is not int
-        or not 1 <= logical_size <= 65535
+        or not 1 <= logical_size <= MAX_ELEMENTS
     ):
         raise ValueError("Native column reduction metadata does not match")
     for name, buffer in buffers.items():
-        maximum = 65535 if name in {"in", "out"} else 64 if name in ARRAYS else 1
+        maximum = MAX_ELEMENTS if name in {"in", "out"} else 64 if name in ARRAYS else 1
         if (
             not buffer.dtype
             or buffer.dtype.decode("ascii") != (spec[name] or entries[entry])
@@ -107,6 +113,8 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
         raise ValueError(
             "Native column reduction shape does not match its logical size"
         )
+    if outer > MAX_GROUPS:
+        raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     extent = stride + sum(
         (size - 1) * step for size, step in zip(shape + reductions, strides + steps)
     )
@@ -142,6 +150,8 @@ def validate(entry, buffers, logical_size, execution):
     mode = "2pass" if two_pass else "looped"
     if not entry.startswith(f"col_reduce_{mode}_{dimension}_32_32_reduce_"):
         raise ValueError("Native column reduction template rank does not match")
+    if outer * (32 if two_pass else 1) > MAX_GROUPS:
+        raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     if execution != {
         "workgroupCount": [(stride + 31) // 32, outer * (32 if two_pass else 1), 1],
         "workgroupSize": [256, 1, 1],

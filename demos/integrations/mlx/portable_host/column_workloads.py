@@ -18,8 +18,12 @@ SMALL_SHAPES = {
     5: ((2, 2, 2, 2, 3, 32), (0, 2, 4)),
 }
 # Further sum geometries: one lane, narrow lanes, the widest threadgroup and
-# 31 reduced rows, the largest small plan.
-SMALL_SUM_SHAPES = ((2, 3), (3, 16), (31, 32), (8, 128), (8, 2048))
+# 31 reduced rows, the largest small plan, and 131,072 elements.
+SMALL_SUM_SHAPES = ((2, 3), (3, 16), (31, 32), (8, 128), (8, 2048), (8, 16384))
+# Looped and two-pass plans over more than 65,535 elements, for these entries'
+# rank-one templates.
+WIDE_OPERATIONS = ("sumfloat32", "maxuint32")
+WIDE_SHAPES = {"looped": (40, 2048), "2pass": (300, 256)}
 SMALL_SUM_ENTRY = "col_reduce_small_1_reduce_sumfloat32"
 
 
@@ -86,6 +90,9 @@ def _looped_cases():
             yield case
         if dimension == 1:
             yield case | {"id": f"{entry}-65-columns", "shape": (rows, 65)}
+            if entry.endswith(WIDE_OPERATIONS):
+                mode = "2pass" if two_pass else "looped"
+                yield case | {"id": f"{entry}-wide", "shape": WIDE_SHAPES[mode]}
             for boundary in ((1025, 1985) if two_pass else (32, 256)):
                 yield case | {
                     "id": f"{entry}-{boundary}-rows",

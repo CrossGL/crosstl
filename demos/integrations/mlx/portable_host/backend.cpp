@@ -682,6 +682,10 @@ uint64_t column_shape_size(const mlx::core::Shape& shape) {
 
 enum class ColumnPass { Small, Looped, TwoPass };
 
+// The largest input or output a column pass binds, as for matrix products; far
+// below the INT32_MAX at which reduce.cpp selects its 64-bit index kernels.
+constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;
+
 void dispatch_column_pass(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -706,7 +710,8 @@ void dispatch_column_pass(
   if (reduction_stride < 1 || reduction_stride > 65535 ||
       outer * reduction_stride * total != in.size() ||
       outer * reduction_stride * (two_pass ? 32 : 1) != out.size() ||
-      in.size() > 65535 || out.size() > 65535) {
+      in.size() > max_column_elements || out.size() > max_column_elements ||
+      outer * (two_pass ? 32 : 1) > 65535) {
     throw std::invalid_argument("CrossTL column reduction storage does not match its pass.");
   }
   uint64_t span = reduction_stride;
@@ -720,7 +725,7 @@ void dispatch_column_pass(
   };
   accumulate_span(shape, strides);
   accumulate_span(reduce_shape, reduce_strides);
-  if (span > 65535 || in.offset() < 0 ||
+  if (span > max_column_elements || in.offset() < 0 ||
       uint64_t(in.offset()) > in.buffer_size() ||
       span * in.itemsize() > in.buffer_size() - uint64_t(in.offset())) {
     throw std::invalid_argument("CrossTL column reduction source view exceeds its bounds.");
@@ -1703,8 +1708,13 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
         "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
   }
   auto plan = get_reduction_plan(in, axes_);
-  if (out.size() != 1 && in.size() > 65535) {
-    throw std::invalid_argument("CrossTL row and column reductions support at most 65535 elements.");
+  // Column passes bound their own views; every other plan that is not a
+  // whole-array reduction binds at most 65535 elements, checked before a
+  // general plan's dense copy.
+  const bool column_plan =
+      plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce;
+  if (out.size() != 1 && in.size() > 65535 && !column_plan) {
+    throw std::invalid_argument("CrossTL row reductions support at most 65535 elements.");
   }
   if (plan.type == GeneralReduce) {
     in = dense_input(in);
@@ -2202,6 +2212,18 @@ void dispatch_qmm(
   quantized_dispatch(entry, buffers, out.size(), launch, "quantized matrix product");
 }
 
+// reduce.cpp sums 16-bit float partitions in their own type. The host
+// translates that sum only for strided_reduce_small, which reduces fewer than
+// 32 partitions; refuse before the product runs.
+const char* partition_sum_type(const array& out, int partitions, const char* label) {
+  if (out.dtype() != float32 && partitions >= 32) {
+    throw std::invalid_argument(
+        std::string("CrossTL split-K ") + label +
+        " sum 16-bit float partitions only below 32 partitions.");
+  }
+  return matmul_storage(out.dtype());
+}
+
 // quantized.cpp qmm_splitk: K in split_k partitions whose partial products
 // land on a leading partition axis, then a strided sum over that axis.
 void dispatch_qmm_split_k(
@@ -2216,31 +2238,23 @@ void dispatch_qmm_split_k(
     int N,
     int K,
     int split_k) {
-  if (out.dtype() != float32) {
-    throw std::invalid_argument(
-        "CrossTL split-K quantized matrix products require float32 partition sums.");
-  }
+  const char* storage =
+      partition_sum_type(out, split_k, "quantized matrix products");
   auto temp_shape = out.shape();
   if (temp_shape.size() == 1) {
     temp_shape.insert(temp_shape.begin(), 1);
   }
   temp_shape.insert(temp_shape.begin(), split_k);
   array intermediate(temp_shape, out.dtype(), nullptr, {});
-  const std::string entry = std::string("affine_qmm_t_splitk_float_gs_") +
-      std::to_string(group_size) + "_b_" + std::to_string(bits) +
-      (N % 32 == 0 ? "_alN_true" : "_alN_false");
+  const std::string entry = std::string("affine_qmm_t_splitk_") +
+      quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
+      std::to_string(bits) + (N % 32 == 0 ? "_alN_true" : "_alN_false");
   require_entry(entry);
   const uint32_t tiles_n = (uint32_t(N) + 31) / 32;
   const uint32_t tiles_m = (uint32_t(M) + 31) / 32;
   if (intermediate.size() > max_matmul_elements || tiles_n > 65535 || tiles_m > 65535 ||
       split_k > 65535) {
     throw std::invalid_argument("CrossTL quantized matmul launch exceeds its bounds.");
-  }
-  // dispatch_column_pass binds at most 65535 partial products; refuse before
-  // the product runs rather than after.
-  if (intermediate.size() > 65535) {
-    throw std::invalid_argument(
-        "CrossTL split-K quantized matrix products sum at most 65535 partial products.");
   }
   intermediate.set_data(allocator::malloc(intermediate.nbytes()));
   int32_t k = K, n = N, m = M;
@@ -2249,10 +2263,10 @@ void dispatch_qmm_split_k(
   auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
   std::vector<CrosstlMlxBuffer> buffers = {
       {"w", "uint32", data(w), matmul_span(w), 0},
-      {"scales", "float32", data(scales), matmul_span(scales), 0},
-      {"biases", "float32", data(biases), matmul_span(biases), 0},
-      {"x", "float32", data(x), matmul_span(x), 0},
-      {"y", "float32", intermediate.data<void>(), intermediate.size(), 1},
+      {"scales", storage, data(scales), matmul_span(scales), 0},
+      {"biases", storage, data(biases), matmul_span(biases), 0},
+      {"x", storage, data(x), matmul_span(x), 0},
+      {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
       {"K", "int32", &k, 1, 0},
       {"N", "int32", &n, 1, 0},
       {"M", "int32", &m, 1, 0},
@@ -2265,7 +2279,7 @@ void dispatch_qmm_split_k(
       ReductionOpType::ContiguousStridedReduce,
       {intermediate.shape(0)},
       {intermediate.strides(0)});
-  dispatch_column_reduce(intermediate, out, plan, {0}, "sum", "float32");
+  dispatch_column_reduce(intermediate, out, plan, {0}, "sum", storage);
 }
 } // namespace
 
@@ -2283,10 +2297,9 @@ void dispatch_qvm_split_k(
     int M,
     int N,
     int K) {
-  if (out.dtype() != float32) {
-    throw std::invalid_argument(
-        "CrossTL split-K vector-matrix products require float32 partition sums.");
-  }
+  const int split_k = K > 8192 ? 32 : 8;
+  const char* storage =
+      partition_sum_type(out, split_k, "vector-matrix products");
   // adjust_matrix_offsets moves a single weight batch axis by tid.z without
   // wrapping it, so 2-D weights (the partition axis alone) under batched x
   // read past the last partition in quantized.h.
@@ -2295,7 +2308,6 @@ void dispatch_qvm_split_k(
         "CrossTL split-K vector-matrix products of batched inputs and 2-D weights are not "
         "routed: qvm_split_k offsets the weights past their partitions.");
   }
-  const int split_k = K > 8192 ? 32 : 8;
   const int split_d = (K + split_k - 1) / split_k;
   const uint64_t B = out.size() / M / N * split_k;
   const int bn = std::min(group_size, 32) * 2;
@@ -2328,9 +2340,9 @@ void dispatch_qvm_split_k(
   }
   temp_shape.insert(temp_shape.end() - 2, split_k);
   array intermediate(temp_shape, out.dtype(), nullptr, {});
-  const std::string entry = std::string("affine_qvm_split_k_float_gs_") +
-      std::to_string(group_size) + "_b_" + std::to_string(bits) + "_spk_" +
-      std::to_string(split_k);
+  const std::string entry = std::string("affine_qvm_split_k_") +
+      quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
+      std::to_string(bits) + "_spk_" + std::to_string(split_k);
   require_entry(entry);
   if (intermediate.size() > max_matmul_elements || B > 65535 || uint32_t(M) > 65535) {
     throw std::invalid_argument("CrossTL quantized matmul launch exceeds its bounds.");
@@ -2346,10 +2358,10 @@ void dispatch_qvm_split_k(
   };
   std::vector<CrosstlMlxBuffer> buffers = {
       {"w", "uint32", data(w), matmul_span(w), 0},
-      {"scales", "float32", data(scales), matmul_span(scales), 0},
-      {"biases", "float32", data(biases), matmul_span(biases), 0},
-      {"x", "float32", data(x), matmul_span(x), 0},
-      {"y", "float32", intermediate.data<void>(), intermediate.size(), 1},
+      {"scales", storage, data(scales), matmul_span(scales), 0},
+      {"biases", storage, data(biases), matmul_span(biases), 0},
+      {"x", storage, data(x), matmul_span(x), 0},
+      {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
       {"in_vec_size", "int32", &in_vec_size, 1, 0},
       {"out_vec_size", "int32", &out_vec_size, 1, 0},
       {"x_batch_ndims", "int32", &x_batch_ndims, 1, 0},
@@ -2377,7 +2389,7 @@ void dispatch_qvm_split_k(
       ReductionOpType::ContiguousStridedReduce,
       {intermediate.shape(axis)},
       {intermediate.strides(axis)});
-  dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", "float32");
+  dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", storage);
 }
 
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {

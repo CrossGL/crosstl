@@ -26,7 +26,7 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 NEGATIVE_CHECKS = {
     "allocation": "column reduction source view exceeds its bounds",
     "long": "long-column reduction plans are not implemented",
-    "limit": "row and column reductions support at most 65535 elements",
+    "limit": "column reduction inner shape exceeds its bounds",
 }
 
 
@@ -63,7 +63,8 @@ def reject_invalid_plan(mx, np, mode, runtime):
                 mx.array(np.ones(4, dtype=np.float32)), (33, 33), (33, 1)
             )
         else:
-            shape = {"long": (1024, 2), "limit": (1024, 64)}[mode]
+            # 65,536 output columns exceed the 65,535 workgroups of a launch axis.
+            shape = {"long": (1024, 2), "limit": (2, 65536)}[mode]
             source = mx.array(np.ones(shape, dtype=np.float32))
         mx.eval(mx.sum(source, axis=0))
     except (ValueError, RuntimeError) as error:

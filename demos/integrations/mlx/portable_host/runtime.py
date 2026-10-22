@@ -651,7 +651,7 @@ class HostRuntime:
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
-        small_column = entry in column_small_layout.SMALL_COLUMN_ENTRIES
+        small_column = entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
         column_reduction = entry in COLUMN_ENTRIES or small_column
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
@@ -701,7 +701,11 @@ class HostRuntime:
                 else (
                     reduction_layout.MAX_ELEMENTS
                     if entry in REDUCTION_ENTRIES
-                    else 65535
+                    else (
+                        column_reduction_layout.MAX_ELEMENTS
+                        if column_reduction
+                        else 65535
+                    )
                 )
             )
         ):

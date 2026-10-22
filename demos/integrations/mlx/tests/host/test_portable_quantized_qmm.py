@@ -224,28 +224,47 @@ def test_verification_cases_cover_every_route():
     layouts = {(record["layout"], bool(record["wBatchShape"])) for record in RECORDS}
     assert layouts == {("dense", True), ("dense", False), ("strided", False)}
     splits = {
-        record["splitK"]: record["dispatches"][1:]
+        (record["splitK"], record["dtype"], *record["dispatches"][1:])
         for record in RECORDS
         if record["splitK"] > 1
     }
     assert splits == {
-        4: ["col_reduce_small_1_reduce_sumfloat32"],
-        64: ["col_reduce_looped_1_32_32_reduce_sumfloat32"],
+        (4, "float32", "col_reduce_small_1_reduce_sumfloat32"),
+        (64, "float32", "col_reduce_looped_1_32_32_reduce_sumfloat32"),
+        (4, "float16", "col_reduce_small_1_reduce_sumfloat16"),
+        (8, "float16", "col_reduce_small_1_reduce_sumfloat16"),
+        (16, "bfloat16", "col_reduce_small_1_reduce_sumbfloat16"),
     }
     assert verify.small_column_variants() == {
-        "col_reduce_small_1_reduce_sumfloat32@32x4"
+        "col_reduce_small_1_reduce_sumfloat32@32x4",
+        "col_reduce_small_1_reduce_sumfloat16@32x4",
+        "col_reduce_small_1_reduce_sumfloat16@32x8",
+        "col_reduce_small_1_reduce_sumbfloat16@32x8",
     }
     # Partial row tiles, partial column tiles of unaligned N and K tails.
     assert any(record["M"] % 32 for record in RECORDS)
     assert any(record["N"] % 32 for record in RECORDS if record["transpose"])
     assert any(record["K"] % 32 for record in RECORDS if not record["transpose"])
-    half, wide = (verify.case_record(case) for case, _ in verify.REFUSALS)
-    for record in (half, wide):
-        assert layout.signature(record["entry"])["kernel"] == "qmm_t_splitk"
-    # A half-precision product, and a float32 one whose 64 partitions of
-    # 32 by 32 outputs exceed the column sum's 65,535 elements by one.
-    assert half["dtype"] == "float16" and wide["dtype"] == "float32"
-    assert wide["splitK"] * wide["M"] * wide["N"] == 65536
+    # More than 65,535 partial products: 64 partitions of 32 by 32 float32
+    # outputs, and test_qmm's 8 partitions of 64 by 256 float16 ones.
+    partials = {
+        record["name"]: record["splitK"] * record["M"] * record["N"]
+        for record in RECORDS
+    }
+    assert partials["qmm-t-split-wide-sum"] == 65536
+    assert partials["qmm-t-split-half-wide"] == 131072
+    # Each partition is k_partition_size columns of K.
+    for record in RECORDS:
+        width = record["K"] // record["splitK"]
+        assert record["partitions"] == [
+            [start, start + width] for start in range(0, record["K"], width)
+        ]
+    # 16-bit float partitions beyond the small column pass are refused.
+    ((case, _),) = verify.REFUSALS
+    looped = verify.case_record(case)
+    assert layout.signature(looped["entry"])["kernel"] == "qmm_t_splitk"
+    assert looped["dtype"] == "float16" and looped["splitK"] == 64
+    assert case_data(looped, 0)["expected"] is None
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
@@ -265,6 +284,62 @@ def test_case_data_is_exact_in_every_element_type(record):
     assert data["scales"].shape[-1] * group == (
         record["K"] if record["transpose"] else record["N"]
     )
+
+
+def test_partition_sum_rounds_in_the_column_sum_order():
+    import numpy as np
+
+    from demos.integrations.mlx.portable_host.verify_quantized_matmul import (
+        partition_sum,
+    )
+
+    # 16 partitions of one float16 output: threadgroup rows 0 to 7 add
+    # partitions j and j + 8 from zero, then row 0 adds rows 1 to 7 in turn.
+    # Every 2048 + 1 rounds back to 2048 (ties to even), so the exact 2056 is
+    # never reached.
+    record = {
+        "dtype": "float16",
+        "M": 1,
+        "N": 1,
+        "partitions": [[k, k + 1] for k in range(16)],
+    }
+    weights = np.array([2048.0] + [1.0] * 8 + [0.0] * 7).reshape(16, 1)
+    assert partition_sum(np, record, np.ones((1, 16)), weights).tolist() == [[2048.0]]
+    # Partition 8 is row 0's second addend: 1 + 2048 rounds there instead.
+    weights = np.array([1.0] * 8 + [2048.0] + [0.0] * 7).reshape(16, 1)
+    assert partition_sum(np, record, np.ones((1, 16)), weights).tolist() == [[2048.0]]
+    weights = np.array([0.0] * 8 + [1.0] * 8).reshape(16, 1)
+    assert partition_sum(np, record, np.ones((1, 16)), weights).tolist() == [[8.0]]
+    with pytest.raises(ValueError, match="small column pass"):
+        partition_sum(
+            np,
+            record | {"partitions": [[k, k + 1] for k in range(32)]},
+            np.ones((1, 32)),
+            np.ones((32, 1)),
+        )
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        record
+        for record in RECORDS
+        if record["dtype"] != "float32" and record["splitK"] > 1
+    ],
+    ids=lambda record: record["name"],
+)
+def test_half_split_references_round_every_partition(record):
+    import numpy as np
+
+    from demos.integrations.mlx.portable_host.verify_quantized_matmul import rounded
+
+    seed = [case[0] for case in verify.CASES].index(record["name"])
+    expected = case_data(record, seed)["expected"]
+    assert np.array_equal(rounded(expected, record["dtype"]), expected)
+    single = case_data(record | {"partitions": [[0, record["K"]]]}, seed)["expected"]
+    # Rounding each partition and each addition changes these products.
+    if record["name"] != "qmm-t-split-half":
+        assert (expected != single).sum() > 100
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
@@ -501,14 +576,15 @@ def test_backend_routes_matrix_products_as_quantized_cpp():
         "int split_k = int(std::max<int64_t>(1, 512 / tiles));",
         "const int k_align = group_size > 32 ? group_size : 32;",
         "while (split_k > 1 && (K % (split_k * k_align) != 0)) {",
-        '"affine_qmm_t_splitk_float_gs_"',
+        'std::string("affine_qmm_t_splitk_") +',
         '(transpose ? "affine_qmm_t_" : "affine_qmm_n_")',
         '(N % 32 == 0 ? "_alN_true" : "_alN_false")',
         "temp_shape.insert(temp_shape.begin(), split_k);",
         "{{tiles_n, tiles_m, uint32_t(split_k)}, {32, 2, 2}}",
         "{{tiles_n, tiles_m, uint32_t(B)}, {32, 2, 2}}",
-        'dispatch_column_reduce(intermediate, out, plan, {0}, "sum", "float32");',
-        "require float32 partition sums",
+        'dispatch_column_reduce(intermediate, out, plan, {0}, "sum", storage);',
+        "sum 16-bit float partitions only below 32 partitions",
+        "if (out.dtype() != float32 && partitions >= 32) {",
     ):
         assert text in backend, text
 

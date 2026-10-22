@@ -10,7 +10,9 @@ Every case routes one ``mx.quantized_matmul`` call to its translated entries
 and checks each output bit against an exact float64 reference. Inputs lie on
 dyadic grids with power-of-two scales, so every dequantized weight is exact in
 the element type the kernels dequantize into and every float32 partial sum is
-exact, whatever its order; only the final cast rounds.
+exact, whatever its order; only the final cast rounds. 16-bit float split-K
+products also round each partition's product and every addition of their
+partition sum, which the reference repeats in the column sum's order.
 """
 
 import argparse
@@ -50,11 +52,30 @@ CASES = (
     ("qmm-t-unsplit", "float16", 128, 6, 128, 96, (40,), (), "dense", True),
     ("qmm-t-unsplit-folded", "float32", 128, 2, 128, 33, (2, 20), (), "dense", True),
     # qmm_t_splitk: 4 partitions of one unaligned column tile (a small sum),
-    # 64 partitions of one partial row tile (a looped sum) and 4 partitions
-    # of partial row and column tiles.
+    # 64 partitions of one partial row tile (a looped sum), 4 partitions of
+    # partial row and column tiles, and 64 partitions holding 65,536 partial
+    # products.
     ("qmm-t-split-small", "float32", 64, 4, 256, 8, (3, 10), (), "dense", True),
     ("qmm-t-split-looped", "float32", 32, 2, 2048, 32, (20,), (), "dense", True),
     ("qmm-t-split-tiles", "float32", 128, 5, 512, 99, (129,), (), "dense", True),
+    ("qmm-t-split-wide-sum", "float32", 32, 6, 2048, 32, (32,), (), "dense", True),
+    # 16-bit float partitions, summed in their type: 4 partitions, 16
+    # partitions that each threadgroup row adds two of, and test_qmm's
+    # 8 partitions of 131,072 float16 partial products.
+    ("qmm-t-split-half", "float16", 64, 4, 256, 8, (30,), (), "dense", True),
+    (
+        "qmm-t-split-bfloat-interleaved",
+        "bfloat16",
+        32,
+        3,
+        512,
+        32,
+        (32,),
+        (),
+        "dense",
+        True,
+    ),
+    ("qmm-t-split-half-wide", "float16", 32, 4, 256, 256, (64,), (), "dense", True),
     # qmm_n: a K tail over two row tiles, stacked, broadcast and shared
     # weights, and a single row tile at the vector limit. MLX gives every
     # broadcast unit axis a zero stride, so broadcast weights keep two groups
@@ -66,22 +87,32 @@ CASES = (
     ("qmm-n-shared-weights", "float16", 32, 5, 33, 32, (3, 10), (), "strided", False),
     ("qmm-n-limit", "float32", 64, 6, 13, 64, (4,), (), "dense", False),
 )
-# Products the host refuses, as (case, the error it raises): split-K partial
-# products of half-precision types need a half-precision partition sum, and
-# the column sum binds at most 65,535 partial products.
+# Products the host refuses, as (case, the error it raises): 16-bit float
+# partial products in 32 or more partitions take the looped column sum, which
+# the host translates for float32 alone.
 REFUSALS = (
     (
-        ("qmm-t-split-half", "float16", 64, 4, 256, 8, (30,), (), "dense", True),
-        "require float32 partition sums",
-    ),
-    (
-        ("qmm-t-split-wide-sum", "float32", 32, 2, 2048, 32, (32,), (), "dense", True),
-        "sum at most 65535 partial products",
+        (
+            "qmm-t-split-half-looped",
+            "float16",
+            32,
+            2,
+            2048,
+            32,
+            (20,),
+            (),
+            "dense",
+            True,
+        ),
+        "sum 16-bit float partitions only below 32 partitions",
     ),
 )
+SUM_KINDS = {"small": "col_reduce_small_1", "looped": "col_reduce_looped_1_32_32"}
 SUM_ENTRIES = {
-    "small": "col_reduce_small_1_reduce_sumfloat32",
-    "looped": "col_reduce_looped_1_32_32_reduce_sumfloat32",
+    "col_reduce_small_1_reduce_sumfloat32",
+    "col_reduce_looped_1_32_32_reduce_sumfloat32",
+    "col_reduce_small_1_reduce_sumfloat16",
+    "col_reduce_small_1_reduce_sumbfloat16",
 }
 
 
@@ -98,7 +129,11 @@ def case_record(case):
         if qmm_layout.signature(entry)["kernel"] == "qmm_t_splitk"
         else 1
     )
-    sums = [] if split == 1 else [SUM_ENTRIES[qmm_layout.partition_sum(m, n, split)]]
+    sums = []
+    if split > 1:
+        kind = SUM_KINDS[qmm_layout.partition_sum(m, n, split)]
+        sums = [f"{kind}_reduce_sum{dtype}"]
+    width = k // split
     return {
         "name": name,
         "dtype": dtype,
@@ -115,6 +150,8 @@ def case_record(case):
         "splitK": split,
         "entry": entry,
         "dispatches": [entry, *sums],
+        # qmm_splitk's partitions: k_partition_size = K / split_k columns each.
+        "partitions": [[start, start + width] for start in range(0, k, width)],
     }
 
 
@@ -124,7 +161,7 @@ def small_column_variants():
     for case in CASES:
         record = case_record(case)
         for entry in record["dispatches"][1:]:
-            if entry in column_small_layout.SMALL_COLUMN_ENTRIES:
+            if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
                 lanes, rows = column_small_layout.geometry(
                     record["M"] * record["N"], record["splitK"]
                 )
@@ -162,7 +199,7 @@ def validate_trace(trace, records, target):
         or {info["batched"] for info in signatures} != {False, True}
         or {info["aligned"] for info in signatures} != {None, False, True}
         or {info["dtype"] for info in signatures} != {"float32", "float16", "bfloat16"}
-        or sums != set(SUM_ENTRIES.values())
+        or sums != SUM_ENTRIES
     ):
         raise RuntimeError("Quantized qmm cases do not cover every route")
 
