@@ -51,6 +51,11 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .texture_types import (
+    METAL_DEPTH_TEXTURE_TYPES,
+    METAL_SAMPLED_TEXTURE_TYPES,
+    combined_texture_type,
+)
 from .type_layout import metal_type_layout
 
 
@@ -1778,69 +1783,69 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "xhalf4x3": "f16mat4x3",
             "xhalf4x4": "f16mat4",
             # Texture Types
-            "texture1d": "sampler1D",
-            "texture1d<float>": "sampler1D",
-            "texture1d<half>": "sampler1D",
-            "texture1d<int>": "isampler1D",
-            "texture1d<uint>": "usampler1D",
-            "texture1d_array": "sampler1DArray",
-            "texture1d_array<float>": "sampler1DArray",
-            "texture1d_array<half>": "sampler1DArray",
-            "texture1d_array<int>": "isampler1DArray",
-            "texture1d_array<uint>": "usampler1DArray",
-            "texture2d": "sampler2D",
-            "texture2d<float>": "sampler2D",
-            "texture2d<half>": "sampler2D",
-            "texture2d<int>": "isampler2D",
-            "texture2d<uint>": "usampler2D",
-            "texture2d_ms": "sampler2DMS",
-            "texture2d_ms<float>": "sampler2DMS",
-            "texture2d_ms<half>": "sampler2DMS",
-            "texture2d_ms<int>": "isampler2DMS",
-            "texture2d_ms<uint>": "usampler2DMS",
-            "texture2d_ms_array": "sampler2DMSArray",
-            "texture2d_ms_array<float>": "sampler2DMSArray",
-            "texture2d_ms_array<half>": "sampler2DMSArray",
-            "texture2d_ms_array<int>": "isampler2DMSArray",
-            "texture2d_ms_array<uint>": "usampler2DMSArray",
-            "texture3d": "sampler3D",
-            "texture3d<float>": "sampler3D",
-            "texture3d<half>": "sampler3D",
-            "texture3d<int>": "isampler3D",
-            "texture3d<uint>": "usampler3D",
-            "texturecube": "samplerCube",
-            "texturecube<float>": "samplerCube",
-            "texturecube<half>": "samplerCube",
-            "texturecube<int>": "isamplerCube",
-            "texturecube<uint>": "usamplerCube",
-            "TextureCube": "samplerCube",
-            "texturecube_array": "samplerCubeArray",
-            "texturecube_array<float>": "samplerCubeArray",
-            "texturecube_array<half>": "samplerCubeArray",
-            "texturecube_array<int>": "isamplerCubeArray",
-            "texturecube_array<uint>": "usamplerCubeArray",
-            "texture2d_array": "sampler2DArray",
-            "texture2d_array<float>": "sampler2DArray",
-            "texture2d_array<half>": "sampler2DArray",
-            "texture2d_array<int>": "isampler2DArray",
-            "texture2d_array<uint>": "usampler2DArray",
+            "texture1d": "texture1D",
+            "texture1d<float>": "texture1D",
+            "texture1d<half>": "texture1D",
+            "texture1d<int>": "itexture1D",
+            "texture1d<uint>": "utexture1D",
+            "texture1d_array": "texture1DArray",
+            "texture1d_array<float>": "texture1DArray",
+            "texture1d_array<half>": "texture1DArray",
+            "texture1d_array<int>": "itexture1DArray",
+            "texture1d_array<uint>": "utexture1DArray",
+            "texture2d": "texture2D",
+            "texture2d<float>": "texture2D",
+            "texture2d<half>": "texture2D",
+            "texture2d<int>": "itexture2D",
+            "texture2d<uint>": "utexture2D",
+            "texture2d_ms": "texture2DMS",
+            "texture2d_ms<float>": "texture2DMS",
+            "texture2d_ms<half>": "texture2DMS",
+            "texture2d_ms<int>": "itexture2DMS",
+            "texture2d_ms<uint>": "utexture2DMS",
+            "texture2d_ms_array": "texture2DMSArray",
+            "texture2d_ms_array<float>": "texture2DMSArray",
+            "texture2d_ms_array<half>": "texture2DMSArray",
+            "texture2d_ms_array<int>": "itexture2DMSArray",
+            "texture2d_ms_array<uint>": "utexture2DMSArray",
+            "texture3d": "texture3D",
+            "texture3d<float>": "texture3D",
+            "texture3d<half>": "texture3D",
+            "texture3d<int>": "itexture3D",
+            "texture3d<uint>": "utexture3D",
+            "texturecube": "textureCube",
+            "texturecube<float>": "textureCube",
+            "texturecube<half>": "textureCube",
+            "texturecube<int>": "itextureCube",
+            "texturecube<uint>": "utextureCube",
+            "TextureCube": "textureCube",
+            "texturecube_array": "textureCubeArray",
+            "texturecube_array<float>": "textureCubeArray",
+            "texturecube_array<half>": "textureCubeArray",
+            "texturecube_array<int>": "itextureCubeArray",
+            "texturecube_array<uint>": "utextureCubeArray",
+            "texture2d_array": "texture2DArray",
+            "texture2d_array<float>": "texture2DArray",
+            "texture2d_array<half>": "texture2DArray",
+            "texture2d_array<int>": "itexture2DArray",
+            "texture2d_array<uint>": "utexture2DArray",
             "texture_buffer": "samplerBuffer",
             "texture_buffer<float>": "samplerBuffer",
             "texture_buffer<half>": "samplerBuffer",
             "texture_buffer<int>": "isamplerBuffer",
             "texture_buffer<uint>": "usamplerBuffer",
-            "depth2d": "sampler2DShadow",
-            "depth2d<float>": "sampler2DShadow",
-            "depth2d_array": "sampler2DArrayShadow",
-            "depth2d_array<float>": "sampler2DArrayShadow",
-            "depthcube": "samplerCubeShadow",
-            "depthcube<float>": "samplerCubeShadow",
-            "depthcube_array": "samplerCubeArrayShadow",
-            "depthcube_array<float>": "samplerCubeArrayShadow",
-            "depth2d_ms": "sampler2DMS",
-            "depth2d_ms<float>": "sampler2DMS",
-            "depth2d_ms_array": "sampler2DMSArray",
-            "depth2d_ms_array<float>": "sampler2DMSArray",
+            "depth2d": "texture2DShadow",
+            "depth2d<float>": "texture2DShadow",
+            "depth2d_array": "texture2DArrayShadow",
+            "depth2d_array<float>": "texture2DArrayShadow",
+            "depthcube": "textureCubeShadow",
+            "depthcube<float>": "textureCubeShadow",
+            "depthcube_array": "textureCubeArrayShadow",
+            "depthcube_array<float>": "textureCubeArrayShadow",
+            "depth2d_ms": "texture2DMS",
+            "depth2d_ms<float>": "texture2DMS",
+            "depth2d_ms_array": "texture2DMSArray",
+            "depth2d_ms_array<float>": "texture2DMSArray",
             # SwiftUI layer-effect shaders expose the rendered layer as a
             # sampler-like object with sample(coord) syntax.
             "SwiftUI::Layer": "sampler2D",
@@ -2850,12 +2855,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         return None
 
     def resource_classification_type(self, mapped_type):
+        """The combined CrossGL spelling of a mapped resource type, without pointer or reference suffixes."""
         if not mapped_type:
             return mapped_type
         base = str(mapped_type).strip()
         while base.endswith("*") or base.endswith("&"):
             base = base[:-1].strip()
-        return base
+        return combined_texture_type(base)
 
     def sampled_array_coordinate_constructor(self, texture_expr):
         mapped_type = self.resource_classification_type(
@@ -3112,6 +3118,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         return bool(mapped_type and "MS" in str(mapped_type))
 
     def scalar_size_resource_type(self, mapped_type):
+        mapped_type = self.resource_classification_type(mapped_type)
         return mapped_type in {
             "sampler1D",
             "isampler1D",
@@ -19639,24 +19646,9 @@ float {scalar}(float value) {{
         if not base_name or not generic_args:
             return None
 
-        resource_type = {
-            "texture1d": "sampler1D",
-            "texture1d_array": "sampler1DArray",
-            "texture2d": "sampler2D",
-            "texture2d_array": "sampler2DArray",
-            "texture2d_ms": "sampler2DMS",
-            "texture2d_ms_array": "sampler2DMSArray",
-            "texture3d": "sampler3D",
-            "texturecube": "samplerCube",
-            "texturecube_array": "samplerCubeArray",
-            "texture_buffer": "samplerBuffer",
-            "depth2d": "sampler2DShadow",
-            "depth2d_array": "sampler2DArrayShadow",
-            "depthcube": "samplerCubeShadow",
-            "depthcube_array": "samplerCubeArrayShadow",
-            "depth2d_ms": "sampler2DMS",
-            "depth2d_ms_array": "sampler2DMSArray",
-        }.get(base_name)
+        resource_type = METAL_SAMPLED_TEXTURE_TYPES.get(
+            base_name, METAL_DEPTH_TEXTURE_TYPES.get(base_name)
+        )
         if resource_type is None:
             return None
         if base_name.startswith("depth"):
@@ -22811,6 +22803,7 @@ float {scalar}(float value) {{
         return mapped_type in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}
 
     def is_sampled_texture_type(self, mapped_type):
+        mapped_type = self.resource_classification_type(mapped_type)
         if mapped_type == "sampler":
             return False
         return bool(
