@@ -35206,6 +35206,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         if self.hlsl_gl_frag_data_semantic(semantic):
             return True
+        if re.fullmatch(r"gl_FragColor\d+", str(semantic)):
+            # MSL [[color(N)]] for N > 0, which a scalar or narrower vector may carry (float depth [[color(3)]]).
+            return True
         return str(semantic).upper().startswith("SV_TARGET")
 
     def hlsl_gl_frag_data_semantic(self, semantic):
@@ -35224,6 +35227,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16int",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "float",
             "double",
             "half",

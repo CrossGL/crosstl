@@ -44,6 +44,7 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .enumerator_values import enumerator_values
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -3511,6 +3512,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         for enum in enums:
             if isinstance(enum, EnumNode):
                 self.register_metal_enum_arithmetic_contract(enum)
+        self.metal_enumerator_values = enumerator_values(
+            [enum for enum in enums if isinstance(enum, EnumNode)],
+            lambda value: self.generate_expression(value, False),
+        )
         emitted_typedefs = []
         for alias in typedefs:
             if not isinstance(alias, TypeAliasNode):
@@ -22918,8 +22923,15 @@ float {scalar}(float value) {{
 
     def dynamic_fragment_output_semantic(self, name, args):
         if name == "color" and args:
+            index = None
             if re.fullmatch(r"\d+", args[0]):
                 index = int(args[0])
+            else:
+                # An attachment named by an enumerator of the shared header.
+                index = (getattr(self, "metal_enumerator_values", None) or {}).get(
+                    args[0]
+                )
+            if index is not None:
                 return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
             return "gl_FragColor"
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:

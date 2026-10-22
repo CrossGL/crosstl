@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .binding_constants import fold_binding_constants
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
@@ -180,6 +181,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
@@ -199,6 +201,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
+    fold_binding_constants(program)
     canonicalize_texture_swizzles(program)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
