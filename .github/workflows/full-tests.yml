@@ -23,11 +23,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  durations:
+    name: Find recorded test durations
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      key: ${{ steps.find.outputs.cache-matched-key }}
+    steps:
+      # Every shard must place tests by the same recording, so this job picks one
+      # and each shard restores exactly that key. No match leaves the hash split.
+      - name: Find the newest recording from main
+        id: find
+        uses: actions/cache/restore@v6
+        with:
+          path: build/pytest-durations
+          key: pytest-durations-${{ github.run_id }}
+          restore-keys: pytest-durations-
+          lookup-only: true
+
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
+    needs: durations
     runs-on: ubuntu-latest
-    # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
-    # minutes each, the longest job of a merge-queue run; six bring a shard close
+    # tools/pytest_shard.py splits the suite by the test durations that the last main
+    # run recorded, or by test id when there is no recording. Three shards took 21 to
+    # 23 minutes each, the longest job of a merge-queue run; six bring a shard close
     # to the other gating workflows. Each shard still collects the whole suite.
     timeout-minutes: 60
     strategy:
@@ -60,11 +80,27 @@ jobs:
         # tests that run pwsh allow 15 s, and a cold start under xdist load has exceeded it.
         run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
+      - name: Restore recorded test durations
+        if: needs.durations.outputs.key != ''
+        uses: actions/cache/restore@v6
+        with:
+          path: build/pytest-durations
+          key: ${{ needs.durations.outputs.key }}
+          # Falling back to the hash here while other shards balance would skip tests.
+          fail-on-cache-miss: true
+
       - name: Run complete test suite
+        env:
+          DURATIONS_KEY: ${{ needs.durations.outputs.key }}
         run: |
           mkdir -p build/reports
+          balance=()
+          if [ -n "$DURATIONS_KEY" ]; then
+            balance=(--shard-durations build/pytest-durations)
+          fi
           python -m pytest tests demos/integrations \
             -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            "${balance[@]}" --shard-durations-out "build/durations/shard-${{ matrix.shard }}.json" \
             --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
@@ -88,6 +124,36 @@ jobs:
             build/reports/full-tests-failure-summary.md
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Upload recorded test durations
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-durations-${{ matrix.shard }}
+          path: build/durations/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  save-durations:
+    # Runs on main only: pull request and merge-queue caches are not visible to other refs.
+    name: Save recorded test durations
+    needs: pytest
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download recorded test durations
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pytest-durations-*
+          path: build/pytest-durations
+          merge-multiple: true
+
+      - name: Save recorded test durations
+        uses: actions/cache/save@v6
+        with:
+          path: build/pytest-durations
+          key: pytest-durations-${{ github.run_id }}-${{ github.run_attempt }}
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
@@ -695,7 +761,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue require.
     name: Complete Test Suite result
     if: always()
-    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    needs: [durations, pytest, save-durations, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

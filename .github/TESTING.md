@@ -61,7 +61,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 |---|---|
 | `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into six shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite in six shards (`tools/pytest_shard.py`), balanced by the test durations the last `main` run recorded; shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |

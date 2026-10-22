@@ -184,8 +184,11 @@ def _steps():
 
 def test_actions_are_referenced_by_release_tag():
     # Release tags keep workflows readable and let Dependabot propose upgrades.
-    # pypa/gh-action-pypi-publish publishes only its release/v1 branch.
-    release_tag = re.compile(r"^[\w.-]+/[\w.-]+@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$")
+    # pypa/gh-action-pypi-publish publishes only its release/v1 branch. An action may
+    # live in a subdirectory of its repository, as actions/cache/restore does.
+    release_tag = re.compile(
+        r"^[\w.-]+/[\w.-]+(?:/[\w.-]+)*@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$"
+    )
     for name, step in _steps():
         ref = str(step.get("uses", ""))
         if ref and not ref.startswith("./"):
