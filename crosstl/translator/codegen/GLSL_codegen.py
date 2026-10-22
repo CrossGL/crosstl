@@ -55257,6 +55257,9 @@ complex64_t crossgl_complex64_mod_assign(
                 continue
             if self.is_layout_bound_struct_uniform(node, node_type):
                 continue
+            if self.is_constant_buffer_type(node_type):
+                # A ConstantBuffer<T> declares a uniform block of T's members, not a T value.
+                continue
             record_type(node_type)
 
         for node in getattr(ast, "constants", []) or []:

@@ -1,6 +1,7 @@
 """Arrays of arrays of resources, flattened to one dimension for Vulkan.
 
-GLSL (``GL_ARB_arrays_of_arrays``), HLSL and MSL declare arrays of arrays of samplers, textures and images::
+GLSL (``GL_ARB_arrays_of_arrays``), HLSL and MSL declare arrays of arrays of samplers, textures and images, and
+HLSL and CrossGL arrays of arrays of constant buffers (``ConstantBuffer<T> lights[2][4]``)::
 
     uniform sampler2D atlas[2][4];                 // GLSL
     Texture2D<float4> atlas[2][4] : register(t0);  // HLSL
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .constant_buffers import constant_buffer_element
 from .hub_types import call_name, iter_functions
 from .opaque_structs import _is_opaque
 from .rewrite import call, clone
@@ -60,7 +62,9 @@ def _dimensions(type_node):
 
 def _is_descriptor_grid(type_node):
     base, sizes = _dimensions(type_node)
-    return len(sizes) >= 2 and _is_opaque(base)
+    return len(sizes) >= 2 and (
+        _is_opaque(base) or constant_buffer_element(base) is not None
+    )
 
 
 def _flat_size(sizes):
