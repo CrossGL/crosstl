@@ -96,6 +96,9 @@ from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
 )
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -8235,6 +8238,7 @@ class GLSLCodeGen(
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
+        ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         code = self.render_program_at_required_version(ast, target_stage)
         for reason in unavailable_builtin_reasons(
             code,
@@ -39614,6 +39618,12 @@ complex64_t crossgl_complex64_mod_assign(
                 array = self.generate_expression(expr.array)
                 array = self.glsl_precise_selected_value(expr.array, array)
                 index = self.glsl_resource_array_index_expression(expr)
+                instance_member = self.glsl_structured_buffer_array_element_member(
+                    expr.array
+                )
+                if instance_member is not None:
+                    # One buffer of an array of storage blocks holds its elements in a member.
+                    return f"{array}.{instance_member}[{index}]"
                 return f"{array}[{index}]"
             else:
                 return str(expr)
@@ -43440,6 +43450,22 @@ complex64_t crossgl_complex64_mod_assign(
         if normalized_type and normalized_type.endswith("*"):
             return normalized_type[:-1].rstrip()
         return None
+
+    def glsl_structured_buffer_array_element_member(self, buffer_expr):
+        """The block member holding the elements of ``buffer_expr``, one buffer of a declared buffer array.
+
+        An array of structured buffers is declared as an array of blocks (``buffer B { T data[]; } b[N];``), so
+        element ``i`` of ``b[k]`` is ``b[k].data[i]``. ``None`` for any other operand.
+        """
+        if not isinstance(buffer_expr, ArrayAccessNode):
+            return None
+        base = getattr(buffer_expr, "array", None)
+        if not isinstance(base, (IdentifierNode, VariableNode)):
+            return None
+        name = self.expression_name(base)
+        if name in self.local_variable_types:
+            return None
+        return self.structured_buffer_instance_members.get(name)
 
     def structured_buffer_access_expression(self, buffer_arg, element_index):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
