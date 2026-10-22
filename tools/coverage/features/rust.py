@@ -36,6 +36,7 @@ _SCALARS = {
     "u16": "uint16",
     "i64": "int64",
     "u64": "uint64",
+    "usize": "usize",
     "bool": "bool",
 }
 _GLAM = {"": "float", "D": "double", "I": "int", "U": "uint", "B": "bool"}
@@ -59,6 +60,7 @@ _CONSTANTS = {
     "ID": "0",
     "CLUSTER_SIZE": "4",
     "DIRECTION": "0",
+    "STREAM": "0",
 }
 # A memory barrier has to order memory, so its semantics name an ordering and a storage class.
 _BARRIER = "{ Semantics::ACQUIRE_RELEASE.bits() | Semantics::UNIFORM_MEMORY.bits() }"
@@ -100,9 +102,19 @@ _UNSPELLED = {
         "no CrossGL function returns a vector's direction and length together"
     ),
     "Vec3::try_normalize": "no CrossGL function returns an optional value",
+    "Vec3::max_position": (
+        "no CrossGL function returns the index of a vector's largest element"
+    ),
+    "Vec3::min_position": (
+        "no CrossGL function returns the index of a vector's smallest element"
+    ),
 }
-# CrossGL builds vectors with constructors rather than functions.
-_CONSTRUCTORS = {"Vec3::new": "vec3", "Vec3::splat": "vec3"}
+# CrossGL builds vectors with constructors and reads an element with the subscript operator, rather than functions.
+_CONSTRUCTORS = {
+    "Vec3::new": "vec3",
+    "Vec3::splat": "vec3",
+    "vector_extract_dynamic": spellings.SUBSCRIPT,
+}
 # Parameters a probe passes as literals. The probes target Vulkan 1.1 (SPIR-V 1.3), where a subgroup broadcast's lane
 # id and a quad broadcast's index must be constants (SPIR-V specification, OpGroupNonUniformBroadcast and
 # OpGroupNonUniformQuadBroadcast).

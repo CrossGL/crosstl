@@ -34,6 +34,13 @@ pub fn any<V: Vector<bool, N>, const N: usize>(vector: V) -> bool {
 
 pub unsafe fn emit_stream_vertex<const STREAM: i64>() {}
 
+pub unsafe fn vector_extract_dynamic<T: Scalar, const N: usize>(
+    vector: impl Vector<T, N>,
+    index: usize,
+) -> T {
+    T::default()
+}
+
 pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
     0
 }
@@ -115,6 +122,10 @@ impl Vec3 {
         (self, self)
     }
 
+    pub fn max_position(self) -> usize {
+        0
+    }
+
     pub fn normalize_and_length(self) -> (Self, f32) {
         (self, 1.0)
     }
@@ -168,6 +179,7 @@ def test_rust_reads_spirv_std_arch_and_expands_its_macros():
         "subgroup_inclusive_f_add",
         "subgroup_logical_and",
         "unsigned_max",
+        "vector_extract_dynamic",
     ]
     assert features["unsigned_max"].signature == Signature(
         Type("uint"), (Param(Type("uint")), Param(Type("uint")))
@@ -193,10 +205,18 @@ def test_rust_fills_in_constant_generic_parameters():
         "unsafe atomic_i_add::<_, { Scope::Subgroup as u32 }, { Semantics::NONE.bits() }>"
     )
     assert "ACQUIRE_RELEASE" in features["memory_barrier"].spelling
-    assert features["emit_stream_vertex"].signature is None
-    assert features["emit_stream_vertex"].note == (
-        "no probe value for the constant parameter STREAM"
+    assert features["emit_stream_vertex"].spelling == "unsafe emit_stream_vertex::<0>"
+    _, _, note = rust.signature("f", ("const WIDTH: u32", "", ""))
+    assert note == "no probe value for the constant parameter WIDTH"
+
+
+def test_rust_geometry_stream_is_a_crossgl_argument():
+    stream = parse()["emit_stream_vertex"]
+    assert stream.crossgl == "EmitStreamVertex"
+    assert (
+        "unsafe { emit_stream_vertex::<0>() };" in probes.build(stream, "rust").source
     )
+    assert "EmitStreamVertex(0);" in probes.build(stream, "crossgl").source
 
 
 def test_rust_reads_float_and_vec3_methods():
@@ -245,6 +265,26 @@ def test_rust_probes_64_bit_integer_results():
     assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
 
 
+def test_rust_probes_pointer_sized_integers():
+    features = parse()
+    position = features["Vec3::max_position"]
+    assert position.signature == Signature(Type("usize"), (Param(VEC3_TYPE),))
+    source = probes.build(position, "rust").source
+    assert "let r: usize = a0.max_position();" in source
+    assert "outp[i] = (r) as u32;" in source
+    assert position.crossgl == ""
+    extract = features["vector_extract_dynamic"]
+    source = probes.build(extract, "rust").source
+    assert "let a1: usize = (uin[i + 0]) as usize;" in source
+    assert "let r: f32 = unsafe { vector_extract_dynamic(a0, a1) };" in source
+    # rust-gpu's usize is 32 bits wide, and the Rust importer writes it as CrossGL's uint.
+    crossgl = probes.build(extract, "crossgl").source
+    assert "uint a1 = uint(uin[i + 0u]);" in crossgl
+    assert "float r = a0[a1];" in crossgl
+    with pytest.raises(probes.ProbeError, match="no pointer-sized integer type"):
+        probes.spell(Type("usize"), "glsl")
+
+
 def test_rust_has_no_probe_for_vectors_spirv_std_lacks():
     with pytest.raises(probes.ProbeError, match="no int16 vectors"):
         probes.spell(Type("int16", (3,)), "rust")
@@ -280,6 +320,7 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
     features = parse()
     for name in (
         "Float::integer_decode",
+        "Vec3::max_position",
         "Vec3::normalize_and_length",
         "Vec3::try_normalize",
     ):

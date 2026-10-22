@@ -70,6 +70,7 @@ _STORAGE = {
     "uint64": "uint",
     "int8x4_packed": "uint",
     "uint8x4_packed": "uint",
+    "usize": "uint",
 }
 
 

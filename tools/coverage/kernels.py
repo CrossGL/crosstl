@@ -178,6 +178,7 @@ class Rust(Dialect):
     entry = "probe"
     # rustgpu.CAPABILITIES enables Int16 and Int64 for every probe.
     wide_integers = True
+    pointer_sized = True
     narrow_scalars = True
     _SCALARS = {
         "float": "f32",
@@ -189,10 +190,13 @@ class Rust(Dialect):
         "uint16": "u16",
         "int64": "i64",
         "uint64": "u64",
+        "usize": "usize",
     }
     # spirv-std's glam has 32-bit integer vectors only (features/rust.py, _GLAM_FEATURES).
     _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
-    _INTEGERS = frozenset({"int", "uint", "int16", "uint16", "int64", "uint64"})
+    _INTEGERS = frozenset(
+        {"int", "uint", "int16", "uint16", "int64", "uint64", "usize"}
+    )
     # A tuple result, read through its first field, and an optional one, read as its value or the type's default.
     _HELD = re.compile(r"\((\w+), [^()]+\)|Option<(\w+)>")
 
