@@ -30784,6 +30784,40 @@ class GLSLCodeGen(
             return complete.minimum - base[1], complete.maximum - base[0]
         return base[0] - complete.maximum, base[1] - complete.minimum
 
+    def generate_glsl_storage_pointer_step(self, expression, operator):
+        """``p++``, ``++p``, ``p--`` or ``--p`` of a storage pointer whose value
+        is discarded.
+
+        A storage pointer lowers to its backing buffer and an element offset,
+        so the step moves the offset by one element, as ``p += 1`` does. A
+        step whose value is used needs the pointer as a first-class value and
+        stays refused.
+        """
+        if expression is not self.current_discarded_expression:
+            return None
+        operand = expression.operand
+        if not isinstance(operand, (str, IdentifierNode, VariableNode)):
+            return None
+        name = getattr(operand, "name", None) or self.expression_name(operand)
+        binding = self.current_glsl_storage_pointer_aliases.get(name)
+        if binding is None or binding.get("kind") != "storage-pointer":
+            return None
+        offset = binding.get("offset")
+        if binding.get("resource_root") or not self.glsl_storage_pointer_offset_lvalue(
+            offset
+        ):
+            raise OpenGLStoragePointerError(
+                f"OpenGL cannot reassign storage pointer '{name}'",
+                parameter_name=name,
+                reason="assignment-storage-unavailable",
+                source_location=getattr(expression, "source_location", None),
+            )
+        increment = operator == "++" or expression.op in {
+            "PRE_INCREMENT",
+            "POST_INCREMENT",
+        }
+        return f"({offset} {'+=' if increment else '-='} 1)"
+
     def generate_glsl_storage_pointer_assignment(self, node, indent):
         target = getattr(node, "target", getattr(node, "left", None))
         if not isinstance(target, (str, IdentifierNode, VariableNode)):
@@ -39986,6 +40020,9 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }:
+                pointer_step = self.generate_glsl_storage_pointer_step(expr, op)
+                if pointer_step is not None:
+                    return pointer_step
                 self.validate_glsl_private_pointer_byte_view_mutation(expr.operand)
                 self.validate_glsl_storage_pointer_mutation_target(expr.operand)
                 self.validate_glsl_buffer_block_member_access(
