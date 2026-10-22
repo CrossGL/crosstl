@@ -13,6 +13,7 @@ from ..common_ast import (
     CastNode,
     FunctionCallNode,
     MemberAccessNode,
+    TextureSampleNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
@@ -40,11 +41,15 @@ class HLSLTexelAccessMixin:
             "texelFetch",
             "texelFetchOffset",
             "texture",
+            "textureClamp",
             "textureOffset",
+            "textureOffsetClamp",
             "textureLod",
             "textureLodOffset",
             "textureGrad",
+            "textureGradClamp",
             "textureGradOffset",
+            "textureGradOffsetClamp",
         }
     )
 
@@ -201,6 +206,13 @@ class HLSLTexelAccessMixin:
         """Whether a swizzle of a texel read only selects element components."""
         if not isinstance(member, str):
             return False
+        if isinstance(texel_expr, TextureSampleNode):
+            return self.texel_swizzle_selects_components(
+                self.texel_component_count(
+                    self.expression_raw_type(texel_expr.texture)
+                ),
+                member,
+            )
         if (
             isinstance(texel_expr, FunctionCallNode)
             and isinstance(texel_expr.name, MemberAccessNode)
