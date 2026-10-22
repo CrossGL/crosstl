@@ -299,6 +299,9 @@ class CrossGL(Dialect):
     def literal(self, kind: Type) -> str:
         return coop_literal(kind) or super().literal(kind)
 
+    def address(self, name: str) -> str:
+        return f"&{name}"
+
     def pointer(self, kind: Type, name: str) -> str:
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
