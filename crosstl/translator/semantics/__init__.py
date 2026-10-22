@@ -44,6 +44,7 @@ from .hlsl_stage_interfaces import (
     legalize_hlsl_stage_interfaces,
 )
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
+from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
@@ -203,6 +204,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     canonicalize_builtin_values(program, report.target)
+    deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
