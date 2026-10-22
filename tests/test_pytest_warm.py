@@ -162,9 +162,9 @@ def test_translator_legs_warm_the_cache_before_their_tests():
 
 def test_complete_suite_warms_the_cache_before_the_shard_runs():
     names = _step_names("full-tests.yml", "pytest")
-    warm = names.index("Rewrite test modules")
+    run = names.index("Run complete test suite")
     assert (
-        names.index("Install dependencies")
-        < warm
-        < names.index("Run complete test suite")
+        names.index("Install dependencies") < names.index("Rewrite test modules") < run
     )
+    # The MLX pwsh tests allow 15 s, which a cold pwsh start under load has exceeded.
+    assert names.index("Start PowerShell once") < run
