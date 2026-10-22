@@ -111,6 +111,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
+from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -11515,7 +11516,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         normalized = raw_content.strip("<>\"'").replace("\\", "/").lower()
         return is_system_include and (
             normalized in self.METAL_ONLY_SYSTEM_INCLUDES
-            or normalized.startswith("metal_")
+            or is_apple_sdk_include(normalized)
         )
 
     def is_metal_only_preprocessor_line(self, line):
