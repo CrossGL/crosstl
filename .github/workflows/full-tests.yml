@@ -100,19 +100,7 @@ jobs:
 
       - name: Install optional shader validators
         if: runner.os == 'Linux'
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install GLSL validator (macOS)
         if: runner.os == 'macOS'
@@ -466,19 +454,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc
