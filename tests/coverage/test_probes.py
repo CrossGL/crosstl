@@ -900,6 +900,20 @@ def test_constant_vector_arguments_are_zero_vectors():
     assert "textureLodOffset(u0, a1, a2, ivec2(0, 0))" in source
 
 
+@pytest.mark.parametrize("language", ["slang", "crossgl"])
+def test_constant_unsigned_arguments_are_one(language):
+    # A cluster size must be a power of two, so zero, the other constants' value, is no valid count or size.
+    rotate = feature(
+        "WaveClusteredRotate",
+        Type("float"),
+        Type("float"),
+        Type("uint"),
+        Param(Type("uint"), "const"),
+    )
+    source = probes.build(rotate, language).source
+    assert "float r = WaveClusteredRotate(a0, a1, 1u);" in source
+
+
 @pytest.mark.parametrize("language", ["glsl", "crossgl"])
 def test_constant_array_arguments_are_local_constants(language):
     source = probes.build(GATHER_OFFSETS, language).source

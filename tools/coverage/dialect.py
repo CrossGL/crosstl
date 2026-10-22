@@ -55,6 +55,8 @@ class Dialect:
     packed_bytes = False
     # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
     string = ""
+    # How the dialect spells an unsigned one, for ``constant``.
+    one = "1u"
 
     def type(self, kind: Type) -> str:
         if kind.count:
@@ -122,6 +124,14 @@ class Dialect:
         if kind.shape:
             return self.construct(kind, [zero] * kind.shape[0])
         return zero
+
+    def constant(self, kind: Type) -> str:
+        """An argument of ``kind`` that the language requires to be a constant expression. An unsigned scalar is a
+        count, a size or an index, and one is the smallest value all of them take: a cluster size must be a power of
+        two (SPIR-V 1.6, OpGroupNonUniformRotateKHR)."""
+        if kind.scalar in ("uint", "uint16", "uint64") and not kind.shape:
+            return self.one
+        return self.literal(kind)
 
     def constant_array(self, kind: Type, name: str) -> str:
         """A local constant ``name`` of the array type ``kind``, for an argument that must be a constant

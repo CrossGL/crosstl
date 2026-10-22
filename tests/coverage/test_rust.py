@@ -222,7 +222,7 @@ def test_rust_passes_a_broadcast_lane_id_as_a_literal():
     )
     assert features["subgroup_shuffle"].signature.params[1] == Param(Type("uint"))
     source = probes.build(features["subgroup_broadcast"], "rust").source
-    assert "let r: f32 = unsafe { subgroup_broadcast(a0, 0) };" in source
+    assert "let r: f32 = unsafe { subgroup_broadcast(a0, 1) };" in source
 
 
 def feature(name, result, *params, spelling=""):
