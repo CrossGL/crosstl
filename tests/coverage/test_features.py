@@ -1,4 +1,6 @@
-from tools.coverage import validators
+import pytest
+
+from tools.coverage import probes, validators
 from tools.coverage.features import (
     cuda,
     glsl,
@@ -18,6 +20,7 @@ from tools.coverage.model import (
     Signature,
     Type,
     coop_vector,
+    tuple_of,
 )
 
 GLSL_EXCERPT = """
@@ -1244,6 +1247,89 @@ def test_slang_cooperative_vector_functions_spell_their_generic_arguments():
     # A packed multiply's column count k is the input vector's length.
     packed = features["coopVecMatMulPacked"].signature.params
     assert packed[2] == Param(COOP_COLUMNS, "const")
+
+
+def test_slang_strings_are_literals_and_parameter_packs_are_empty():
+    text = """
+//@public:
+int getStringHash(String string);
+
+[require(cpp_cuda_glsl_hlsl_spirv_llvm, printf)]
+void printf<each T>(NativeString format, expand each T args);
+
+__generic<each T : __BuiltinIntegerType>
+[require(cuda_glsl_hlsl_spirv, raytracing_intersection)]
+bool ReportHitOptix(float tHit, uint hitKind, expand each T attribs);
+"""
+    features = by_name(slang.parse(text, ""))
+    constant = Param(STRING, "const")
+    assert features["getStringHash"].signature.params == (constant,)
+    assert features["printf"].signature.params == (constant,)
+    assert features["ReportHitOptix"].signature.params == (
+        Param(Type("float")),
+        Param(Type("uint")),
+    )
+    assert probes.build(features["printf"], "slang").source.count('printf("");') == 1
+
+
+def test_slang_type_packs_hold_one_int_and_tuples_are_read_through_their_first_member():
+    text = """
+//@public:
+__intrinsic_op($(kIROp_MakeTuple))
+Tuple<T> makeTuple<each T>(T v);
+
+Tuple<T, U> concat<each T, each U>(Tuple<T> t, Tuple<U> u)
+{
+    return makeTuple(expand each t, expand each u);
+}
+"""
+    features = by_name(slang.parse(text, ""))
+    make = features["makeTuple"].signature
+    assert make == Signature(tuple_of("int", 1), (Param(Type("int")),))
+    concat = features["concat"].signature
+    assert concat.result == tuple_of("int", 2)
+    assert concat.params == (Param(tuple_of("int", 1)), Param(tuple_of("int", 1)))
+    native = probes.build(features["concat"], "slang").source
+    assert "Tuple<int> a0 = Tuple<int>(iin[i + 0u]);" in native
+    assert "int r = concat(a0, a1)._0;" in native
+    crossgl = probes.build(features["makeTuple"], "crossgl").source
+    assert "int r = makeTuple(a0)._0;" in crossgl
+
+
+def test_slang_pointers_are_uniforms_and_free_value_generics_are_spelled():
+    text = """
+//@public:
+[ForceInline]
+T loadAligned<int alignment, T>(T* ptr)
+{
+    return __load_aligned(ptr, __align_attr(alignment));
+}
+
+[require(spirv)]
+void InterlockedAddF16x2(half2* dest, half2 value, out half2 originalValue);
+
+[require(spirv, cooperative_vector, vk_mem_model)]
+CoopVec<T, N> coopVecLoadCoherent<let N : int, T : __BuiltinArithmeticType>(T* buffer, int32_t byteOffset16ByteAligned = 0, constexpr MemoryScope memoryScope = MemoryScope::Device);
+
+internal void enableVMMDeviceScopeCapabilityIfNeeded(constexpr MemoryScope memoryScope);
+"""
+    features = by_name(slang.parse(text, ""))
+    assert "enableVMMDeviceScopeCapabilityIfNeeded" not in features
+    load = features["loadAligned"]
+    assert load.signature.params == (Param(Type("int"), "pointer"),)
+    assert load.spelling == load.crossgl == "loadAligned<4>"
+    assert features["InterlockedAddF16x2"].signature.params[0] == Param(
+        Type("half", (2,)), "pointer"
+    )
+    native = probes.build(load, "slang").source
+    assert "uniform int* a0;" in native
+    assert "int r = loadAligned<4>(a0);" in native
+    assert "uniform int* a0;" in probes.build(load, "crossgl").source
+    coherent = probes.build(features["coopVecLoadCoherent"], "slang").source
+    assert "uniform float* a0;" in coherent
+    assert "coopVecLoadCoherent<4, float>(a0, a1, MemoryScope.Device)" in coherent
+    with pytest.raises(probes.ProbeError, match="device pointer"):
+        probes.build(load, "hlsl")
 
 
 MOJO_MATH_INIT = """
