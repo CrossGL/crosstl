@@ -30,8 +30,8 @@ METADATA_TYPES = {
 ARRAYS = {"shape", "strides", "reduce_shape", "reduce_strides"}
 # The largest input, output or logical size a column launch binds: the bound
 # the host's matrix products use, far below the INT32_MAX at which reduce.cpp
-# switches to 64-bit indexing. Each shape axis and stride stays below 65536
-# and each launch axis at most 65535 workgroups.
+# switches to 64-bit indexing. Each shape axis stays below 65536, each stride
+# inside that bound, and each launch axis at most 65535 workgroups.
 MAX_ELEMENTS = 2**28 - 1
 MAX_GROUPS = 65535
 
@@ -93,7 +93,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
             if shape != [0] or strides != [0]:
                 raise ValueError("Native column reduction empty metadata must be zero")
         elif any(not 1 <= size <= 65535 for size in shape) or any(
-            not 0 <= stride <= 65535 for stride in strides
+            not 0 <= stride <= MAX_ELEMENTS for stride in strides
         ):
             raise ValueError(
                 "Native column reduction shape or stride exceeds its bounds"
@@ -107,7 +107,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
     output_size = outer * stride
     if (
         not 1 <= size <= 65535
-        or not 1 <= stride <= 65535
+        or not 1 <= stride <= MAX_ELEMENTS
         or reductions[-1] != size
         or steps[-1] != stride
         or metadata["non_col_reductions"] != [non_columns]
@@ -153,7 +153,7 @@ def validate(entry, buffers, logical_size, execution):
     mode = "2pass" if two_pass else "looped"
     if not entry.startswith(f"col_reduce_{mode}_{dimension}_32_32_reduce_"):
         raise ValueError("Native column reduction template rank does not match")
-    if outer * (32 if two_pass else 1) > MAX_GROUPS:
+    if outer * (32 if two_pass else 1) > MAX_GROUPS or -(-stride // 32) > MAX_GROUPS:
         raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     if execution != {
         "workgroupCount": [(stride + 31) // 32, outer * (32 if two_pass else 1), 1],

@@ -18,8 +18,17 @@ SMALL_SHAPES = {
     5: ((2, 2, 2, 2, 3, 32), (0, 2, 4)),
 }
 # Further sum geometries: one lane, narrow lanes, the widest threadgroup and
-# 31 reduced rows, the largest small plan, and 131,072 elements.
-SMALL_SUM_SHAPES = ((2, 3), (3, 16), (31, 32), (8, 128), (8, 2048), (8, 16384))
+# 31 reduced rows, the largest small plan, 131,072 elements, and a stride of
+# 65,536 columns over two axes, past the bound of one axis.
+SMALL_SUM_SHAPES = (
+    (2, 3),
+    (3, 16),
+    (31, 32),
+    (8, 128),
+    (8, 2048),
+    (8, 16384),
+    (8, 128, 512),
+)
 # Looped and two-pass plans over more than 65,535 elements, for these entries'
 # rank-one templates.
 WIDE_OPERATIONS = ("sumfloat32", "maxuint32")
@@ -43,7 +52,10 @@ def _small_cases():
         yield case
         if entry == SMALL_SUM_ENTRY:
             for shape in SMALL_SUM_SHAPES:
-                yield case | {"id": f"{entry}-{shape[0]}x{shape[1]}", "shape": shape}
+                yield case | {
+                    "id": f"{entry}-{'x'.join(map(str, shape))}",
+                    "shape": shape,
+                }
         if dtype == "float32" and dimension == 1:
             for profile in ("early-nan", "late-nan", "positive-infinity"):
                 yield case | {"id": f"{entry}-{profile}", "profile": profile}
@@ -59,11 +71,17 @@ def small_variants():
     return keys
 
 
+def column_stride(case):
+    """The reduction stride MLX plans: the dense axes after the last reduced one."""
+    return math.prod(case["shape"][max(case["axes"]) + 1 :])
+
+
 def small_plan(case):
     """``(reduced elements, columns, outputs)`` of one small column case."""
     shape, axes = case["shape"], case["axes"]
     total = math.prod(shape[axis] for axis in axes)
-    return total, shape[-1], math.prod(shape) // total // shape[-1]
+    columns = column_stride(case)
+    return total, columns, math.prod(shape) // total // columns
 
 
 def cases():
@@ -252,7 +270,7 @@ def validate(records, *, trace=None):
         cursor = end
         for stage, values in enumerate(passes):
             dispatch = trace[start + stage]
-            stride = logical.shape[-1] if stage == 0 else expected.size
+            stride = column_stride(case) if stage == 0 else expected.size
             outer = expected.size // stride
             entry = (
                 case["entry"]

@@ -708,7 +708,7 @@ void dispatch_column_pass(
   uint64_t reduction_size = reduce_shape.back();
   int64_t reduction_stride = reduce_strides.back();
   uint64_t non_columns = total / reduction_size;
-  if (reduction_stride < 1 || reduction_stride > 65535 ||
+  if (reduction_stride < 1 || uint64_t(reduction_stride) > max_column_elements ||
       outer * reduction_stride * total != in.size() ||
       outer * reduction_stride * (two_pass ? 32 : 1) != out.size() ||
       in.size() > max_column_elements || out.size() > max_column_elements ||
@@ -718,7 +718,7 @@ void dispatch_column_pass(
   uint64_t span = reduction_stride;
   auto accumulate_span = [&](const auto& sizes, const auto& steps) {
     for (size_t axis = 0; axis < sizes.size(); ++axis) {
-      if (steps[axis] < 0 || steps[axis] > 65535) {
+      if (steps[axis] < 0 || uint64_t(steps[axis]) > max_column_elements) {
         throw std::invalid_argument("CrossTL column reduction stride exceeds its bounds.");
       }
       span += (uint64_t(sizes[axis]) - 1) * steps[axis];
@@ -758,6 +758,13 @@ void dispatch_column_pass(
   // (the kernels allow 1024 threads); the looped passes use 32 x 32 tiles.
   const uint64_t blocks = (reduction_stride + 3) / 4;
   const uint32_t lanes = uint32_t(std::min<uint64_t>(blocks, 32));
+  // Each pass covers the reduction stride along the launch's first axis.
+  const uint64_t column_groups = pass == ColumnPass::Small
+      ? (blocks + lanes - 1) / lanes
+      : (uint64_t(reduction_stride) + 31) / 32;
+  if (column_groups > 65535) {
+    throw std::invalid_argument("CrossTL column reduction launch exceeds 65535 workgroups.");
+  }
   const CrosstlMlxLaunch launch = pass == ColumnPass::Small
       ? CrosstlMlxLaunch{
             {uint32_t((blocks + lanes - 1) / lanes), uint32_t(outer), 1},
@@ -794,7 +801,8 @@ void dispatch_column_reduce(
   // Follow upstream's shape product, including broadcast views with zero strides.
   uint64_t inner = 1;
   while (!shape.empty() && int64_t(inner) < stride) {
-    if (shape.back() < 1 || uint64_t(shape.back()) > 65535 / inner) {
+    if (shape.back() < 1 || shape.back() > 65535 ||
+        uint64_t(shape.back()) > max_column_elements / inner) {
       throw std::invalid_argument("CrossTL column reduction inner shape exceeds its bounds.");
     }
     inner *= shape.back();

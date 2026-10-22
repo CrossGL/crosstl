@@ -464,6 +464,15 @@ reaches `affine_qmv`, one nvfp4 row `nvfp4_qmv` and two or four rows
 `nvfp4_qmv_wide`. The references take `gemv` for one row and
 `steel_gemm_fused` otherwise.
 
+`verify_upstream_qmm_vjp.py` runs `test_qmm_vjp` and `test_qmm_jvp`. Each
+differentiates an 8-bit, group-64 product of a `(2, 64, K)` input with respect
+to that input, for transposed and untransposed weights, and compares the
+derivative with the same product written out through `allclose`. The
+derivatives are quantized products of the cotangent or tangent with the
+weights: 128 folded rows that reach `affine_qmm_n` or `affine_qmm_t_splitk`
+with its small float32 partition sum. Neither test evaluates the primal
+output, so the trace must hold exactly two launches of each product.
+
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
   --mlx-root mlx-upstream --packages host-packages --output-dir upstream-qmv

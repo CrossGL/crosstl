@@ -231,6 +231,29 @@ def test_validate_bounds_elements_and_launch_axes(monkeypatch):
         column_small_layout.validate(ENTRY, buffers, count, _launch(1, 2, 60000))
 
 
+def test_validate_accepts_reduction_strides_past_one_axis_bound():
+    # test_qmm_vjp's 8 partitions of 128 by 512 outputs: a 65,536-column
+    # stride, which strided_reduce_small covers with 512 workgroups.
+    buffers, count, _ = _buffers(8, 65536)
+    assert count == 524288
+    launch = _launch(65536, 8)
+    assert launch["workgroupCount"] == [512, 1, 1]
+    metadata = column_small_layout.validate(ENTRY, buffers, count, launch)
+    assert metadata["reduce_strides"] == [65536]
+
+
+def test_validate_bounds_the_column_axis_of_the_launch(monkeypatch):
+    # 2,097,152 columns need 16,384 workgroups of 32 lanes of four columns;
+    # with MAX_GROUPS lowered below that, the column axis bounds the launch.
+    buffers, count, _ = _buffers(1, 2097152)
+    launch = _launch(2097152, 1)
+    assert launch["workgroupCount"] == [16384, 1, 1]
+    column_small_layout.validate(ENTRY, buffers, count, launch)
+    monkeypatch.setattr(column_small_layout, "MAX_GROUPS", 16383)
+    with pytest.raises(ValueError, match="65535 workgroups"):
+        column_small_layout.validate(ENTRY, buffers, count, launch)
+
+
 def test_backend_bounds_column_passes_by_elements_and_workgroups():
     source = Path(column_small_layout.__file__).with_name("backend.cpp").read_text()
     assert "constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;" in source
@@ -240,9 +263,18 @@ def test_backend_bounds_column_passes_by_elements_and_workgroups():
         "in.size() > max_column_elements || out.size() > max_column_elements",
         "outer * (two_pass ? 32 : 1) > 65535",
         "if (span > max_column_elements || in.offset() < 0 ||",
+        # The stride is bounded by the elements and the launch's column axis.
+        "uint64_t(reduction_stride) > max_column_elements",
+        "uint64_t(steps[axis]) > max_column_elements",
+        "if (column_groups > 65535) {",
     ):
         assert text in body, text
     assert "65535 ||\n      in.size() > 65535" not in body
+    assert "reduction_stride > 65535" not in body
+    # The launch bound is checked before the native dispatch.
+    assert body.index("if (column_groups > 65535) {") < body.index(
+        "dispatch_callback.load()"
+    )
     assert column_reduction_layout.MAX_ELEMENTS == 2**28 - 1
     # MLX's reductions refuse row plans over 65,535 elements before a general
     # plan's dense copy, and leave column plans to their passes' bounds.
@@ -282,7 +314,7 @@ def test_workload_variants_match_their_launches():
         assert key in variants
     for case in column_workloads._small_cases():
         total, columns, _ = column_workloads.small_plan(case)
-        assert total < 32 and 1 <= columns <= 16384
+        assert total < 32 and 1 <= columns <= 65536
 
 
 def test_backend_routes_small_plans_before_the_looped_passes():

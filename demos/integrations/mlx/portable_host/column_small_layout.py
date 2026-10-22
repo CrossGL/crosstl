@@ -17,6 +17,7 @@ accumulator is the element type, as in reduce.metal: each addition rounds.
 
 from demos.integrations.mlx.portable_host.column_reduction_layout import (
     LOOPED,
+    MAX_GROUPS,
     read_metadata,
     template_dimension,
 )
@@ -98,6 +99,8 @@ def validate(entry, buffers, logical_size, execution):
         raise ValueError("Native column reduction template rank does not match")
     lanes, rows = geometry(stride, total)
     blocks = -(-stride // N_READS)
+    if -(-blocks // lanes) > MAX_GROUPS:
+        raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     if execution != {
         "workgroupCount": [-(-blocks // lanes), outer, 1],
         "workgroupSize": [lanes, rows, 1],

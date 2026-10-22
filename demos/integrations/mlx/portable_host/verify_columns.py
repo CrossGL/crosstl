@@ -63,7 +63,7 @@ def reject_invalid_plan(mx, np, mode, runtime):
                 mx.array(np.ones(4, dtype=np.float32)), (33, 33), (33, 1)
             )
         else:
-            # 65,536 output columns exceed the 65,535 workgroups of a launch axis.
+            # An axis of 65,536 columns exceeds the bound on one shape axis.
             shape = {"long": (1024, 2), "limit": (2, 65536)}[mode]
             source = mx.array(np.ones(shape, dtype=np.float32))
         mx.eval(mx.sum(source, axis=0))

@@ -363,7 +363,9 @@ def column_evidence():
         dtype = case["dtype"]
         passes = [expected] if partials is None else [partials, expected]
         for stage, values in enumerate(passes):
-            stride = logical.shape[-1] if stage == 0 else expected.size
+            stride = (
+                column_workloads.column_stride(case) if stage == 0 else expected.size
+            )
             guards = (
                 [index % 2 == 0 for index in range(32)]
                 if dtype == "bool_"

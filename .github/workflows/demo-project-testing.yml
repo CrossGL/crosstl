@@ -3303,7 +3303,7 @@ jobs:
       fail-fast: false
       matrix:
         # Each unchanged upstream test runs on its own leg of every platform.
-        test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples]
+        test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples, qmm_vjp]
         include:
           - os: ubuntu-24.04
             target: opengl
@@ -3345,7 +3345,8 @@ jobs:
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qmv.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qmv_large_output.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qvm.py \
-            demos/integrations/mlx/tests/host/test_portable_upstream_qmv_small_non_multiples.py
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmv_small_non_multiples.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_vjp.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
