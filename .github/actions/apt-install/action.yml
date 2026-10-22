@@ -61,7 +61,13 @@ runs:
         fi
         mkdir -p "$ARCHIVES/partial"
         for attempt in 1 2 3; do
-          if timeout 180 "${apt[@]}" update && timeout 420 "${apt[@]}" install --download-only "${packages[@]}"; then
+          # A source the job does not install from, such as packages.microsoft.com answering
+          # 403, fails the whole update. The lists that did update are still used, and the
+          # download below is what decides whether the attempt worked.
+          if ! timeout 180 "${apt[@]}" update; then
+            echo "::warning::apt-get update failed or timed out on attempt $attempt"
+          fi
+          if timeout 420 "${apt[@]}" install --download-only "${packages[@]}"; then
             "${apt[@]}" install "${packages[@]}"
             sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
             sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"

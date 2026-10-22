@@ -332,7 +332,11 @@ _APT_STUB = """\
     with log.open("a") as output:
         output.write(json.dumps({"operation": operation, "args": args}) + "\\n")
     failure = os.environ["TEST_FAILURE"]
-    if failure == operation or (failure == "first-update" and not earlier):
+    # "first-<operation>" fails only the first call of that operation.
+    first = failure == "first-" + operation and not any(
+        json.loads(line)["operation"] == operation for line in earlier
+    )
+    if failure == operation or first:
         sys.exit(100)
     if operation == "download":
         prefix = "Dir::Cache::Archives="
@@ -352,13 +356,10 @@ def _apt_install_step(step_id):
     "recommends,cached,failure,success,operations",
     [
         ("true", [], "", True, ["update", "download", "install"]),
-        (
-            "false",
-            [],
-            "first-update",
-            True,
-            ["update", "update", "download", "install"],
-        ),
+        # An update that fails on one source still leaves the lists the download needs.
+        ("false", [], "first-update", True, ["update", "download", "install"]),
+        ("true", [], "update", True, ["update", "download", "install"]),
+        ("true", [], "first-download", True, ["update", "download"] * 2 + ["install"]),
         ("true", [], "download", False, ["update", "download"] * 3),
         ("true", [], "install", False, ["update", "download", "install"]),
         # A warm cache installs the archives it holds and never contacts a mirror.
