@@ -6033,7 +6033,8 @@ class GLSLCodeGen(
         for node in self.walk_ast(ast):
             if (
                 isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
+                and self.function_call_name(node)
+                in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             ):
                 execution_barrier_call_nodes.update((id(node), id(node.function)))
         for node in self.walk_ast(ast):
