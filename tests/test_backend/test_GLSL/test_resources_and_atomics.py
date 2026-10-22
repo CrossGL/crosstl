@@ -681,8 +681,10 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
+    # GLSL rejects a non-constant index into an implicitly sized block array, so
+    # the constant-valued index sizes the array as Metal does.
     assert (
-        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[];"
+        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[2];"
         in glsl
     )
     assert "int value = buffers[dynamicIndex].data[2];" in glsl
@@ -7907,7 +7909,7 @@ def test_codegen_ternary_index_alias_initializers_infer_size():
 
         fragment {
             vec4 main(vec2 uv, bool outer, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, outer, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, outer, inner, clamp(dynamicLayer, 0, 5)) + texture(afterTexture, uv);
             }
         }
     }
@@ -7992,7 +7994,7 @@ def test_codegen_ternary_index_alias_assignments_infer_size():
 
         compute {
             void main(bool outer, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8088,7 +8090,7 @@ def test_codegen_branch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, inner, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8178,7 +8180,7 @@ def test_codegen_branch_merged_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8278,7 +8280,7 @@ def test_codegen_switch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int mode, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, mode, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, mode, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8377,7 +8379,7 @@ def test_codegen_match_merged_index_aliases_infer_image_size():
 
         compute {
             void main(int mode, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8472,7 +8474,7 @@ def test_codegen_for_loop_carried_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int limit, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, limit, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, limit, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8565,7 +8567,7 @@ def test_codegen_while_do_loop_carried_index_aliases_infer_image_size():
 
         compute {
             void main(int limit, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8669,7 +8671,7 @@ def test_codegen_helper_return_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8766,7 +8768,7 @@ def test_codegen_nested_helper_return_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9144,7 +9146,7 @@ def test_codegen_arithmetic_alias_helper_return_infers_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9411,7 +9413,7 @@ def test_codegen_switch_match_unsized_sampled_arrays_infer_case_literal_size():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 0, 4), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -12213,7 +12215,7 @@ def test_codegen_switch_match_sampled_arrays_ignore_dynamic_negative_indices():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 1, 3), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
