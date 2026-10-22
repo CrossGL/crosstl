@@ -42,6 +42,9 @@ from crosstl.translator.codegen.metal_codegen import (
     UnsupportedMetalFeatureError,
 )
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from crosstl.translator.codegen.resource_array_bounds import (
+    ResourceArrayIndexUnboundedError,
+)
 from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
@@ -6568,19 +6571,9 @@ def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "array<device uint*, 1> counts" in generated_code
-    assert "device uint* afterCounts" in generated_code
-    assert (
-        "uint readCount(array<device uint*, 1> localCounts, uint which, uint index)"
-        in generated_code
-    )
-    assert "return localCounts[which][index];" in generated_code
-    assert (
-        "return readCount(counts, which, index) + afterCounts[index];" in generated_code
-    )
-    assert "array<device uint*, 2> counts" not in generated_code
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="counts"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_metal_unsized_structured_buffer_array_rejects_multiple_fixed_helper_sizes():
@@ -23204,7 +23197,7 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23222,7 +23215,10 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
     )
     assert "textures[layer].sample(samplers[layer], uv)" in generated_code
     assert "textures[3].sample(samplers[3], uv)" in generated_code
-    assert "sampleLayer(textures, samplers, input.layer, input.uv)" in generated_code
+    assert (
+        "sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv)"
+        in generated_code
+    )
     assert "array<texture2d<float>, 1> textures" not in generated_code
     assert "array<sampler, 1> samplers" not in generated_code
 
@@ -23272,19 +23268,10 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_unsupported_indices():
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="samplers"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in dynamic_code
-    assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers"
-        in dynamic_code
-    )
-    assert "textures[layer].sample(samplers[layer], uv)" in dynamic_code
-    assert "array<texture2d<float>, 2> textures" not in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(2)]]" not in dynamic_code
 
     assert "array<texture2d<float>, 1> textures [[texture(0)]]" in negative_code
     assert "texture2d<float> afterTexture [[texture(1)]]" in negative_code
@@ -23389,7 +23376,7 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 1), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23398,11 +23385,11 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "constant int LAYER = 3;" in generated_code
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in generated_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in generated_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in generated_code
+    assert "array<texture2d<float>, 2> textures [[texture(0)]]" in generated_code
+    assert "texture2d<float> afterTexture [[texture(2)]]" in generated_code
+    assert "array<sampler, 2> samplers [[sampler(0)]]" in generated_code
     assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers, int LAYER"
+        "float4 sampleLayer(array<texture2d<float>, 2> textures, array<sampler, 2> samplers, int LAYER"
         in generated_code
     )
     assert "textures[LAYER].sample(samplers[LAYER], uv)" in generated_code
@@ -31643,7 +31630,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth);
                 float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
                 return vec4(arrayShadow + singleShadow);
             }
@@ -31670,7 +31657,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
         "shadowMaps[3].sample_compare(shadowSamplers[3], uv, depth)" in generated_code
     )
     assert (
-        "shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth)"
+        "shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth)"
         in generated_code
     )
     assert (
@@ -31735,23 +31722,10 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_ignore_unsupported_indi
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="shadowMaps"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> shadowSamplers [[sampler(0)]]" in dynamic_code
-    assert "sampler afterSampler [[sampler(1)]]" in dynamic_code
-    assert (
-        "float shadowLayer(array<depth2d<float>, 1> shadowMaps, array<sampler, 1> shadowSamplers"
-        in dynamic_code
-    )
-    assert (
-        "shadowMaps[layer].sample_compare(shadowSamplers[layer], uv, depth)"
-        in dynamic_code
-    )
-    assert "array<depth2d<float>, 2> shadowMaps" not in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(2)]]" not in dynamic_code
 
     assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in negative_code
     assert "depth2d<float> afterShadow [[texture(1)]]" in negative_code

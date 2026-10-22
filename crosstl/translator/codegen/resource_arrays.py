@@ -146,8 +146,18 @@ def collect_resource_array_size_hints(
     strict_fixed_local_array_sizes=False,
     propagate_argument_sizes_to_callee=True,
     validate_fixed_argument_sizes=True,
+    required_sizes=None,
 ):
-    """Infer resource-array sizes from literal accesses and call propagation."""
+    """Infer resource-array sizes from literal accesses and call propagation.
+
+    ``required_sizes`` adds sizes unsized global arrays need for other reasons, such as their non-constant indexes. It
+    is a mapping, or a callable that receives ``resolved``, the ids of the array-access nodes whose index this
+    inference evaluated in every context it scanned them in, and ``approximate_loops``, the ids of the loops it did not
+    unroll in some scan (it follows one iteration of those), and returns one
+    (:class:`resource_array_bounds.DynamicIndexSizes`). The sizes propagate like those of literal accesses.
+    """
+    resolved_accesses = {}
+    approximate_loops = set()
     fixed_global_array_sizes = fixed_global_array_sizes or {}
     fixed_function_array_sizes = fixed_function_array_sizes or {}
     global_hints = {name: initial_size for name in global_arrays}
@@ -1807,6 +1817,7 @@ def collect_resource_array_size_hints(
                         propagated_names,
                     )
                     return
+                approximate_loops.add(id(value))
                 zero_iteration_hints = dict(loop_index_hints)
                 body_index_hints = dict(loop_index_hints)
                 yield from walk(
@@ -1869,6 +1880,7 @@ def collect_resource_array_size_hints(
                         propagated_names,
                     )
                     return
+                approximate_loops.add(id(value))
                 body_index_hints = dict(loop_index_hints)
                 yield from walk(body, loop_constants, body_index_hints)
                 merge_loop_index_hints(
@@ -1880,6 +1892,7 @@ def collect_resource_array_size_hints(
                 return
 
             if isinstance(value, WhileNode):
+                approximate_loops.add(id(value))
                 yield value, active_constants, active_index_hints
                 condition_index_hints = dict(active_index_hints)
                 yield from walk(
@@ -1903,6 +1916,7 @@ def collect_resource_array_size_hints(
                 return
 
             if isinstance(value, DoWhileNode):
+                approximate_loops.add(id(value))
                 yield value, active_constants, active_index_hints
                 body = getattr(value, "body", None)
                 body_index_hints = dict(active_index_hints)
@@ -2130,6 +2144,9 @@ def collect_resource_array_size_hints(
                 index = resource_index_hint(
                     index_expr, visible_constants, visible_index_hints, call_stack
                 )
+                resolved_accesses[id(node)] = resolved_accesses.get(
+                    id(node), True
+                ) and (index is not None and index >= 0)
                 if array_name is not None and index is not None and index >= 0:
                     changed = (
                         record_array_required_size(func_name, array_name, index + 1)
@@ -2178,6 +2195,9 @@ def collect_resource_array_size_hints(
             index = resource_index_hint(
                 index_expr, visible_constants, visible_index_hints
             )
+            resolved_accesses[id(node)] = resolved_accesses.get(id(node), True) and (
+                index is not None and index >= 0
+            )
             if array_name is None or index is None or index < 0:
                 continue
             required_size = index + 1
@@ -2188,6 +2208,16 @@ def collect_resource_array_size_hints(
         scan_call_site_resource_requirements(
             func_name, func, initial_constants, {}, {func_name}
         )
+
+    if callable(required_sizes):
+        required_sizes = required_sizes(
+            resolved=frozenset(
+                node_id for node_id, resolved in resolved_accesses.items() if resolved
+            ),
+            approximate_loops=frozenset(approximate_loops),
+        )
+    for array_name, required_size in sorted((required_sizes or {}).items()):
+        record_array_required_size(None, array_name, required_size)
 
     def register_fixed_requirement(scope_key, size, current_size):
         """Record a fixed size requirement for a propagated array argument."""
