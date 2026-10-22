@@ -22905,6 +22905,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "selected_null": True,
         }
 
+    def hlsl_storage_root_element_type(self, name, resource_type):
+        """The logical element type of storage root ``name`` in ``resource_type``.
+
+        A narrow source element widened into a 32-bit carrier keeps its source
+        type, one carrier element per source element; a source element with the
+        carrier's layout takes the carrier's spelling. ``None`` when ``name``
+        has no source pointee type.
+        """
+        source_resource_type = self.local_variable_source_types.get(
+            name
+        ) or self.local_variable_types.get(name)
+        source_element_type = self.hlsl_typed_buffer_element_type(
+            source_resource_type,
+            {
+                "Buffer",
+                "StructuredBuffer",
+                "RWBuffer",
+                "RWStructuredBuffer",
+                "RasterizerOrderedBuffer",
+                "RasterizerOrderedStructuredBuffer",
+            },
+        ) or self.hlsl_pointer_element_type(source_resource_type)
+        source_element_type = (
+            self.hlsl_bfloat16_scalar_type_name(source_element_type)
+            or source_element_type
+        )
+        if source_element_type is None:
+            return None
+        physical_element_type = self.hlsl_resource_pointer_element_type(resource_type)
+        source_layout = scalar_storage_layout(source_element_type)
+        if source_layout is not None and source_layout == scalar_storage_layout(
+            physical_element_type
+        ):
+            return physical_element_type
+        return source_element_type
+
     def hlsl_resource_pointer_binding(self, expression):
         if expression is None:
             return None
@@ -22976,35 +23012,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if resource_name.startswith(("RW", "RasterizerOrdered"))
                 else "read"
             )
-            source_resource_type = self.local_variable_source_types.get(
-                raw_name
-            ) or self.local_variable_types.get(raw_name)
-            source_element_type = self.hlsl_typed_buffer_element_type(
-                source_resource_type,
-                {
-                    "Buffer",
-                    "StructuredBuffer",
-                    "RWBuffer",
-                    "RWStructuredBuffer",
-                    "RasterizerOrderedBuffer",
-                    "RasterizerOrderedStructuredBuffer",
-                },
-            ) or self.hlsl_pointer_element_type(source_resource_type)
-            source_element_type = (
-                self.hlsl_bfloat16_scalar_type_name(source_element_type)
-                or source_element_type
+            contract_element_type = self.hlsl_storage_root_element_type(
+                raw_name, resource_type
             )
             rendered_root = self.hlsl_identifier_name(raw_name)
             offset = self.current_hlsl_resource_pointer_offsets.get(rendered_root, "0")
-            if source_element_type is not None:
-                contract_element_type = source_element_type
-                source_layout = scalar_storage_layout(source_element_type)
-                physical_element_type = self.hlsl_resource_pointer_element_type(
-                    resource_type
-                )
-                physical_layout = scalar_storage_layout(physical_element_type)
-                if source_layout is not None and source_layout == physical_layout:
-                    contract_element_type = physical_element_type
+            if contract_element_type is not None:
                 return self.hlsl_resource_pointer_parameter_alias_binding(
                     {
                         "address_space": "storage",
@@ -32437,6 +32450,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             pointer_contract = self.hlsl_resource_pointer_parameter_contract(
                 parameter, self.hlsl_function_declaration_name(func)
             )
+            # A narrow source element keeps its logical type when helpers
+            # advance the root's offset, as the unadvanced root does.
+            logical_element_type = self.hlsl_storage_root_element_type(
+                parameter_name, resource_type
+            )
+            if pointer_contract is None and logical_element_type is not None:
+                pointer_contract = {
+                    "address_space": "storage",
+                    "access": access,
+                    "element_type": logical_element_type,
+                    "resource_type": resource_type,
+                }
             if pointer_contract is not None:
                 entry_binding = self.hlsl_resource_pointer_parameter_alias_binding(
                     pointer_contract,
