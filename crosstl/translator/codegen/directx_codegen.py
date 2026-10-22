@@ -77,6 +77,7 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.constant_buffers import constant_buffer_element
 from ..semantics.hlsl_ray_payloads import (
     PAYLOAD_ACCESS_ATTRIBUTES,
     PAYLOAD_STAGES,
@@ -4412,7 +4413,11 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                         vtype = base_type
                         if array_size:
                             array_suffix = f"[{array_size}]"
-                        elif self.is_resource_array_hint_type(base_type):
+                        elif (
+                            self.is_resource_array_hint_type(base_type)
+                            or constant_buffer_element(base_type) is not None
+                        ):
+                            # An unbounded resource array, ConstantBuffer<T> name[] included (SM 5.1).
                             array_suffix = "[]"
                         else:
                             raise UnsizedArrayUnsupportedError(
