@@ -11468,7 +11468,7 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
     assert "array<texture2d<float, access::write>, 2> targets;" in code
     assert "array<texture2d<uint, access::read_write>, 2> counters;" in code
     assert "pack.pairs[index].read(uint2(pixel)).xy" in code
-    assert "pack.targets[index].write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert "pack.targets[index].write(float4(value, 0.0, 1.0), uint2(pixel))" in code
     assert "pack.counters[index].atomic_fetch_add(uint2(pixel), value).x" in code
     assert "array<texture2d<float, access::read>, 2> pairsAlias = pack.pairs" in code
     assert "chainedPairsAlias[index].read(uint2(pixel)).xy" in code
@@ -11476,7 +11476,7 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
         "array<texture2d<float, access::write>, 2> targetsAlias = pack.targets" in code
     )
     assert (
-        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel))"
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 1.0), uint2(pixel))"
         in code
     )
     assert (
@@ -11510,7 +11510,7 @@ def test_generated_metal_compute_struct_held_storage_image_element_aliases_compi
     assert "texture2d<float, access::read> pairAlias = pack.pairs[index];" in code
     assert "pairAlias.read(uint2(pixel)).xy" in code
     assert "texture2d<float, access::write> targetAlias = pack.targets[index];" in code
-    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert "targetAlias.write(float4(value, 0.0, 1.0), uint2(pixel))" in code
     assert (
         "texture2d<uint, access::read_write> counterAlias = pack.counters[index];"
         in code

@@ -62,6 +62,7 @@ from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
+from ..semantics.narrowing_constructors import select_narrowing_constructor_components
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -206,11 +207,9 @@ from .image_access_contracts import (
     image_format_component_kind,
     image_format_component_type,
     image_format_or_default_channel_count,
-    image_format_result_type,
     image_load_result_kind_error,
     image_load_result_kind_mismatch,
     image_load_result_shape_error,
-    image_load_result_shape_mismatch,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
@@ -218,7 +217,6 @@ from .image_access_contracts import (
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
-    image_store_value_shape_mismatch,
     integer_coordinate_dimension_from_type_name,
     is_floating_scalar_type_name,
     is_image_atomic_operation,
@@ -290,9 +288,7 @@ from .image_access_contracts import (
     should_validate_image_load_result_shape,
     storage_image_atomic_zero_value,
     storage_image_format_store_constructor,
-    storage_image_load_component_suffix,
     storage_image_store_constructors,
-    storage_image_store_value_expression,
     storage_image_two_component_store_expression,
     storage_image_zero_values,
     supported_image_formats,
@@ -378,6 +374,7 @@ from .metal_texel_buffers import (
     METAL_TEXEL_BUFFER_TYPES,
     TEXEL_BUFFER_TYPES,
     MetalTexelBuffers,
+    texel_buffer_component_type,
 )
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_wave_extended import (
@@ -412,6 +409,14 @@ from .stage_utils import (
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
+)
+from .storage_image_texels import (
+    is_whole_texel_load,
+    leading_components_suffix,
+    load_context_allowed,
+    store_value_allowed,
+    texel_store_value,
+    texel_vector_type,
 )
 from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
@@ -1947,6 +1952,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
         lower_relational_builtins(ast)
+        select_narrowing_constructor_components(ast)
         return merge_adjacent_metal_barriers(
             self.refusals.run(self.render_checked_program, ast, target_stage)
         )
@@ -11493,7 +11499,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if layout_element is not None:
                 access, conversion = layout_element
                 return f"{conversion}({access})" if conversion else access
-            array = self.generate_expression(expr.array)
+            if is_whole_texel_load(expr.array, self.function_call_name):
+                # The subscript selects a component of the whole texel.
+                array = self.generate_expression_with_expected(expr.array, None)
+            else:
+                array = self.generate_expression(expr.array)
             if isinstance(
                 expr.array,
                 (
@@ -25915,23 +25925,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def image_load_component_suffix(self, image_type, image_format):
         if self.suppress_image_load_component_suffix:
             return ""
-        expected_scalar = self.is_scalar_value_type(
-            self.current_expression_expected_type
-        )
-        scalar_integer_resource = (
-            self.is_scalar_integer_image_resource(image_type, image_format)
-            and self.expected_component_count() != 4
-        )
-        if image_format is None and not expected_scalar:
-            # Unformatted loads yield four channels; only a scalar context
-            # selects the first one.
-            scalar_integer_resource = False
-        return storage_image_load_component_suffix(
-            image_format,
-            expected_scalar=expected_scalar,
-            scalar_integer_resource=scalar_integer_resource,
-            float_resource=self.is_float_image_resource(image_type),
-        )
+        # ``read`` yields four components; a narrower context takes the leading ones.
+        return leading_components_suffix(self.expected_component_count())
 
     def image_format_store_constructor(self, image_format):
         return storage_image_format_store_constructor(
@@ -25976,21 +25971,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def image_store_value_expression(
         self, image_type, image_format, value, value_type=None
     ):
-        scalar_integer_resource = self.is_scalar_integer_image_resource(
-            image_type, image_format
-        )
-        if self.is_vector_value_type(value_type):
-            scalar_integer_resource = False
-        return storage_image_store_value_expression(
-            image_format,
-            value,
-            self.is_scalar_value_type(value_type),
-            scalar_integer_resource=scalar_integer_resource,
-            float_resource=self.is_float_image_resource(image_type),
-            integer_constructor=self.integer_image_store_constructor(image_type),
-            float_constructor="float4",
-            constructors_by_kind=self.image_store_constructors_by_kind(),
-            zero_values_by_kind=self.image_store_zero_values_by_kind(),
+        # ``write`` takes four components and ignores those the format lacks.
+        component_kind = metal_storage_image_component_type(
+            self.storage_image_access_agnostic_type(image_type)
+        ) or image_format_component_kind(image_format)
+        constructor = self.image_store_constructors_by_kind().get(component_kind)
+        if constructor is None:
+            return value
+        return texel_store_value(
+            constructor, component_kind, value, self.value_component_count(value_type)
         )
 
     def image_store_expected_value_type(self, image_type, image_format, value_arg=None):
@@ -26006,14 +25995,18 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return None
 
     def image_load_result_type(self, image_arg):
+        # imageLoad yields four components whatever the format, as ``read`` does.
         image_format = self.image_resource_format(image_arg)
         if image_format:
-            return image_format_result_type(image_format)
-        image_type = self.texture_argument_resource_type(image_arg)
-        component_type = metal_storage_image_component_type(image_type)
-        # Without a format qualifier, imageLoad yields all four channels, as
-        # Metal's read() does; callers select components explicitly.
-        return f"{component_type}4" if component_type else None
+            component_kind = image_format_component_kind(image_format)
+        else:
+            image_type = self.texture_argument_resource_type(image_arg)
+            component_kind = metal_storage_image_component_type(
+                image_type
+            ) or texel_buffer_component_type(image_type)
+        return texel_vector_type(
+            component_kind, {"float": "float", "int": "int", "uint": "uint"}
+        )
 
     def image_load_component_kind(self, image_type, image_format):
         if image_format:
@@ -26102,29 +26095,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             ),
         )
 
-    def image_format_allows_native_vector_context(self, image_format):
-        return image_format in {"r32f", "r32i", "r32ui"}
-
-    def image_format_context_channel_count_allowed(
-        self, image_format, format_channels, context_channels
-    ):
-        if format_channels == context_channels:
-            return True
-        if not self.image_format_allows_native_vector_context(image_format):
-            return False
-        return format_channels == 1 and context_channels in {1, 4}
-
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
         value_channels = self.expression_component_count(value_arg)
-        if self.image_format_context_channel_count_allowed(
-            image_format, expected_channels, value_channels
-        ):
-            return
-        value_channels = image_store_value_shape_mismatch(
-            expected_channels, value_channels
-        )
-        if value_channels is None:
+        if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(image_type)
         raise ValueError(
@@ -26171,15 +26145,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
-        if self.image_format_context_channel_count_allowed(
-            image_format, loaded_channels, expected_channels
-        ):
-            return
-        expected_channels = image_load_result_shape_mismatch(
-            loaded_channels,
-            expected_channels,
-        )
-        if expected_channels is None:
+        if load_context_allowed(loaded_channels, expected_channels):
             return
         raise ValueError(
             image_load_result_shape_error(

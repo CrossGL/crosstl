@@ -127,8 +127,10 @@ from .spirv_exponent_builtins import (
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
+    SHADER_IMAGE_FORMATS,
     atomic_storage_image_format,
     emit_four_component_image_read,
+    image_load_in_context,
     narrow_image_texel,
 )
 from .spirv_inline_requirements import (
@@ -846,6 +848,9 @@ class VulkanSPIRVCodeGen(
             self.require_capability("InputAttachment")
         if dim == "Buffer":
             self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
+        if image_format not in SHADER_IMAGE_FORMATS:
+            # SPIR-V 3.11: every other Image Format operand needs this capability.
+            self.require_capability("StorageImageExtendedFormats")
 
         id_value = self.get_id()
         self.emit(
@@ -6565,7 +6570,12 @@ class VulkanSPIRVCodeGen(
                 metadata, "StorageImageReadWithoutFormat"
             )
             return emit_four_component_image_read(
-                self, result_type, image_id, coord_id, image_operands
+                self,
+                result_type,
+                image_id,
+                coord_id,
+                image_operands,
+                metadata.get("component_count"),
             )
 
         if function_name == "imageStore":
@@ -21679,7 +21689,10 @@ class VulkanSPIRVCodeGen(
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression_with_precision(expr, precise)
+            value = self.process_expression_with_precision(expr, precise)
+            return image_load_in_context(
+                self, expr, value, self.current_expression_expected_type
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
 

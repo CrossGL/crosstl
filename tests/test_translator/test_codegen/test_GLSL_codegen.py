@@ -21488,8 +21488,8 @@ def test_glsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "uvec4 mask2D = imageLoad(maskImage, pixel);" in generated_code
     assert "ivec4 label2D = imageLoad(labelImage, pixel).x;" not in generated_code
     assert "uvec4 mask2D = imageLoad(maskImage, pixel).x;" not in generated_code
-    assert "imageStore(labelImage, pixel, ivec4(label2D));" in generated_code
-    assert "imageStore(maskImage, pixel, uvec4(mask2D));" in generated_code
+    assert "imageStore(labelImage, pixel, label2D);" in generated_code
+    assert "imageStore(maskImage, pixel, mask2D);" in generated_code
 
 
 def test_glsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
@@ -21597,22 +21597,16 @@ def test_glsl_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = imageLoad(image, pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(image, pixel).x;" in generated_code
-    assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(image, pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(image, pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
 
 
@@ -37683,7 +37677,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 0.0));"
+        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -37691,7 +37685,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 0u));"
+        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -38085,14 +38079,14 @@ def test_opengl_explicit_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixelLayer).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "layout(rg32i, binding = 1) uniform image3D" not in generated_code
@@ -38174,18 +38168,18 @@ def test_opengl_explicit_narrow_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
     assert "layout(rg8i, binding = 5) uniform image2D" not in generated_code
     assert "layout(rg8ui, binding = 7) uniform image2D" not in generated_code
@@ -38331,7 +38325,7 @@ def test_opengl_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "vec4 oldValue = imageLoad(images[1], voxel);" in generated_code
@@ -38410,23 +38404,17 @@ def test_opengl_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[1], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel);" not in generated_code
@@ -38509,23 +38497,17 @@ def test_opengl_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -38639,20 +38621,14 @@ def test_opengl_transitive_rg_image_arrays_share_call_site_size():
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert "uint oldValue = imageLoad(images[3], pixel).x;" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
+    assert "imageStore(images[1], pixel, vec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
+    assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "vec2 vectorFloatDeep(image2D images[3]" not in generated_code
@@ -39352,14 +39328,8 @@ def test_opengl_shadowed_rg_image_array_constant_keeps_scalar_context():
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];"
         not in generated_code
@@ -39423,7 +39393,7 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39483,7 +39453,7 @@ def test_opengl_unsized_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[0], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "layout(r32ui, binding = 0) uniform image2D counters" not in generated_code
@@ -39544,7 +39514,7 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[LAYER], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39677,7 +39647,7 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code

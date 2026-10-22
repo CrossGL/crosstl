@@ -20346,10 +20346,9 @@ class TestVulkanSPIRVCodeGen:
         assert (
             "imageAtomicAdd requires a 2-component integer coordinate " "for uimage2D"
         ) in spv_code_refused
-        assert (
-            "imageStore value operand does not match v4float "
-            "storage image texel type"
-        ) in spv_code_refused
+        # A three-component value for a four-channel format takes the alpha
+        # fill (GLSL 4.60 section 8.12), so only the wrong kinds are refused.
+        assert "does not match v4float" not in spv_code_refused
         assert (
             "imageStore value operand does not match uint " "storage image texel type"
         ) in spv_code_refused
