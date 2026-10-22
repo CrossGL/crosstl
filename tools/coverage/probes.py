@@ -65,8 +65,10 @@ _STORAGE = {
     "bool": "float",
     "double": "float",
     "half": "float",
+    "int8": "int",
     "int16": "int",
     "int64": "int",
+    "uint8": "uint",
     "uint16": "uint",
     "uint64": "uint",
     "int8x4_packed": "uint",
@@ -103,6 +105,8 @@ class _Builder:
         self.shared: list[str] = []
         # Uniforms that hold pointers to device memory, for a parameter that takes one.
         self.pointers: list[str] = []
+        # What the arguments the dialect makes itself declare before the entry point (Dialect.handle).
+        self.handles: list[str] = []
         # Fragment-shader inputs as ``(type spelling, name)``.
         self.inputs: list[Buffer] = []
 
@@ -140,15 +144,23 @@ class _Builder:
     def declarations(self) -> list[str]:
         """The resources the probe declares before its entry point."""
         objects = self.receiver.declarations if self.receiver else []
-        return objects + self.uniforms.declarations + self.shared + self.pointers
+        return (
+            objects
+            + self.uniforms.declarations
+            + self.shared
+            + self.pointers
+            + self.handles
+        )
 
     def _resource(self, kind: Type) -> bool:
         if (self.payload or self.tracing) and kind.opaque == "udt":
             return True
         if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind):
             return True
-        return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
-            kind
+        return (
+            bool(self.receiver and self.receiver.takes(kind))
+            or self.uniforms.takes(kind)
+            or self.dialect.handle(kind, "") is not None
         )
 
     def _attributes(self, param: Param) -> bool:
@@ -217,6 +229,10 @@ class _Builder:
                 arguments.append(receiver.argument(param.type))
             elif self.uniforms.takes(param.type):
                 arguments.append(self.uniforms.argument(param.type))
+            elif handle := dialect.handle(param.type, local):
+                self.lines += handle.lines
+                self.handles += handle.declarations
+                arguments.append(handle.argument)
             elif param.type.opaque in _RAY_DESCRIPTIONS:
                 self.lines += self._ray(local)
                 arguments.append(local)

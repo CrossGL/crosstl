@@ -128,7 +128,12 @@ def _run(args: argparse.Namespace) -> int:
         if args.feature:
             feature_list = [f for f in feature_list if f.name in args.feature]
         for direction in directions:
-            if direction == "input" and language not in runner.INPUT_BACKENDS:
+            backends = (
+                runner.INPUT_BACKENDS
+                if direction == "input"
+                else runner.OUTPUT_BACKENDS
+            )
+            if language not in backends:
                 continue
             jobs += [(feature, direction, language) for feature in feature_list]
     results = runner.run(jobs, args.jobs or None)
@@ -196,7 +201,14 @@ def _tools() -> int:
     rows = [("language", "directions", "tool", "found")]
     for language in LANGUAGES:
         tool = validators.TOOLS[language]
-        directions = "output, input" if language in runner.INPUT_BACKENDS else "output"
+        directions = ", ".join(
+            direction
+            for direction, backends in (
+                ("output", runner.OUTPUT_BACKENDS),
+                ("input", runner.INPUT_BACKENDS),
+            )
+            if language in backends
+        )
         if validators.available(language):
             found = validators.version(tool) or "yes, no version reported"
         else:

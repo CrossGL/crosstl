@@ -16,19 +16,22 @@ SCALARS = (
     "half",
     "int16",
     "uint16",
+    "int8",
+    "uint8",
     "int8x4_packed",
     "uint8x4_packed",
     "usize",
 )
-# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit scalars, the
-# 32-bit words that pack four 8-bit integers (HLSL shader model 6.6), and Rust's pointer-sized unsigned integer, which
-# rust-gpu's SPIR-V targets make 32 bits wide.
+# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit and 8-bit scalars,
+# the 32-bit words that pack four 8-bit integers (HLSL shader model 6.6), and Rust's pointer-sized unsigned integer,
+# which rust-gpu's SPIR-V targets make 32 bits wide.
 WIDE_INTEGERS = frozenset({"int64", "uint64"})
 NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
+BYTES = frozenset({"int8", "uint8"})
 PACKED_BYTES = frozenset({"int8x4_packed", "uint8x4_packed"})
 POINTER_SIZED = frozenset({"usize"})
 # Overload selection prefers a signature without these when a function has one.
-OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS
+OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS | BYTES
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",
@@ -37,6 +40,7 @@ LANGUAGES = (
     "hlsl",
     "metal",
     "mojo",
+    "opencl",
     "rust",
     "slang",
     "spirv",
@@ -44,6 +48,9 @@ LANGUAGES = (
     "wgsl",
 )
 DIRECTIONS = ("output", "input")
+# The language an imported probe is emitted to and validated in when CrossTL has no generator for its own: HLSL, the
+# target whose output row covers the most of what OpenCL C kernels call.
+ROUND_TRIPS = {"opencl": "hlsl"}
 # The ray-tracing stages a probe can run in, each with the name HLSL's ``[shader(...)]`` attribute and slangc's
 # ``-stage`` give it. A ray-tracing intrinsic is probed in a closest-hit shader, which allows most of them, unless only
 # one other stage has it (DirectX Raytracing functional specification, "Intrinsics", and HLSL shader execution
@@ -114,6 +121,27 @@ class Type:
 
 
 VOID = Type.other("void")
+# The OpenCL C enumerated types of the synchronization, atomic and event-profiling functions, whose arguments are named
+# constants, and the constant a probe passes. They are kept as ``uint`` types with the enumeration as ``opaque``.
+OPENCL_ENUMERATIONS = {
+    "cl_mem_fence_flags": "CLK_LOCAL_MEM_FENCE",
+    "memory_scope": "memory_scope_work_group",
+    "memory_order": "memory_order_relaxed",
+    "clk_profiling_info": "CLK_PROFILING_COMMAND_EXEC_TIME",
+}
+# The C11 atomic types of OpenCL C (OpenCL C 3.0, section 6.15.12.6), by the type of the value each holds. They are
+# kept as that type with the atomic type as ``opaque``; a probe passes the address of an element of an output buffer
+# of the atomic type.
+OPENCL_ATOMICS = {
+    "atomic_int": "int",
+    "atomic_uint": "uint",
+    "atomic_long": "int64",
+    "atomic_ulong": "uint64",
+    "atomic_float": "float",
+    "atomic_double": "double",
+    "atomic_half": "half",
+    "atomic_flag": "int",
+}
 # A constant string argument, such as the tag a C library ``nan`` takes; probes pass the empty string.
 STRING = Type.other("string")
 _COOP_VECTOR = re.compile(r"CoopVec<(\w+), ([2-4])>")

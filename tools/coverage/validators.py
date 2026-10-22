@@ -30,6 +30,7 @@ TOOLS = {
     "hlsl": "dxc",
     "metal": "metal",
     "mojo": "mojo",
+    "opencl": "clang",
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
@@ -43,6 +44,7 @@ SUFFIX = {
     "hlsl": ".hlsl",
     "metal": ".metal",
     "mojo": ".mojo",
+    "opencl": ".cl",
     "rust": ".rs",
     "slang": ".slang",
     "spirv": ".spvasm",
@@ -104,6 +106,10 @@ METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
 # feature list names, and for C++17.
 CUDA_ARCH = "sm_80"
+# OpenCL C 3.0 for SPIR: Clang's SPIR targets support every optional feature and Khronos extension, so a probe needs
+# no -cl-ext flags. Only half needs the probe to enable cl_khr_fp16 with a pragma.
+OPENCL_STANDARD = "CL3.0"
+OPENCL_TARGET = "spir64"
 # Slang probes compile to SPIR-V, the target whose validator (SPIRV-Tools, built into slangc) checks the result.
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
@@ -191,6 +197,8 @@ def missing(language: str, target: str = "") -> str:
     needed = {
         "spirv": ("spirv-as", "spirv-val"),
         "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
+        # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
+        "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
     return next((tool for tool in needed if not command(tool)), "")
 
@@ -401,6 +409,22 @@ def validate(
                     name,
                     "-o",
                     "probe.o",
+                ],
+                scratch,
+            )
+        if language == "opencl":
+            return _run(
+                [
+                    *command("clang"),
+                    "-x",
+                    "cl",
+                    f"-cl-std={OPENCL_STANDARD}",
+                    "-target",
+                    OPENCL_TARGET,
+                    "-Xclang",
+                    "-finclude-default-header",
+                    "-fsyntax-only",
+                    name,
                 ],
                 scratch,
             )
