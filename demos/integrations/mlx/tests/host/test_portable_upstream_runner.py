@@ -15,6 +15,7 @@ from demos.integrations.mlx.portable_host import (
     verify_upstream_qmm,
     verify_upstream_qmm_shapes,
     verify_upstream_qmv,
+    verify_upstream_qmv_small_non_multiples,
 )
 from demos.integrations.mlx.portable_host import (
     verify_upstream_quantization as quantization,
@@ -36,6 +37,7 @@ RUNNERS = {
     "fp_qmv": verify_upstream_fp_qmv,
     "fp_qmv_large_output": verify_upstream_fp_qmv_large_output,
     "fp_qvm": verify_upstream_fp_qvm,
+    "qmv_small_non_multiples": verify_upstream_qmv_small_non_multiples,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 

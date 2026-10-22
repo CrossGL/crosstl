@@ -456,6 +456,14 @@ does. Each type reaches `nvfp4_qmv_fast` of that type, alone and batched, for
 translated chain of 16-bit and float32 element-wise operations ending in an
 `and` reduction.
 
+`verify_upstream_qmv_small_non_multiples.py` runs
+`test_qmv_small_non_multiples`, which mixes both families. One to four rows of
+32 values multiply 3, 5, 7 or 10 output rows quantized as 4-bit and 6-bit
+affine groups and as nvfp4. No width is a multiple of 8, so every affine product
+reaches `affine_qmv`, one nvfp4 row `nvfp4_qmv` and two or four rows
+`nvfp4_qmv_wide`. The references take `gemv` for one row and
+`steel_gemm_fused` otherwise.
+
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
   --mlx-root mlx-upstream --packages host-packages --output-dir upstream-qmv
