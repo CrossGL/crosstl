@@ -10047,7 +10047,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "Native 16-bit HLSL support" in normalized_readme
     assert "Concrete `static_assert` evaluation" in normalized_readme
     assert "Official DXC validation" in normalized_readme
-    assert "profile `cs_6_0`, no `-enable-16bit-types`, and `-WX` passes" in (
+    assert "profile `cs_6_6`, no `-enable-16bit-types`, and `-WX` passes" in (
         normalized_readme
     )
     assert "zero warnings across all 484 entry-point runs" in normalized_readme
@@ -10124,7 +10124,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "17,865 bytes" in normalized_readme
+    assert "17,917 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -10158,8 +10158,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "size_bytes": 5704,
+        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
+        "size_bytes": 5721,
     }
     assert directx["materialization"] == {
         "reachable_specialization_count": 5,
@@ -10177,9 +10177,22 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "issue": "https://github.com/CrossGL/crosstl/issues/1800",
         "remaining_static_assertion_count": 0,
     }
+    assert directx["execution_contract"] == {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [64, 1, 1],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+            "source": "mlx/backend/metal/quantized.cpp",
+            "function": "quantize_dequantize",
+            "workgroup_expression": "MTL::Size(thread_group_size, 1, 1)",
+            "thread_group_size": "min(maxTotalThreadsPerThreadgroup, nthreads)",
+        },
+    }
     assert directx["compiler_validation"] == {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
@@ -10349,8 +10362,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "size_bytes": 17865,
+        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
+        "size_bytes": 17917,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",

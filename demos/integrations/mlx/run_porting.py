@@ -1190,9 +1190,22 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "artifact_count": 1,
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
+    "execution_contract": {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [64, 1, 1],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+            "source": "mlx/backend/metal/quantized.cpp",
+            "function": "quantize_dequantize",
+            "workgroup_expression": "MTL::Size(thread_group_size, 1, 1)",
+            "thread_group_size": "min(maxTotalThreadsPerThreadgroup, nthreads)",
+        },
+    },
     "generated_hlsl": {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "size_bytes": 5704,
+        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
+        "size_bytes": 5721,
     },
     "materialization": {
         "reachable_specialization_count": 5,
@@ -1212,7 +1225,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     },
     "compiler_validation": {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
@@ -1315,8 +1328,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "size_bytes": 17865,
+        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
+        "size_bytes": 17917,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -9680,6 +9693,9 @@ def _check_gemv_vulkan_toolchain(
         include=MLX_GEMV_SOURCE,
         targets=("vulkan",),
         output_dir=_relpath(work_dir / "out-gemv-vulkan", mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
