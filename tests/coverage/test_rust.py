@@ -239,7 +239,7 @@ def test_rust_reads_float_and_vec3_methods():
     )
     assert features["Vec3::select"].spelling == "Vec3::select"
     assert features["Vec3::select"].signature.params[0] == Param(Type("bool", (3,)))
-    assert features["Vec3::to_array"].signature.unsupported == "[f32; 3]"
+    assert features["Vec3::to_array"].signature.result == Type("float", count=3)
     assert features["Vec3::lerp"].crossgl == "mix"
     assert features["Vec3::new"].crossgl == "vec3"
 
@@ -359,6 +359,51 @@ def test_rust_probes_convert_a_float_category_and_an_aligned_vector():
     assert "let r: Vec3 = Vec3::from(a0.to_vec3a());" in source
     assert aligned.crossgl == "vec3"
     assert "vec3 r = vec3(a0);" in probes.build(aligned, "crossgl").source
+
+
+ARRAY_VEC3 = """
+impl Vec3 {
+    pub const fn from_array(a: [f32; 3]) -> Self {
+        Self::new(a[0], a[1], a[2])
+    }
+    pub const fn to_array(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
+    }
+    pub const fn from_slice(slice: &[f32]) -> Self {
+        Self::new(slice[0], slice[1], slice[2])
+    }
+    pub fn write_to_slice(self, slice: &mut [f32]) {
+        slice[..3].copy_from_slice(&self.to_array());
+    }
+}
+"""
+
+
+def test_rust_probes_pass_arrays_and_slices():
+    found = rust.parse({}, "pub trait Float: Num + Copy {}", ARRAY_VEC3, frozenset())
+    features = {f.name: f for f in found}
+    built = features["Vec3::from_array"]
+    source = probes.build(built, "rust").source
+    assert "let a0: [f32; 3] = [fin[i + 0], fin[i + 1], fin[i + 2]];" in source
+    assert "let r: Vec3 = Vec3::from_array(a0);" in source
+    assert "vec3 r = vec3(a0, a1, a2);" in probes.build(built, "crossgl").source
+    # A slice the function reads is the probe's input buffer.
+    sliced = features["Vec3::from_slice"]
+    source = probes.build(sliced, "rust").source
+    assert "let r: Vec3 = Vec3::from_slice(fin);" in source
+    assert "vec3 r = vec3(a0, a1, a2);" in probes.build(sliced, "crossgl").source
+    # An array result is stored through its first element.
+    source = probes.build(features["Vec3::to_array"], "rust").source
+    assert "let r: [f32; 3] = a0.to_array();" in source
+    assert "outp[i] = r[0];" in source
+    # A slice the function writes is a local array of one value per component.
+    written = features["Vec3::write_to_slice"]
+    source = probes.build(written, "rust").source
+    assert "let mut a1: [f32; 3] = Default::default();" in source
+    assert "a0.write_to_slice(&mut a1);" in source
+    for name in ("Vec3::to_array", "Vec3::write_to_slice"):
+        with pytest.raises(probes.NoSpelling):
+            probes.build(features[name], "crossgl")
 
 
 def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():

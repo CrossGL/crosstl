@@ -113,6 +113,10 @@ class Dialect:
     def cast(self, kind: Type, value: str) -> str:
         return f"{self.type(kind)}({value})"
 
+    def array(self, kind: Type, parts: list[str]) -> str:
+        """An array of the type ``kind`` holding ``parts``, for a parameter that takes one."""
+        raise ProbeError(f"no probe for {self.language} array parameters yet")
+
     def literal(self, kind: Type) -> str:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
         if kind == STRING:
@@ -218,9 +222,9 @@ class Dialect:
     def inout_argument(self) -> str:
         return "outp[i]"
 
-    def buffer_argument(self) -> str:
-        """The probe's whole output buffer, for a parameter that takes a runtime-sized array."""
-        return "outp"
+    def buffer_argument(self, name: str) -> str:
+        """The whole input buffer ``name``, for a parameter that takes a runtime-sized array."""
+        return name
 
     def to_int(self, condition: str) -> str:
         return f"{condition} ? 1 : 0"

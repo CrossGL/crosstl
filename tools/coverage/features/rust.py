@@ -109,6 +109,10 @@ _UNSPELLED = {
         "no CrossGL function returns the index of a vector's smallest element"
     ),
     "Float::classify": "no CrossGL function returns a float's category",
+    "Vec3::to_array": "no CrossGL function converts a vector to an array",
+    "Vec3::write_to_slice": (
+        "no CrossGL function writes a vector's elements to an array"
+    ),
 }
 # CrossGL builds vectors with constructors and reads an element with the subscript operator, rather than functions.
 _CONSTRUCTORS = {
@@ -127,6 +131,8 @@ _TRAIT_METHOD = re.compile(r"^    (unsafe )?fn (\w+)", re.M)
 _IMPL_METHOD = re.compile(r"^    pub (?:const )?(unsafe )?fn (\w+)", re.M)
 _MACRO = re.compile(r"^macro_rules! (\w+) \{", re.M)
 _TEMPLATE = re.compile(r"pub (?:const )?(?:unsafe )?fn \$name")
+# A slice parameter, ``&[T]`` or ``&mut [T]``. The probe passes its input buffer for one the function reads.
+_SLICE = re.compile(r"&\s*(mut\s+)?\[([^;\]]+)\]")
 
 
 def _nesting(text: str, index: int) -> int:
@@ -239,6 +245,11 @@ def rust_type(
         element = rust_type(vector.group(1), generics, self_type)
         if not element.opaque and not element.shape:
             return Type(element.scalar, (3,))
+    array = re.fullmatch(r"\[(.+);\s*(\d+)\]", spelling)
+    if array:
+        element = rust_type(array.group(1), generics, self_type, aliases)
+        if not element.opaque:
+            return Type(element.scalar, element.shape, count=int(array.group(2)))
     # A tuple or an option stays opaque, spelled with the types it holds so that a probe can read its first value.
     held = re.fullmatch(r"\((.+)\)|Option<(.+)>", spelling)
     if held:
@@ -281,6 +292,17 @@ def signature(
             continue
         kind = part.partition(":")[2].strip()
         direction = "in"
+        sliced = _SLICE.fullmatch(kind)
+        element = rust_type(sliced.group(2), types, self_type) if sliced else None
+        if element and not element.opaque and not sliced.group(1):
+            params.append(Param(element, "buffer"))
+            continue
+        if element and not element.opaque and len(self_type.shape) == 1:
+            # A vector's mutable slice holds one value per component, as glam requires, so the probe passes a local
+            # array of that length.
+            array = Type(element.scalar, element.shape, count=self_type.shape[0])
+            params.append(Param(array, "out"))
+            continue
         if kind.startswith("&"):
             direction, kind = "inout", re.sub(r"^&\s*(?:mut\s+)?", "", kind)
         params.append(Param(rust_type(kind, types, self_type, aliases), direction))

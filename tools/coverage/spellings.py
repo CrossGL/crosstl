@@ -234,11 +234,13 @@ COUNTERPARTS = {
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
     # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
-    # with the vec3 constructor.
+    # with the vec3 constructor, which also builds a vector from an array's or a slice's first three elements.
     "rust": {
         "Float::sin_cos": "void sincos(float, out float, out float)",
         "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
         "Vec3::to_vec3a": "vec3 vec3(vec3)",
+        "Vec3::from_array": "vec3 vec3(float, float, float)",
+        "Vec3::from_slice": "vec3 vec3(float, float, float)",
         "emit_stream_vertex": "void EmitStreamVertex(const int)",
         "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },

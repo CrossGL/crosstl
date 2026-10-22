@@ -224,6 +224,11 @@ class Rust(Dialect):
             return None
         return kind, "{}.0" if held.group(1) else "{}.unwrap_or_default()"
 
+    def type(self, kind: Type) -> str:
+        if kind.count:
+            return f"[{self.type(kind.element)}; {kind.count}]"
+        return super().type(kind)
+
     def scalar(self, scalar: str) -> str:
         if scalar not in self._SCALARS:
             raise ProbeError(f"no {scalar} probe for rust yet")
@@ -250,6 +255,9 @@ class Rust(Dialect):
         if kind.shape:
             return f"{value}.as_{self.type(kind).lower()}()"
         return f"({value}) as {self.type(kind)}"
+
+    def array(self, kind: Type, parts: list[str]) -> str:
+        return f"[{', '.join(parts)}]"
 
     def literal(self, kind: Type) -> str:
         if kind.shape:
