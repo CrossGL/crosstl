@@ -3274,6 +3274,8 @@ class GLSLCodeGen(
         }
 
         self.function_map = {
+            # HLSL's non-uniform resource index is GLSL's GL_EXT_nonuniform_qualifier.
+            "NonUniformResourceIndex": "nonuniformEXT",
             "atan2": "atan",
             "lerp": "mix",
             "frac": "fract",
@@ -4120,10 +4122,10 @@ class GLSLCodeGen(
 
     def uses_nonuniform_ext(self, ast):
         for node in self.walk_ast(ast):
-            if (
-                isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) == "nonuniformEXT"
-            ):
+            if isinstance(node, FunctionCallNode) and self.function_call_name(node) in {
+                "nonuniformEXT",
+                "NonUniformResourceIndex",
+            }:
                 return True
         return False
 
