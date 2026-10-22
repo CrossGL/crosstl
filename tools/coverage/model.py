@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 SCALARS = (
@@ -112,13 +113,66 @@ class Type:
 VOID = Type.other("void")
 # A constant string argument, such as the tag a C library ``nan`` takes; probes pass the empty string.
 STRING = Type.other("string")
+_COOP_VECTOR = re.compile(r"CoopVec<(\w+), ([2-4])>")
+# The length a probe gives a cooperative vector whose length is a generic size.
+COOP_VECTOR_LENGTH = 4
+# The column count ``k`` that Slang's packed cooperative-vector multiplies take as a constant. For the unpacked 32-bit
+# floats every probe passes, it must equal the input vector's length (hlsl.meta.slang, coopVecMatMulPacked).
+COOP_COLUMNS = Type("int", opaque="CoopVecColumns")
+# The constant a probe passes for each enumeration parameter of Slang's cooperative-vector functions: a vector's and a
+# matrix's elements are the 32-bit floats every probe fills them with, in row-major order, and a coherent load is
+# coherent across the device, the scope coopVecLoadCoherent defaults to.
+COOP_ENUMERATORS = {
+    "CoopVecComponentType": "CoopVecComponentType.Float32",
+    "CoopVecMatrixLayout": "CoopVecMatrixLayout.RowMajor",
+    "MemoryScope": "MemoryScope.Device",
+}
+
+
+def coop_vector(scalar: str, length: int) -> Type:
+    """Slang's cooperative vector of ``length`` ``scalar`` elements: an opaque type that keeps its element type and
+    length as ``scalar`` and ``shape``, so a probe can fill one from the input buffers.
+    """
+    return Type(scalar, (length,), f"CoopVec<{scalar}, {length}>")
+
+
+def coop_literal(kind: Type) -> str:
+    """The constant a probe passes for a cooperative-vector enumeration or column count ``kind``, or an empty
+    string."""
+    if kind == COOP_COLUMNS:
+        return str(COOP_VECTOR_LENGTH)
+    return COOP_ENUMERATORS.get(kind.opaque, "")
+
+
+def coop_element(opaque: str) -> Type | None:
+    """The element type of the cooperative vector the opaque spelling ``opaque`` names, or ``None``."""
+    match = _COOP_VECTOR.fullmatch(opaque)
+    return Type(match.group(1)) if match else None
+
+
+_TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")
+
+
+def tuple_of(scalar: str, length: int) -> Type:
+    """Slang's tuple of ``length`` ``scalar`` elements: an opaque type that keeps its element type as ``scalar``, so a
+    probe can fill one from the input buffers."""
+    return Type(scalar, (), "Tuple<" + ", ".join([scalar] * length) + ">")
+
+
+def tuple_element(opaque: str) -> tuple[Type, int] | None:
+    """The element type and length of the tuple the opaque spelling ``opaque`` names, or ``None``."""
+    match = _TUPLE.fullmatch(opaque)
+    if match is None or match.group(1) not in SCALARS:
+        return None
+    return Type(match.group(1)), match.group(2).count(",") + 1
 
 
 @dataclass(frozen=True)
 class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
-    value that the function reads and may write, or ``workgroup``, a variable the compute workgroup shares.
+    value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
+    a uniform, or ``workgroup``, a variable the compute workgroup shares.
     """
 
     type: Type

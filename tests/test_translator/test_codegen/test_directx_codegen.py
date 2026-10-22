@@ -4803,7 +4803,7 @@ def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
 
     generated = generate_code(ast)
 
-    assert "out[uint(idx)] = keys.Load(int(key_index));" in generated
+    assert "out_[uint(idx)] = keys.Load(int(key_index));" in generated
 
 
 def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
@@ -45215,7 +45215,7 @@ def test_directx_image_1d_and_1d_array_storage_operations():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture1D<float4> line : register(u0);" in generated_code
+    assert "RWTexture1D<float4> line_ : register(u0);" in generated_code
     assert "RWTexture1DArray<float4> layers : register(u1);" in generated_code
     assert "RWTexture1D<uint> counters : register(u2);" in generated_code
     assert "RWTexture1DArray<uint> layerCounters : register(u3);" in generated_code

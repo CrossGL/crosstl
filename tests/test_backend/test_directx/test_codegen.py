@@ -4358,12 +4358,12 @@ def test_codegen_rasterizer_ordered_resources_roundtrip():
     assert "@ register(u0, space1)" in output
     assert "uimage2D pixelCounts;" in output
     assert "image2DArray layers;" in output
-    assert "RWBuffer<uint> bins;" in output
+    assert "uimageBuffer bins;" in output
     assert "RWStructuredBuffer<int> values;" in output
     assert "RWByteAddressBuffer rawBytes;" in output
     assert "oldCount = imageAtomicAdd(pixelCounts, pixel, 1u);" in output
     assert "imageStore(layers, uvec3(pixel, layer), vec4(oldCount, 0, 0, 1));" in output
-    assert "oldBin = atomicAdd(bins[0], oldCount);" in output
+    assert "oldBin = imageAtomicAdd(bins, 0, oldCount);" in output
     assert "oldValue = atomicMax(values[0], int(oldBin));" in output
     assert "buffer_store(rawBytes, 0, oldBin);" in output
 
@@ -5680,12 +5680,12 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "@ register(u6, space3)" in crossgl
     assert "RWStructuredBuffer<int> buffers[2];" in crossgl
     assert "@ register(u8, space4)" in crossgl
-    assert "RWBuffer<uint> counters[2];" in crossgl
+    assert "uimageBuffer counters[2];" in crossgl
     assert "texture(textures[index], samplers[index], uv)" in crossgl
     assert "imageStore(images[index], uvec2(1, 2), c);" in crossgl
     assert "buffer_store(buffers[index], 0, 7);" in crossgl
     assert "buffer_load(buffers[index], 0)" in crossgl
-    assert "oldValue = atomicAdd(counters[index][0], 1u);" in crossgl
+    assert "oldValue = imageAtomicAdd(counters[index], 0, 1u);" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
@@ -5699,7 +5699,11 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "buffers[index][0] = 7;" in hlsl
     assert "buffers[index].Store(" not in hlsl
     assert "buffers[index].Load(0)" in hlsl
-    assert "InterlockedAdd(counters[index][0], 1u, oldValue);" in hlsl
+    assert (
+        "oldValue = __crossgl_imageAtomicAdd_RWBuffer_uint(counters[index], 0, 1u);"
+        in hlsl
+    )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in hlsl
     assert "buffer_store(" not in hlsl
     assert "buffer_load(" not in hlsl
     assert "atomicAdd(counters" not in hlsl
@@ -5981,16 +5985,17 @@ def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_
 
     crossgl = generate_crossgl(code)
 
-    assert "Buffer<float4> coefficients[][2];" in crossgl
-    assert "RWBuffer<uint> counters[];" in crossgl
+    assert "samplerBuffer coefficients[][2];" in crossgl
+    assert "uimageBuffer counters[];" in crossgl
     assert (
         "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
     )
     assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
     assert (
-        "vec4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in crossgl
+        "vec4 value = texelFetch(coefficients[nonUniformMaterial][nonUniformTile], 0);"
+        in crossgl
     )
-    assert "oldValue = atomicAdd(counters[nonUniformMaterial][0], 1u);" in crossgl
+    assert "oldValue = imageAtomicAdd(counters[nonUniformMaterial], 0, 1u);" in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
@@ -5998,10 +6003,15 @@ def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_
     assert "RWBuffer<uint> counters[] : register(u0, space4);" in hlsl
     assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
     assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
-    assert "float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in (
-        hlsl
+    assert (
+        "float4 value = coefficients[nonUniformMaterial][nonUniformTile].Load(0);"
+        in hlsl
     )
-    assert "InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);" in hlsl
+    assert (
+        "oldValue = __crossgl_imageAtomicAdd_RWBuffer_uint("
+        "counters[nonUniformMaterial], 0, 1u);" in hlsl
+    )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in hlsl
     assert "float nonUniformMaterial" not in hlsl
     assert "float nonUniformTile" not in hlsl
     assert "atomicAdd(" not in hlsl
@@ -7399,13 +7409,18 @@ def test_codegen_interlocked_compare_exchange_mapping():
 
     output = generate_crossgl(code)
     assert "original = imageAtomicCompSwap(tex, dtid.xy, 1u, 0u);" in output
-    assert "RWBuffer<uint> buf;" in output
-    assert "original = atomicCompareExchange(buf[dtid.x], 2u, 1u);" in output
+    assert "uimageBuffer buf;" in output
+    assert "original = imageAtomicCompSwap(buf, dtid.x, 2u, 1u);" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "RWBuffer<uint> buf : register(u1);" in regenerated_hlsl
     assert (
-        "InterlockedCompareExchange(buf[dtid.x], 2u, 1u, original);" in regenerated_hlsl
+        "original = __crossgl_imageAtomicCompSwap_RWBuffer_uint(buf, dtid.x, 2u, 1u);"
+        in regenerated_hlsl
+    )
+    assert (
+        "InterlockedCompareExchange(buffer[coord], value0, value1, original);"
+        in regenerated_hlsl
     )
     assert "atomicCompareExchange(buf" not in regenerated_hlsl
 
@@ -7451,17 +7466,19 @@ def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
 
     output = generate_crossgl(code)
 
-    assert "RWBuffer<uint> counterBuffers[2];" in output
+    assert "uimageBuffer counterBuffers[2];" in output
     assert "RWStructuredBuffer<int> signedValues;" in output
-    assert "original = atomicAdd(counterBuffers[1][dtid.x], 1u);" in output
+    assert "original = imageAtomicAdd(counterBuffers[1], dtid.x, 1u);" in output
     assert "oldSigned = atomicMax(signedValues[dtid.x], -1);" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "RWBuffer<uint> counterBuffers[2] : register(u4);" in regenerated_hlsl
     assert "RWStructuredBuffer<int> signedValues : register(u6);" in regenerated_hlsl
     assert (
-        "InterlockedAdd(counterBuffers[1][dtid.x], 1u, original);" in regenerated_hlsl
+        "original = __crossgl_imageAtomicAdd_RWBuffer_uint(counterBuffers[1], dtid.x, 1u);"
+        in regenerated_hlsl
     )
+    assert "InterlockedAdd(buffer[coord], value0, original);" in regenerated_hlsl
     assert "InterlockedMax(signedValues[dtid.x], -1, oldSigned);" in regenerated_hlsl
     assert "atomicAdd(counterBuffers" not in regenerated_hlsl
     assert "atomicMax(signedValues" not in regenerated_hlsl

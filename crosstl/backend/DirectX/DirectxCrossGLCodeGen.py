@@ -40,6 +40,7 @@ from .struct_methods import (
     method_local_names,
 )
 from .texel_access import HLSLTexelAccessMixin
+from .texel_buffers import HLSLTexelBufferMixin
 from .trigonometric_reduction import HLSLTrigonometricReductionMixin
 from .unorm_store_rounding import HLSLUnormStoreRoundingMixin
 from .value_shapes import HLSLValueShapeMixin
@@ -77,6 +78,7 @@ class HLSLToCrossGLConverter(
     HLSLUnormStoreRoundingMixin,
     HLSLStructMethodCallMixin,
     HLSLTexelAccessMixin,
+    HLSLTexelBufferMixin,
     HLSLTrigonometricReductionMixin,
     HLSLValueShapeMixin,
 ):
@@ -692,6 +694,10 @@ class HLSLToCrossGLConverter(
                 function = "imageLoad"
                 if arg_count == (3 if is_multisample else 2):
                     dropped_parameters.append("status output")
+            elif self.is_sampled_texel_buffer_type(resource_type):
+                function = "texelFetch"
+                if arg_count == 2:
+                    dropped_parameters.append("status output")
             elif resource_base.startswith(("Texture", "FeedbackTexture")):
                 has_offset = arg_count is not None and arg_count >= (
                     3 if is_multisample else 2
@@ -1296,6 +1302,11 @@ class HLSLToCrossGLConverter(
     def texture_load_method_arguments(
         self, obj, rendered_args, descriptor, raw_args, is_main=False
     ):
+        texel_buffer_args = self.texel_buffer_load_arguments(
+            obj, rendered_args, descriptor
+        )
+        if texel_buffer_args is not None:
+            return texel_buffer_args
         resource_base = self.raw_type_base(descriptor.get("resource_type"))
         is_multisample = resource_base in {"Texture2DMS", "Texture2DMSArray"}
         if is_multisample:
@@ -2705,9 +2716,10 @@ class HLSLToCrossGLConverter(
         return self.raw_type_base(type_name).startswith("RasterizerOrdered")
 
     def is_rw_texture_type(self, type_name):
+        """Whether a resource is a storage image, including storage texel buffers."""
         return self.raw_type_base(type_name).startswith(
             ("RWTexture", "RasterizerOrderedTexture")
-        )
+        ) or self.is_storage_texel_buffer_type(type_name)
 
     def is_multisample_texture_type(self, type_name):
         return self.raw_type_base(type_name) in {
@@ -2761,7 +2773,12 @@ class HLSLToCrossGLConverter(
             return False
         if not self.is_rw_texture_type(self.expression_raw_type(expr)):
             return False
-        return self.array_access_depth(expr) > self.expression_resource_array_dims(expr)
+        # One index after the resource-array indices selects the texel; a
+        # further index subscripts a component of the loaded texel.
+        return (
+            self.array_access_depth(expr)
+            == self.expression_resource_array_dims(expr) + 1
+        )
 
     def generate_without_storage_index_lowering(self, expr, is_main=False):
         previous = self.suppress_storage_image_index_lowering
@@ -2818,6 +2835,18 @@ class HLSLToCrossGLConverter(
         return f"imageStore({image}, {coord}, {rendered_value})"
 
     def storage_image_component_assignment_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            # ``image[p][i]`` writes component ``i`` of a texel.
+            index = expr.index
+            index = getattr(index, "value", index)
+            text = str(index).rstrip("uU") if isinstance(index, (int, str)) else ""
+            if (
+                text.isdigit()
+                and int(text) < 4
+                and self.is_storage_image_texel_access(expr.array)
+            ):
+                return expr.array, "xyzw"[int(text)]
+            return None
         if not isinstance(expr, MemberAccessNode):
             return None
         if not isinstance(expr.member, str):
@@ -4557,6 +4586,12 @@ class HLSLToCrossGLConverter(
         resource_base = self.raw_type_base(resource_type)
         if not resource_base:
             return None
+
+        texel_buffer_dimensions = self.generate_texel_buffer_dimensions(
+            stmt, indent, is_main
+        )
+        if texel_buffer_dimensions is not None:
+            return texel_buffer_dimensions
 
         obj = self.generate_expression(stmt.name.object, is_main)
         rendered_args = [self.generate_expression(arg, is_main) for arg in stmt.args]

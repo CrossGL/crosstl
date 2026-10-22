@@ -191,9 +191,15 @@ class Dialect:
         """A pointer to the local ``name``, for a parameter that takes one."""
         raise ProbeError(f"no probe passes {self.language} a pointer yet")
 
+    def pointer(self, kind: Type, name: str) -> str:
+        """The declaration of a uniform ``name`` that holds a pointer to device memory of ``kind``, for a parameter
+        that takes one."""
+        raise ProbeError(f"no probe passes {self.language} a device pointer yet")
+
     def workgroup(self, kind: Type, name: str) -> str:
         """The declaration of a variable ``name`` that a compute workgroup shares."""
-        return f"shared {self.type(kind)} {name};"
+        count = f"[{kind.count}]" if kind.count else ""
+        return f"shared {self.type(kind.element)} {name}{count};"
 
     def workgroup_argument(self, name: str) -> str:
         """The workgroup variable ``name``, for a parameter that takes one."""

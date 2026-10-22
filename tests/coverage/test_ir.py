@@ -61,6 +61,13 @@ def test_unmatched_features_stay_their_own_and_wrong_outranks_refused():
     assert entry["counts"] == {"supported": 0, "refused": 0, "wrong": 1, "untested": 1}
 
 
+def test_a_call_that_spells_its_generic_arguments_is_keyed_by_its_name():
+    entry = ir.build(
+        [row("slang", ("bit_cast", "supported", {"crossgl": "bit_cast<int>"}))]
+    )
+    assert list(by_name(entry)) == ["slang/bit_cast"]
+
+
 def test_input_rows_do_not_widen_the_universe():
     entry = ir.build([{**row("glsl", ("abs", "supported", {})), "direction": "input"}])
     assert entry is None

@@ -4,7 +4,16 @@ import pytest
 
 from tools.coverage import probes, validators
 from tools.coverage.features.common import prototype
-from tools.coverage.model import STRING, VOID, Feature, Param, Signature, Type
+from tools.coverage.model import (
+    COOP_COLUMNS,
+    STRING,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    coop_vector,
+)
 
 VEC3 = Type("float", (3,))
 
@@ -476,7 +485,7 @@ def trace_ray(language):
         ),
         (
             "slang",
-            "RaytracingAccelerationStructure u0 : register(t8);",
+            "RaytracingAccelerationStructure u0;",
             "float3(fin[i + 0u], fin[i + 1u], fin[i + 2u])",
         ),
         (
@@ -1190,7 +1199,7 @@ def test_metal_probes_are_valid_metal(probe_feature):
     assert verdict.accepted, verdict.log
 
 
-def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
+def test_cuda_hip_and_crossgl_pass_the_address_of_a_local_for_a_pointer_to_values():
     norm = Feature(
         "cuda",
         "function",
@@ -1202,8 +1211,12 @@ def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
         source = probes.build(replace(norm, language=language), language).source
         assert "    float a1 = fin[i + 0u];" in source
         assert "    float r = normf(a0, &a1);" in source
-    with pytest.raises(probes.ProbeError, match="no probe passes crossgl a pointer"):
-        probes.build(norm, "crossgl")
+    source = probes.build(norm, "crossgl").source
+    assert "            float a1 = fin[i + 0u];" in source
+    assert "            float r = norm(a0, &a1);" in source
+    # A language without pointers to locals says so rather than spelling one.
+    with pytest.raises(probes.ProbeError, match="no probe passes glsl a pointer"):
+        probes.build(replace(norm, language="glsl"), "glsl")
 
 
 def test_hip_and_crossgl_pass_the_empty_string_for_a_c_string():
@@ -1388,6 +1401,114 @@ def test_slang_functions_spirv_lacks_compile_for_hlsl():
     assert not validators.validate(
         "slang", probe.source, tess.stage, probe.entry
     ).accepted
+
+
+COOP4 = coop_vector("float", 4)
+COMPONENT = Param(Type.other("CoopVecComponentType"), "const")
+COOP_MATMUL = replace(
+    feature(
+        "coopVecMatMul",
+        COOP4,
+        COOP4,
+        COMPONENT,
+        Type.other("RWByteAddressBuffer"),
+        Type("int"),
+        COMPONENT,
+        Param(Type.other("CoopVecMatrixLayout"), "const"),
+        Param(Type("bool"), "const"),
+        Param(Type("uint"), "const"),
+        crossgl="coopVecMatMul<float, 4, 4, float>",
+    ),
+    language="slang",
+    spelling="coopVecMatMul<float, 4, 4, float>",
+)
+COOP_GROUPSHARED = replace(
+    feature(
+        "coopVecLoadGroupshared",
+        COOP4,
+        Param(Type("float", count=4), "workgroup"),
+        Type("int"),
+        crossgl="coopVecLoadGroupshared<4, float, 4>",
+    ),
+    language="slang",
+    spelling="coopVecLoadGroupshared<4, float, 4>",
+)
+COOP_PACKED = replace(
+    feature(
+        "coopVecMatMulPacked",
+        COOP4,
+        COOP4,
+        COMPONENT,
+        Param(COOP_COLUMNS, "const"),
+        Type.other("RWByteAddressBuffer"),
+        Type("int"),
+        COMPONENT,
+        Param(Type.other("CoopVecMatrixLayout"), "const"),
+        Param(Type("bool"), "const"),
+        Param(Type("uint"), "const"),
+        crossgl="coopVecMatMulPacked<float, 4, 4, float>",
+    ),
+    language="slang",
+    spelling="coopVecMatMulPacked<float, 4, 4, float>",
+)
+COOP_REDUCE = replace(
+    feature(
+        "coopVecReduceSumAccumulate",
+        VOID,
+        COOP4,
+        Type.other("RWByteAddressBuffer"),
+        Type("int"),
+    ),
+    language="slang",
+)
+
+
+def test_slang_probe_fills_a_cooperative_vector_and_reads_its_first_element():
+    source = probes.build(COOP_MATMUL, "slang").source
+    assert "RWByteAddressBuffer u0;" in source
+    assert (
+        "CoopVec<float, 4> a0 = CoopVec<float, 4>(fin[i + 0u], fin[i + 1u], fin[i + 2u], fin[i + 3u]);"
+        in source
+    )
+    assert (
+        "float r = coopVecMatMul<float, 4, 4, float>(a0, CoopVecComponentType.Float32, u0, a3, "
+        "CoopVecComponentType.Float32, CoopVecMatrixLayout.RowMajor, false, 1u)[0];"
+        in source
+    )
+    # CrossGL spells the vector, its enumerations and the buffer as Slang does.
+    crossgl = probes.build(COOP_MATMUL, "crossgl").source
+    assert "uniform RWByteAddressBuffer u0;" in crossgl
+    assert "CoopVec<float, 4> a0 = CoopVec<float, 4>(" in crossgl
+    assert (
+        "a3, CoopVecComponentType.Float32, CoopVecMatrixLayout.RowMajor, false, 1u)[0];"
+        in crossgl
+    )
+
+
+def test_slang_probe_passes_the_vector_length_as_a_packed_column_count():
+    for language in ("slang", "crossgl"):
+        source = probes.build(COOP_PACKED, language).source
+        assert "(a0, CoopVecComponentType.Float32, 4, u0, a4, " in source
+
+
+def test_slang_probe_fills_a_workgroup_array_element_by_element():
+    source = probes.build(COOP_GROUPSHARED, "slang").source
+    assert "groupshared float a0[4];" in source
+    assert "    a0[3] = fin[i + 3u];" in source
+    assert "coopVecLoadGroupshared<4, float, 4>(a0, a1)[0]" in source
+    assert "shared float a0[4];" in probes.build(COOP_GROUPSHARED, "crossgl").source
+
+
+@pytest.mark.skipif(not validators.available("slang"), reason="slangc is not installed")
+@pytest.mark.parametrize(
+    "probe_feature",
+    [COOP_MATMUL, COOP_PACKED, COOP_GROUPSHARED, COOP_REDUCE],
+    ids=lambda f: f.name,
+)
+def test_slang_cooperative_vector_probes_are_valid_slang(probe_feature):
+    probe = probes.build(probe_feature, "slang")
+    verdict = validators.validate("slang", probe.source, entry=probe.entry)
+    assert verdict.accepted, verdict.log
 
 
 MOJO_SIGNATURES = [
