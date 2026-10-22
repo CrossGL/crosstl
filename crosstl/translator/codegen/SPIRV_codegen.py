@@ -120,6 +120,7 @@ from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_entry_bindings import reserve_entry_buffer_bindings
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -18191,8 +18192,13 @@ class VulkanSPIRVCodeGen(
         return None
 
     def register_declared_resource_metadata(
-        self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        type_id: SpirvId,
+        decorate: bool = True,
     ):
+        """Record a resource's metadata; ``decorate`` adds its memory decorations, which need a variable."""
         metadata = self.resource_metadata_for_declared_type(type_id)
         if metadata is None or metadata.get("kind") not in {
             "sampled_image",
@@ -18205,7 +18211,7 @@ class VulkanSPIRVCodeGen(
 
         metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
         self.resource_type_metadata[var_id.id] = metadata
-        if metadata.get("kind") == "storage_image":
+        if decorate and metadata.get("kind") == "storage_image":
             self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
@@ -18966,6 +18972,8 @@ class VulkanSPIRVCodeGen(
             function_node, "parameters", getattr(function_node, "params", [])
         )
         parameters = list(parameters or [])
+        if is_entry_point:
+            reserve_entry_buffer_bindings(self, parameters)
         skipped_parameter_indices = (
             set()
             if is_entry_point
@@ -19133,7 +19141,11 @@ class VulkanSPIRVCodeGen(
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
                 self.variable_value_types[param_id.id] = param_value_type
-            self.register_declared_resource_metadata(param, param_id, param_value_type)
+            # A helper's image parameter is a value, not a memory object declaration, so it takes no
+            # NonWritable or NonReadable decoration (SPIR-V 1.6 section 3.20); the caller's variable has them.
+            self.register_declared_resource_metadata(
+                param, param_id, param_value_type, decorate=False
+            )
 
         self.begin_block()
 
