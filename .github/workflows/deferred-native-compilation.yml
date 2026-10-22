@@ -185,9 +185,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install OpenGL compiler and software runtime
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-utils spirv-tools
+
+      - name: Install project and test dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-utils spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version

@@ -303,6 +303,81 @@ def test_linux_dxc_installer_pinning(
         )
 
 
+@pytest.mark.skipif(os.name != "posix", reason="apt installer requires POSIX tools")
+@pytest.mark.parametrize(
+    "recommends,failure,success,operations",
+    [
+        ("true", "", True, ["update", "download", "install"]),
+        (
+            "false",
+            "first-update",
+            True,
+            ["update", "update", "download", "install"],
+        ),
+        ("true", "download", False, ["update", "download"] * 3),
+        ("true", "install", False, ["update", "download", "install"]),
+    ],
+)
+def test_apt_installer_retries_only_the_network_steps(
+    tmp_path, recommends, failure, success, operations
+):
+    bash = shutil.which("bash")
+    assert bash is not None
+    mock_bin = tmp_path / "tools"
+    mock_bin.mkdir()
+    script = f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        tool = Path(sys.argv[0]).name
+        args = sys.argv[1:]
+        if tool == "timeout":
+            os.execvp(args[1], args[1:])
+        if tool == "sleep":
+            sys.exit(0)
+        log = Path(os.environ["TEST_LOG"])
+        earlier = log.read_text().splitlines() if log.exists() else []
+        if "update" in args:
+            operation = "update"
+        elif "--download-only" in args:
+            operation = "download"
+        else:
+            operation = "install"
+        with log.open("a") as output:
+            output.write(json.dumps({"operation": operation, "args": args}) + "\\n")
+        failure = os.environ["TEST_FAILURE"]
+        if failure == operation or (failure == "first-update" and not earlier):
+            sys.exit(100)
+        """)
+    for name in ("sudo", "timeout", "sleep"):
+        tool = mock_bin / name
+        tool.write_text(script, encoding="utf-8")
+        tool.chmod(0o755)
+    log = tmp_path / "calls.jsonl"
+    env = {
+        **os.environ,
+        "PATH": str(mock_bin) + os.pathsep + os.environ["PATH"],
+        "PACKAGES": "glslang-tools spirv-tools=2024.1-1",
+        "RECOMMENDS": recommends,
+        "TEST_FAILURE": failure,
+        "TEST_LOG": str(log),
+    }
+    body = textwrap.dedent(_local_action_text("apt-install").split("run: |\n", 1)[1])
+    result = subprocess.run(
+        [bash, "-c", body], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert (result.returncode == 0) is success, result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [call["operation"] for call in calls] == operations
+    for call in calls:
+        assert call["args"][0] == "apt-get"
+        assert ("--no-install-recommends" in call["args"]) is (recommends == "false")
+        if call["operation"] != "update":
+            assert call["args"][-2:] == ["glslang-tools", "spirv-tools=2024.1-1"]
+
+
 def _workflow_job_section(workflow, job_id):
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",

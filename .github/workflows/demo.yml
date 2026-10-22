@@ -75,9 +75,9 @@ jobs:
 
       - name: Install Linux shader validators
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
 
       - name: Install DirectX Shader Compiler
         if: runner.os == 'Windows'
