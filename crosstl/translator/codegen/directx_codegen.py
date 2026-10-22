@@ -229,6 +229,7 @@ from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
+from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_wave_extended import (
@@ -3354,6 +3355,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
 
         Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
         """
+        ast = legalize_hlsl_keyword_names(ast)
         lower_relational_builtins(ast)
         return merge_adjacent_hlsl_barriers(
             self.refusals.run(self.render_program, ast, target_stage)
