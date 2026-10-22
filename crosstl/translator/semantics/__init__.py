@@ -51,6 +51,7 @@ from .intrinsic_named_functions import (
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
@@ -210,6 +211,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hlsl_out_argument_atomics(program, report.target)
     canonicalize_builtin_values(program, report.target)
     lower_compute_entry_values(program, report.target)
+    adopt_module_stage_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
