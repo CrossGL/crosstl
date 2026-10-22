@@ -464,6 +464,9 @@ class WGSL(Dialect):
     def inout_argument(self) -> str:
         return "&outp[i]"
 
+    def buffer_argument(self) -> str:
+        return "&outp"
+
     def to_int(self, condition: str) -> str:
         return f"select(0, 1, {condition})"
 

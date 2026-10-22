@@ -330,6 +330,37 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
             probes.build(features[name], "crossgl")
 
 
+CONVERTED_FLOAT = """
+pub trait Float: Num + Copy {
+    fn classify(self) -> FpCategory;
+}
+"""
+
+CONVERTED_VEC3 = """
+impl Vec3 {
+    pub fn to_vec3a(self) -> Vec3A {
+        Vec3A::from(self)
+    }
+}
+"""
+
+
+def test_rust_probes_convert_a_float_category_and_an_aligned_vector():
+    found = rust.parse({}, CONVERTED_FLOAT, CONVERTED_VEC3, frozenset({"dot"}))
+    features = {f.name: f for f in found}
+    category = features["Float::classify"]
+    source = probes.build(category, "rust").source
+    assert "let r: u32 = (a0.classify()) as u32;" in source
+    assert category.note == "no CrossGL function returns a float's category"
+    with pytest.raises(probes.NoSpelling):
+        probes.build(category, "crossgl")
+    aligned = features["Vec3::to_vec3a"]
+    source = probes.build(aligned, "rust").source
+    assert "let r: Vec3 = Vec3::from(a0.to_vec3a());" in source
+    assert aligned.crossgl == "vec3"
+    assert "vec3 r = vec3(a0);" in probes.build(aligned, "crossgl").source
+
+
 def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
     features = parse()
     # Rust's fract truncates; CrossGL's floors.

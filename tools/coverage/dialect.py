@@ -218,6 +218,10 @@ class Dialect:
     def inout_argument(self) -> str:
         return "outp[i]"
 
+    def buffer_argument(self) -> str:
+        """The probe's whole output buffer, for a parameter that takes a runtime-sized array."""
+        return "outp"
+
     def to_int(self, condition: str) -> str:
         return f"{condition} ? 1 : 0"
 

@@ -227,6 +227,8 @@ class _Builder:
                     raise ProbeError("more than one inout parameter")
                 arguments.append(dialect.inout_argument())
                 output = param.type
+            elif param.direction == "buffer":
+                arguments.append(dialect.buffer_argument())
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))

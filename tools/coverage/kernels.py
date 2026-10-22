@@ -199,8 +199,16 @@ class Rust(Dialect):
     )
     # A tuple result, read through its first field, and an optional one, read as its value or the type's default.
     _HELD = re.compile(r"\((\w+), [^()]+\)|Option<(\w+)>")
+    # Results no buffer element holds, read as a type one does: a float's category as its discriminant, and glam's
+    # 16-byte aligned 3-vector as its plain one.
+    _CONVERTED = {
+        "FpCategory": (Type("uint"), "({}) as u32"),
+        "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
+    }
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
+        if opaque in self._CONVERTED:
+            return self._CONVERTED[opaque]
         held = self._HELD.fullmatch(opaque)
         if not held:
             return None

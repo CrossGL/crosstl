@@ -90,7 +90,7 @@ _DIFFERENT = {
     "Vec3::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
     "Float::log": "Float::log takes a base; CrossGL's log is the natural logarithm",
 }
-# Functions that return several values, or an optional one, where no CrossGL function does.
+# Functions whose result no CrossGL function computes, with the reason.
 _UNSPELLED = {
     "Float::integer_decode": (
         "no CrossGL function returns a float's mantissa, exponent and sign as integers"
@@ -108,6 +108,7 @@ _UNSPELLED = {
     "Vec3::min_position": (
         "no CrossGL function returns the index of a vector's smallest element"
     ),
+    "Float::classify": "no CrossGL function returns a float's category",
 }
 # CrossGL builds vectors with constructors and reads an element with the subscript operator, rather than functions.
 _CONSTRUCTORS = {

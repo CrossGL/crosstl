@@ -220,6 +220,9 @@ COUNTERPARTS = {
         "frexp": "vec3 frexp(vec3, out ivec3)",
         "modf": "vec3 modf(vec3, out vec3)",
         "atomicCompareExchangeWeak": "int atomicCompSwap(inout int, int, int)",
+        # CrossGL asks a buffer for its element count with buffer_dimensions, as the SPIR-V importer writes
+        # OpArrayLength.
+        "arrayLength": "uint buffer_dimensions(buffer uint)",
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
@@ -230,9 +233,12 @@ COUNTERPARTS = {
     },
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
+    # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
+    # with the vec3 constructor.
     "rust": {
         "Float::sin_cos": "void sincos(float, out float, out float)",
         "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
+        "Vec3::to_vec3a": "vec3 vec3(vec3)",
         "emit_stream_vertex": "void EmitStreamVertex(const int)",
         "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },
