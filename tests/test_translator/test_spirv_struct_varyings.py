@@ -106,10 +106,39 @@ void main() {
 """
 
 
+def _named(code):
+    """Replace numeric ids with the debug or type name they stand for.
+
+    Unformatted SPIR-V keeps numeric ids whether or not SPIRV-Tools is installed, so the checks do not depend on
+    ``spirv-dis`` friendly names: an ``OpName`` id takes its name, and the 32-bit integer and bool types and their
+    constants take ``uint``, ``int``, ``bool`` and ``uint_<value>`` spellings.
+    """
+    names = dict(re.findall(r'^OpName (%\d+) "(\w+)"$', code, re.M))
+    scalar_types = {
+        "OpTypeInt 32 0": "uint",
+        "OpTypeInt 32 1": "int",
+        "OpTypeBool": "bool",
+    }
+    for type_id, spelling in re.findall(
+        r"^(%\d+) = (OpTypeInt 32 [01]|OpTypeBool)$", code, re.M
+    ):
+        names.setdefault(type_id, scalar_types[spelling])
+    for constant_id, type_id, value in re.findall(
+        r"^(%\d+) = OpConstant (%\d+) (\d+)$", code, re.M
+    ):
+        if names.get(type_id) in {"uint", "int"}:
+            names.setdefault(constant_id, f"{names[type_id]}_{value}")
+    return re.sub(
+        r"%\d+\b",
+        lambda match: "%" + names.get(match.group(0), match.group(0)[1:]),
+        code,
+    )
+
+
 def _spirv(tmp_path, source, name="shader.cgl"):
     path = tmp_path / name
     path.write_text(source)
-    code = crosstl.translate(str(path), backend="vulkan")
+    code = crosstl.translate(str(path), backend="vulkan", format_output=False)
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
         asm = tmp_path / "out.spvasm"
         asm.write_text(code)
@@ -120,7 +149,7 @@ def _spirv(tmp_path, source, name="shader.cgl"):
         ):
             result = subprocess.run(command, capture_output=True, text=True)
             assert result.returncode == 0, result.stdout + result.stderr
-    return code
+    return _named(code)
 
 
 def _decorations(code, prefix):
