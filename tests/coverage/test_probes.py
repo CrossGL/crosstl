@@ -1199,7 +1199,7 @@ def test_metal_probes_are_valid_metal(probe_feature):
     assert verdict.accepted, verdict.log
 
 
-def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
+def test_cuda_hip_and_crossgl_pass_the_address_of_a_local_for_a_pointer_to_values():
     norm = Feature(
         "cuda",
         "function",
@@ -1211,8 +1211,12 @@ def test_cuda_and_hip_pass_the_address_of_a_local_for_a_pointer_to_values():
         source = probes.build(replace(norm, language=language), language).source
         assert "    float a1 = fin[i + 0u];" in source
         assert "    float r = normf(a0, &a1);" in source
-    with pytest.raises(probes.ProbeError, match="no probe passes crossgl a pointer"):
-        probes.build(norm, "crossgl")
+    source = probes.build(norm, "crossgl").source
+    assert "            float a1 = fin[i + 0u];" in source
+    assert "            float r = norm(a0, &a1);" in source
+    # A language without pointers to locals says so rather than spelling one.
+    with pytest.raises(probes.ProbeError, match="no probe passes glsl a pointer"):
+        probes.build(replace(norm, language="glsl"), "glsl")
 
 
 def test_hip_and_crossgl_pass_the_empty_string_for_a_c_string():

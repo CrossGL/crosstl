@@ -3131,6 +3131,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "image1D",
             "iimage1D",
             "uimage1D",
+            "imageBuffer",
+            "iimageBuffer",
+            "uimageBuffer",
         }
 
     def array_size_component(self, mapped_type):

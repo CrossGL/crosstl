@@ -579,6 +579,9 @@ class HLSLValueShapeMixin:
             )
             if vector_or_matrix_type:
                 return vector_or_matrix_type
+            texel_buffer_type = self.map_texel_buffer_type(base, generic_type)
+            if texel_buffer_type:
+                return texel_buffer_type
             rasterizer_buffer_type = self.map_rasterizer_ordered_buffer_type(
                 base, generic_type
             )

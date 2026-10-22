@@ -3250,6 +3250,10 @@ class GLSLCodeGen(
             "uimage2DArray": "uimage2DArray",
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
+            "samplerBuffer": "samplerBuffer",
+            "imageBuffer": "imageBuffer",
+            "iimageBuffer": "iimageBuffer",
+            "uimageBuffer": "uimageBuffer",
             "image1D": "image1D",
             "image1DArray": "image1DArray",
             "image2D": "image2D",
@@ -48876,9 +48880,23 @@ complex64_t crossgl_complex64_mod_assign(
                     f"'{func_name}' requires 2 argument(s), got {len(args)}"
                 )
             texture_name = self.generate_expression(args[0])
-            coordinate = self.glsl_index_expression(
-                args[1], args[0], target_signed=True
+            # A 32-bit texel-buffer coordinate is a texel coordinate, as for
+            # imageLoad: every in-range unsigned value converts to int
+            # unchanged. Other widths need the index range proof.
+            coordinate_info = self.glsl_value_type_info(
+                self.glsl_source_expression_type(args[1])
             )
+            if (
+                coordinate_info is not None
+                and coordinate_info["width"] == 1
+                and coordinate_info["bits"] == 32
+                and coordinate_info["narrow"] is None
+            ):
+                coordinate = self.glsl_signed_coordinate_expression(args[1])
+            else:
+                coordinate = self.glsl_index_expression(
+                    args[1], args[0], target_signed=True
+                )
             return f"texelFetch({texture_name}, {coordinate})"
 
         self.validate_texture_call_arity(func_name, args)
@@ -56648,6 +56666,7 @@ complex64_t crossgl_complex64_mod_assign(
             "iimage2DArray",
             "iimage2DMS",
             "iimage2DMSArray",
+            "iimageBuffer",
             "uimage1D",
             "uimage1DArray",
             "uimage2D",
@@ -56657,6 +56676,7 @@ complex64_t crossgl_complex64_mod_assign(
             "uimage2DArray",
             "uimage2DMS",
             "uimage2DMSArray",
+            "uimageBuffer",
             "atomic_uint",
             "accelerationStructureEXT",
         }
@@ -57118,6 +57138,9 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_unknown_image_format_qualifier(vtype, node)
         if explicit_format:
             return explicit_format
+        if vtype in {"imageBuffer", "iimageBuffer", "uimageBuffer"}:
+            # Texel buffers take the format of the bound buffer view.
+            return self.glsl_unknown_image_format_qualifier(vtype, node)
         if vtype in {
             "image1D",
             "image1DArray",

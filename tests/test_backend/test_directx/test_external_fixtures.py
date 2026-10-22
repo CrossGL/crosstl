@@ -1182,12 +1182,12 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "Buffer<int> intbuf;",
-            "RWBuffer<int2> int2buf;",
-            "int int1 = intbuf[address];",
-            "ivec2 int2 = int2buf[address];",
-            "uvec3 uint3 = uint3buf[address];",
-            "float b = float4buf[address][2];",
+            "isamplerBuffer intbuf;",
+            "iimageBuffer int2buf;",
+            "int int1 = texelFetch(intbuf, address).x;",
+            "ivec2 int2 = imageLoad(int2buf, address).xy;",
+            "uvec3 uint3 = texelFetch(uint3buf, address).xyz;",
+            "float b = imageLoad(float4buf, address)[2];",
         ),
     ),
     ExternalFixture(
@@ -1284,9 +1284,10 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "Buffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
-            "RWBuffer<float> buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
-            "buf[0] = f;",
+            "samplerBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "return texelFetch(buf, 0).x;",
+            "imageBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
+            "imageStore(buf, 0, vec4(f, 0.0, 0.0, 0.0));",
             "@ numthreads(8, 8, 1)",
             "void main(uvec2 ID @ gl_GlobalInvocationID)",
         ),
