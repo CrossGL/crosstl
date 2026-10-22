@@ -44,7 +44,18 @@ fn drain(@group(0) @binding(0) var<storage, read_write> A: array<i32>, i32 count
 def _translate(tmp_path, source, backend):
     path = tmp_path / "kernel.cgl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    # Check the generator's own text: clang-format and spirv-dis versions vary
+    # between hosts and rewrap parameters or renumber ids.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def _spirv(tmp_path, source):
+    """Return SPIR-V assembly with each ``%<id>`` spelled by its first ``OpName``."""
+    code = _translate(tmp_path, source, "vulkan")
+    names = {}
+    for ident, name in re.findall(r'OpName %(\d+) "(\w+)"', code):
+        names.setdefault(ident, name)
+    return re.sub(r"%(\d+)\b", lambda m: "%" + names.get(m[1], m[1]), code)
 
 
 def _kernel(group=0, globals=""):
@@ -66,13 +77,13 @@ def test_metal_reads_the_values_from_a_constant_buffer(tmp_path):
     assert re.search(
         r"struct scale_Args \{\s*int n;\s*float s;\s*float2 v;\s*\};", code
     )
-    assert "constant scale_Args &scale_Args [[buffer(2)]]" in code
+    assert re.search(r"constant scale_Args\s*&\s*scale_Args \[\[buffer\(2\)\]\]", code)
     assert "scale_Args.n" in code and "scale_Args.s" in code
     assert not re.search(r"\bint n\s*[,)]", code)
 
 
 def test_spirv_reads_the_values_from_a_uniform_block(tmp_path):
-    code = _translate(tmp_path, _kernel(group=1), "vulkan")
+    code = _spirv(tmp_path, _kernel(group=1))
     entry = re.search(r"OpEntryPoint GLCompute %\w+ \"scale\"(.*)", code).group(1)
     assert entry.split() == ["%gl_GlobalInvocationID"]
     assert "Input_int" not in code
@@ -93,14 +104,15 @@ def test_block_takes_the_first_free_binding(tmp_path):
         tmp_path, source, "directx"
     )
     assert "[[buffer(3)]]" in _translate(tmp_path, source, "metal")
-    assert re.search(
-        r"OpDecorate %scale_Args\w* Binding 3", _translate(tmp_path, source, "vulkan")
-    )
+    assert re.search(r"OpDecorate %scale_Args\w* Binding 3", _spirv(tmp_path, source))
 
 
 @pytest.mark.parametrize("backend", ["directx", "metal", "vulkan"])
 def test_a_written_value_becomes_a_local_copy(tmp_path, backend):
-    code = _translate(tmp_path, WRITTEN, backend)
+    if backend == "vulkan":
+        code = _spirv(tmp_path, WRITTEN)
+    else:
+        code = _translate(tmp_path, WRITTEN, backend)
     if backend == "directx":
         assert "int count_value = count;" in code
         assert "count_value = (count_value - 1);" in code
