@@ -232,6 +232,7 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_texel_buffers import HLSL_TEXEL_BUFFER_TYPES, HLSLTexelBuffers
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -2297,6 +2298,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.implicit_member_texture_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
@@ -2765,6 +2767,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "RWTexture3D": "RWTexture3D<float4>",
             "sampler": "SamplerState",
             "comparison_sampler": "SamplerComparisonState",
+            **HLSL_TEXEL_BUFFER_TYPES,
         }
         self.function_map = {
             "atomicAdd": "InterlockedAdd",
@@ -3683,6 +3686,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
@@ -4303,6 +4307,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.generic_enum_specializations,
         )
 
+        self.hlsl_texel_buffers.prepare(ast)
         comparison_texture_names, comparison_sampler_names = (
             self.collect_comparison_resources(ast)
         )
@@ -4525,6 +4530,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
+            mapped_type = self.hlsl_texel_buffers.declaration_type(
+                var_name, vtype, node, mapped_type
+            )
             self.hlsl_half_storage.register_resource(
                 var_name,
                 self.global_variable_types.get(var_name, vtype),
@@ -5123,6 +5131,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             function_declaration_sources
         )
         code += self.generate_texture_query_helpers()
+        code += self.hlsl_texel_buffers.code()
         code += self.hlsl_buffer_length.code()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
@@ -53846,6 +53855,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
             return None
+        texel_buffer_call = self.hlsl_texel_buffers.generate_call(func_name, args)
+        if texel_buffer_call is not None:
+            return texel_buffer_call
         if is_texture_lod_clamp_operation(func_name):
             return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
 

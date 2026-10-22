@@ -3249,6 +3249,10 @@ class GLSLCodeGen(
             "uimage2DArray": "uimage2DArray",
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
+            "samplerBuffer": "samplerBuffer",
+            "imageBuffer": "imageBuffer",
+            "iimageBuffer": "iimageBuffer",
+            "uimageBuffer": "uimageBuffer",
             "image1D": "image1D",
             "image1DArray": "image1DArray",
             "image2D": "image2D",
@@ -48873,9 +48877,9 @@ complex64_t crossgl_complex64_mod_assign(
                     f"'{func_name}' requires 2 argument(s), got {len(args)}"
                 )
             texture_name = self.generate_expression(args[0])
-            coordinate = self.glsl_index_expression(
-                args[1], args[0], target_signed=True
-            )
+            # A texel-buffer coordinate is a texel coordinate, as for imageLoad:
+            # every in-range unsigned coordinate converts to int unchanged.
+            coordinate = self.glsl_signed_coordinate_expression(args[1])
             return f"texelFetch({texture_name}, {coordinate})"
 
         self.validate_texture_call_arity(func_name, args)
@@ -56642,6 +56646,7 @@ complex64_t crossgl_complex64_mod_assign(
             "iimage2DArray",
             "iimage2DMS",
             "iimage2DMSArray",
+            "iimageBuffer",
             "uimage1D",
             "uimage1DArray",
             "uimage2D",
@@ -56651,6 +56656,7 @@ complex64_t crossgl_complex64_mod_assign(
             "uimage2DArray",
             "uimage2DMS",
             "uimage2DMSArray",
+            "uimageBuffer",
             "atomic_uint",
             "accelerationStructureEXT",
         }
@@ -57112,6 +57118,9 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_unknown_image_format_qualifier(vtype, node)
         if explicit_format:
             return explicit_format
+        if vtype in {"imageBuffer", "iimageBuffer", "uimageBuffer"}:
+            # Texel buffers take the format of the bound buffer view.
+            return self.glsl_unknown_image_format_qualifier(vtype, node)
         if vtype in {
             "image1D",
             "image1DArray",

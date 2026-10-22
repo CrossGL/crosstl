@@ -54,9 +54,10 @@ class HLSLTexelAccessMixin:
     )
 
     def is_texture_resource_type(self, type_name):
+        """Whether a resource holds typed texels, including texel buffers."""
         return self.raw_type_base(type_name).startswith(
             ("Texture", "RWTexture", "RasterizerOrderedTexture")
-        )
+        ) or self.is_texel_buffer_type(type_name)
 
     def texel_component_count(self, resource_type):
         """Component count of a texture's declared element type, if known."""
@@ -195,6 +196,11 @@ class HLSLTexelAccessMixin:
         )
         if sampled_fetch is not None:
             return sampled_fetch
+        texel_buffer_fetch = self.generate_sampled_texel_buffer_fetch(
+            expr, is_main, narrow
+        )
+        if texel_buffer_fetch is not None:
+            return texel_buffer_fetch
         if (
             not self.suppress_storage_image_index_lowering
             and self.is_storage_image_texel_access(expr)
@@ -257,6 +263,8 @@ class HLSLTexelAccessMixin:
         "RasterizerOrderedTexture2D",
         "RasterizerOrderedTexture2DArray",
         "RasterizerOrderedTexture3D",
+        "RWBuffer",
+        "RasterizerOrderedBuffer",
     )
 
     def is_runtime_format_storage_texture(self, node):

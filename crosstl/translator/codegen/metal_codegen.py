@@ -374,6 +374,11 @@ from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
+from .metal_texel_buffers import (
+    METAL_TEXEL_BUFFER_TYPES,
+    TEXEL_BUFFER_TYPES,
+    MetalTexelBuffers,
+)
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_wave_extended import (
     emit_metal_wave_extension_helpers,
@@ -973,6 +978,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.current_sampler_parameters = set()
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
+        self.metal_texel_buffers = MetalTexelBuffers(self)
         self.texture_variable_raw_types = {}
         self.current_texture_parameters = {}
         self.current_texture_parameter_raw_types = {}
@@ -1333,6 +1339,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "image2DArray": "texture2d_array<float, access::read_write>",
             "image2DMS": "texture2d_ms<float, access::read>",
             "image2DMSArray": "texture2d_ms_array<float, access::read>",
+            **METAL_TEXEL_BUFFER_TYPES,
             # Matrix Types
             "mat2": "float2x2",
             "mat3": "float3x3",
@@ -2096,6 +2103,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.current_sampler_parameters = set()
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
+        self.metal_texel_buffers = MetalTexelBuffers(self)
         self.texture_variable_raw_types = {}
         self.current_texture_parameters = {}
         self.current_texture_parameter_raw_types = {}
@@ -2973,6 +2981,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "image2DArray",
                 "image2DMS",
                 "image2DMSArray",
+                *TEXEL_BUFFER_TYPES,
             ]:
                 mapped_type = self.map_resource_type_with_format(vtype, node)
                 binding = self.explicit_resource_binding_index(
@@ -3185,6 +3194,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     )
 
         code += self.generate_image_atomic_compare_helpers()
+        code += self.metal_texel_buffers.code()
         code += self.generate_buffer_atomic_compare_helpers()
         code += self.generate_pointer_atomic_compare_helpers()
         code += self.generate_metal_wave_helpers()
@@ -16187,6 +16197,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "image2DArray",
                 "image2DMS",
                 "image2DMSArray",
+                *TEXEL_BUFFER_TYPES,
             }
         )
 
@@ -21983,6 +21994,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "iimage2DMSArray": "texture2d_ms_array",
             "uimage2DMSArray": "texture2d_ms_array",
             "imageCube": "texture2d_array",
+            "imageBuffer": "texture_buffer",
+            "iimageBuffer": "texture_buffer",
+            "uimageBuffer": "texture_buffer",
         }
         texture_type = texture_types.get(base_type)
         if texture_type:
@@ -26459,6 +26473,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def generate_texture_call_value(self, func_name, args):
         if not func_name:
             return None
+        texel_buffer_call = self.metal_texel_buffers.generate_call(func_name, args)
+        if texel_buffer_call is not None:
+            return texel_buffer_call
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)
