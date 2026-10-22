@@ -26,14 +26,15 @@ jobs:
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
-    # minutes each, the longest job of a merge-queue run; six bring a shard close
-    # to the other gating workflows. Each shard still collects the whole suite.
+    # tools/pytest_shard.py splits the suite by test id. Six shards ran their tests
+    # for about 10 minutes each, the longest job of a merge-queue run once macOS
+    # translator tests were split; eight bring a shard under the translator legs.
+    # Each shard still collects the whole suite.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
       - name: Checkout repository
