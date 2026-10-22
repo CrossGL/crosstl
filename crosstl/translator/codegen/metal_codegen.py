@@ -62,6 +62,7 @@ from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
+from ..semantics.non_uniform_indices import non_uniform_indices_spelled
 from ..semantics.sampler_states import is_sampler_constructor
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -1940,9 +1941,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         Raises :class:`MetalLoweringRefused` listing every construct that has no faithful Metal lowering.
         """
         lower_relational_builtins(ast)
-        return merge_adjacent_metal_barriers(
-            self.refusals.run(self.render_checked_program, ast, target_stage)
-        )
+        with non_uniform_indices_spelled(ast, None):
+            return merge_adjacent_metal_barriers(
+                self.refusals.run(self.render_checked_program, ast, target_stage)
+            )
 
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""

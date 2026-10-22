@@ -92,6 +92,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.non_uniform_indices import non_uniform_indices_spelled
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -8224,7 +8225,9 @@ class GLSLCodeGen(
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
-        with self.opengl_descriptor_set_plan_for(ast):
+        with self.opengl_descriptor_set_plan_for(ast), non_uniform_indices_spelled(
+            ast, "nonuniformEXT"
+        ):
             return self.refusals.run(
                 self.render_program_with_profile_builtins, ast, target_stage
             )
@@ -55238,6 +55241,9 @@ complex64_t crossgl_complex64_mod_assign(
             if self.is_glsl_buffer_block_variable(node, node_type):
                 continue
             if self.is_layout_bound_struct_uniform(node, node_type):
+                continue
+            if self.is_constant_buffer_type(node_type):
+                # ConstantBuffer<T> (or an array of them) holds T as block contents, not as a T value.
                 continue
             record_type(node_type)
 

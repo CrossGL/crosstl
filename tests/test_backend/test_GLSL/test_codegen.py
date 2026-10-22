@@ -2744,7 +2744,7 @@ def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():
 
     assert "struct UBO" in crossgl
     assert "Foo foo;" in crossgl
-    assert "uniform UBO ubos[2] @set(2) @binding(4);" in crossgl
+    assert "ConstantBuffer<UBO> ubos[2] @set(2) @binding(4);" in crossgl
     assert "cbuffer Uniforms" not in crossgl
     assert "ubos[1].foo.v" in crossgl
 

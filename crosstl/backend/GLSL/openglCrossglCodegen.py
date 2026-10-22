@@ -37,6 +37,7 @@ from .OpenglAst import (
 )
 from .shadow_textures import retype_shadow_textures
 from .subgroup_import import import_subgroup_call
+from .uniform_block_arrays import arrayed_uniform_block_declaration
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -2230,13 +2231,7 @@ class GLSLToCrossGLConverter:
         return block_name
 
     def generate_arrayed_descriptor_set_uniform_block(self, var):
-        block_name = self.uniform_block_name(var)
-        attributes = self.descriptor_set_uniform_block_attribute_suffix(
-            block_name, [var]
-        )
-        var_type = self.convert_type(block_name)
-        array_suffix = self.array_suffix(var)
-        return f"uniform {var_type} {var.name}{array_suffix}{attributes};\n"
+        return arrayed_uniform_block_declaration(self, var)
 
     def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
         layout = self.uniform_block_layout(block_name, uniforms)

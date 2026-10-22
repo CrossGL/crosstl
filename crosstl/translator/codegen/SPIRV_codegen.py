@@ -112,6 +112,11 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_constant_buffer_arrays import (
+    constant_buffer_register_nodes,
+    declare_constant_buffer_array,
+    require_uniform_buffer_array_non_uniform_indexing,
+)
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
@@ -131,6 +136,11 @@ from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_mesh_builtins import (
+    mesh_builtin_member_builtin,
+    mesh_builtin_output_info,
+    mesh_index_builtin_variable,
+)
 from .spirv_per_vertex_builtins import (
     lower_per_vertex_builtin_arrays,
     per_vertex_builtin_info,
@@ -156,6 +166,12 @@ from .spirv_ray_builtins import (
 )
 from .spirv_refusals import SpirvRefusals
 from .spirv_separate_textures import separate_texture_type_info
+from .spirv_shading_rate import (
+    require_shading_rate_capability,
+    shading_rate_builtin_info,
+    shading_rate_flag_value,
+    shading_rate_semantic_builtin,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -2507,6 +2523,7 @@ class VulkanSPIRVCodeGen(
             self.is_non_uniform_value(index) for index in indices
         ):
             self.mark_non_uniform_result(spirv_id)
+            require_uniform_buffer_array_non_uniform_indexing(self, base_id, indices)
         return spirv_id
 
     def access_chain_result_pointer_type(
@@ -9240,6 +9257,7 @@ class VulkanSPIRVCodeGen(
         variable = self.create_variable(array_type, "Output", variable_name)
         if builtin:
             self.decorations.append(f"OpDecorate %{variable.id} BuiltIn {builtin}")
+            require_shading_rate_capability(self, builtin)
         else:
             self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
         if role == "primitives":
@@ -9255,6 +9273,9 @@ class VulkanSPIRVCodeGen(
         """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
         if semantic is None:
             return None
+        extra_builtin = mesh_builtin_member_builtin(role, semantic)
+        if extra_builtin is not None:
+            return extra_builtin
 
         semantic_map = {
             "SV_Position": "gl_Position",
@@ -9480,11 +9501,18 @@ class VulkanSPIRVCodeGen(
                 )
             return True
 
+        element_type = info["element_type"]
+        if element_type is None:
+            # GL_EXT_mesh_shader built-in blocks are written member by member.
+            self.refuse_lowering(
+                f"SPIR-V mesh output {info['name']} elements are assigned member by member"
+            )
+            return True
+
         value = self.process_expression(value_expr)
         if value is None:
             return True
 
-        element_type = info["element_type"]
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
             self.refuse_lowering(
@@ -9913,6 +9941,8 @@ class VulkanSPIRVCodeGen(
         array_expr = getattr(node, "array", getattr(node, "array_expr", None))
         name = self.expression_name(array_expr)
         info = self.current_mesh_output_parameters.get(name)
+        if info is None:
+            info = mesh_builtin_output_info(self, name)
         if info is None:
             return None
         index_expr = getattr(node, "index", getattr(node, "index_expr", None))
@@ -19603,6 +19633,8 @@ class VulkanSPIRVCodeGen(
     def glsl_builtin_limit_constant(self, name: str) -> Optional[SpirvId]:
         value = GLSL_BUILTIN_INT_LIMITS.get(name)
         if value is None:
+            value = shading_rate_flag_value(name)
+        if value is None:
             return None
         return self.register_constant(value, self.register_primitive_type("int"))
 
@@ -20189,6 +20221,9 @@ class VulkanSPIRVCodeGen(
         semantic = self.spirv_interface_semantic_alias(
             str(semantic), self.current_execution_model, storage_class
         )
+        index_output = mesh_index_builtin_variable(self, semantic, storage_class)
+        if index_output is not None:
+            return index_output
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
         if builtin is None:
             return None
@@ -20213,6 +20248,9 @@ class VulkanSPIRVCodeGen(
 
         if self.is_structured_buffer_declared_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
+        constant_buffer_array = declare_constant_buffer_array(self, node)
+        if constant_buffer_array is not None:
+            return constant_buffer_array
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
         storage_class = self.infer_global_storage_class(
@@ -20459,6 +20497,7 @@ class VulkanSPIRVCodeGen(
         yield from self.global_resource_nodes(ast)
         yield from self.global_structured_buffer_nodes(ast)
         yield from getattr(ast, "cbuffers", []) or []
+        yield from constant_buffer_register_nodes(self, ast)
 
     def global_structured_buffer_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -20713,6 +20752,16 @@ class VulkanSPIRVCodeGen(
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")
             self.decorations.append(f"OpDecorate %{var_id.id} PerVertexKHR")
+        if self.declaration_metadata_names(node) & {
+            "perprimitive",
+            "perprimitiveext",
+            "per_primitive",
+        }:
+            # GL_EXT_mesh_shader `perprimitiveEXT`: one value per mesh primitive, written by the mesh stage and
+            # read flat by the fragment stage (SPV_EXT_mesh_shader, PerPrimitiveEXT decoration).
+            self.require_capability("MeshShadingEXT")
+            self.require_extension("SPV_EXT_mesh_shader")
+            self.decorations.append(f"OpDecorate %{var_id.id} PerPrimitiveEXT")
 
     def has_attribute(self, node, attribute_name: str) -> bool:
         return any(
@@ -28650,7 +28699,11 @@ class VulkanSPIRVCodeGen(
         name = getattr(value, "name", None)
         if name in self.enum_variant_values:
             return self.enum_variant_values[name]
-        return None
+        # Case labels may name integer constants (HLSL/GLSL `const uint X = 1;`)
+        # or fold constant arithmetic; OpSwitch needs the folded literal.
+        return evaluate_literal_int_expression(
+            value, self.active_literal_int_constants()
+        )
 
     def process_while(self, node: WhileNode):
         """Process a CrossGL while loop."""
@@ -29703,6 +29756,11 @@ class VulkanSPIRVCodeGen(
             ),
             "SV_DEPTH": "gl_FragDepth",
             "SV_COVERAGE": "gl_SampleMask",
+            "SV_SHADINGRATE": (
+                "gl_ShadingRateEXT"
+                if self.current_execution_model == "Fragment"
+                else "gl_PrimitiveShadingRateEXT"
+            ),
         }
         return aliases.get(str(name).upper(), name)
 
@@ -29712,6 +29770,7 @@ class VulkanSPIRVCodeGen(
             "SV_DEPTH": "gl_FragDepth",
             "SV_COVERAGE": "gl_SampleMask",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
+            "SV_SHADINGRATE": "gl_PrimitiveShadingRateEXT",
         }
         return aliases.get(str(name).upper(), name)
 
@@ -29748,6 +29807,11 @@ class VulkanSPIRVCodeGen(
             return "gl_FragStencilRefEXT"
         if upper_name == "SV_DEPTH":
             return "gl_FragDepth"
+        shading_rate = shading_rate_semantic_builtin(
+            semantic, execution_model, storage_class
+        )
+        if shading_rate is not None:
+            return shading_rate
         return semantic
 
     def spirv_builtin_cache_name(self, name: str) -> str:
@@ -29762,6 +29826,9 @@ class VulkanSPIRVCodeGen(
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
+        shading_rate = shading_rate_builtin_info(name)
+        if shading_rate is not None:
+            return shading_rate
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -30159,6 +30226,8 @@ class VulkanSPIRVCodeGen(
         self.mark_fragment_stencil_ref_replacing_if_needed(builtin_name, storage_class)
 
     def require_stage_builtin_capabilities(self, builtin_name: str):
+        if require_shading_rate_capability(self, builtin_name):
+            return
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")
@@ -31389,13 +31458,8 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
-        ast = lower_constant_buffer_resources(
-            ast,
-            lambda name: self.refuse_lowering(
-                f"array of constant buffers '{name}': the SPIR-V emitter does not declare descriptor arrays "
-                "of uniform blocks yet"
-            ),
-        )
+        # Arrays of constant buffers stay declared as they are: spirv_constant_buffer_arrays declares them.
+        ast = lower_constant_buffer_resources(ast)
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
