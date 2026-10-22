@@ -65,3 +65,41 @@ def test_write_trace_follows_the_host_retention_flag(tmp_path, retain):
 def test_host_runtime_requires_a_boolean_trace_retention_flag(tmp_path, value):
     with pytest.raises(ValueError, match="Trace value retention"):
         runtime.HostRuntime(tmp_path, tmp_path / "trace.jsonl", trace_values=value)
+
+
+def test_compaction_replaces_only_long_strings():
+    limit = trace_records.COMPACT_STRING_LIMIT
+    observed = "ab" * limit
+    event = {
+        "entry": "e" * limit,
+        "details": {"inputObservations": {"a": {"observedBytes": observed}}},
+        "names": ["x" * (limit + 1), "y"],
+    }
+    compact = trace_records.compact_trace_values(event)
+    assert compact["entry"] == event["entry"]
+    assert compact["details"]["inputObservations"]["a"]["observedBytes"] == {
+        "compactedString": {
+            "length": 2 * limit,
+            "sha256": hashlib.sha256(observed.encode()).hexdigest(),
+        }
+    }
+    assert compact["names"][0]["compactedString"]["length"] == limit + 1
+    assert compact["names"][1] == "y"
+    assert event["details"]["inputObservations"]["a"]["observedBytes"] == observed
+
+
+def test_trace_summary_streams_only_the_checked_fields(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    records = [
+        {"entry": "a", "target": "metal", "threads": 3, "details": {"x": [1] * 9}},
+        {"entry": "b", "target": "opengl", "inputs": {}},
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    assert trace_records.read_trace_summary(path) == [
+        {"entry": "a", "target": "metal", "threads": 3},
+        {"entry": "b", "target": "opengl"},
+    ]
+    assert trace_records.read_trace_summary(path, keys=("details",)) == [
+        {"details": {"x": [1] * 9}},
+        {},
+    ]

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.trace_records import read_trace_summary
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 
 UPSTREAM_TESTS = ("test_quantized.TestQuantized.test_quantize_dequantize",)
@@ -233,10 +234,7 @@ def run(root, packages, reductions, output):
         raise RuntimeError(
             f"Upstream quantization workers failed: {', '.join(failures)}; inspect {output}"
         )
-    trace = [
-        json.loads(line)
-        for line in (output / "native/trace.jsonl").read_text().splitlines()
-    ]
+    trace = read_trace_summary(output / "native/trace.jsonl")
     validate_trace(trace, target, results["native"]["nativeDispatches"])
     evidence = {
         "commit": COMMIT,
