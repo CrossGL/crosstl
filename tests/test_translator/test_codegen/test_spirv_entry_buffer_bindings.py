@@ -1,9 +1,14 @@
-"""Explicit storage-buffer bindings of entry-point parameters stay free for those parameters.
+"""SPIR-V resource parameters of Metal entry points and helpers.
+
+Explicit storage-buffer bindings of entry-point parameters stay free for those parameters.
 
 MSL numbers buffers, textures and samplers in separate index spaces (MSL 5.2.1), so a kernel can take both
 ``texture2d<float> source [[texture(0)]]`` and ``device float *out [[buffer(0)]]``. SPIR-V keeps the buffer's
 index as its Vulkan binding and allocates the texture a free one. The texture parameter is processed first and used
 to take binding 0, so the buffer was then refused as a duplicate binding.
+
+A helper's storage-image parameter is a value, not a memory object declaration, so only the caller's variable takes
+the ``NonWritable``/``NonReadable`` decoration of its access; spirv-val rejected the decoration on the parameter.
 """
 
 import re
@@ -41,6 +46,26 @@ kernel void read_texture(texture2d<float> source [[texture(0)]],
 kernel void scale_buffer(device float *values [[buffer(0)]],
                          uint gid [[thread_position_in_grid]]) {
     values[gid] = values[gid] * 2.0f;
+}
+"""
+
+
+IMAGE_HELPERS = """
+#include <metal_stdlib>
+using namespace metal;
+
+static half3 fetch(texture2d<half, access::read> source, uint2 at) {
+    return source.read(at).rgb;
+}
+
+static void put(texture2d<half, access::write> destination, uint2 at, half3 value) {
+    destination.write(half4(value, 1.0h), at);
+}
+
+kernel void copy(texture2d<half, access::read> source [[texture(0)]],
+                 texture2d<half, access::write> destination [[texture(1)]],
+                 uint2 gid [[thread_position_in_grid]]) {
+    put(destination, gid, fetch(source, gid));
 }
 """
 
@@ -97,3 +122,14 @@ def test_two_buffers_with_one_binding_are_still_refused(tmp_path):
     source = TEXTURE_THEN_BUFFER.replace("[[buffer(1)]]", "[[buffer(0)]]")
     with pytest.raises(Exception, match="Duplicate SPIR-V resource binding"):
         _translate(tmp_path, source)
+
+
+def test_image_helper_parameters_take_no_memory_decorations(tmp_path):
+    spirv = _translate(tmp_path, IMAGE_HELPERS)
+    decorated = dict(re.findall(r"OpDecorate (%\w+) (NonWritable|NonReadable)", spirv))
+    variables = set(re.findall(r"(%\w+) = OpVariable ", spirv))
+    parameters = set(re.findall(r"(%\w+) = OpFunctionParameter ", spirv))
+    assert sorted(decorated.values()) == ["NonReadable", "NonWritable"]
+    assert set(decorated) <= variables
+    assert not set(decorated) & parameters
+    _validate(spirv, tmp_path)
