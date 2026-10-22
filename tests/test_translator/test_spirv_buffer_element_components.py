@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import crosstl
+from tests.spirv_friendly_names import translate_spirv
 
 FIXTURES = Path(__file__).parent / "spirv_buffer_components"
 
@@ -62,7 +63,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 def _translate(tmp_path, source, name):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend="vulkan")
+    return translate_spirv(path)
 
 
 def _spirv_val(tmp_path, code):
@@ -289,7 +290,10 @@ def test_glsl_storage_block_elements_are_written_through_subscripts(tmp_path):
 def test_glsl_storage_block_element_references_reach_every_emitter(tmp_path, backend):
     path = tmp_path / "references.comp"
     path.write_text(GLSL_ELEMENT_REFERENCES)
-    code = crosstl.translate(str(path), backend=backend)
+    if backend == "vulkan":
+        code = translate_spirv(path)
+    else:
+        code = crosstl.translate(str(path), backend=backend)
 
     # A loaded element is a value: nothing may select from, increment or assign to it.
     assert not re.search(r"\.Load\([^;]*\)\s*(\.|\[|\+\+|--)", code), code
