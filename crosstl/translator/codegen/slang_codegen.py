@@ -10651,6 +10651,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "bool": "bool",
             "void": "void",
             "sampler": "SamplerState",
+            "comparison_sampler": "SamplerComparisonState",
             "sampler1D": "Sampler1D<float4>",
             "sampler1DArray": "Sampler1DArray<float4>",
             "sampler2D": "Sampler2D<float4>",
@@ -14901,6 +14902,7 @@ class SlangCodeGen(LoweringRefusalMixin):
     def is_sampler_state_type(self, type_name):
         return self.resource_base_type(type_name) in {
             "sampler",
+            "comparison_sampler",
             "SamplerState",
             "SamplerComparisonState",
         }

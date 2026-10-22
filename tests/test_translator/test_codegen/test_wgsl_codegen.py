@@ -2555,7 +2555,7 @@ def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
         ValueError,
         match=(
             r"WGSL target requires textureCompare\(\) explicit sampler operand "
-            r"to use samplerComparisonState"
+            r"to be a comparison_sampler"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))

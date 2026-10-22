@@ -35,6 +35,7 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .shadow_textures import retype_shadow_textures
 from .subgroup_import import import_subgroup_call
 
 try:
@@ -507,8 +508,9 @@ class GLSLToCrossGLConverter:
             "Texture2DMS": "sampler2DMS",
             "Texture2DMSArray": "sampler2DMSArray",
             "sampler": "sampler",
+            "samplerShadow": "comparison_sampler",
             "SamplerState": "sampler",
-            "SamplerComparisonState": "sampler",
+            "SamplerComparisonState": "comparison_sampler",
             "sampler1D": "sampler1D",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
@@ -813,7 +815,10 @@ class GLSLToCrossGLConverter:
         if not type_name:
             return False
         name = str(self.convert_type(type_name))
-        return name == "accelerationStructureEXT" or name.startswith(
+        return name in {
+            "accelerationStructureEXT",
+            "comparison_sampler",
+        } or name.startswith(
             (
                 "__sampler",
                 "StructuredBuffer",
@@ -2562,6 +2567,7 @@ class GLSLToCrossGLConverter:
             self.shader_type = previous_shader_type
 
     def generate_shader(self, node):
+        retype_shadow_textures(node)
         self.uniform_vars = []
         self.inputs = []
         self.outputs = []

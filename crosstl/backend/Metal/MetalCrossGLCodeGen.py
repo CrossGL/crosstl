@@ -43,6 +43,7 @@ from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
+from .comparison_samplers import collect_comparison_sampler_ids
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1893,6 +1894,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         self.out_of_line_call_operator_replacements = {}
         self.suppressed_out_of_line_call_operator_ids = set()
         self.storage_texture_declaration_ids = set()
+        self.comparison_sampler_ids = set()
         self.global_storage_texture_names = set()
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
@@ -8704,6 +8706,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         self.storage_texture_declaration_ids = (
             self.collect_storage_texture_declaration_ids(ast)
         )
+        self.comparison_sampler_ids = collect_comparison_sampler_ids(ast)
         self.struct_member_types = {}
         self.resolved_struct_member_types = {}
         self.resolved_struct_member_qualifiers = {}
@@ -8906,6 +8909,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         )
 
     def map_variable_type(self, var):
+        mapped_type = self.map_variable_type_by_declaration(var)
+        if mapped_type == "sampler" and id(var) in self.comparison_sampler_ids:
+            return "comparison_sampler"
+        return mapped_type
+
+    def map_variable_type_by_declaration(self, var):
         raw_type = self.effective_metal_variable_type(var)
         structured_buffer_type = self.structured_buffer_pointer_type(var)
         if structured_buffer_type:

@@ -4401,8 +4401,12 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                         vtype = self.convert_type_node_to_string(node.var_type)
                         array_suffix = ""
                 else:
-                    vtype = str(node.var_type)
-                    array_suffix = ""
+                    # A promoted stage-entry resource array carries its HLSL type as text (``SamplerState[2]``).
+                    vtype, array_suffix = split_array_type_suffix(str(node.var_type))
+                    if array_suffix:
+                        resource_count = self.resource_array_count(
+                            array_suffix[1 : array_suffix.index("]")]
+                        )
             elif hasattr(node, "vtype"):
                 vtype = node.vtype
                 array_suffix = ""
@@ -32109,7 +32113,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_hlsl_constant_buffer_type(mapped_type)
             or self.is_hlsl_texture_buffer_type(mapped_type)
             or self.is_hlsl_readonly_buffer_type(mapped_type)
-            or mapped_type in ["SamplerState", "SamplerComparisonState"]
+            or re.sub(r"(\s*\[\s*\w*\s*\])+$", "", mapped_type)
+            in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
@@ -44079,7 +44084,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 else:
                     vtype = self.convert_type_node_to_string(node.var_type)
             else:
-                vtype = str(node.var_type)
+                vtype, array_suffix = split_array_type_suffix(str(node.var_type))
+                if array_suffix:
+                    resource_count = self.resource_array_count(
+                        array_suffix[1 : array_suffix.index("]")]
+                    )
         elif hasattr(node, "vtype"):
             vtype = node.vtype
         else:
