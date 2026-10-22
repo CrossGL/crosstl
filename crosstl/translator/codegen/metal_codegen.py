@@ -64,6 +64,9 @@ from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.narrowing_constructors import select_narrowing_constructor_components
 from ..semantics.sampler_states import is_sampler_constructor
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..structure_conversions import (
@@ -1981,6 +1984,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 "argument buffer"
             ),
         )
+        ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")

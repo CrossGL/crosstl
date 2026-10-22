@@ -12489,6 +12489,29 @@ class SlangCodeGen(LoweringRefusalMixin):
         buffer = self.generate_expression(args[0])
         return f"{buffer}.Consume()"
 
+    def buffer_counter_expression(self, func_name, args):
+        """``IncrementCounter()`` / ``DecrementCounter()``, which Slang keeps on an ``RWStructuredBuffer``."""
+        if len(args) != 1:
+            return self.unsupported_structured_buffer_call(
+                func_name, "takes exactly one buffer operand", "uint"
+            )
+        buffer_type = self.resource_base_type(
+            self.structured_buffer_resource_type(args[0])
+        )
+        if not (
+            isinstance(buffer_type, str)
+            and buffer_type.startswith("RWStructuredBuffer<")
+        ) or self.buffer_resource_access(args[0]) in {"readonly", "writeonly"}:
+            return self.unsupported_structured_buffer_call(
+                func_name, "requires a read-write RWStructuredBuffer resource", "uint"
+            )
+        method = (
+            "IncrementCounter"
+            if func_name == "buffer_increment_counter"
+            else "DecrementCounter"
+        )
+        return f"{self.generate_expression(args[0])}.{method}()"
+
     def buffer_dimensions_expression(self, args):
         if not args:
             return self.unsupported_structured_buffer_call(
@@ -13020,6 +13043,9 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name == "buffer_consume":
             return self.buffer_consume_expression(args)
+
+        if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+            return self.buffer_counter_expression(func_name, args)
 
         if func_name == "buffer_dimensions":
             return self.buffer_dimensions_expression(args)
