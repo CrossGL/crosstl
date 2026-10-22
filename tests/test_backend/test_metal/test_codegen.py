@@ -926,7 +926,7 @@ def test_codegen_texture_and_sampler_translation():
     }
     """
     result = convert(code)
-    assert re.search(r"sampler2d", result, re.IGNORECASE)
+    assert "texture2D albedo @texture(0)" in result
     assert "texture(albedo, samp, in_.uv)" in result
     assert "albedo" in result
 
@@ -1048,8 +1048,8 @@ def test_codegen_texture2d_array_alias_preserves_sample_slice():
     """
     crossgl = convert(code)
 
-    assert "typedef sampler2DArray ColorArray;" not in crossgl
-    assert "vec4 sampleSlice(sampler2DArray tex, sampler s, vec2 uv)" in crossgl
+    assert "typedef texture2DArray ColorArray;" not in crossgl
+    assert "vec4 sampleSlice(texture2DArray tex, sampler s, vec2 uv)" in crossgl
     assert "texture(tex, s, vec3(uv, 2))" in crossgl
     assert "textureLod(tex, s, uv, 2)" not in crossgl
     parse_crossgl(crossgl)
@@ -1193,9 +1193,9 @@ def test_codegen_integer_texture_element_aliases_preserve_sampler_and_image_fami
     """
     crossgl = convert(code)
 
-    assert "typedef usampler2D UShortColor;" not in crossgl
+    assert "typedef utexture2D UShortColor;" not in crossgl
     assert "typedef iimage2D SignedStorage;" not in crossgl
-    assert "u16vec4 sampleUnsigned(usampler2D tex, sampler s, vec2 uv)" in crossgl
+    assert "u16vec4 sampleUnsigned(utexture2D tex, sampler s, vec2 uv)" in crossgl
     assert "i16vec4 readSigned(iimage2D tex @readwrite, uvec2 p)" in crossgl
     assert "void writeUnsigned(uimage2D tex @writeonly" in crossgl
     assert "texture(tex, s, uv)" in crossgl
@@ -4271,7 +4271,7 @@ def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
     """
     crossgl = convert(code)
 
-    assert "StructuredBuffer<sampler2D> textures @buffer(0)" in crossgl
+    assert "StructuredBuffer<texture2D> textures @buffer(0)" in crossgl
     assert "StructuredBuffer<ColorTexture>" not in crossgl
     assert "texture(buffer_load(textures, 0), linearSampler, vec2(0.5))" in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -5715,7 +5715,7 @@ def test_codegen_sampled_texture_write_emits_diagnostic():
     """
     result, message = metal_import_partial_output(convert, code)
 
-    assert "sampler2D tex @texture(0)" in result
+    assert "texture2D tex @texture(0)" in result
     assert (
         "Metal sampled texture write write on tex: a texture with access::sample "
         "cannot be written"
@@ -5888,7 +5888,7 @@ def test_codegen_fixed_texture_arrays_lower_resource_methods():
     """
     result = convert(code)
 
-    assert "sampler2D[2] textures @texture(0)" in result
+    assert "texture2D[2] textures @texture(0)" in result
     assert "image2D[2] images @texture(2) @readwrite" in result
     assert "texture(textures[index], samp, vec2(0.5, 0.5))" in result
     assert "imageLoad(images[index], uvec2(1, 2))" in result
@@ -6248,7 +6248,7 @@ def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():
     """
     crossgl = convert(code)
 
-    assert "sampler2D[AAPLNumTextureArguments] exampleTextures" in crossgl
+    assert "texture2D[AAPLNumTextureArguments] exampleTextures" in crossgl
     assert "device float*[AAPLNumBufferArguments] exampleBuffers" in crossgl
     assert "@id(AAPLArgumentBufferIDExampleBuffers)" in crossgl
     assert "uint[AAPLNumBufferArguments] exampleConstants" in crossgl
@@ -6270,10 +6270,10 @@ def test_codegen_argument_buffer_reference_array_parameter_roundtrips():
     """
     crossgl = convert(code)
 
-    assert "constant sampler2D& texturesAB1 @buffer(0)" in crossgl
-    assert "constant sampler2D& texturesAB2[10] @buffer(1)" in crossgl
-    assert "sampler2D[10] texturesArray @texture(0)" in crossgl
-    assert "sampler2D&[10] texturesAB2" not in crossgl
+    assert "constant texture2D& texturesAB1 @buffer(0)" in crossgl
+    assert "constant texture2D& texturesAB2[10] @buffer(1)" in crossgl
+    assert "texture2D[10] texturesArray @texture(0)" in crossgl
+    assert "texture2D&[10] texturesAB2" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -6384,7 +6384,7 @@ def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     crossgl = convert(code)
 
     assert "VertexOut in_" in crossgl
-    assert "sampler2D texture_" in crossgl
+    assert "texture2D texture_" in crossgl
     assert "BrightnessUniform& uniform_" in crossgl
     assert "in.textureCoordinate" not in crossgl
     assert "uniform.brightness" not in crossgl
@@ -6555,7 +6555,7 @@ def test_codegen_metal_namespace_types():
     }
     """
     result = convert(code)
-    assert "sampler2D" in result
+    assert "texture2D" in result
 
 
 def test_codegen_raytracing_qualifiers_output():
