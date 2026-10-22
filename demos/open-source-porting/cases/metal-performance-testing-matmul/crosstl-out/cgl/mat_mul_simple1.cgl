@@ -11,6 +11,7 @@ shader main {
 
     // Compute Shader
     compute {
+        @ host_workgroup_size
         @ stage_entry
         void mat_mul_simple1(StructuredBuffer<float> A @buffer(0), StructuredBuffer<float> B @buffer(1), RWStructuredBuffer<float> X @buffer(2), constant MatMulParams& params @buffer(3), uvec2 id @gl_GlobalInvocationID) {
             const uint row_dim_x = params.row_dim_x;

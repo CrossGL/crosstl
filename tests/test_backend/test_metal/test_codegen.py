@@ -86,15 +86,15 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
-def generate_code(ast_node):
-    codegen = MetalToCrossGLConverter()
+def generate_code(ast_node, threadgroup_size=None):
+    codegen = MetalToCrossGLConverter(threadgroup_size=threadgroup_size)
     return codegen.generate(ast_node)
 
 
-def convert(code: str) -> str:
+def convert(code: str, threadgroup_size=None) -> str:
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    return generate_code(ast)
+    return generate_code(ast, threadgroup_size)
 
 
 @pytest.mark.parametrize("kind", ["uint", "int", "short", "float"])
@@ -115,10 +115,12 @@ kernel void retained(device {kind}* output [[buffer(0)]]) {{
     assert "for (volatile uint step" in canonical
 
 
-def convert_without_preprocessing(code: str, file_path=None) -> str:
+def convert_without_preprocessing(
+    code: str, file_path=None, threadgroup_size=None
+) -> str:
     tokens = MetalLexer(code, preprocess=False).tokenize()
     ast = MetalParser(tokens, file_path=file_path).parse()
-    return generate_code(ast)
+    return generate_code(ast, threadgroup_size)
 
 
 @pytest.mark.parametrize(
@@ -4854,7 +4856,7 @@ def test_codegen_execution_only_threadgroup_barrier_reaches_native_targets():
         threadgroup_barrier(mem_flags::mem_none);
     }
     """
-    ast = parse_crossgl(convert(code))
+    ast = parse_crossgl(convert(code, threadgroup_size=32))
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     glsl = GLSLCodeGen().generate(ast)
@@ -4932,7 +4934,7 @@ def test_codegen_preserves_effectful_standalone_void_casts_once():
         (void)counter--;
     }
     """
-    crossgl = convert(code)
+    crossgl = convert(code, threadgroup_size=32)
 
     assert "(void)" not in crossgl
     assert crossgl.count("observe(lid)") == 2
@@ -6134,7 +6136,7 @@ def test_codegen_quadgroup_indices_roundtrip_to_glsl_and_metal(tmp_path):
         output[tid] = quad_gid * 4u + quad_lid;
     }
     """
-    crossgl = convert(code)
+    crossgl = convert(code, threadgroup_size=32)
 
     assert "uint quad_gid @gl_QuadGroupID" in crossgl
     assert "uint quad_lid @gl_QuadGroupInvocationID" in crossgl
@@ -9219,7 +9221,7 @@ def test_codegen_binds_metal_simd_intrinsics_by_source_signature(tmp_path):
     }
     """
 
-    generated = convert(code)
+    generated = convert(code, threadgroup_size=32)
 
     assert generated.count("WaveShuffleDown(data.real, (uint(delta) & 65535u))") == 1
     assert generated.count("WaveShuffleDown(data.imag, (uint(delta) & 65535u))") == 1
@@ -9350,7 +9352,7 @@ def test_codegen_mlx_gemvt_materialized_lane_expression_uses_builtin_overload(
     }
     """
 
-    generated = convert(code)
+    generated = convert(code, threadgroup_size=32)
     normalized = normalize(generated)
 
     assert (
@@ -12072,7 +12074,7 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
     }
     """
 
-    crossgl = convert_without_preprocessing(source)
+    crossgl = convert_without_preprocessing(source, threadgroup_size=32)
     shader = parse_crossgl(crossgl)
     generated_targets = {
         "crossgl": crossgl,
@@ -13982,7 +13984,7 @@ def test_metal_simd_reductions_reach_backend_wave_instructions():
             + simd_broadcast(v, lane);
     }
     """
-    ast = parse_crossgl(convert(code))
+    ast = parse_crossgl(convert(code, threadgroup_size=32))
 
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "WaveActiveSum(" in hlsl

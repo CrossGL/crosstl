@@ -157,11 +157,17 @@ def test_spirv_barriers_without_crossgl_equivalent_are_refused(opcode, operands)
 def _translate(tmp_path, source, backend, name):
     path = tmp_path / name
     path.write_text(source)
+    options = {}
+    if name.endswith(".metal"):
+        # A Metal kernel's threadgroup size is chosen at dispatch; targets that fix it in the shader need it given.
+        options["source_options"] = {"threadgroup_size": (64, 1, 1)}
     if backend == "vulkan":
         return friendly_spirv(
-            crosstl.translate(str(path), backend=backend, format_output=False)
+            crosstl.translate(
+                str(path), backend=backend, format_output=False, **options
+            )
         )
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, **options)
 
 
 def test_glsl_emits_device_fences_as_memory_barrier(tmp_path):

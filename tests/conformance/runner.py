@@ -63,6 +63,10 @@ def isolated(job, path, timeout):
     return json.loads(result_path.read_text())
 
 
+# Source languages whose host, not the kernel, chooses the threadgroup size at dispatch time.
+HOST_SIZED_LANGUAGES = frozenset({"metal"})
+
+
 @dataclass
 class Cell:
     """One (case, target, route, configuration) after translation and native validation."""
@@ -92,6 +96,9 @@ def translate(case, target, route, root):
         target=target,
         artifact=str(artifact),
     )
+    if case.lang in HOST_SIZED_LANGUAGES:
+        # The harness dispatches the source with case.group threads per threadgroup and says so.
+        job["source_options"] = {"threadgroup_size": [case.group, 1, 1]}
     return artifact, isolated(job, directory / "translate.json", 120)
 
 

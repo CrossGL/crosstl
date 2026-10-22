@@ -13927,13 +13927,17 @@ def test_translate_project_matches_direct_metal_materialized_signatures(
         encoding="utf-8",
     )
 
+    # Both translations state the threadgroup size the host dispatches the kernel with.
     direct_output = crosstl_cli.translate(
-        str(source_path), backend=target, format_output=False
+        str(source_path),
+        backend=target,
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
     payload = translate_project(
-        repo,
-        targets=[target],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo, targets=(target,), output_dir="out", workgroup_size=(32, 1, 1)
+        ),
         format_output=False,
     ).to_json()
 
@@ -16751,9 +16755,12 @@ def test_translate_project_folds_concrete_metal_sizeof_across_targets(tmp_path):
     )
 
     payload = translate_project(
-        repo,
-        targets=["directx", "opengl", "vulkan"],
-        output_dir="out",
+        project_api.ProjectConfig(
+            root=repo,
+            targets=("directx", "opengl", "vulkan"),
+            output_dir="out",
+            workgroup_size=(64, 1, 1),
+        ),
         format_output=False,
     ).to_json()
 
@@ -17093,6 +17100,7 @@ def test_translate_project_opengl_inlines_mlx_ordering_dependent_aliases(
             source_roots = ["shaders"]
             targets = ["opengl"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -18528,6 +18536,7 @@ def test_translate_project_materializes_masked_gemv_local_kernel_alias(
             source_roots = ["shaders"]
             targets = ["{target}"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip() + "\n",
         encoding="utf-8",
     )
@@ -57017,6 +57026,7 @@ def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> P
             include = ["kernels/*.metal"]
             targets = ["directx"]
             output_dir = "translated"
+            workgroup_size = [32, 1, 1]
             """).strip(),
         encoding="utf-8",
     )
@@ -57029,7 +57039,10 @@ def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
     shader_path = shader_dir / "reduce_kernel.metal"
     shader_path.write_text(METAL_SIMD_SHUFFLE_DOWN_KERNEL, encoding="utf-8")
     generated_hlsl = project_pipeline.translate(
-        str(shader_path), backend="directx", source_backend="metal"
+        str(shader_path),
+        backend="directx",
+        source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
     assert "simd_shuffle_down" not in generated_hlsl
     assert (

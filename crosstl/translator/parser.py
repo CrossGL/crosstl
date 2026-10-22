@@ -79,6 +79,12 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .host_workgroup_size import (
+    HOST_WORKGROUP_SIZE_ATTRIBUTE,
+    HOST_WORKGROUP_SIZE_KEY,
+    host_workgroup_size_mark,
+    resolve_host_workgroup_sizes,
+)
 from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
 from .source_licenses import SOURCE_LICENSES
@@ -432,7 +438,7 @@ class Parser:
 
     def finalize_shader(self, shader):
         bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
-        return validate_shader_cbuffers(shader)
+        return resolve_host_workgroup_sizes(validate_shader_cbuffers(shader))
 
     def append_parsed_nodes(self, collection, parsed):
         """Append one parsed node or extend a list of parsed nodes."""
@@ -879,6 +885,18 @@ class Parser:
         execution_config.update(
             self.execution_config_from_function_attributes(main_function)
         )
+        host_size_mark = host_workgroup_size_mark(
+            getattr(main_function, "attributes", []) or [],
+            self.layout_argument_to_string,
+        )
+        if host_size_mark is not None:
+            main_function.attributes = [
+                attr
+                for attr in main_function.attributes
+                if str(getattr(attr, "name", "")).lower()
+                != HOST_WORKGROUP_SIZE_ATTRIBUTE
+            ]
+            execution_config[HOST_WORKGROUP_SIZE_KEY] = host_size_mark
 
         return StageNode(
             stage=stage_enum,

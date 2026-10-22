@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
+from ..host_workgroup_size import require_static_workgroup_size
 from ..matrix_shape import (
     crossgl_matrix_shape,
     length_method_object,
@@ -30498,6 +30499,7 @@ class VulkanSPIRVCodeGen(
                     for index in range(3)
                 )
 
+        require_static_workgroup_size(config)
         return (
             self.positive_local_size_dimension(
                 config.get("local_size_x", 1), "local_size_x", "x", stage

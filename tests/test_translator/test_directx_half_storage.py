@@ -37,7 +37,12 @@ REQUIRE_ENV = "CROSTL_REQUIRE_HALF_BUFFER_RUNTIME"
 def _translate(root, source):
     path = root / "storage.metal"
     path.write_text(source, encoding="utf-8")
-    return translate(str(path), backend="directx", format_output=False)
+    return translate(
+        str(path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
+    )
 
 
 @pytest.mark.parametrize("case", CASES)
