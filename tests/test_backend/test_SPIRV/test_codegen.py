@@ -8113,8 +8113,9 @@ def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_codegen_reparse()
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert 'debugPrintfEXT("unsigned == %u", foo);' in generated_code
-    assert "debugPrintfEXT(value_fmt" not in generated_code
+    assert 'printf("unsigned == %u", foo);' in generated_code
+    assert "debugPrintfEXT" not in generated_code
+    assert "printf(value_fmt" not in generated_code
     assert "spirv_NonSemantic_DebugPrintf_1" not in generated_code
     assert "OpString" not in generated_code
     assert "Unhandled statement type" not in generated_code

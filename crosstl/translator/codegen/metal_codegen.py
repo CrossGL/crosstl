@@ -360,6 +360,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
@@ -2545,6 +2546,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "metal_atomic" in line for line in pre_lines
         ):
             code += "#include <metal_atomic>\n"
+        if uses_debug_printf(self, ast) and not any(
+            "metal_logging" in line for line in pre_lines
+        ):
+            code += "#include <metal_logging>\n"
         if self.uses_cooperative_matrix(ast) and not any(
             "metal_simdgroup_matrix" in line for line in pre_lines
         ):
@@ -10559,6 +10564,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         discard_statement = self.generate_fragment_discard_statement(expr_node)
         if discard_statement is not None:
             return discard_statement
+        debug_print = metal_debug_printf_statement(self, expr_node)
+        if debug_print is not None:
+            return debug_print
 
         if hasattr(stmt, "expression"):
             if isinstance(stmt.expression, (AssignmentNode, BackendAssignmentNode)):

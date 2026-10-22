@@ -13556,6 +13556,7 @@ def test_translated_metal_materialized_template_validates_with_dxc(tmp_path):
         backend="directx",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 4},
     )
 
     assert "float add_bias_float_4(float value, uint bias)" in code

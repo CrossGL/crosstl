@@ -21,6 +21,7 @@ from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
+from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -92,6 +93,7 @@ __all__ = [
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
+    "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
@@ -176,7 +178,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.array_parameters`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
-    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
+    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
+    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
@@ -221,6 +224,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_per_vertex_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
+    refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
