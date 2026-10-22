@@ -44,7 +44,6 @@ _IMAGE_ATOMICS = frozenset(
 _ATOMIC_FORMATS = {"iimage": "r32i", "uimage": "r32ui", "image": "r32f"}
 
 
-
 def _component_shape(codegen, type_id):
     """``(component type name, component count)`` of a scalar or vector type."""
     base = type_id.type.base_type
