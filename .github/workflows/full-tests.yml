@@ -61,11 +61,14 @@ jobs:
         run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
       - name: Run complete test suite
+        # The default xdist scheduler hands each worker a fixed run of consecutive
+        # tests, so the worker that drew the slow ones finished minutes after the
+        # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
           python -m pytest tests demos/integrations \
             -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
-            --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
+            --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
