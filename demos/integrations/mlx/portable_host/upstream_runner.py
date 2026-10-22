@@ -7,7 +7,10 @@ test and passes itself here. It provides:
 - ``UPSTREAM_TESTS`` and ``LABEL``: the unchanged test and its log label;
 - ``TIMEOUTS``: the deadline of each bounded command, by mode;
 - ``prepare_packages(root, packages, reductions, jobs)``: the ``--prepare`` step;
-- ``validate_trace(trace, target, count)``: the native trace's requirements.
+- ``validate_trace(trace, target, count)``: the native trace's requirements;
+- optionally ``COLUMN_SUMS``: column reduction entries ``prepare_packages``
+  translates into ``column_directory(reductions)``, which the native worker
+  also loads.
 
 ``run`` translates the random packages, then the module's packages, then runs
 the test on MLX's CPU and through the translated host, and checks that the
@@ -62,11 +65,19 @@ def check_trace(trace, target, count, *, label, expected, prefixes, reductions):
         )
 
 
-def translate_ahead(root, packages, reductions, jobs, groups, maxima):
+def column_directory(reductions):
+    """Where a runner's static column reduction packages sit beside its maxima."""
+    reductions = Path(reductions)
+    return reductions.with_name(reductions.name + "-column")
+
+
+def translate_ahead(root, packages, reductions, jobs, groups, maxima, columns=()):
     """Translate each ``(builder, entries)`` group and index ``maxima`` on demand.
 
     ``builder`` is a package module with ``build_entries``; the maxima are
     packaged when the run first launches them, at the widths it launches.
+    ``columns`` are column reduction entries translated into
+    ``column_directory(reductions)``.
     """
     from demos.integrations.mlx.portable_host import reduction_packages
 
@@ -82,12 +93,24 @@ def translate_ahead(root, packages, reductions, jobs, groups, maxima):
         entries=maxima,
         on_demand=True,
     )
+    if columns:
+        reduction_packages.build_packages(
+            root,
+            column_directory(reductions),
+            target,
+            family="column",
+            entries=tuple(columns),
+            jobs=jobs,
+        )
     for record in records:
         print(json.dumps(record), flush=True)
 
 
 def _commands(spec, root, packages, output, target, jobs):
     random, reductions = output / "random-packages", output / "reductions"
+    loaded = ["--reductions", str(reductions)]
+    if getattr(spec, "COLUMN_SUMS", ()):
+        loaded += ["--reductions", str(column_directory(reductions))]
     module = ["-m", spec.MODULE]
     common = ["--mlx-root", str(root), "--packages", str(packages)]
     commands = [
@@ -110,7 +133,7 @@ def _commands(spec, root, packages, output, target, jobs):
                 mode,
                 spec.TIMEOUTS[mode],
                 [*module, "--worker", mode, *common]
-                + ["--reductions", str(reductions), "--random", str(random)]
+                + [*loaded, "--random", str(random)]
                 + ["--output-dir", str(output / mode)],
             )
         )
@@ -163,7 +186,7 @@ def main(spec, argv=None):
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--reductions", type=Path)
+    parser.add_argument("--reductions", type=Path, action="append")
     parser.add_argument("--random", type=Path)
     parser.add_argument("--jobs", type=int, default=3)
     mode = parser.add_mutually_exclusive_group()

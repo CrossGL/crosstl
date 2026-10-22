@@ -3049,7 +3049,7 @@ jobs:
     name: MLX quantized host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 270
+    timeout-minutes: 285
     strategy:
       fail-fast: false
       matrix:
@@ -3165,6 +3165,18 @@ jobs:
             python -m demos.integrations.mlx.portable_host.matmul_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/quantized-matmul-translation.log
+      - name: Translate split-K partition sums
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX small column packages" -- \
+            python -m demos.integrations.mlx.portable_host.column_small_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/small-column-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX looped column package" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family column --entry col_reduce_looped_1_32_32_reduce_sumfloat32 \
+              --jobs 2 --output-dir .mlx-portable-quantized/column-reductions \
+              2>&1 | tee .mlx-portable-quantized/column-translation.log
       - name: Execute affine quantized matrix-vector products through MLX
         env:
           EGL_PLATFORM: surfaceless
@@ -3175,7 +3187,8 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized matmul host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_quantized_matmul --mlx-root mlx-upstream \
-              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/quantized-matmul \
+              --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/column-reductions \
+              --output-dir .mlx-portable-quantized/quantized-matmul \
               2>&1 | tee .mlx-portable-quantized/quantized-matmul.log
       - name: Translate floating-point matrix-vector packages
         run: |
@@ -3241,7 +3254,7 @@ jobs:
       fail-fast: false
       matrix:
         # Each unchanged upstream test runs on its own leg of every platform.
-        test: [qvm, qmv]
+        test: [qvm, qmv, qvm_splitk]
         include:
           - os: ubuntu-24.04
             target: opengl
@@ -3276,7 +3289,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_upstream_runner.py \
-            demos/integrations/mlx/tests/host/test_portable_upstream_qvm.py demos/integrations/mlx/tests/host/test_portable_upstream_qmv.py
+            demos/integrations/mlx/tests/host/test_portable_upstream_qvm.py demos/integrations/mlx/tests/host/test_portable_upstream_qmv.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qvm_splitk.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL

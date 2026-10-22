@@ -10,6 +10,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
+    column_small_layout,
     column_workloads,
     reduction_packages,
     runtime,
@@ -71,7 +72,7 @@ def test_column_package_family_covers_both_modes_and_every_template():
     assert reduction_packages.FAMILY_WIDTHS["column"] == (256,)
     assert {case["entry"] for case in column_workloads.cases()} == set(
         reduction_packages.COLUMN_ENTRIES
-    )
+    ) | set(column_small_layout.SMALL_COLUMN_ENTRIES)
 
 
 @pytest.mark.parametrize(
@@ -138,7 +139,7 @@ def test_column_rejection_messages_match_the_host_backend():
         assert f"CrossTL {message}" in source
 
 
-@pytest.mark.parametrize("mode", ["allocation", "small", "long", "limit"])
+@pytest.mark.parametrize("mode", ["allocation", "long", "limit"])
 @pytest.mark.parametrize("fault", [None, "message", "dispatch", "accepted"])
 def test_column_rejection_requires_the_expected_error_before_dispatch(mode, fault):
     import numpy as np
@@ -378,6 +379,19 @@ def column_evidence():
                 ]
                 * 32
             )
+            size, count = [256, 1, 1], [
+                (stride + 31) // 32,
+                (expected.size // stride)
+                * (32 if stage == 0 and partials is not None else 1),
+                1,
+            ]
+            if case["entry"] in column_small_layout.SMALL_COLUMN_ENTRIES:
+                lanes, rows = column_small_layout.geometry(
+                    stride, logical.size // expected.size
+                )
+                size = [lanes, rows, 1]
+                blocks = -(-stride // 4)
+                count = [-(-blocks // lanes), expected.size // stride, 1]
             trace.append(
                 dict(
                     entry=(
@@ -389,13 +403,8 @@ def column_evidence():
                     ),
                     dispatchVersion=3,
                     threads=logical.size if stage == 0 else partials.size,
-                    workgroupSize=[256, 1, 1],
-                    workgroupCount=[
-                        (stride + 31) // 32,
-                        (expected.size // stride)
-                        * (32 if stage == 0 and partials is not None else 1),
-                        1,
-                    ],
+                    workgroupSize=size,
+                    workgroupCount=count,
                     reductionValues=column_workloads.wire_values(
                         values.reshape(-1).tolist()
                     ),

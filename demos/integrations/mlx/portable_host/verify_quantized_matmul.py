@@ -1,6 +1,7 @@
 """Exercise MLX quantized_matmul through translated affine matrix-vector kernels.
 
-Transposed cases reach the qmv kernels and untransposed ones qvm.
+Transposed cases reach the qmv kernels and untransposed ones qvm, or for ``K``
+of 1024 and more qvm_split_k and the column sum over its partitions.
 
 Every case routes one ``mx.quantized_matmul`` call to one translated entry and
 checks each output bit against an exact float64 reference: inputs lie on
@@ -73,6 +74,35 @@ CASES = (
     ("qvm-two-bit-rows", "bfloat16", 64, 2, 512, 64, (2,), (), "dense", False),
     ("qvm-shared-weights", "float32", 32, 8, 128, 64, (2, 1), (), "strided", False),
     ("qvm-two-batch-axes", "float16", 32, 5, 96, 32, (2, 3, 2), (2, 3), "dense", False),
+    # qvm_split_k: 8 whole partitions over three folded rows, a short final
+    # partition, 32 partitions of stacked weights (a looped column sum) and
+    # stacked weights under a strided batch (a small column sum over an outer
+    # batch axis).
+    ("qvm-split-k-rows", "float32", 32, 2, 2048, 128, (3,), (), "dense", False),
+    ("qvm-split-k-tail", "float32", 64, 4, 1100, 64, (1,), (), "dense", False),
+    ("qvm-split-k-wide", "float32", 128, 2, 9000, 256, (2, 1), (2,), "dense", False),
+    ("qvm-split-k-strided", "float32", 32, 8, 1024, 32, (3, 1), (3,), "strided", False),
+)
+# Products the host refuses, as (case, the error it raises). quantized.cpp
+# sends a strided x batch over 2-D weights to qvm_split_k, whose single weight
+# batch axis (the partitions) adjust_matrix_offsets never wraps: every batch
+# after the first would read past w.
+REFUSALS = (
+    (
+        (
+            "qvm-split-k-shared-weights",
+            "float32",
+            32,
+            8,
+            1024,
+            32,
+            (3, 1),
+            (),
+            "strided",
+            False,
+        ),
+        "batched inputs and 2-D weights",
+    ),
 )
 SCALES = (1.0, 0.5, 0.25, 0.125)
 
@@ -84,6 +114,7 @@ def case_record(case):
     if not w_batch and layout == "dense":
         # w.ndim() == 2 and a row-contiguous x: MLX folds every x row into M.
         m, batches = math.prod(x_prefix), 1
+    entry = matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose)
     return {
         "name": name,
         "dtype": dtype,
@@ -97,8 +128,36 @@ def case_record(case):
         "transpose": transpose,
         "M": m,
         "batches": batches,
-        "entry": matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose),
+        "entry": entry,
+        "dispatches": [entry, *split_sum(entry, m, n)],
     }
+
+
+def split_sum(entry, m, n):
+    """The column sum reduce.cpp runs over a split-K product's partitions."""
+    info = matmul_layout.signature(entry)
+    if "splitK" not in info:
+        return []
+    # strided_reduce_small below 32 partitions, otherwise the looped pass.
+    kind = "small_1" if info["splitK"] < 32 else "looped_1_32_32"
+    return [f"col_reduce_{kind}_reduce_sum{info['dtype']}"]
+
+
+def small_column_variants():
+    """The small column sum variants the split-K cases launch, as cache keys."""
+    from demos.integrations.mlx.portable_host import column_small_layout
+
+    keys = set()
+    for case in CASES:
+        record = case_record(case)
+        for entry in record["dispatches"][1:]:
+            if entry in column_small_layout.SMALL_COLUMN_ENTRIES:
+                split = matmul_layout.signature(record["entry"])["splitK"]
+                lanes, rows = column_small_layout.geometry(
+                    record["M"] * record["N"], split
+                )
+                keys.add(column_small_layout.variant(entry, (lanes, rows, 1)))
+    return keys
 
 
 def case_data(record, seed):
@@ -200,7 +259,7 @@ def run_case(mx, np, host, record, seed):
         )
     if actual.view(np.uint32).tobytes() != expected.view(np.uint32).tobytes():
         raise AssertionError(f"Quantized matmul output differs: {record['name']}")
-    if count != 1:
+    if count != len(record["dispatches"]):
         raise AssertionError(
             f"Quantized matmul dispatch count differs: {record['name']}"
         )
@@ -238,13 +297,54 @@ def run_case(mx, np, host, record, seed):
     }
 
 
+def run_refusal(mx, np, host, refusal, seed):
+    """Check that one product raises ``message`` before any dispatch."""
+    case, message = refusal
+    record = case_record(case)
+    data = case_data(record, seed)
+    dtype = getattr(mx, record["dtype"])
+    arrays = {
+        name: mx.array(data[name].tolist(), dtype=dtype)
+        for name in ("scales", "biases", "x")
+    }
+    arrays["w"] = mx.array(data["w"].tolist(), dtype=mx.uint32)
+    mx.eval(*arrays.values())
+    x = arrays["x"][::2] if record["layout"] == "strided" else arrays["x"]
+    start = host.dispatch_count
+    try:
+        mx.eval(
+            mx.quantized_matmul(
+                x,
+                arrays["w"],
+                arrays["scales"],
+                arrays["biases"],
+                transpose=record["transpose"],
+                group_size=record["groupSize"],
+                bits=record["bits"],
+            )
+        )
+    except ValueError as error:
+        if message not in str(error):
+            raise AssertionError(
+                f"Quantized matmul refusal differs: {record['name']}: {error}"
+            ) from error
+    else:
+        raise AssertionError(
+            f"Quantized matmul refusal did not raise: {record['name']}"
+        )
+    if host.dispatch_count != start:
+        raise AssertionError(f"Quantized matmul refusal dispatched: {record['name']}")
+    return {"name": record["name"], "entry": record["entry"], "message": message}
+
+
 def validate_trace(trace, records, target):
-    expected = [record["entry"] for record in records]
+    expected = [entry for record in records for entry in record["dispatches"]]
     if [event.get("entry") for event in trace] != expected or any(
         event.get("target") != target for event in trace
     ):
         raise RuntimeError("Quantized matmul trace does not match the routed entries")
-    for event, record in zip(trace, records):
+    products = [event for event in trace if event["entry"].startswith("affine_")]
+    for event, record in zip(products, records):
         metadata = event["matmulMetadata"]
         if (
             metadata["M"],
@@ -253,13 +353,19 @@ def validate_trace(trace, records, target):
             metadata["batches"],
         ) != (record["M"], record["N"], record["K"], record["batches"]):
             raise RuntimeError(f"Quantized matmul launch differs: {record['name']}")
-    kernels = {matmul_layout.signature(entry)["kernel"] for entry in expected}
-    batched = {matmul_layout.signature(entry)["batched"] for entry in expected}
-    if kernels != {"qmv_quad", "qmv_fast", "qmv", "qvm"} or batched != {False, True}:
+    entries = [record["entry"] for record in records]
+    kernels = {matmul_layout.signature(entry)["kernel"] for entry in entries}
+    batched = {matmul_layout.signature(entry)["batched"] for entry in entries}
+    sums = {entry for entry in expected if entry.startswith("col_reduce_")}
+    if (
+        kernels != {"qmv_quad", "qmv_fast", "qmv", "qvm", "qvm_split_k"}
+        or batched != {False, True}
+        or len(sums) != 2
+    ):
         raise RuntimeError("Quantized matmul cases do not cover every route")
 
 
-def verify(root, packages, output):
+def verify(root, packages, output, reductions=None):
     import mlx.core as mx
     import numpy as np
 
@@ -267,9 +373,11 @@ def verify(root, packages, output):
     output.mkdir(parents=True, exist_ok=False)
     preparation = verify_prepared(root)
     (output / "adaptation.json").write_text(json.dumps(preparation, indent=2))
-    host = HostRuntime(packages, output / "trace.jsonl", mlx_root=root)
+    host = HostRuntime(
+        packages, output / "trace.jsonl", mlx_root=root, reductions=reductions
+    )
     host.install()
-    records = []
+    records, refusals = [], []
     try:
         for seed, case in enumerate(CASES):
             record = run_case(mx, np, host, case_record(case), seed)
@@ -278,6 +386,14 @@ def verify(root, packages, output):
                 json.dumps({"target": host.target, "cases": records}, indent=2)
             )
             print(json.dumps(record), flush=True)
+        for seed, refusal in enumerate(REFUSALS, start=len(CASES)):
+            refusals.append(run_refusal(mx, np, host, refusal, seed))
+        (output / "results.json").write_text(
+            json.dumps(
+                {"target": host.target, "cases": records, "refusals": refusals},
+                indent=2,
+            )
+        )
     finally:
         close = getattr(host.executor.runtime_adapter.runtime, "close", None)
         if close:
@@ -296,5 +412,8 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--reductions", type=Path, help="the looped column sum's packages"
+    )
     args = parser.parse_args()
-    verify(args.mlx_root, args.packages, args.output_dir)
+    verify(args.mlx_root, args.packages, args.output_dir, args.reductions)

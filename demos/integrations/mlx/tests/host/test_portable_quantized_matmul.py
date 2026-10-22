@@ -80,6 +80,28 @@ def native_binding(record):
         "workgroupCount": [m, -(-n // rows), batches],
         "workgroupSize": list(layout.workgroup_size(record["entry"])),
     }
+    split = layout.signature(record["entry"]).get("splitK")
+    if split:
+        # qvm_split_k always binds the views, with the partition axis added.
+        split_d = -(-k // split)
+        parameters = {
+            "in_vec_size": split_d,
+            "out_vec_size": n,
+            "final_block_size": k - (split - 1) * split_d,
+            **layout.split_views(
+                x_shape,
+                x_strides,
+                w_shape,
+                strides["w"],
+                strides["s"],
+                strides["b"],
+                split,
+                k,
+                groups,
+            ),
+        }
+        counts["y"] *= split
+        execution["workgroupCount"][2] *= split
     return counts, parameters, execution
 
 
@@ -113,7 +135,8 @@ def test_signature_accepts_exactly_the_dispatched_specializations(dtype, group, 
         f"affine_gather_qmv_{stem}",
         f"affine_qmv_{stem}_batch_0_hgs",
         f"affine_qvm_{stem}_d_64_batch_0",
-        f"affine_qvm_split_k_{stem}_spk_8",
+        f"affine_qvm_split_k_{stem}_spk_16",
+        f"affine_qvm_split_k_{stem}_spk_8_batch_0",
         f"affine_qvm_{stem}_batch_1_hgs",
     ):
         with pytest.raises(ValueError):
@@ -167,9 +190,22 @@ def test_selection_follows_quantized_matmul_for_upstream_qvm_shapes(group, bits)
                 assert not layout.transposed(entry)
                 assert layout.tile_rows(entry) == 64
                 assert layout.workgroup_size(entry) == (32, 2, 1)
-    # Longer reductions go to qvm_split_k, and four vectors to qmm_n.
-    with pytest.raises(ValueError, match="Split-K"):
-        layout.select("float32", group, bits, 1, 128, 1024, 1, False)
+    # Longer reductions go to qvm_split_k, in 32 partitions above 8192, and
+    # four vectors to qmm_n.
+    stem = f"float_gs_{group}_b_{bits}"
+    for k, partitions in ((1024, 8), (8192, 8), (8193, 32), (16384, 32)):
+        for batches in (1, 3):
+            entry = layout.select("float32", group, bits, 1, 128, k, batches, False)
+            assert entry == f"affine_qvm_split_k_{stem}_spk_{partitions}"
+            info = layout.signature(entry)
+            assert (info["kernel"], info["splitK"], info["batched"]) == (
+                "qvm_split_k",
+                partitions,
+                True,
+            )
+            assert not layout.transposed(entry)
+            assert layout.tile_rows(entry) == 2 * min(group, 32)
+            assert layout.workgroup_size(entry) == (32, 2, 1)
     with pytest.raises(ValueError, match="matrix-matrix"):
         layout.select("float32", group, bits, 4, 128, 256, 1, False)
     assert layout.select("float32", group, 4, 3, 128, 1023, 1, False).startswith(
@@ -187,8 +223,21 @@ def test_verification_cases_cover_every_route_and_batch_layout():
         (kernel, batched)
         for kernel in ("qmv_quad", "qmv_fast", "qmv", "qvm")
         for batched in (False, True)
+    } | {("qvm_split_k", True)}
+    split = [record for record in RECORDS if "split_k" in record["entry"]]
+    # Both partition counts, a short final partition, both column sums and
+    # stacked and shared weights.
+    assert {layout.signature(record["entry"])["splitK"] for record in split} == {8, 32}
+    assert any(record["K"] % 8 for record in split)
+    assert {record["dispatches"][1].split("_")[2] for record in split} == {
+        "small",
+        "looped",
     }
-    qvm = [record for record in RECORDS if not record["transpose"]]
+    assert {bool(record["wBatchShape"]) for record in split} == {False, True}
+    assert any(record["layout"] == "strided" for record in split)
+    qvm = [
+        record for record in RECORDS if not record["transpose"] and record not in split
+    ]
     assert {record["bits"] for record in qvm} == {2, 3, 4, 5, 6, 8}
     assert {record["dtype"] for record in qvm} == {"float32", "float16", "bfloat16"}
     # A K tail, a K below one 32-row block, and a half-empty last tile.
@@ -217,6 +266,7 @@ def test_plan_accepts_each_verification_launch(record):
     assert set(metadata["parameters"]) == {
         *layout.SCALAR_PARAMETERS,
         *layout.BATCH_PARAMETERS,
+        *(layout.SPLIT_SCALARS if "split_k" in record["entry"] else ()),
     }
     padding = metadata["overreadPadding"]
     if record["name"] == "quad-d64-partial-tile":
@@ -273,13 +323,67 @@ def mutate(fault, counts, parameters, execution):
         "dimension",
     ),
 )
-@pytest.mark.parametrize("name", ("qmv-two-batch-axes", "qvm-two-batch-axes"))
+@pytest.mark.parametrize(
+    "name",
+    (
+        "qmv-two-batch-axes",
+        "qvm-two-batch-axes",
+        "qvm-split-k-wide",
+        "qvm-split-k-strided",
+    ),
+)
 def test_plan_rejects_launches_that_differ_from_mlx(fault, name):
     record = next(item for item in RECORDS if item["name"] == name)
     counts, parameters, execution = native_binding(record)
     mutate(fault, counts, parameters, execution)
     with pytest.raises(ValueError):
         layout.plan(record["entry"], counts, parameters, counts["y"], execution)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ("final", "partition-axis", "partition-stride", "partitions", "row-view", "k-view"),
+)
+@pytest.mark.parametrize("name", ("qvm-split-k-tail", "qvm-split-k-wide"))
+def test_split_plan_rejects_partitions_quantized_cpp_would_not_make(fault, name):
+    record = next(item for item in RECORDS if item["name"] == name)
+    counts, parameters, execution = native_binding(record)
+    split = layout.signature(record["entry"])["splitK"]
+    if fault == "final":
+        parameters["final_block_size"] += 1
+    elif fault == "partition-axis":
+        parameters["x_shape"][parameters["x_batch_ndims"] - 1] += 1
+    elif fault == "partition-stride":
+        parameters["w_strides"][parameters["w_batch_ndims"] - 1] += 1
+    elif fault == "partitions":
+        execution["workgroupCount"][2] += 1
+    elif fault == "row-view":
+        parameters["x_strides"][-2] = record["K"]
+    elif fault == "k-view":
+        parameters["w_shape"][-2] += 1
+    assert split in (8, 32)
+    with pytest.raises(ValueError):
+        layout.plan(record["entry"], counts, parameters, counts["y"], execution)
+
+
+def test_split_plan_refuses_batched_inputs_over_two_dimensional_weights():
+    # adjust_matrix_offsets moves a single weight batch axis (the partitions of
+    # 2-D weights) by tid.z without wrapping it: later batches read past w.
+    ((case, message),) = verify.REFUSALS
+    record = verify.case_record(case)
+    counts, parameters, execution = native_binding(record)
+    assert parameters["w_batch_ndims"] == 1 and record["batches"] > 1
+    with pytest.raises(ValueError, match="w batch exceeds its buffer"):
+        layout.plan(record["entry"], counts, parameters, counts["y"], execution)
+    backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
+    assert "w.ndim() == 2 && out.size() / M / N > 1" in backend
+    assert message in backend
+
+
+def test_matrix_offsets_wrap_only_multiple_batch_axes():
+    assert layout._matrix_offset(5, [2], [7]) == 35
+    assert layout._matrix_offset(5, [3, 2], [100, 7]) == 207
+    assert layout._matrix_offset(5, [], []) == 0
 
 
 def test_plan_rejects_entries_mlx_would_not_select():
@@ -550,7 +654,7 @@ def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
             tmp_path,
             tmp_path,
             "opengl",
-            ["affine_qvm_split_k_float_gs_32_b_4_spk_8"],
+            ["affine_qvm_split_k_float_gs_32_b_4_spk_16"],
             1,
         )
     calls.clear()
@@ -685,13 +789,19 @@ def test_untransposed_case_data_packs_groups_along_the_outputs(name):
 def test_trace_validation_requires_the_routed_entries():
     trace = [
         {
-            "entry": record["entry"],
+            "entry": entry,
             "target": "metal",
             "matmulMetadata": {key: record[key] for key in ("M", "N", "K", "batches")},
         }
         for record in RECORDS
+        for entry in record["dispatches"]
     ]
     verify.validate_trace(trace, RECORDS, "metal")
+    split = next(
+        index for index, event in enumerate(trace) if "split_k" in event["entry"]
+    )
+    with pytest.raises(RuntimeError):
+        verify.validate_trace(trace[: split + 1] + trace[split + 2 :], RECORDS, "metal")
     with pytest.raises(RuntimeError):
         verify.validate_trace(trace[1:], RECORDS, "metal")
     trace[0]["matmulMetadata"]["M"] += 1
@@ -751,7 +861,21 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         for item in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
     ]
-    assert deadlines == [1800, 3600, 1800, 1200, 2400, 1800, 1200]
+    assert deadlines == [1800, 3600, 900, 900, 1800, 1200, 2400, 1800, 1200]
+    # Split-K products sum their partitions with translated column kernels.
+    sums = steps["Translate split-K partition sums"]
+    assert "if" not in sums and "set -euo pipefail" in sums["run"]
+    assert "portable_host.column_small_packages" in sums["run"]
+    assert "--verification" in sums["run"]
+    assert "--family column" in sums["run"]
+    assert "--entry col_reduce_looped_1_32_32_reduce_sumfloat32" in sums["run"]
+    assert "--output-dir .mlx-portable-quantized/column-reductions" in sums["run"]
+    assert "--reductions .mlx-portable-quantized/column-reductions" in step["run"]
+    assert (
+        names.index("Translate quantized matrix-vector packages")
+        < names.index("Translate split-K partition sums")
+        < names.index(name)
+    )
     assert sum(deadlines) + 900 < job["timeout-minutes"] * 60
     # The half host job no longer runs the products.
     half = [item.get("name") for item in workflow["jobs"]["half-host"]["steps"]]

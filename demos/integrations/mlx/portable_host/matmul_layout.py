@@ -6,8 +6,9 @@ few input vectors as quantized.cpp does. Transposed weights go to
 power-of-two widths, then ``affine_qmv_fast`` when ``N`` and ``K`` are aligned,
 otherwise ``affine_qmv``. The portable host reports no Apple GPU generation, so
 it never selects ``affine_qmv_wide`` (MLX uses it from generation 15).
-Untransposed weights go to ``affine_qvm`` while ``K`` is below 1024; MLX splits
-longer reductions over ``qvm_split_k`` and a sum, which the host does not route.
+Untransposed weights go to ``affine_qvm`` while ``K`` is below 1024, and longer
+reductions to ``affine_qvm_split_k``: 8 partitions of ``K`` (32 above 8192)
+whose partial products a column sum then adds.
 """
 
 import ctypes
@@ -30,10 +31,16 @@ PATTERN = re.compile(
     r"affine_(qmv_quad|qmv_fast|qmv|qvm)_(float|float16_t|bfloat16_t)"
     r"_gs_(32|64|128)_b_(2|3|4|5|6|8)(?:_d_(64|128))?_batch_(0|1)"
 )
+SPLIT_PATTERN = re.compile(
+    r"affine_qvm_split_k_(float|float16_t|bfloat16_t)_gs_(32|64|128)"
+    r"_b_(2|3|4|5|6|8)_spk_(8|32)"
+)
 ENTRY_PREFIXES = ("affine_qmv_", "affine_qvm_")
 # QuantizedMatmul::eval_gpu sends untransposed products with K at or above
-# this through qvm_split_k.
+# this through qvm_split_k, in 32 partitions above QVM_WIDE_SPLIT and 8 below.
 QVM_SPLIT_K = 1024
+QVM_WIDE_SPLIT = 8192
+SPLIT_SCALARS = ("final_block_size",)
 MATRIX_PARAMETERS = ("w", "scales", "biases", "x", "y")
 SCALAR_PARAMETERS = ("in_vec_size", "out_vec_size")
 BATCH_SCALARS = ("x_batch_ndims", "w_batch_ndims")
@@ -60,7 +67,24 @@ MAX_BATCH_DIMENSIONS = 16
 
 
 def signature(entry):
-    """The kernel, element type, group size, bits, ``D`` and batching of an entry."""
+    """The kernel, element type, group size, bits, ``D`` and batching of an entry.
+
+    Split-K entries add their partition count and always bind batch views.
+    """
+    split = SPLIT_PATTERN.fullmatch(entry) if isinstance(entry, str) else None
+    if split is not None:
+        source, group, bits, partitions = split.groups()
+        return {
+            "kernel": "qvm_split_k",
+            "dtype": next(
+                key for key, value in SOURCE_TYPES.items() if value == source
+            ),
+            "groupSize": int(group),
+            "bits": int(bits),
+            "D": None,
+            "batched": True,
+            "splitK": int(partitions),
+        }
     match = PATTERN.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError("Unsupported quantized matrix-vector entry")
@@ -100,7 +124,7 @@ def workgroup_size(entry):
 
 def transposed(entry):
     """Whether the entry multiplies by transposed weights, ``w`` of ``(N, K)``."""
-    return signature(entry)["kernel"] != "qvm"
+    return signature(entry)["kernel"] not in ("qvm", "qvm_split_k")
 
 
 def tile_rows(entry):
@@ -110,7 +134,7 @@ def tile_rows(entry):
     simdgroups x ``min(group_size, 32)`` columns.
     """
     info = signature(entry)
-    if info["kernel"] == "qvm":
+    if info["kernel"] in ("qvm", "qvm_split_k"):
         return 2 * min(info["groupSize"], SIMD_SIZE)
     return 64 if info["kernel"] == "qmv_quad" else 8
 
@@ -130,7 +154,7 @@ def select(dtype, group, bits, m, n, k, batches, transpose=True):
     """quantized.cpp QuantizedMatmul::eval_gpu's entry for one product.
 
     Raises for the products MLX sends to kernels the host does not route: the
-    matrix-matrix kernels and qvm_split_k.
+    matrix-matrix kernels.
     """
     if m >= vector_limit(k, n, transpose):
         raise ValueError("Quantized matrix-matrix products are not routed")
@@ -138,7 +162,8 @@ def select(dtype, group, bits, m, n, k, batches, transpose=True):
     batch = "_batch_1" if batches > 1 else "_batch_0"
     if not transpose:
         if k >= QVM_SPLIT_K:
-            raise ValueError("Split-K quantized vector-matrix products are not routed")
+            partitions = 32 if k > QVM_WIDE_SPLIT else 8
+            return f"affine_qvm_split_k_{stem}_spk_{partitions}"
         return f"affine_qvm_{stem}{batch}"
     if k in QUAD_DIMENSIONS and bits in (2, 4, 8):
         return f"affine_qmv_quad_{stem}_d_{k}{batch}"
@@ -147,8 +172,11 @@ def select(dtype, group, bits, m, n, k, batches, transpose=True):
 
 
 def parameter_names(entry):
+    info = signature(entry)
     names = (*MATRIX_PARAMETERS, *SCALAR_PARAMETERS)
-    return (*names, *BATCH_PARAMETERS) if signature(entry)["batched"] else names
+    if "splitK" in info:
+        return (*names, *BATCH_PARAMETERS, *SPLIT_SCALARS)
+    return (*names, *BATCH_PARAMETERS) if info["batched"] else names
 
 
 def parameter_type(entry, name):
@@ -156,7 +184,7 @@ def parameter_type(entry, name):
         return "uint32"
     if name in MATRIX_PARAMETERS:
         return signature(entry)["dtype"]
-    if name in SCALAR_PARAMETERS or name in BATCH_SCALARS:
+    if name in SCALAR_PARAMETERS or name in BATCH_SCALARS or name in SPLIT_SCALARS:
         return "int32"
     return BATCH_VECTORS[name]
 
@@ -178,7 +206,9 @@ def read_storage(entry, buffers):
             INTEGER_TYPES.get(dtype, ctypes.c_uint32)
         )
         count = buffer.count
-        scalar = name in SCALAR_PARAMETERS or name in BATCH_SCALARS
+        scalar = (
+            name in SCALAR_PARAMETERS or name in BATCH_SCALARS or name in SPLIT_SCALARS
+        )
         if (
             not buffer.data
             or buffer.data % itemsize
@@ -218,6 +248,18 @@ def _location(index, shape, strides):
         location += (index % extent) * stride
         index //= extent
     return location
+
+
+def _matrix_offset(index, shape, strides):
+    """quantized.h adjust_matrix_offsets: one batch axis is never wrapped.
+
+    A single batch dimension offsets by ``tid.z * strides[0]`` for every
+    ``tid.z`` in the grid, so it addresses past the axis when the grid has
+    more batches than the axis; more dimensions go through elem_to_loc.
+    """
+    if len(shape) == 1:
+        return index * strides[0]
+    return _location(index, shape, strides)
 
 
 def _batch_offsets(parameters, m, k, rows, words, groups, batches):
@@ -267,10 +309,10 @@ def _batch_offsets(parameters, m, k, rows, words, groups, batches):
         raise ValueError("Quantized matrix-vector batch strides must be nonnegative")
     return [
         (
-            _location(z, x_shape[:x_batch], x_strides[:x_batch]),
-            _location(z, w_shape[:w_batch], w_strides[:w_batch]),
-            _location(z, w_shape[:w_batch], s_strides[:w_batch]),
-            _location(z, w_shape[:w_batch], b_strides[:w_batch]),
+            _matrix_offset(z, x_shape[:x_batch], x_strides[:x_batch]),
+            _matrix_offset(z, w_shape[:w_batch], w_strides[:w_batch]),
+            _matrix_offset(z, w_shape[:w_batch], s_strides[:w_batch]),
+            _matrix_offset(z, w_shape[:w_batch], b_strides[:w_batch]),
         )
         for z in range(batches)
     ]
@@ -284,6 +326,8 @@ def plan(entry, counts, parameters, threads, execution):
     the inert unbatched values qmv's batch_0 kernels reflect but never read.
     """
     info = signature(entry)
+    if "splitK" in info:
+        return _plan_split(entry, info, counts, parameters, threads, execution)
     k, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
     group, bits = info["groupSize"], info["bits"]
     transpose = transposed(entry)
@@ -365,3 +409,157 @@ def plan(entry, counts, parameters, threads, execution):
         "overreadPadding": padding,
         "parameters": values,
     }
+
+
+def split_views(
+    x_shape, x_strides, w_shape, w_strides, s_strides, b_strides, split, k, groups
+):
+    """quantized.cpp qvm_split_k's views: a ``split`` batch axis before the matrices.
+
+    Takes the operands' shapes and strides as MLX binds them (a 1-D ``x`` is
+    not yet widened) and the scales' row width ``groups``, and returns the
+    bound batch parameters.
+    """
+    split_d = -(-k // split)
+    x_shape, x_strides = list(x_shape), list(x_strides)
+    if len(x_shape) == 1:
+        x_shape.insert(0, 1)
+        x_strides.insert(0, 0)
+    x_ndim, w_ndim, words = len(x_shape), len(w_shape), w_shape[-1]
+    x_shape.insert(x_ndim - 2, split)
+    x_shape[-1] //= split
+    x_strides.insert(x_ndim - 2, split_d)
+    # quantized.cpp overwrites the row stride, which the kernel never reads.
+    x_strides[x_ndim - 1] = split_d
+    w_shape = list(w_shape)
+    w_shape.insert(w_ndim - 2, split)
+    w_shape[w_ndim - 1] //= split
+    return {
+        "x_batch_ndims": x_ndim - 1,
+        "x_shape": x_shape,
+        "x_strides": x_strides,
+        "w_batch_ndims": w_ndim - 1,
+        "w_shape": w_shape,
+        "w_strides": _inserted(w_strides, split_d * words),
+        "s_strides": _inserted(s_strides, split_d * groups),
+        "b_strides": _inserted(b_strides, split_d * groups),
+    }
+
+
+def _plan_split(entry, info, counts, parameters, threads, execution):
+    """Validate one qvm_split_k launch against quantized.cpp's partitions."""
+    split, group, bits = info["splitK"], info["groupSize"], info["bits"]
+    split_d, n = parameters.get("in_vec_size"), parameters.get("out_vec_size")
+    final = parameters.get("final_block_size")
+    if any(type(value) is not int for value in (split_d, n, final)):
+        raise ValueError("Quantized split-K dimensions are invalid")
+    k = (split - 1) * split_d + final
+    if (
+        not 1 <= final <= split_d
+        or split_d != -(-k // split)
+        or not 1 <= n <= MAX_ELEMENTS
+        or n % group
+        or k > MAX_ELEMENTS
+    ):
+        raise ValueError("Quantized split-K dimensions are invalid")
+    if not isinstance(execution, dict) or set(execution) != {
+        "workgroupCount",
+        "workgroupSize",
+    }:
+        raise ValueError("Quantized matrix-vector launch geometry is missing")
+    m, tiles, batches = execution["workgroupCount"]
+    if (
+        list(execution["workgroupSize"]) != list(workgroup_size(entry))
+        or any(type(value) is not int for value in (m, tiles, batches))
+        or not 1 <= m <= MAX_GROUPS
+        or not split <= batches <= MAX_GROUPS
+        or batches % split
+        or tiles != -(-n // tile_rows(entry))
+        or tiles > MAX_GROUPS
+    ):
+        raise ValueError("Quantized matrix-vector launch does not match MLX's grid")
+    if select(info["dtype"], group, bits, m, n, k, batches // split, False) != entry:
+        raise ValueError("Quantized matrix-vector entry differs from MLX's routing")
+    if threads != m * n * batches or counts["y"] != threads:
+        raise ValueError("Quantized matrix-vector output extent differs")
+    if set(parameters) != {*SCALAR_PARAMETERS, *BATCH_PARAMETERS, *SPLIT_SCALARS}:
+        raise ValueError("Quantized split-K parameters are missing")
+    words, groups = n * bits // 32, n // group
+    x_shape, w_shape = parameters["x_shape"], parameters["w_shape"]
+    x_batch, w_batch = parameters["x_batch_ndims"], parameters["w_batch_ndims"]
+    if (
+        x_batch != len(x_shape) - 2
+        or not 1 <= x_batch <= MAX_BATCH_DIMENSIONS
+        or w_batch != len(w_shape) - 2
+        or not 1 <= w_batch <= MAX_BATCH_DIMENSIONS
+        or len(parameters["x_strides"]) != len(x_shape)
+        or not len(parameters["w_strides"])
+        == len(parameters["s_strides"])
+        == len(parameters["b_strides"])
+        == len(w_shape)
+        or x_shape[x_batch - 1] != split
+        or w_shape[w_batch - 1] != split
+    ):
+        raise ValueError("Quantized split-K batch ranks do not match")
+    # Undo the reshape: drop the partition axis and restore the K extents and
+    # the dense row strides ensure_row_contiguous_matrix leaves.
+    x_strides = parameters["x_strides"]
+    original = dict(
+        x_shape=[*x_shape[: x_batch - 1], m, k],
+        x_strides=[*x_strides[: x_batch - 1], k, 1],
+        w_shape=[*w_shape[: w_batch - 1], k, words],
+        w_strides=[*parameters["w_strides"][: w_batch - 1], words, 1],
+        s_strides=[*parameters["s_strides"][: w_batch - 1], groups, 1],
+        b_strides=[*parameters["b_strides"][: w_batch - 1], groups, 1],
+    )
+    expected = split_views(**original, split=split, k=k, groups=groups)
+    if {name: parameters[name] for name in BATCH_PARAMETERS} != expected:
+        raise ValueError("Quantized split-K views differ from quantized.cpp's")
+    if math.prod(x_shape[:x_batch]) != batches or (
+        math.prod(w_shape[:w_batch]) > batches
+    ):
+        raise ValueError("Quantized matrix-vector batch extents do not match")
+    if any(
+        stride < 0
+        for name in ("x_strides", "w_strides", "s_strides", "b_strides")
+        for stride in parameters[name]
+    ):
+        raise ValueError("Quantized matrix-vector batch strides must be nonnegative")
+    extents = {"x": (m - 1) * k, "w": 0, "scales": 0, "biases": 0}
+    widths = {"x": None, "w": words, "scales": groups, "biases": groups}
+    views = {
+        "x": (x_shape, x_strides, x_batch),
+        "w": (w_shape, parameters["w_strides"], w_batch),
+        "scales": (w_shape, parameters["s_strides"], w_batch),
+        "biases": (w_shape, parameters["b_strides"], w_batch),
+    }
+    for z in range(batches):
+        # The last partition reads the shorter final block.
+        rows = final if z % split == split - 1 else split_d
+        for name, (shape, strides, ndim) in views.items():
+            offset = _matrix_offset(z, shape[:ndim], strides[:ndim])
+            end = (
+                offset + extents[name] + (rows if name == "x" else rows * widths[name])
+            )
+            if end > counts[name]:
+                raise ValueError(
+                    f"Quantized matrix-vector {name} batch exceeds its buffer"
+                )
+    if any(counts[name] > MAX_ELEMENTS for name in counts):
+        raise ValueError("Quantized matrix-vector buffers exceed the index bound")
+    return {
+        "kernel": info["kernel"],
+        "M": m,
+        "N": n,
+        "K": k,
+        "batches": batches // split,
+        "splitK": split,
+        "overreadPadding": {"scales": 0, "biases": 0},
+        "parameters": dict(parameters),
+    }
+
+
+def _inserted(strides, value):
+    values = list(strides)
+    values.insert(len(values) - 2, value)
+    return values

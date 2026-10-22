@@ -20,6 +20,7 @@ from crosstl.project.native_runtime_drivers import (
     OpenGLComputeRuntime,
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
+from crosstl.project.runtime_values import exact_types_within
 from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
@@ -32,6 +33,7 @@ from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
     bfloat_storage,
     column_reduction_layout,
+    column_small_layout,
     copy_layout,
     gather_dispatch,
     gemm_dispatch,
@@ -51,6 +53,12 @@ from demos.integrations.mlx.portable_host import (
     scan_dispatch,
     scan_layout,
     slice_update_layout,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    SmallColumnPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
@@ -207,6 +215,10 @@ TYPES = {
     "uint64": ctypes.c_uint64,
 }
 _installed_runtime = None
+INT_TYPES = frozenset({int})
+BOOL_TYPES = frozenset({bool})
+INTEGRAL_TYPES = frozenset({bool, int})
+FLOAT_TYPES = frozenset({float})
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
 ALL_CAST_ENTRIES = {
@@ -256,16 +268,29 @@ def physical_dtype(dtype, target):
 
 
 def boolean_values(values, dtype):
-    expected_type = bool if dtype == "bool" else int
-    if any(type(value) is not expected_type or value not in (0, 1) for value in values):
+    expected_types = BOOL_TYPES if dtype == "bool" else INT_TYPES
+    if not exact_types_within(values, expected_types) or (
+        values and not (min(values) >= 0 and max(values) <= 1)
+    ):
         raise ValueError("Boolean storage must contain canonical zero or one values")
-    return [bool(value) if dtype == "bool" else int(value) for value in values]
+    # Exact bools or ints already are their canonical storage values.
+    return list(values)
 
 
 def wire_value(value):
     if isinstance(value, float) and not math.isfinite(value):
         return "nan" if math.isnan(value) else "+infinity" if value > 0 else "-infinity"
     return value
+
+
+def wire_values(values):
+    """``[wire_value(value) for value in values]``, in bulk for exact scalars."""
+    values = list(values)
+    if exact_types_within(values, INTEGRAL_TYPES) or (
+        exact_types_within(values, FLOAT_TYPES) and all(map(math.isfinite, values))
+    ):
+        return values
+    return [wire_value(value) for value in values]
 
 
 class HostRuntime:
@@ -301,6 +326,13 @@ class HostRuntime:
         self.target = index["target"]
         self.small_rows = (
             SmallRowPackageCache(mlx_root, self.directory / "small-rows", self.target)
+            if mlx_root is not None
+            else None
+        )
+        self.small_columns = (
+            SmallColumnPackageCache(
+                mlx_root, self.directory / SMALL_COLUMN_CACHE, self.target
+            )
             if mlx_root is not None
             else None
         )
@@ -590,10 +622,13 @@ class HostRuntime:
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
-        column_reduction = entry in COLUMN_ENTRIES
+        small_column = entry in column_small_layout.SMALL_COLUMN_ENTRIES
+        column_reduction = entry in COLUMN_ENTRIES or small_column
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
-            column_reduction_layout if column_reduction else row_reduction_layout
+            (column_small_layout if small_column else column_reduction_layout)
+            if column_reduction
+            else row_reduction_layout
         )
         reduction = entry in REDUCTION_ENTRIES or shaped_reduction or initialization
         if entry not in self.descriptors and not reduction:
@@ -651,7 +686,7 @@ class HostRuntime:
                 "Reduction initialization requires one invocation per output"
             )
         checked_reduction = None
-        if reduction and not small_row:
+        if reduction and not small_row and not small_column:
             key = f'w{execution["workgroupSize"][0]}/{entry}'
             checked_reduction = getattr(self, "checked_reductions", {}).get(key)
             if checked_reduction is None and key not in self.reduction_descriptors:
@@ -659,7 +694,7 @@ class HostRuntime:
             if checked_reduction is None:
                 descriptor = self.reduction_descriptors[key]
                 package_directory = self.reduction_directories[key] / "package"
-        elif not small_row:
+        elif not small_row and not small_column:
             descriptor = self.descriptors[entry]
             package_directory = (
                 self.bfloat_directory
@@ -826,6 +861,16 @@ class HostRuntime:
             shaped_metadata = layout_module.validate(
                 entry, supplied, threads, execution
             )
+            if small_column:
+                if self.small_columns is None:
+                    raise ValueError(
+                        "Small column dispatch requires the pinned MLX source root"
+                    )
+                descriptor, package_directory = self.small_columns.get(
+                    column_small_layout.variant(
+                        entry, tuple(execution["workgroupSize"])
+                    )
+                )
             if checked_reduction is not None:
                 descriptor, package_directory = checked_reduction.get(
                     entry,
@@ -1004,11 +1049,7 @@ class HostRuntime:
                     ).contents
                 )
             else:
-                values = (
-                    [0] * buffer.count
-                    if buffer.output == 1
-                    else [wire_value(value) for value in view]
-                )
+                values = [0] * buffer.count if buffer.output == 1 else wire_values(view)
             if initialization:
                 # Unwritten outputs must differ from the reduction identity.
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
@@ -1179,9 +1220,9 @@ class HostRuntime:
                     if dtype.startswith("int")
                     else (0, 2**bits - 1)
                 )
-                if any(
-                    type(value) is not int or not low <= value <= high
-                    for value in output["values"]
+                readback = output["values"]
+                if not exact_types_within(readback, INT_TYPES) or (
+                    readback and not (low <= min(readback) and max(readback) <= high)
                 ):
                     raise RuntimeError(
                         "Native integer readback is outside its integer type"
@@ -1203,7 +1244,12 @@ class HostRuntime:
                         ).value
                     return value
 
-                if any(
+                # Validated destinations lie in [0, count), so as many distinct
+                # written indices as elements leave no untouched storage.
+                every_element_written = len(written) == buffer.count and (
+                    not written or (min(written) >= 0 and max(written) < buffer.count)
+                )
+                if not every_element_written and any(
                     storage_word(value) != storage_word(initial[index])
                     for index, value in enumerate(output["values"][: buffer.count])
                     if index not in written
@@ -1221,8 +1267,9 @@ class HostRuntime:
                 result_values = bfloat_storage.unpack(result_values, self.target)
             values = (storage_type * buffer.count)(
                 *(
-                    float(value) if storage_type is ctypes.c_float else value
-                    for value in result_values
+                    map(float, result_values)
+                    if storage_type is ctypes.c_float
+                    else result_values
                 )
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))

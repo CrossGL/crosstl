@@ -31,7 +31,7 @@ def validate_result(record, mode, tests=UPSTREAM_TESTS):
         record.get("mode") != mode
         or record.get("tests") != list(tests)
         or type(record.get("testsRun")) is not int
-        or record["testsRun"] != 1
+        or record["testsRun"] != len(tests)
         or record.get("success") is not True
         or any(record.get(key) != [] for key in ("skipped", "errors", "failures"))
         or type(record.get("nativeDispatches")) is not int

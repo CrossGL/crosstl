@@ -14,12 +14,19 @@ from demos.integrations.mlx.portable_host import (
 from demos.integrations.mlx.portable_host import (
     verify_upstream_quantization as quantization,
 )
-from demos.integrations.mlx.portable_host import verify_upstream_qvm
+from demos.integrations.mlx.portable_host import (
+    verify_upstream_qvm,
+    verify_upstream_qvm_splitk,
+)
 
 WORKFLOW = (
     Path(__file__).resolve().parents[5] / ".github/workflows/demo-project-testing.yml"
 )
-RUNNERS = {"qvm": verify_upstream_qvm, "qmv": verify_upstream_qmv}
+RUNNERS = {
+    "qvm": verify_upstream_qvm,
+    "qmv": verify_upstream_qmv,
+    "qvm_splitk": verify_upstream_qvm_splitk,
+}
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
 
@@ -27,7 +34,7 @@ def record(spec, mode, dispatches):
     return {
         "mode": mode,
         "tests": list(spec.UPSTREAM_TESTS),
-        "testsRun": 1,
+        "testsRun": len(spec.UPSTREAM_TESTS),
         "success": True,
         "skipped": [],
         "errors": [],
@@ -86,6 +93,63 @@ def test_check_trace_requires_exact_routed_dispatches(fault):
             )
     else:
         upstream_runner.check_trace(items, "metal", count, reductions=("max",), **check)
+
+
+def test_translate_ahead_places_column_sums_beside_the_maxima(tmp_path, monkeypatch):
+    from demos.integrations.mlx.portable_host import reduction_packages
+
+    packages = tmp_path / "packages"
+    packages.mkdir()
+    (packages / "index.json").write_text(json.dumps({"target": "opengl"}))
+    builds, reductions = [], []
+
+    class Builder:
+        @staticmethod
+        def build_entries(root, directory, target, entries, jobs):
+            builds.append((target, list(entries), jobs))
+            return [{"entry": entry} for entry in entries]
+
+    monkeypatch.setattr(
+        reduction_packages,
+        "build_packages",
+        lambda root, output, target, **options: reductions.append(
+            (output, target, options)
+        ),
+    )
+    output = tmp_path / "reductions"
+    upstream_runner.translate_ahead(
+        tmp_path, packages, output, 2, [(Builder, ["a"])], ("max",)
+    )
+    assert reductions == [
+        (output, "opengl", {"family": "all", "entries": ("max",), "on_demand": True})
+    ]
+    upstream_runner.translate_ahead(
+        tmp_path, packages, output, 2, [(Builder, ["a"])], ("max",), columns=["col"]
+    )
+    assert reductions[2:] == [
+        (
+            tmp_path / "reductions-column",
+            "opengl",
+            {"family": "column", "entries": ("col",), "jobs": 2},
+        )
+    ]
+    assert builds == [("opengl", ["a"], 2)] * 2
+
+
+def test_cli_worker_loads_every_reduction_directory(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        upstream_runner,
+        "worker",
+        lambda args, tests, trace_values: seen.append(args.reductions),
+    )
+    common = ["--mlx-root", "m", "--packages", "p", "--output-dir", "o"]
+    upstream_runner.main(
+        verify_upstream_qvm_splitk,
+        [*common, "--worker", "native", "--reductions", "r", "--reductions", "c"],
+    )
+    upstream_runner.main(verify_upstream_qvm, [*common, "--worker", "cpu"])
+    assert seen == [[Path("r"), Path("c")], None]
 
 
 @pytest.mark.parametrize("name", sorted(RUNNERS))
@@ -156,9 +220,15 @@ def test_runner_prepares_packages_before_both_workers(
         if mode != "random":
             assert spec.MODULE in command
         if mode == "native":
-            assert command[command.index("--reductions") + 1] == str(
-                output / "reductions"
-            )
+            loaded = [
+                command[index + 1]
+                for index, item in enumerate(command)
+                if item == "--reductions"
+            ]
+            expected_reductions = [str(output / "reductions")]
+            if getattr(spec, "COLUMN_SUMS", ()):
+                expected_reductions.append(str(output / "reductions-column"))
+            assert loaded == expected_reductions
             assert command[command.index("--random") + 1] == str(
                 output / "random-packages"
             )
@@ -170,7 +240,10 @@ def test_runner_module_names_itself(name):
     spec = RUNNERS[name]
     assert spec.MODULE == spec.__name__
     assert spec.LABEL == "test_" + name
-    assert spec.UPSTREAM_TESTS == (f"test_quantized.TestQuantized.test_{name}",)
+    first, *others = spec.UPSTREAM_TESTS
+    assert first == f"test_quantized.TestQuantized.test_{name}"
+    # Further tests are the named test's variants, such as its multi-row form.
+    assert all(test.startswith(first + "_") for test in others)
     assert set(spec.TIMEOUTS) == {"random", "packages", "cpu", "native"}
 
 

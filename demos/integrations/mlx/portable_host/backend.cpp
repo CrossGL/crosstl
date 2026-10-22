@@ -680,6 +680,8 @@ uint64_t column_shape_size(const mlx::core::Shape& shape) {
   return size;
 }
 
+enum class ColumnPass { Small, Looped, TwoPass };
+
 void dispatch_column_pass(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -687,9 +689,10 @@ void dispatch_column_pass(
     mlx::core::Strides strides,
     mlx::core::Shape reduce_shape,
     mlx::core::Strides reduce_strides,
-    bool two_pass,
+    ColumnPass pass,
     const std::string& operation,
     const char* dtype) {
+  const bool two_pass = pass == ColumnPass::TwoPass;
   if (shape.size() > 64 || shape.size() != strides.size() ||
       reduce_shape.empty() || reduce_shape.size() > 64 ||
       reduce_shape.size() != reduce_strides.size()) {
@@ -725,8 +728,10 @@ void dispatch_column_pass(
   int32_t ndim = static_cast<int32_t>(shape.size());
   int32_t reduce_ndim = static_cast<int32_t>(reduce_shape.size());
   const int dimension = reduce_ndim == 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
-  std::string entry = std::string(two_pass ? "col_reduce_2pass_" : "col_reduce_looped_") +
-      std::to_string(dimension) + "_32_32_reduce_" + operation + dtype;
+  std::string entry = pass == ColumnPass::Small
+      ? "col_reduce_small_" + std::to_string(dimension) + "_reduce_" + operation + dtype
+      : std::string(two_pass ? "col_reduce_2pass_" : "col_reduce_looped_") +
+          std::to_string(dimension) + "_32_32_reduce_" + operation + dtype;
   if (ndim == 0) { shape.push_back(0); strides.push_back(0); }
   out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   CrosstlMlxBuffer buffers[] = {
@@ -743,9 +748,17 @@ void dispatch_column_pass(
       {"non_col_reductions", "uint64", &non_columns, 1, 0},
       {"out_size", "uint64", &outer, 1, 0},
   };
-  const CrosstlMlxLaunch launch{
-      {uint32_t((reduction_stride + 31) / 32), uint32_t(outer * (two_pass ? 32 : 1)), 1},
-      {256, 1, 1}};
+  // reduce.cpp strided_reduce_small: lanes of four columns, at most eight rows
+  // (the kernels allow 1024 threads); the looped passes use 32 x 32 tiles.
+  const uint64_t blocks = (reduction_stride + 3) / 4;
+  const uint32_t lanes = uint32_t(std::min<uint64_t>(blocks, 32));
+  const CrosstlMlxLaunch launch = pass == ColumnPass::Small
+      ? CrosstlMlxLaunch{
+            {uint32_t((blocks + lanes - 1) / lanes), uint32_t(outer), 1},
+            {lanes, uint32_t(std::min<uint64_t>({8, 1024 / lanes, total})), 1}}
+      : CrosstlMlxLaunch{
+            {uint32_t((reduction_stride + 31) / 32), uint32_t(outer * (two_pass ? 32 : 1)), 1},
+            {256, 1, 1}};
   char error[2048] = {};
   int status = dispatch_callback.load()(
       entry.c_str(), buffers, two_pass ? 12 : 11, in.size(), &launch, error, sizeof(error));
@@ -768,8 +781,8 @@ void dispatch_column_reduce(
   }
   const uint64_t total = column_shape_size(plan.shape);
   const int64_t stride = plan.strides.back();
-  if (total < 32 || (stride < 32 && total >= 1024)) {
-    throw std::invalid_argument("CrossTL small-column and long-column reduction plans are not implemented.");
+  if (stride < 32 && total >= 1024) {
+    throw std::invalid_argument("CrossTL long-column reduction plans are not implemented.");
   }
   auto [shape, strides] = shapes_without_reduction_axes(in, axes);
   // Follow upstream's shape product, including broadcast views with zero strides.
@@ -786,17 +799,25 @@ void dispatch_column_reduce(
     throw std::invalid_argument("CrossTL column reduction output does not match its contiguous span.");
   }
   std::tie(shape, strides) = collapse_contiguous_dims(shape, strides);
+  if (total < 32) {
+    dispatch_column_pass(
+        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Small, operation, dtype);
+    return;
+  }
   const bool two_pass = total > 256 && out.size() / 32 < 1024;
   if (!two_pass) {
-    dispatch_column_pass(in, out, shape, strides, plan.shape, plan.strides, false, operation, dtype);
+    dispatch_column_pass(
+        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Looped, operation, dtype);
     return;
   }
   Shape intermediate_shape{32};
   intermediate_shape.insert(intermediate_shape.end(), out.shape().begin(), out.shape().end());
   array intermediate(std::move(intermediate_shape), out.dtype(), nullptr, {});
-  dispatch_column_pass(in, intermediate, shape, strides, plan.shape, plan.strides, true, operation, dtype);
+  dispatch_column_pass(
+      in, intermediate, shape, strides, plan.shape, plan.strides, ColumnPass::TwoPass, operation, dtype);
   // Consume the completed native partials, preserving the upstream second pass.
-  dispatch_column_pass(intermediate, out, {}, {}, {32}, {int64_t(out.size())}, false, operation, dtype);
+  dispatch_column_pass(
+      intermediate, out, {}, {}, {32}, {int64_t(out.size())}, ColumnPass::Looped, operation, dtype);
 }
 
 const char* storage_type(mlx::core::Dtype dtype) {
@@ -2062,6 +2083,117 @@ const char* matmul_storage(Dtype dtype) {
 }
 } // namespace
 
+// quantized.cpp qvm_split_k: the K axis in 8 partitions (32 above 8192) whose
+// partial products land on a partition axis before the matrices, then a
+// strided sum over that axis.
+void dispatch_qvm_split_k(
+    const array& x,
+    const array& w,
+    const array& scales,
+    const array& biases,
+    array& out,
+    int group_size,
+    int bits,
+    int M,
+    int N,
+    int K) {
+  if (out.dtype() != float32) {
+    throw std::invalid_argument(
+        "CrossTL split-K vector-matrix products require float32 partition sums.");
+  }
+  // adjust_matrix_offsets moves a single weight batch axis by tid.z without
+  // wrapping it, so 2-D weights (the partition axis alone) under batched x
+  // read past the last partition in quantized.h.
+  if (w.ndim() == 2 && out.size() / M / N > 1) {
+    throw std::invalid_argument(
+        "CrossTL split-K vector-matrix products of batched inputs and 2-D weights are not "
+        "routed: qvm_split_k offsets the weights past their partitions.");
+  }
+  const int split_k = K > 8192 ? 32 : 8;
+  const int split_d = (K + split_k - 1) / split_k;
+  const uint64_t B = out.size() / M / N * split_k;
+  const int bn = std::min(group_size, 32) * 2;
+  auto x_shape = x.shape();
+  auto x_strides = x.strides();
+  if (x_shape.size() == 1) {
+    x_shape.insert(x_shape.begin(), 1);
+    x_strides.insert(x_strides.begin(), 0);
+  }
+  const int x_ndim = static_cast<int>(x_shape.size());
+  int32_t x_batch_ndims = x_ndim - 2 + 1;
+  int32_t w_batch_ndims = int32_t(w.ndim()) - 2 + 1;
+  auto w_shape = w.shape();
+  auto w_strides = w.strides();
+  auto s_strides = scales.strides();
+  auto b_strides = biases.strides();
+  x_shape.insert(x_shape.end() - 2, split_k);
+  x_shape.back() /= split_k;
+  x_strides.insert(x_strides.end() - 2, split_d);
+  x_strides[x_ndim - 1] = split_d;
+  w_shape.insert(w_shape.end() - 2, split_k);
+  w_shape[w.ndim() - 1] /= split_k;
+  w_strides.insert(w_strides.end() - 2, int64_t(split_d) * w.shape(-1));
+  s_strides.insert(s_strides.end() - 2, int64_t(split_d) * scales.shape(-1));
+  b_strides.insert(b_strides.end() - 2, int64_t(split_d) * biases.shape(-1));
+  int32_t final_block_size = K - (split_k - 1) * split_d;
+  auto temp_shape = out.shape();
+  if (temp_shape.size() == 1) {
+    temp_shape.insert(temp_shape.begin(), 1);
+  }
+  temp_shape.insert(temp_shape.end() - 2, split_k);
+  array intermediate(temp_shape, out.dtype(), nullptr, {});
+  const std::string entry = std::string("affine_qvm_split_k_float_gs_") +
+      std::to_string(group_size) + "_b_" + std::to_string(bits) + "_spk_" +
+      std::to_string(split_k);
+  require_entry(entry);
+  if (intermediate.size() > max_matmul_elements || B > 65535 || uint32_t(M) > 65535) {
+    throw std::invalid_argument("CrossTL quantized matmul launch exceeds its bounds.");
+  }
+  intermediate.set_data(allocator::malloc(intermediate.nbytes()));
+  int32_t in_vec_size = split_d;
+  int32_t out_vec_size = N;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  auto vector = [](const char* name, const char* type, const auto& values) {
+    return CrosstlMlxBuffer{
+        name, type, const_cast<void*>(static_cast<const void*>(values.data())),
+        values.size(), 0};
+  };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"w", "uint32", data(w), matmul_span(w), 0},
+      {"scales", "float32", data(scales), matmul_span(scales), 0},
+      {"biases", "float32", data(biases), matmul_span(biases), 0},
+      {"x", "float32", data(x), matmul_span(x), 0},
+      {"y", "float32", intermediate.data<void>(), intermediate.size(), 1},
+      {"in_vec_size", "int32", &in_vec_size, 1, 0},
+      {"out_vec_size", "int32", &out_vec_size, 1, 0},
+      {"x_batch_ndims", "int32", &x_batch_ndims, 1, 0},
+      vector("x_shape", "int32", x_shape),
+      vector("x_strides", "int64", x_strides),
+      {"w_batch_ndims", "int32", &w_batch_ndims, 1, 0},
+      vector("w_shape", "int32", w_shape),
+      vector("w_strides", "int64", w_strides),
+      vector("s_strides", "int64", s_strides),
+      vector("b_strides", "int64", b_strides),
+      {"final_block_size", "int32", &final_block_size, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {uint32_t(M), uint32_t((N + bn - 1) / bn), uint32_t(B)}, {32, 2, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()),
+      intermediate.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native quantized split-K failed: ") + error);
+  }
+  const int axis = int(intermediate.ndim()) - 3;
+  ReductionPlan plan(
+      ReductionOpType::ContiguousStridedReduce,
+      {intermediate.shape(axis)},
+      {intermediate.strides(axis)});
+  dispatch_column_reduce(intermediate, out, plan, {axis}, "sum", "float32");
+}
+
 void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (mode_ != QuantizationMode::Affine || inputs.size() != 4) {
@@ -2099,8 +2231,8 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         "CrossTL quantized matmul does not route matrix-matrix products yet.");
   }
   if (!transpose_ && K >= 1024) {
-    throw std::invalid_argument(
-        "CrossTL quantized matmul does not route split-K vector-matrix products yet.");
+    dispatch_qvm_split_k(x, w, scales, biases, out, group_size_, bits_, M, N, K);
+    return;
   }
   // dispatch_qmv without qmv_wide, which MLX selects from generation 15, and
   // qvm for untransposed weights.
