@@ -908,7 +908,10 @@ def test_metal_reachable_template_resources_materialize_before_target_codegen(
     )
 
     generated = crosstl.translate(
-        str(source_path), backend=backend, format_output=False
+        str(source_path),
+        backend=backend,
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1085,7 +1088,10 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1125,7 +1131,10 @@ def test_metal_constexpr_threadgroup_extent_lowers_to_directx_literal(tmp_path):
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -1163,7 +1172,10 @@ def test_metal_value_template_threadgroup_extents_remain_entry_specific(tmp_path
     )
 
     generated = crosstl.translate(
-        str(source_path), backend="directx", format_output=False
+        str(source_path),
+        backend="directx",
+        format_output=False,
+        source_options={"threadgroup_size": 32},
     )
 
     _assert_generated_output_is_usable(generated)
@@ -2481,6 +2493,7 @@ def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path)
             include = ["kernels/tg.metal"]
             targets = ["vulkan"]
             output_dir = "out"
+            workgroup_size = [32, 1, 1]
 
             [project.sources]
             "**/*.metal" = "metal"

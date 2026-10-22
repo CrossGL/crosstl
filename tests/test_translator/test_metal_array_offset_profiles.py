@@ -92,7 +92,7 @@ def test_array_offsets_preserve_profiled_value_addition(tmp_path, target, profil
         str(path),
         backend=target,
         format_output=False,
-        source_options={"binary32_additive_profile": profile},
+        source_options={"binary32_additive_profile": profile, "threadgroup_size": 32},
     )
     assert "crossgl_metal_add_float" in generated
     assert "scratch" in generated

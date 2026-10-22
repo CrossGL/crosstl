@@ -11290,6 +11290,7 @@ def test_glsl_metal_storage_to_workgroup_byte_array_copy(tmp_path):
         backend="opengl",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     assert "copy_values_shared[0] = input_[0];" in generated
@@ -11334,6 +11335,7 @@ def test_glsl_storage_to_workgroup_byte_array_copy_checks_expanded_bounds(tmp_pa
             backend="opengl",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     diagnostic = exc_info.value
@@ -11372,6 +11374,7 @@ def test_glsl_storage_to_workgroup_byte_array_copy_rejects_mismatched_backings(
             backend="opengl",
             format_output=False,
             source_backend="metal",
+            source_options={"threadgroup_size": 32},
         )
 
     diagnostic = exc_info.value
@@ -49145,6 +49148,7 @@ def test_glsl_metal_half_storage_to_workgroup_byte_array_copy(tmp_path):
         backend="opengl",
         format_output=False,
         source_backend="metal",
+        source_options={"threadgroup_size": 32},
     )
 
     for index in range(4):

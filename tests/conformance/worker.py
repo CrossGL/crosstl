@@ -24,6 +24,7 @@ def translate_job(job):
             backend=BACKENDS[job["target"]],
             source_backend=SOURCE_BACKENDS.get(job["language"], job["language"]),
             format_output=False,
+            source_options=job.get("source_options"),
         )
         Path(job["artifact"]).write_text(result)
         return {"status": "translated", "seconds": time.perf_counter() - started}

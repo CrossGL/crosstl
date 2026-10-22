@@ -1592,6 +1592,8 @@ WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 ENTRY_WORKGROUP_SIZE_RULES_CONFIG_KEY = "entry_workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
+# Targets that fix the workgroup size in the shader, so a configured project size must reach them.
+WORKGROUP_SIZE_FIXED_TARGETS = frozenset(("directx", "opengl", "vulkan"))
 WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
@@ -29444,7 +29446,7 @@ def _translate_project_impl(
                     )
                     requires_workgroup_specialization = workgroup_input_supported and (
                         (
-                            target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
+                            target in WORKGROUP_SIZE_FIXED_TARGETS
                             and _project_input_requires_workgroup_specialization(
                                 input_path=translation_input_path,
                                 source_backend=translation_source_backend,

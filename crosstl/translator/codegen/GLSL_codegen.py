@@ -142,6 +142,7 @@ from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .builtin_result_types import (
     GLSL_FAMILY,
+    builtin_call_result_type,
     component_access_type,
     inferred_value_type,
 )
@@ -45118,6 +45119,20 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if boolean_reduction_type is not None:
                 return boolean_reduction_type
+            if function_name not in self.function_return_types:
+                # Typed by its operands' source types, so ``transpose(W)`` of a uniform or built-in matrix is typed.
+                builtin_type = builtin_call_result_type(
+                    function_name,
+                    [
+                        self.type_name_string(
+                            self.glsl_source_expression_type(argument)
+                        )
+                        for argument in expression.arguments or []
+                    ],
+                    GLSL_FAMILY,
+                )
+                if builtin_type is not None:
+                    return builtin_type
         return self.expression_result_type(expression)
 
     def glsl_addressed_element_type_match_score(

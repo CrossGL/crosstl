@@ -234,7 +234,7 @@ def test_a_slang_probe_for_hlsl_is_written_as_hlsl_and_compiled_by_dxc(
 ):
     commands = []
 
-    def run(arguments, cwd):
+    def run(arguments, cwd, environment=None, stdout=True):
         commands.append(arguments)
         if arguments[0] == "slangc":
             Path(cwd, arguments[arguments.index("-o") + 1]).write_text(generated)
@@ -255,6 +255,29 @@ def test_a_slang_probe_for_hlsl_is_written_as_hlsl_and_compiled_by_dxc(
     else:
         assert len(commands) == 1
         assert "debugBreak() not currently supported" in verdict.log
+
+
+@pytest.mark.skipif(not validators.available("slang"), reason="slangc is not installed")
+def test_slangc_validates_the_spirv_it_writes():
+    # The half-precision atomic converts its pointer to an integer, which SPIR-V allows only for a physical storage
+    # buffer pointer; slangc writes the conversion for a local's address and exits 0 unless told to validate.
+    source = "\n".join(
+        [
+            "RWStructuredBuffer<half> outp;",
+            '[shader("compute")]',
+            "[numthreads(1, 1, 1)]",
+            "void main(uint3 tid : SV_DispatchThreadID) {",
+            "    half a0 = outp[tid.x];",
+            "    half a1;",
+            "    InterlockedAddF16Emulated(&a0, a0, a1);",
+            "    outp[tid.x] = a1;",
+            "}",
+        ]
+    )
+    verdict = validators.validate("slang", source)
+    assert not verdict.accepted
+    assert verdict.log.startswith("error: line ")
+    assert "PhysicalStorageBuffer" in verdict.log
 
 
 def test_a_slang_probe_for_hlsl_needs_dxc(monkeypatch):

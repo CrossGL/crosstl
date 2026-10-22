@@ -11588,7 +11588,7 @@ def test_preprocessor_template_method_full_pipeline_to_hlsl():
     )
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
-    crossgl = MetalToCrossGLConverter().generate(ast)
+    crossgl = MetalToCrossGLConverter(threadgroup_size=32).generate(ast)
     parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     hlsl = HLSLCodeGen().generate(parsed)
     # No dangling receiver call and no bare Metal `simd_reduce(` builtin survive
@@ -13171,7 +13171,7 @@ def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
     assert "Red_float__simd_reduce__float(thread Red_float& self, float val)" in pre
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
-    crossgl = MetalToCrossGLConverter().generate(ast)
+    crossgl = MetalToCrossGLConverter(threadgroup_size=32).generate(ast)
     parsed = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     hlsl = HLSLCodeGen().generate(parsed)
     assert "op.simd_reduce(" not in hlsl

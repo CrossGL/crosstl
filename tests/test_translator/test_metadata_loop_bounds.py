@@ -251,7 +251,7 @@ def _generator_with_metadata(root, target, source_text=SOURCE):
         translate(
             source,
             format_output=False,
-            source_options={"preserve_resource_origins": True},
+            source_options={"preserve_resource_origins": True, "threadgroup_size": 32},
         )
     )
     generator = HLSLCodeGen() if target == "directx" else GLSLCodeGen()

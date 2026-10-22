@@ -76,6 +76,7 @@ class Mojo(Dialect):
 
     language = "mojo"
     suffix = ".mojo"
+    one = "1"
     entry = "probe"
     # Mojo's 64-bit integer scalar is the word-sized Int, which its integer functions take.
     wide_integers = True
@@ -173,6 +174,7 @@ class Rust(Dialect):
 
     language = "rust"
     suffix = ".rs"
+    one = "1"
     entry = "probe"
     _SCALARS = {
         "float": "f32",

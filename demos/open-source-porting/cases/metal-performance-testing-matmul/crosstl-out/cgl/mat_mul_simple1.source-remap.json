@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 34,
-        "endOffset": 1100,
+        "endLine": 35,
+        "endOffset": 1130,
         "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
-        "length": 1100,
+        "length": 1130,
         "line": 1,
         "offset": 0
       },

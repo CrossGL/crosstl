@@ -49,7 +49,11 @@ kernel void k(device const int* a [[buffer(0)]], device int* o [[buffer(1)]],
 def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    output = crosstl.translate(str(path), backend=backend, format_output=False)
+    # Metal kernels state the threadgroup size their host dispatches them with.
+    options = {"threadgroup_size": 64} if suffix == ".metal" else None
+    output = crosstl.translate(
+        str(path), backend=backend, format_output=False, source_options=options
+    )
     # WGSL from Metal and CUDA kernels has unrelated interface defects (scalar invocation-id builtins and buffer
     # parameters), so only WGSL from GLSL is checked natively.
     if backend == "vulkan" or suffix == ".comp":
