@@ -180,11 +180,13 @@ def test_package_verification_entries_include_the_split_products():
     from demos.integrations.mlx.portable_host import (
         fp_matmul_packages,
         verify_upstream_fp_qmv,
+        verify_upstream_fp_qmv_large_output,
     )
 
     assert set(fp_matmul_packages.verification_entries()) == {
         *upstream.package_entries()["quantized"],
         *verify_upstream_fp_qmv.package_entries()["quantized"],
+        *verify_upstream_fp_qmv_large_output.package_entries()["quantized"],
     }
     assert any(
         "_qvm_split_k_" in name for name in fp_matmul_packages.verification_entries()

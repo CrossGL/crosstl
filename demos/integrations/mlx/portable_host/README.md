@@ -447,6 +447,15 @@ its own reduction directory. `test_qmm_large_dims` (outputs over 2^15 rows or
 columns) is not run yet. The `MLX upstream` jobs run each test on Metal,
 Direct3D 12 (WARP) and OpenGL (Mesa) in the heavy tier.
 
+The block-scaled runners follow the same steps. `verify_upstream_fp_qmv.py`
+and `verify_upstream_fp_qvm.py` run `test_fp_qmv` and `test_fp_qvm` in
+float32. `verify_upstream_fp_qmv_large_output.py` runs
+`test_fp_qmv_large_output` in float16, bfloat16 and float32, as the GPU device
+does. Each type reaches `nvfp4_qmv_fast` of that type, alone and batched, for
+4,096 outputs, against a `gemv` reference in the same type. Its `allclose` is a
+translated chain of 16-bit and float32 element-wise operations ending in an
+`and` reduction.
+
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
   --mlx-root mlx-upstream --packages host-packages --output-dir upstream-qmv
