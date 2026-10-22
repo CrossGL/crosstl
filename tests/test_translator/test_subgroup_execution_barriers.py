@@ -409,8 +409,8 @@ kernel void k(device uint* out [[buffer(0)]],
     _, _, package = _package(
         tmp_path, "opengl", "uint", (64, 1, 1), source=source, software_subgroups=True
     )
-    (generated,) = [
+    (generated,) = (
         path.read_text() for path in tmp_path.joinpath("out").rglob("*.glsl")
-    ]
+    )
     assert _fenced_barriers(generated) == 1
     _compile(generated, "opengl", tmp_path)
