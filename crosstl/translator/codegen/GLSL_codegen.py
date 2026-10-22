@@ -475,6 +475,7 @@ from .stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    function_entry_execution_config,
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -9871,6 +9872,7 @@ class GLSLCodeGen(
                 stage_code += self.generate_function(
                     func,
                     shader_type="compute",
+                    execution_config=function_entry_execution_config(func),
                     entry_name=combined_stage_entry_names.get(id(func)),
                 )
                 code += self.wrap_stage_guard(stage_code, "compute")

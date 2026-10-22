@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 700,
+        "endOffset": 490,
         "file": "crosstl-out/metal/vectorAdd_kernel.metal",
-        "length": 700,
+        "length": 490,
         "line": 1,
         "offset": 0
       },
