@@ -151,22 +151,25 @@ def read_storage(entry, buffers):
     )
 
 
-def _launch(entry, execution, m, n):
-    """The grid depth of a ``(ceil(N / BN), ceil(M / BM), depth)`` launch."""
+def launch_depth(execution, m, n, label=LABEL):
+    """The grid depth of a ``(ceil(N / BN), ceil(M / BM), depth)`` launch.
+
+    Every affine and block-scaled qmm kernel runs ``(32, 2, 2)`` threadgroups.
+    """
     if not isinstance(execution, dict) or set(execution) != {
         "workgroupCount",
         "workgroupSize",
     }:
-        raise ValueError(f"{LABEL} launch geometry is missing")
+        raise ValueError(f"{label} launch geometry is missing")
     count = list(execution["workgroupCount"])
     if (
-        list(execution["workgroupSize"]) != list(workgroup_size(entry))
+        list(execution["workgroupSize"]) != [SIMD_SIZE, WN, WM]
         or len(count) != 3
         or any(type(value) is not int for value in count)
         or count[:2] != [-(-n // BN), -(-m // BM)]
         or not 1 <= min(count) <= max(count) <= MAX_GROUPS
     ):
-        raise ValueError(f"{LABEL} launch does not match MLX's grid")
+        raise ValueError(f"{label} launch does not match MLX's grid")
     return count[2]
 
 
@@ -200,7 +203,7 @@ def plan(entry, counts, parameters, threads, execution):
         or (k if transpose else n) % group
     ):
         raise ValueError(f"{LABEL} dimensions are invalid")
-    depth = _launch(entry, execution, m, n)
+    depth = launch_depth(execution, m, n)
     split = depth if kernel == "qmm_t_splitk" else 1
     batches = depth // split
     if select(info["dtype"], group, bits, m, n, k, batches, transpose) != entry or (
@@ -256,9 +259,13 @@ def padded(dtype):
     return BK + 16 // (4 if dtype == "float32" else 2)
 
 
-def x_loader(entry):
-    """The activation ``BlockLoader`` the translation materializes."""
-    info = signature(entry)
+def x_loader(entry, info=None):
+    """The activation ``BlockLoader`` the translation materializes.
+
+    ``info`` is the entry's signature; the block-scaled kernels share these
+    tiles, so ``fp_qmm_layout`` passes its own.
+    """
+    info = signature(entry) if info is None else info
     itype, width = SOURCE_TYPES[info["dtype"]], padded(info["dtype"])
     name = f"BlockLoader_{itype}_{BM}_{BK}_{width}_1_{THREADS}"
     if info["kernel"] == "qmm_n":
@@ -268,13 +275,13 @@ def x_loader(entry):
     return Loader(f"{name}__load_unsafe", BM, BK, width, THREADS)
 
 
-def access_assertions(entry):
+def access_assertions(entry, info=None, source=SOURCE):
     """The x loader's ``dst`` stays inside the slots ``BlockLoader`` writes."""
-    loader = x_loader(entry)
+    loader = x_loader(entry, info)
     slots = [slot for lane in loader.slots() for slot in lane]
     return (
         {
-            "source": SOURCE,
+            "source": source,
             "entryPoint": entry,
             "function": loader.function,
             "parameter": "self.dst",
@@ -284,7 +291,7 @@ def access_assertions(entry):
     )
 
 
-def index_assertions(entry):
+def index_assertions(entry, info=None, source=SOURCE):
     """OpenGL ranges for the 64-bit offsets the kernel forms.
 
     The x loader reads its whole elements past each source offset; the
@@ -292,9 +299,9 @@ def index_assertions(entry):
     batch strides, int64 strides of buffers below ``MAX_ELEMENTS`` elements;
     and each threadgroup tile view reaches only its ``BM`` padded rows.
     """
-    info = signature(entry)
+    info = signature(entry) if info is None else info
     element = HELPER_ELEMENTS[info["dtype"]]
-    reads = x_loader(entry).reads
+    reads = x_loader(entry, info).reads
     helpers = [f"load_{element}", f"store_{element}", "load_uint8"]
     if info["kernel"] != "qmm_t_splitk":
         helpers.append("load_int64_t")
@@ -324,17 +331,17 @@ def index_assertions(entry):
         for tile in ("Xs", "Ws")
     ]
     return tuple(
-        {"source": SOURCE, **scope, "minimum": 0, "maximum": maximum}
+        {"source": source, **scope, "minimum": 0, "maximum": maximum}
         for scope, maximum in items
     )
 
 
-def bounded_parameters(entry):
+def bounded_parameters(entry, info=None):
     """The scalar parameters each translation bounds by ``K_LIMIT``.
 
     qmm_t_splitk's K loop runs to k_partition_size; its rows still stride by K.
     """
-    if signature(entry)["kernel"] == "qmm_t_splitk":
+    if (signature(entry) if info is None else info)["kernel"] == "qmm_t_splitk":
         return ("K", "k_partition_size")
     return ("K",)
 

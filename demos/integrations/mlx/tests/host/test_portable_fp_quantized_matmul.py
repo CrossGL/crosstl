@@ -518,13 +518,16 @@ def test_backend_routes_block_modes_through_the_floating_point_kernels():
         '{"scales", "uint8"',
         '{"M", "int32"',
         "QuantizedBatchViews views(x, w, scales);",
-        "matrix-matrix products are not routed",
         "dispatch_qvm_split_k(x, w, scales, std::nullopt, out, mode,",
     ):
         assert fragment in body
-    assert '"biases"' not in body
+    assert '"biases"' not in body and "vector_limit" not in body
     routing = backend[backend.index("void QuantizedMatmul::eval_gpu") :]
-    assert "dispatch_fp_quantized_matvec(" in routing.split("array biases")[0]
+    # Products of at least the vector limit's rows take the qmm routes first.
+    vectors = routing.split("array biases")[0]
+    assert vectors.index("if (M >= vector_limit) {") < vectors.index(
+        "dispatch_fp_quantized_matvec("
+    )
     # The split-K kernels of every mode share one host route, which binds
     # biases and their strides only for affine weights.
     start = backend.index("void dispatch_qvm_split_k(")

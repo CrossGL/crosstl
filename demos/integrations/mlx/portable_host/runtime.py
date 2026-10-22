@@ -36,6 +36,7 @@ from demos.integrations.mlx.portable_host import (
     column_small_layout,
     copy_layout,
     fp_matmul_layout,
+    fp_qmm_layout,
     gather_dispatch,
     gemm_dispatch,
     gemm_layout,
@@ -67,6 +68,12 @@ from demos.integrations.mlx.portable_host.fp_matmul_packages import (
 )
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     FpQuantizedMatmulPackageCache,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    FpQuantizedQmmPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
@@ -381,6 +388,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.fp_quantized_qmms = (
+            FpQuantizedQmmPackageCache(
+                mlx_root, self.directory / FP_QUANTIZED_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gemvs = (
             GemvPackageCache(mlx_root, self.directory / GEMV_CACHE, self.target)
             if mlx_root is not None
@@ -570,6 +584,12 @@ class HostRuntime:
             ):
                 qmm_layout.signature(name)
                 return 1
+            if (
+                name.startswith(fp_qmm_layout.ENTRY_PREFIXES)
+                and self.fp_quantized_qmms is not None
+            ):
+                fp_qmm_layout.signature(name)
+                return 1
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
@@ -653,6 +673,17 @@ class HostRuntime:
                 self,
                 qmm_layout,
                 self.quantized_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(fp_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                fp_qmm_layout,
+                self.fp_quantized_qmms,
                 entry,
                 buffers,
                 count,

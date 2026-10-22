@@ -2221,13 +2221,16 @@ int qmm_split_k(int M, int N, int K, int group_size) {
 }
 
 // quantized.cpp qmm: (32, 2, 2) threadgroups over 32 by 32 output tiles,
-// batch parameters bound only for more than one matrix.
+// batch parameters bound only for more than one matrix. Affine kernels bind
+// biases; the mxfp4, mxfp8 and nvfp4 kernels bind uint8 scales and no
+// biases, and qmm leaves fp_qmm_t's global scale slot unbound.
 void dispatch_qmm(
     const array& x,
     const array& w,
     const array& scales,
-    const array& biases,
+    const std::optional<array>& biases,
     array& out,
+    const char* mode,
     bool transpose,
     int group_size,
     int bits,
@@ -2235,7 +2238,7 @@ void dispatch_qmm(
     int N,
     int K) {
   const uint64_t B = out.size() / M / N;
-  const std::string entry = std::string(transpose ? "affine_qmm_t_" : "affine_qmm_n_") +
+  const std::string entry = std::string(mode) + (transpose ? "_qmm_t_" : "_qmm_n_") +
       quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
       std::to_string(bits) + (transpose ? (N % 32 == 0 ? "_alN_true" : "_alN_false") : "") +
       (B > 1 ? "_batch_1" : "_batch_0");
@@ -2251,15 +2254,22 @@ void dispatch_qmm(
   auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
   std::vector<CrosstlMlxBuffer> buffers = {
       {"w", "uint32", data(w), matmul_span(w), 0},
-      {"scales", storage, data(scales), matmul_span(scales), 0},
-      {"biases", storage, data(biases), matmul_span(biases), 0},
-      {"x", storage, data(x), matmul_span(x), 0},
-      {"y", storage, out.data<void>(), out.size(), 1},
-      {"K", "int32", &k, 1, 0},
-      {"N", "int32", &n, 1, 0},
-      {"M", "int32", &m, 1, 0},
+      {"scales", biases ? storage : "uint8", data(scales), matmul_span(scales), 0},
   };
-  QuantizedBatchViews views(x, w, scales, biases);
+  if (biases) {
+    buffers.push_back({"biases", storage, data(*biases), matmul_span(*biases), 0});
+  }
+  buffers.insert(
+      buffers.end(),
+      {
+          {"x", storage, data(x), matmul_span(x), 0},
+          {"y", storage, out.data<void>(), out.size(), 1},
+          {"K", "int32", &k, 1, 0},
+          {"N", "int32", &n, 1, 0},
+          {"M", "int32", &m, 1, 0},
+      });
+  QuantizedBatchViews views =
+      biases ? QuantizedBatchViews(x, w, scales, *biases) : QuantizedBatchViews(x, w, scales);
   if (B > 1) {
     views.bind(buffers);
   }
@@ -2285,8 +2295,9 @@ void dispatch_qmm_split_k(
     const array& x,
     const array& w,
     const array& scales,
-    const array& biases,
+    const std::optional<array>& biases,
     array& out,
+    const char* mode,
     int group_size,
     int bits,
     int M,
@@ -2301,7 +2312,7 @@ void dispatch_qmm_split_k(
   }
   temp_shape.insert(temp_shape.begin(), split_k);
   array intermediate(temp_shape, out.dtype(), nullptr, {});
-  const std::string entry = std::string("affine_qmm_t_splitk_") +
+  const std::string entry = std::string(mode) + "_qmm_t_splitk_" +
       quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
       std::to_string(bits) + (N % 32 == 0 ? "_alN_true" : "_alN_false");
   require_entry(entry);
@@ -2318,16 +2329,22 @@ void dispatch_qmm_split_k(
   auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
   std::vector<CrosstlMlxBuffer> buffers = {
       {"w", "uint32", data(w), matmul_span(w), 0},
-      {"scales", storage, data(scales), matmul_span(scales), 0},
-      {"biases", storage, data(biases), matmul_span(biases), 0},
-      {"x", storage, data(x), matmul_span(x), 0},
-      {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
-      {"K", "int32", &k, 1, 0},
-      {"N", "int32", &n, 1, 0},
-      {"M", "int32", &m, 1, 0},
-      {"k_partition_size", "int32", &k_partition_size, 1, 0},
-      {"split_k_partition_stride", "int32", &split_k_partition_stride, 1, 0},
+      {"scales", biases ? storage : "uint8", data(scales), matmul_span(scales), 0},
   };
+  if (biases) {
+    buffers.push_back({"biases", storage, data(*biases), matmul_span(*biases), 0});
+  }
+  buffers.insert(
+      buffers.end(),
+      {
+          {"x", storage, data(x), matmul_span(x), 0},
+          {"y", storage, intermediate.data<void>(), intermediate.size(), 1},
+          {"K", "int32", &k, 1, 0},
+          {"N", "int32", &n, 1, 0},
+          {"M", "int32", &m, 1, 0},
+          {"k_partition_size", "int32", &k_partition_size, 1, 0},
+          {"split_k_partition_stride", "int32", &split_k_partition_stride, 1, 0},
+      });
   const CrosstlMlxLaunch launch{{tiles_n, tiles_m, uint32_t(split_k)}, {32, 2, 2}};
   quantized_dispatch(entry, buffers, intermediate.size(), launch, "split-K quantized matrix product");
   ReductionPlan plan(
@@ -2463,7 +2480,8 @@ void dispatch_qvm_split_k(
 // quantized.cpp dispatch_qmv, qvm and qvm_split_k for mxfp4, mxfp8 and nvfp4
 // weights: fp_quantized.metal's kernels, with uint8 scales and no biases.
 // QuantizedMatmul passes no global scale, so qmv_wide serves two or more
-// vectors on every device. The matrix-matrix kernels are not routed.
+// vectors on every device. Products of at least the vector limit's rows take
+// dispatch_qmm and dispatch_qmm_split_k instead.
 void dispatch_fp_quantized_matvec(
     const array& x,
     const array& w,
@@ -2475,12 +2493,7 @@ void dispatch_fp_quantized_matvec(
     int bits,
     int M,
     int N,
-    int K,
-    int vector_limit) {
-  if (M >= vector_limit) {
-    throw std::invalid_argument(
-        "CrossTL floating-point quantized matrix-matrix products are not routed.");
-  }
+    int K) {
   if (!transpose && K >= 1024) {
     dispatch_qvm_split_k(x, w, scales, std::nullopt, out, mode, group_size, bits, M, N, K);
     return;
@@ -2579,23 +2592,31 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       : K <= 2048 && N <= 2048        ? 18
       : K <= 4096 && N <= 4096        ? 12
                                       : 10;
-  if (!affine) {
-    dispatch_fp_quantized_matvec(
-        x, w, scales, out, fp_mode, transpose_, group_size_, bits_, M, N, K, vector_limit);
-    return;
-  }
-  array biases = matmul_operand(inputs[3]);
   if (M >= vector_limit) {
-    // qmm_splitk for single matrices with transposed weights, which falls
-    // back to qmm when K admits no split; there is no NAX unit for qmm_nax.
+    // Every mode's matrix-matrix route: qmm_splitk for single matrices with
+    // transposed weights, which falls back to qmm when K admits no split;
+    // there is no NAX unit for qmm_nax.
+    std::optional<array> qmm_biases;
+    if (affine) {
+      qmm_biases = matmul_operand(inputs[3]);
+    }
+    const char* mode = affine ? "affine" : fp_mode;
     const int split_k = transpose_ && B == 1 ? qmm_split_k(M, N, K, group_size_) : 1;
     if (split_k > 1) {
-      dispatch_qmm_split_k(x, w, scales, biases, out, group_size_, bits_, M, N, K, split_k);
+      dispatch_qmm_split_k(
+          x, w, scales, qmm_biases, out, mode, group_size_, bits_, M, N, K, split_k);
     } else {
-      dispatch_qmm(x, w, scales, biases, out, transpose_, group_size_, bits_, M, N, K);
+      dispatch_qmm(
+          x, w, scales, qmm_biases, out, mode, transpose_, group_size_, bits_, M, N, K);
     }
     return;
   }
+  if (!affine) {
+    dispatch_fp_quantized_matvec(
+        x, w, scales, out, fp_mode, transpose_, group_size_, bits_, M, N, K);
+    return;
+  }
+  array biases = matmul_operand(inputs[3]);
   if (!transpose_ && K >= 1024) {
     dispatch_qvm_split_k(x, w, scales, biases, out, "affine", group_size_, bits_, M, N, K);
     return;

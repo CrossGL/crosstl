@@ -78,7 +78,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
 def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
     """Run one launch of ``layout``'s quantized product kernels through ``cache``.
 
-    ``layout`` is ``matmul_layout``, ``qmm_layout`` or ``fp_matmul_layout``:
+    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout`` or
+    ``fp_qmm_layout``:
     each binds the weights ``w``, the ``scales``, the input ``x``, the output
     ``y`` and, for affine kernels, the ``biases``, all in
     ``layout.MATRIX_PARAMETERS``.

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from crosstl.project import ProjectConfig
+from demos.integrations.mlx.portable_host import qmm_layout
 from demos.integrations.mlx.portable_host.matmul_packages import (
     TranslatedEntryCache,
     build_record,
@@ -20,9 +21,6 @@ from demos.integrations.mlx.portable_host.qmm_layout import (
     K_LIMIT,
     SIMD_SIZE,
     SOURCE,
-    access_assertions,
-    bounded_parameters,
-    index_assertions,
     signature,
     workgroup_size,
 )
@@ -41,11 +39,13 @@ def _recipe_hashes():
     }
 
 
-def project_config(root, output_dir, target, entry):
+def project_config(root, output_dir, target, entry, layout=qmm_layout):
     """One entry's translation, with the current-tree qmm gates' options.
 
     BlockMMA has no simd_sum: software subgroups give DirectX and OpenGL
     MLX's 32 lanes, and the cooperative-matrix lowering MLX's fragments.
+    ``layout`` is ``qmm_layout`` or ``fp_qmm_layout``, whose kernels share
+    these tiles: it names the source, workgroup and assertions.
     """
     options = {
         "directx": {
@@ -61,26 +61,30 @@ def project_config(root, output_dir, target, entry):
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
-        include_patterns=(SOURCE,),
+        include_patterns=(layout.SOURCE,),
         include_dirs=(".",),
         targets=(target,),
         output_dir=output_dir,
-        entry_points={SOURCE: (entry,)},
-        entry_workgroup_size_rules={SOURCE: {entry: workgroup_size(entry)}},
+        entry_points={layout.SOURCE: (entry,)},
+        entry_workgroup_size_rules={
+            layout.SOURCE: {entry: layout.workgroup_size(entry)}
+        },
         workgroup_access_assertions=(
-            access_assertions(entry) if target != "metal" else ()
+            layout.access_assertions(entry) if target != "metal" else ()
         ),
-        # qmm_layout.plan bounds every bound buffer at MAX_ELEMENTS elements.
-        index_range_assertions=index_assertions(entry) if target == "opengl" else (),
+        # The layout's plan bounds every bound buffer at MAX_ELEMENTS elements.
+        index_range_assertions=(
+            layout.index_assertions(entry) if target == "opengl" else ()
+        ),
         metadata_preconditions=[
             dict(
-                source=SOURCE,
+                source=layout.SOURCE,
                 entryPoint=entry,
                 parameter=parameter,
                 minimum=0,
                 maximum=K_LIMIT,
             )
-            for parameter in bounded_parameters(entry)
+            for parameter in layout.bounded_parameters(entry)
         ],
         source_options={
             "metal": {
