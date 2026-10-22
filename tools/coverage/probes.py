@@ -36,8 +36,9 @@ _STAGE_PROGRAMS = {
     "node": "node",
 }
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
-# payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
-_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
+# payload a task shader hands to its mesh workgroups, the ray payload a hit shader receives and can trace with, and
+# the data a callable shader receives and can pass to another.
+_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit", "callable"})
 # The stage that starts rays: its probe passes a user-defined inout parameter a ray payload it declares as a local.
 _TRACING_STAGE = "ray-generation"
 # A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.
@@ -117,6 +118,9 @@ class _Builder:
         return read
 
     def value(self, kind: Type) -> str:
+        if kind.count:
+            parts = [self.value(kind.element) for _ in range(kind.count)]
+            return self.dialect.array(kind, parts)
         held = tuple_element(kind.opaque)
         if held:
             element, length = held
@@ -227,6 +231,12 @@ class _Builder:
                     raise ProbeError("more than one inout parameter")
                 arguments.append(dialect.inout_argument())
                 output = param.type
+            elif param.direction == "buffer":
+                storage = _storage(param.type.scalar)
+                if param.type.shape or storage not in _BUFFERS:
+                    raise ProbeError(f"no probe buffer holds {param.type.scalar}")
+                self.offsets.setdefault(storage, 0)
+                arguments.append(dialect.buffer_argument(_BUFFERS[storage]))
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))
@@ -268,8 +278,11 @@ class _Builder:
         atomic = output is not None
         if self.receiver:
             name = self.receiver.call(name)
-        call = dialect.call(name, arguments)
         result = signature.result
+        assigned = dialect.assignment(name, result, arguments)
+        if assigned:
+            self.lines += assigned[0]
+        call = assigned[1] if assigned else dialect.call(name, arguments)
         reading = dialect.reading(result.opaque) if result.opaque else None
         held = dialect.holding(result.opaque) if result.opaque else ""
         if output is None and reading:
@@ -298,14 +311,17 @@ class _Builder:
 
     def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:
         """Statements that keep ``value``, of type ``kind``, in a local and store it, and the output buffer's element
-        type: a matrix's first column or row, and a scalar the buffers cannot hold widened or narrowed.
+        type: an array's first element, a matrix's first column or row, and a scalar the buffers cannot hold widened
+        or narrowed.
         """
         dialect = self.dialect
         output, stored = kind, "r"
-        if len(kind.shape) == 2:
-            columns, rows = kind.shape
-            output = Type(kind.scalar, (columns if dialect.rows_first else rows,))
-            stored = dialect.part("r")
+        if kind.count:
+            output, stored = kind.element, "r[0]"
+        if len(output.shape) == 2:
+            columns, rows = output.shape
+            output = Type(output.scalar, (columns if dialect.rows_first else rows,))
+            stored = dialect.part(stored)
         if _storage(kind.scalar) != kind.scalar:
             output = output.with_scalar(_storage(kind.scalar))
             stored = dialect.cast(output, stored)

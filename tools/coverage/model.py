@@ -175,7 +175,8 @@ class Param:
     """A parameter; ``direction`` is ``in``, ``out``, ``inout`` (an atomic or read-modify-write operand),
     ``const``, an argument the language requires to be a constant expression, ``address``, a pointer to a local
     value that the function reads and may write, ``pointer``, a pointer to device memory, which the probe declares as
-    a uniform, or ``workgroup``, a variable the compute workgroup shares.
+    a uniform, ``workgroup``, a variable the compute workgroup shares, or ``buffer``, a runtime-sized array, for which
+    the probe passes its input buffer of the parameter's type.
     """
 
     type: Type

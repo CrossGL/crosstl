@@ -5,6 +5,11 @@ output is the SPIR-V a GLSL project would hand to CrossTL. A function probe coun
 feature's own GLSL.std.450 instruction, and the round trip is correct only when its module still calls it. The
 NaN-aware instructions have no GLSL built-in; their probe is the one of the instruction with the same operands,
 renamed in the assembly.
+
+GLSL.std.450 encodes ``frexp`` and ``modf`` twice, with an out pointer (``Frexp``, ``Modf``) or a struct result
+(``FrexpStruct``, ``ModfStruct``). glslang, like DXC, writes the struct forms, so they are probed with the GLSL call,
+and a round trip that writes the other form still makes the call. The feature list gives the struct forms no
+signature, because the output row cannot tell them apart: CrossGL's ``frexp`` leaves the form to the generator.
 """
 
 from __future__ import annotations
@@ -15,9 +20,22 @@ import re
 from . import constructs, probes, validators
 from .dialect import ProbeError
 from .features.spirv import UNSPELLED
-from .model import Feature
+from .model import Feature, Param, Signature, Type
 
 _STAND_INS = {"NMin": "FMin", "NMax": "FMax", "NClamp": "FClamp"}
+_VEC3, _IVEC3 = Type("float", (3,)), Type("int", (3,))
+# Each struct form, with its GLSL call and the GLSL signature the pointer form's probe uses.
+_STRUCT_FORMS = {
+    "FrexpStruct": ("frexp", Signature(_VEC3, (Param(_VEC3), Param(_IVEC3, "out")))),
+    "ModfStruct": ("modf", Signature(_VEC3, (Param(_VEC3), Param(_VEC3, "out")))),
+}
+# The instructions a round trip may write for a feature's own.
+_ENCODINGS = {
+    "Frexp": {"Frexp", "FrexpStruct"},
+    "FrexpStruct": {"Frexp", "FrexpStruct"},
+    "Modf": {"Modf", "ModfStruct"},
+    "ModfStruct": {"Modf", "ModfStruct"},
+}
 _EXTENDED = re.compile(r"(\bOpExtInst\s+%\w+\s+%\w+\s+)(\w+)\b")
 
 
@@ -27,7 +45,10 @@ def build(feature: Feature) -> probes.Probe:
         raise ProbeError("glslangValidator or spirv-dis is not installed")
     instruction = "" if constructs.is_construct(feature) else feature.name
     glsl = dataclasses.replace(feature, language="glsl")
-    if instruction:
+    if instruction in _STRUCT_FORMS:
+        spelling, signature = _STRUCT_FORMS[instruction]
+        glsl = dataclasses.replace(glsl, signature=signature, spelling=spelling)
+    elif instruction:
         if feature.signature is None:
             raise ProbeError(feature.note or "the feature list gives no signature")
         spelling = (
@@ -64,6 +85,7 @@ def dropped(feature: Feature, assembly: str) -> str:
     """
     if constructs.is_construct(feature):
         return ""
-    if any(match[2] == feature.name for match in _EXTENDED.finditer(assembly)):
+    written = _ENCODINGS.get(feature.name, {feature.name})
+    if any(match[2] in written for match in _EXTENDED.finditer(assembly)):
         return ""
     return f"the round trip no longer calls {feature.name}"

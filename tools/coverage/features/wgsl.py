@@ -134,6 +134,11 @@ class _Types:
                 kind = self.type(arguments[1])
                 if not kind.opaque:
                     return Param(kind, "workgroup")
+            # A pointer to a runtime-sized array, such as arrayLength reads: the probe's output buffer.
+            if len(arguments) > 1 and re.fullmatch(
+                r"runtime_array\s*<.*>", arguments[1]
+            ):
+                return Param(Type("uint"), "buffer")
             return Param(Type.other(text))
         return Param(self.type(text), "const" if constant else "in")
 

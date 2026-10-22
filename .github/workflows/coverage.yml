@@ -25,6 +25,9 @@ env:
   # tools/coverage/upstream.py reads spirv_std from the same release.
   RUST_GPU_VERSION: "0.11.0"
   RUST_GPU_COMMIT: "62401280ab4b512c734ad1aceee7553385e17418"
+  # The SPIR-V targets tools/coverage/rustgpu.py compiles probes for: mesh and task probes need Vulkan 1.2. The list
+  # is space-separated because it is part of a cache key, and cache keys cannot contain commas.
+  RUST_GPU_TARGETS: "vulkan1.1 vulkan1.2"
 
 on:
   push:
@@ -288,7 +291,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/rust-gpu
-          key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ runner.os }}
+          key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ env.RUST_GPU_TARGETS }}-${{ runner.os }}
 
       - name: Install rust-gpu ${{ env.RUST_GPU_VERSION }}
         run: |
@@ -303,7 +306,7 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal --component rust-src,rustc-dev,llvm-tools
           if [ ! -f target/release/librustc_codegen_spirv.so ]; then
             cargo build --release -p rustc_codegen_spirv
-            cargo run --release -p compiletests -- --target-env vulkan1.1 lang/core/intrinsics/log10
+            cargo run --release -p compiletests -- --target-env "${RUST_GPU_TARGETS// /,}" lang/core/intrinsics/log10
             # Keep only what a probe compiles against.
             find target/release -mindepth 1 -maxdepth 1 ! -name librustc_codegen_spirv.so -exec rm -rf {} +
             find target/compiletest-deps -type d -name incremental -prune -exec rm -rf {} +
