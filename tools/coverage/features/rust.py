@@ -31,9 +31,20 @@ _SCALARS = {
     "f64": "double",
     "i32": "int",
     "u32": "uint",
+    "i16": "int16",
+    "u16": "uint16",
+    "i64": "int64",
+    "u64": "uint64",
     "bool": "bool",
 }
 _GLAM = {"": "float", "D": "double", "I": "int", "U": "uint", "B": "bool"}
+# The cargo features spirv-std 0.11 enables on its glam 0.34 dependency (crates/spirv-std/Cargo.toml). glam puts its
+# other vector widths behind features, so a method such as ``Vec3::as_i16vec3`` is absent from the glam a rust-gpu
+# shader links, and is not a rust-gpu feature.
+_GLAM_FEATURES = frozenset({"f64", "i32", "libm", "u32"})
+_GATED = re.compile(
+    r'#\[cfg\(feature = "([\w-]+)"\)\]\s*(?:#\[[^\]]*\]\s*)*pub (?:const )?(?:unsafe )?fn (\w+)'
+)
 # Values for constant generic parameters: memory scopes and semantics as ``spirv_std::memory`` spells them. Subgroup
 # scope is one every operation that takes a scope accepts, the shader clock included.
 _SCOPE = "{ Scope::Subgroup as u32 }"
@@ -335,10 +346,17 @@ def methods(
     self_type: Type,
     group: str,
     glsl_names: set[str] | frozenset[str],
+    enabled: frozenset[str] | None = None,
 ) -> list[Feature]:
     """The functions of the ``impl`` or ``trait`` block that ``opening`` matches, named ``prefix::name``. An
-    associated function's call names the type ``self_type`` is (``f32`` for a trait implemented by it).
+    associated function's call names the type ``self_type`` is (``f32`` for a trait implemented by it). Given the
+    crate's ``enabled`` cargo features, a function behind any other feature is left out.
     """
+    gated = {
+        function
+        for feature, function in _GATED.findall(text)
+        if enabled is not None and feature not in enabled
+    }
     text = clean(text)
     block = re.search(opening, text, re.M)
     if block is None:
@@ -349,7 +367,7 @@ def methods(
     pattern = _TRAIT_METHOD if opening.startswith("^pub trait") else _IMPL_METHOD
     for match in pattern.finditer(body):
         name = f"{prefix}::{match.group(2)}"
-        if any(f.name == name for f in features):
+        if match.group(2) in gated or any(f.name == name for f in features):
             continue
         found, spelling, note = signature(
             match.group(2), header(body, match.end()), self_type
@@ -416,6 +434,12 @@ def parse(
         glsl_names,
     )
     features += methods(
-        glam_vec3, r"^impl Vec3 \{", "Vec3", Type("float", (3,)), "vec3", glsl_names
+        glam_vec3,
+        r"^impl Vec3 \{",
+        "Vec3",
+        Type("float", (3,)),
+        "vec3",
+        glsl_names,
+        _GLAM_FEATURES,
     )
     return sorted(features, key=lambda f: (f.group, f.name))
