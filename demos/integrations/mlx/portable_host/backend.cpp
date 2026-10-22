@@ -1677,8 +1677,11 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     dispatch_cast({identity}, out);
     return;
   }
-  const bool bfloat_extrema = in.dtype() == bfloat16 && (reduce_type_ == Min || reduce_type_ == Max);
-  const char* dtype = bfloat_extrema ? "bfloat16" : storage_type(in.dtype());
+  // Extrema select an input element, so 16-bit float results need no rounding.
+  const bool half_extrema = (in.dtype() == bfloat16 || in.dtype() == float16) &&
+      (reduce_type_ == Min || reduce_type_ == Max);
+  const char* dtype = half_extrema ? (in.dtype() == bfloat16 ? "bfloat16" : "float16")
+                                   : storage_type(in.dtype());
   const bool boolean = in.dtype() == bool_;
   const bool logical = reduce_type_ == And || reduce_type_ == Or;
   const char* operation = nullptr;
@@ -1707,11 +1710,11 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     in = dense_input(in);
     plan = get_reduction_plan(in, axes_);
   }
-  if (bfloat_extrema && plan.type != ContiguousAllReduce &&
+  if (half_extrema && plan.type != ContiguousAllReduce &&
       !((plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) &&
         plan.shape.back() <= 64)) {
     throw std::invalid_argument(
-        "CrossTL bfloat extrema require whole-array or small-row reduction packages.");
+        "CrossTL 16-bit float extrema require whole-array or small-row reduction packages.");
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
     dispatch_row_reduce(in, out, plan, axes_, operation, dtype);

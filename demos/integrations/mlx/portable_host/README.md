@@ -1442,32 +1442,44 @@ copy grids or a passing complete upstream suite. The existing half-host jobs
 run the native checks without additional runners; shared Python contract tests
 run on Linux only. The job deadline accounts for the bounded commands and setup.
 
-### Bfloat Reductions
+### 16-bit Float Extrema
 
-The reduction builder's `bfloat` family packages unchanged `reduce.metal`
-minimum and maximum entries. Host routing preserves two-byte logical allocation
-sizes, upstream launch selection and intermediate bfloat storage in two-pass
-whole-array reductions. Small rows use the existing exact-grid package cache,
-including partial workgroups and cooperative reductions. Larger row and column
-plans remain explicit unsupported operations; they are not promoted to float32.
+The reduction builder's `bfloat` and `half` families package the unchanged
+`reduce.metal` minimum and maximum entries for bfloat16 and float16. An
+extremum selects an input element, so these results need no rounding. Host
+routing preserves two-byte logical allocation sizes, upstream launch selection
+and intermediate 16-bit storage in two-pass whole-array reductions. Small rows
+use the existing exact-grid package cache, including partial workgroups and
+cooperative reductions. Larger row and column plans, and 16-bit sums and
+products, remain explicit unsupported operations; they are not promoted to
+float32.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages \
-  --mlx-root mlx-upstream --target metal --family bfloat \
-  --width 32 --width 128 --width 256 --output-dir bfloat-reductions
-python -m demos.integrations.mlx.portable_host.verify_bfloat_reductions \
-  --mlx-root mlx-upstream --packages host-packages --bfloat bfloat-packages \
-  --reductions bfloat-reductions --output-dir bfloat-reductions-evidence
+  --mlx-root mlx-upstream --target metal --family half \
+  --width 32 --width 128 --width 256 --output-dir half-reductions
+python -m demos.integrations.mlx.portable_host.verify_extrema_reductions \
+  --mlx-root mlx-upstream --packages host-packages --dtype float16 \
+  --elementwise half-packages --reductions half-reductions \
+  --output-dir half-reductions-evidence
 ```
 
-The required native proof checks 36 public-API workloads against separate CPU
-execution and independent storage-word references. It covers negative maxima,
+`--family bfloat` with `--dtype bfloat16 --elementwise bfloat-packages` runs the
+bfloat proof. Each proof checks the public-API workloads against separate CPU
+execution and independent storage-word references: 36 for bfloat16 and 38 for
+float16, which adds signed binary16 subnormals. They cover negative maxima,
 positive and negative infinity, NaNs, signed zero, 65,536-element inputs, both
 reduction passes, scalar/cooperative rows and a 1,031-row partial workgroup.
 Every partial result, output guard, source artifact and native module is checked.
-Local Metal and OpenGL runs each pass all 36 workloads with 40 native dispatches;
-all six HLSL variants compile with DXC. Windows native execution is a separate
-required CI result, not inferred from those compiler checks.
+Bfloat subnormal inputs stay refused off Metal under
+[#2000](https://github.com/CrossGL/crosstl/issues/2000); the half arithmetic
+proof already establishes binary16 subnormal comparisons on every target.
+Local Metal and OpenGL runs each pass all 36 bfloat workloads with 40 native
+dispatches; a local Metal run passes all 38 float16 workloads with 42. All six
+HLSL and GLSL variants of each family compile with DXC and glslang, as do the
+float16 small-row packages the proof launches. Windows and Linux native
+execution are separate required CI results, not inferred from those compiler
+checks.
 The default reduction package inventory is unchanged. Existing platform jobs
 run this optional family without adding runners.
 

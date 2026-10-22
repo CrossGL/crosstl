@@ -2779,7 +2779,7 @@ jobs:
     name: MLX half host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 355
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -2814,7 +2814,7 @@ jobs:
             2>&1 | tee .mlx-portable-half/dependencies.log
       - name: Validate half host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_bfloat_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
+        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_extrema_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -2920,7 +2920,7 @@ jobs:
       - name: Translate half host packages
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX half translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family half --output-dir .mlx-portable-half/half-packages \
               2>&1 | tee .mlx-portable-half/translation.log
@@ -2931,7 +2931,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX half verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_half --mlx-root mlx-upstream \
               --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
               --output-dir .mlx-portable-half/evidence 2>&1 | tee .mlx-portable-half/verification.log
@@ -2956,7 +2956,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 2100 --label "MLX half arithmetic verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half arithmetic verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_half_arithmetic --mlx-root mlx-upstream \
               --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
               --arithmetic .mlx-portable-half/arithmetic-packages --random .mlx-portable-half/random-packages \
@@ -2995,10 +2995,31 @@ jobs:
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "Bfloat reduction verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify_bfloat_reductions --mlx-root mlx-upstream \
-              --packages .mlx-portable-half/base/packages --bfloat .mlx-portable-half/bfloat-packages \
+            python -m demos.integrations.mlx.portable_host.verify_extrema_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --dtype bfloat16 --elementwise .mlx-portable-half/bfloat-packages \
               --reductions .mlx-portable-half/bfloat-reductions --output-dir .mlx-portable-half/bfloat-reductions-evidence \
               2>&1 | tee .mlx-portable-half/bfloat-reductions-verification.log
+      - name: Translate float16 reduction packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Float16 reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family half --width 32 --width 128 --width 256 \
+              --output-dir .mlx-portable-half/half-reductions \
+              2>&1 | tee .mlx-portable-half/half-reductions-translation.log
+      - name: Execute float16 reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "Float16 reduction verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_extrema_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --dtype float16 --elementwise .mlx-portable-half/half-packages \
+              --reductions .mlx-portable-half/half-reductions --output-dir .mlx-portable-half/half-reductions-evidence \
+              2>&1 | tee .mlx-portable-half/half-reductions-verification.log
       - name: Translate upstream block assertion packages
         run: |
           set -euo pipefail
