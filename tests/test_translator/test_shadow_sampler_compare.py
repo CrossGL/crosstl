@@ -256,12 +256,16 @@ def test_hlsl_level_zero_compares_keep_their_level(tmp_path):
     assert "cubeTex.sample_compare(cmp, P, Q.w, level(0.0));" in metal
 
     glsl = _flat(_translate(tmp_path, HLSL_LEVEL_ZERO, "opengl", "s.hlsl"))
-    assert "textureLod(depthTex, vec3(P.xy, P.z), 0.0)" in glsl
-    assert "textureLodOffset(depthTex, vec3(P.xy, P.z), 0.0, ivec2(1, (-1)))" in glsl
-    # Cube and 2D-array shadows have no core textureLod: zero derivatives select the base level.
-    assert "textureGrad(cubeTex, vec4(P, Q.w), vec3(0.0), vec3(0.0))" in glsl
+    # The locals P and Q are renamed so that they do not hide the stage inputs of the same name.
+    assert "vec3 P_2 = P;" in glsl and "vec4 Q_2 = Q;" in glsl
+    assert "textureLod(depthTex, vec3(P_2.xy, P_2.z), 0.0)" in glsl
     assert (
-        "textureGradOffset(arrayTex, vec4(P, Q.w), vec2(0.0), vec2(0.0), ivec2(1, 0))"
+        "textureLodOffset(depthTex, vec3(P_2.xy, P_2.z), 0.0, ivec2(1, (-1)))" in glsl
+    )
+    # Cube and 2D-array shadows have no core textureLod: zero derivatives select the base level.
+    assert "textureGrad(cubeTex, vec4(P_2, Q_2.w), vec3(0.0), vec3(0.0))" in glsl
+    assert (
+        "textureGradOffset(arrayTex, vec4(P_2, Q_2.w), vec2(0.0), vec2(0.0), ivec2(1, 0))"
         in glsl
     )
     assert "GL_EXT_texture_shadow_lod" not in glsl
