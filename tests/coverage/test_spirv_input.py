@@ -52,6 +52,15 @@ def test_a_probe_must_call_the_features_own_instruction():
 
 
 @needs_glslang
+def test_a_struct_form_is_probed_with_the_glsl_call_glslang_lowers_to_it():
+    # The feature list gives the struct forms no signature (tools/coverage/features/spirv.py).
+    frexp = Feature("spirv", "function", "FrexpStruct", None, note="alternative")
+    probe = spirv_input.build(frexp)
+    assert " FrexpStruct " in probe.source
+    assert validators.validate("spirv", probe.source).accepted
+
+
+@needs_glslang
 def test_input_probe_end_to_end():
     result = runner.run_input(FABS, "spirv")
     assert (result.outcome, result.validator) == (
@@ -65,6 +74,13 @@ def test_a_round_trip_that_drops_the_instruction_is_wrong():
     assert spirv_input.dropped(NMIN, lowered) == "the round trip no longer calls NMin"
     assert spirv_input.dropped(NMIN, lowered.replace("FMin", "NMin")) == ""
     assert spirv_input.dropped(NMIN, "") == "the round trip no longer calls NMin"
+    # Either encoding of modf keeps the call.
+    modf = Feature("spirv", "function", "ModfStruct", None)
+    assert spirv_input.dropped(modf, "%5 = OpExtInst %v3float %1 Modf %3 %4\n") == ""
+    assert (
+        spirv_input.dropped(modf, lowered)
+        == "the round trip no longer calls ModfStruct"
+    )
     loop = Feature("spirv", "control-flow", "for-loop", None)
     assert spirv_input.dropped(loop, "") == ""
 
