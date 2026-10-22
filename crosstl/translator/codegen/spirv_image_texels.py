@@ -17,6 +17,10 @@ A storage image whose format the runtime chooses (HLSL typed UAVs) has
 ``Unknown`` format, but an image atomic needs an ``R32i``/``R32ui``/``R32f``
 format (VUID-StandaloneSpirv-OpImageTexelPointer-04658), the only formats the
 source's atomics accept. Such an image that atomics target takes that format.
+
+An ``OpTypeImage`` format operand outside the core set needs a capability: the
+SPIR-V 1.6 "Image Format" table gives ``StorageImageExtendedFormats`` for the
+one- and two-channel and packed formats.
 """
 
 import re
@@ -26,6 +30,7 @@ from .ast_walk import walk_ast_values
 __all__ = [
     "atomic_storage_image_format",
     "emit_four_component_image_read",
+    "image_format_capability",
     "narrow_image_texel",
 ]
 
@@ -42,6 +47,45 @@ _IMAGE_ATOMICS = frozenset(
     }
 )
 _ATOMIC_FORMATS = {"iimage": "r32i", "uimage": "r32ui", "image": "r32f"}
+
+# SPIR-V 1.6, section 3.11 "Image Format": formats outside the Shader set.
+_EXTENDED_IMAGE_FORMATS = frozenset(
+    {
+        "Rg32f",
+        "Rg16f",
+        "R11fG11fB10f",
+        "R16f",
+        "Rgba16",
+        "Rgb10A2",
+        "Rg16",
+        "Rg8",
+        "R16",
+        "R8",
+        "Rgba16Snorm",
+        "Rg16Snorm",
+        "Rg8Snorm",
+        "R16Snorm",
+        "R8Snorm",
+        "Rg32i",
+        "Rg16i",
+        "Rg8i",
+        "R16i",
+        "R8i",
+        "Rgb10a2ui",
+        "Rg32ui",
+        "Rg16ui",
+        "Rg8ui",
+        "R16ui",
+        "R8ui",
+    }
+)
+
+
+def image_format_capability(image_format):
+    """The capability an ``OpTypeImage`` format operand requires, or ``None`` for core formats."""
+    if image_format in _EXTENDED_IMAGE_FORMATS:
+        return "StorageImageExtendedFormats"
+    return None
 
 
 def _component_shape(codegen, type_id):

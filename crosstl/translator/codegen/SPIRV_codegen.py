@@ -126,6 +126,7 @@ from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor
 from .spirv_image_texels import (
     atomic_storage_image_format,
     emit_four_component_image_read,
+    image_format_capability,
     narrow_image_texel,
 )
 from .spirv_inline_requirements import (
@@ -136,6 +137,10 @@ from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_mesh_builtins import (
+    glsl_mesh_builtin_output_infos,
+    is_glsl_mesh_builtin_output_declaration,
+)
 from .spirv_per_vertex_builtins import (
     lower_per_vertex_builtin_arrays,
     per_vertex_builtin_info,
@@ -842,6 +847,9 @@ class VulkanSPIRVCodeGen(
             self.require_capability("InputAttachment")
         if dim == "Buffer":
             self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
+        format_capability = image_format_capability(image_format)
+        if format_capability is not None:
+            self.require_capability(format_capability)
 
         id_value = self.get_id()
         self.emit(
@@ -9280,6 +9288,8 @@ class VulkanSPIRVCodeGen(
         normalized = semantic_map.get(str(semantic), str(semantic))
         if role == "vertices" and normalized == "gl_Position":
             return "Position"
+        if role == "vertices" and normalized == "gl_PointSize":
+            return "PointSize"
         if role == "primitives":
             return {
                 "gl_PrimitiveID": "PrimitiveId",
@@ -9496,6 +9506,12 @@ class VulkanSPIRVCodeGen(
             return True
 
         element_type = info["element_type"]
+        if element_type is None:
+            self.refuse_lowering(
+                f"SPIR-V mesh {info['name']} elements can only be written "
+                "member by member"
+            )
+            return True
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
             self.refuse_lowering(
@@ -18863,6 +18879,8 @@ class VulkanSPIRVCodeGen(
         if mesh_parameter_execution_model is None and has_mesh_output_parameters:
             mesh_parameter_execution_model = "MeshEXT"
         mesh_output_parameter_indices = set()
+        if is_entry_point and mesh_parameter_execution_model == "MeshEXT":
+            mesh_output_parameters.update(glsl_mesh_builtin_output_infos(self))
 
         for source_param_index, param in enumerate(parameters):
             param_type_source = getattr(
@@ -28665,7 +28683,12 @@ class VulkanSPIRVCodeGen(
         name = getattr(value, "name", None)
         if name in self.enum_variant_values:
             return self.enum_variant_values[name]
-        return None
+        # A case label is an integral constant expression (GLSL 4.60 6.2, HLSL and
+        # MSL follow C++), so named constants and their arithmetic fold to literals.
+        folded = evaluate_literal_int_expression(
+            value, self.active_literal_int_constants()
+        )
+        return None if folded is None else int(folded)
 
     def process_while(self, node: WhileNode):
         """Process a CrossGL while loop."""
@@ -31665,6 +31688,8 @@ class VulkanSPIRVCodeGen(
                 )
                 try:
                     for var in getattr(stage, "local_variables", []):
+                        if is_glsl_mesh_builtin_output_declaration(self, var):
+                            continue
                         if not self.global_variable_exists_for_current_stage(var.name):
                             self.process_global_variable_declaration(var)
                 finally:
