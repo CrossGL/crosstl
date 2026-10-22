@@ -178,6 +178,7 @@ class Rust(Dialect):
     entry = "probe"
     # rustgpu.CAPABILITIES enables Int16 and Int64 for every probe.
     wide_integers = True
+    pointer_sized = True
     narrow_scalars = True
     _SCALARS = {
         "float": "f32",
@@ -189,10 +190,31 @@ class Rust(Dialect):
         "uint16": "u16",
         "int64": "i64",
         "uint64": "u64",
+        "usize": "usize",
     }
     # spirv-std's glam has 32-bit integer vectors only (features/rust.py, _GLAM_FEATURES).
     _GLAM = {"float": "", "double": "D", "int": "I", "uint": "U", "bool": "B"}
-    _INTEGERS = frozenset({"int", "uint", "int16", "uint16", "int64", "uint64"})
+    _INTEGERS = frozenset(
+        {"int", "uint", "int16", "uint16", "int64", "uint64", "usize"}
+    )
+    # A tuple result, read through its first field, and an optional one, read as its value or the type's default.
+    _HELD = re.compile(r"\((\w+), [^()]+\)|Option<(\w+)>")
+
+    def reading(self, opaque: str) -> tuple[Type, str] | None:
+        held = self._HELD.fullmatch(opaque)
+        if not held:
+            return None
+        spelled = held.group(1) or held.group(2)
+        scalars = {name: scalar for scalar, name in self._SCALARS.items()}
+        vector = re.fullmatch(r"([DIUB]?)Vec([234])", spelled)
+        if spelled in scalars:
+            kind = Type(scalars[spelled])
+        elif vector:
+            prefixes = {prefix: scalar for scalar, prefix in self._GLAM.items()}
+            kind = Type(prefixes[vector.group(1)], (int(vector.group(2)),))
+        else:
+            return None
+        return kind, "{}.0" if held.group(1) else "{}.unwrap_or_default()"
 
     def scalar(self, scalar: str) -> str:
         if scalar not in self._SCALARS:
