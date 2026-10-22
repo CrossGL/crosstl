@@ -8,9 +8,16 @@ test and passes itself here. It provides:
 - ``TIMEOUTS``: the deadline of each bounded command, by mode;
 - ``prepare_packages(root, packages, reductions, jobs)``: the ``--prepare`` step;
 - ``validate_trace(trace, target, count)``: the native trace's requirements;
+- ``REDUCTIONS``: the whole-array maxima of its error bounds. Each reduction
+  family's maxima sit in ``maxima_directories(reductions, REDUCTIONS)``, which
+  the native worker loads;
 - optionally ``COLUMN_SUMS``: column reduction entries ``prepare_packages``
   translates into ``column_directory(reductions)``, which the native worker
-  also loads.
+  also loads;
+- optionally ``OPERATORS``: element-wise package families (``packages.py``'s
+  ``half`` and ``half-arithmetic``) for a test that computes in a 16-bit float
+  type. ``prepare_packages`` translates each into
+  ``operator_directory(reductions, family)`` and the native worker loads them.
 
 ``run`` translates the random packages, then the module's packages, then runs
 the test on MLX's CPU and through the translated host, and checks that the
@@ -32,6 +39,10 @@ from demos.integrations.mlx.portable_host.verify_upstream_quantization import (
 )
 
 RANDOM_PACKAGES = "demos.integrations.mlx.portable_host.random_packages"
+# Whole-array reduction families, in the order the worker loads them.
+MAXIMA_FAMILIES = ("all", "half", "bfloat")
+# The worker option that loads each element-wise package family.
+OPERATOR_OPTIONS = {"half": "--half", "half-arithmetic": "--half-arithmetic"}
 
 
 def row_strides(shape):
@@ -72,28 +83,75 @@ def column_directory(reductions):
     return reductions.with_name(reductions.name + "-column")
 
 
-def translate_ahead(root, packages, reductions, jobs, groups, maxima, columns=()):
+def maxima_directories(reductions, maxima):
+    """Each reduction family of ``maxima`` and the directory that packages it.
+
+    The float32 family keeps ``reductions`` itself; a 16-bit family sits
+    beside it, as ``reductions-half`` or ``reductions-bfloat``.
+    """
+    from demos.integrations.mlx.portable_host.reduction_packages import ENTRY_GROUPS
+
+    reductions = Path(reductions)
+    families = {}
+    for entry in maxima:
+        family = next(
+            (name for name in MAXIMA_FAMILIES if entry in ENTRY_GROUPS[name]), None
+        )
+        if family is None:
+            raise ValueError(f"No whole-array reduction family packages {entry}")
+        families.setdefault(family, []).append(entry)
+    return {
+        family: (
+            (
+                reductions
+                if family == "all"
+                else reductions.with_name(f"{reductions.name}-{family}")
+            ),
+            tuple(families[family]),
+        )
+        for family in MAXIMA_FAMILIES
+        if family in families
+    }
+
+
+def operator_directory(reductions, family):
+    """Where element-wise package ``family`` sits beside a runner's maxima."""
+    if family not in OPERATOR_OPTIONS:
+        raise ValueError(f"Unsupported upstream operator package family: {family}")
+    return Path(reductions).with_name(f"{family}-packages")
+
+
+def translate_ahead(
+    root, packages, reductions, jobs, groups, maxima, columns=(), operators=()
+):
     """Translate each ``(builder, entries)`` group and index ``maxima`` on demand.
 
     ``builder`` is a package module with ``build_entries``; the maxima are
-    packaged when the run first launches them, at the widths it launches.
-    ``columns`` are column reduction entries translated into
-    ``column_directory(reductions)``.
+    packaged when the run first launches them, at the widths it launches, in
+    their family's ``maxima_directories`` entry. ``columns`` are column
+    reduction entries translated into ``column_directory(reductions)``, and
+    ``operators`` element-wise families translated into ``operator_directory``.
     """
+    from demos.integrations.mlx.portable_host import packages as operator_packages
     from demos.integrations.mlx.portable_host import reduction_packages
 
     target = json.loads((Path(packages) / "index.json").read_text())["target"]
     records = []
     for builder, entries in groups:
         records += builder.build_entries(root, packages, target, entries, jobs)
-    reduction_packages.build_packages(
-        root,
-        reductions,
-        target,
-        family="all",
-        entries=maxima,
-        on_demand=True,
-    )
+    for family, (directory, entries) in maxima_directories(reductions, maxima).items():
+        reduction_packages.build_packages(
+            root,
+            directory,
+            target,
+            family=family,
+            entries=entries,
+            on_demand=True,
+        )
+    for family in operators:
+        operator_packages.build_packages(
+            root, operator_directory(reductions, family), target, family=family
+        )
     if columns:
         reduction_packages.build_packages(
             root,
@@ -109,9 +167,16 @@ def translate_ahead(root, packages, reductions, jobs, groups, maxima, columns=()
 
 def _commands(spec, root, packages, output, target, jobs):
     random, reductions = output / "random-packages", output / "reductions"
-    loaded = ["--reductions", str(reductions)]
+    loaded = []
+    for directory, _ in maxima_directories(reductions, spec.REDUCTIONS).values():
+        loaded += ["--reductions", str(directory)]
     if getattr(spec, "COLUMN_SUMS", ()):
         loaded += ["--reductions", str(column_directory(reductions))]
+    for family in getattr(spec, "OPERATORS", ()):
+        loaded += [
+            OPERATOR_OPTIONS[family],
+            str(operator_directory(reductions, family)),
+        ]
     module = ["-m", spec.MODULE]
     common = ["--mlx-root", str(root), "--packages", str(packages)]
     commands = [
@@ -186,6 +251,8 @@ def main(spec, argv=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--reductions", type=Path, action="append")
     parser.add_argument("--random", type=Path)
+    parser.add_argument("--half", type=Path)
+    parser.add_argument("--half-arithmetic", type=Path)
     parser.add_argument("--jobs", type=int, default=3)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--worker", choices=("cpu", "native"))

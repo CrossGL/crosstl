@@ -97,6 +97,8 @@ def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
             mlx_root=args.mlx_root,
             reductions=args.reductions,
             random=args.random,
+            half=getattr(args, "half", None),
+            half_arithmetic=getattr(args, "half_arithmetic", None),
             trace_values=trace_values,
         )
         host.install()

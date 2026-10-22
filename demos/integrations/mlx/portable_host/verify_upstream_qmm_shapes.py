@@ -65,8 +65,6 @@ WEIGHTS = (
     ((99, 256), (((129, 256), True),)),
 )
 REDUCTIONS = ("all_reduce_maxfloat32",)
-SMALL_SUM = "col_reduce_small_1_reduce_sumfloat32"
-LOOPED_SUM = "col_reduce_looped_1_32_32_reduce_sumfloat32"
 TIMEOUTS = {"random": 600, "packages": 3600, "cpu": 600, "native": 3600}
 FAMILIES = ("quantized", "qmm", "gemv", "gemm", "splitk", "small")
 # Every affine, steel and column entry counts, so an unexpected route fails.
@@ -98,26 +96,39 @@ def quantized_operands(w_shape, x_shape, transpose):
     return m, n, k, out_size // m // n
 
 
-def quantized_route(m, n, k, batches, transpose):
-    """The product entry and its partition sum, with a small sum's cache key."""
+def partition_sums(dtype):
+    """The small and looped column sums over ``dtype`` split-K partitions."""
+    return (
+        f"col_reduce_small_1_reduce_sum{dtype}",
+        f"col_reduce_looped_1_32_32_reduce_sum{dtype}",
+    )
+
+
+def quantized_route(
+    m, n, k, batches, transpose, *, dtype="float32", group=GROUP, bits=BITS
+):
+    """The product entry and its partition sum, with a small sum's cache key.
+
+    A 16-bit split-K product sums its partitions in the element type, which
+    the host offers in the small pass only.
+    """
     if m < matmul_layout.vector_limit(k, n, transpose):
-        entry = matmul_layout.select(
-            "float32", GROUP, BITS, m, n, k, batches, transpose
-        )
+        entry = matmul_layout.select(dtype, group, bits, m, n, k, batches, transpose)
         if "splitK" in matmul_layout.signature(entry):
-            raise ValueError("The quantized-shape tests split no vector product")
+            raise ValueError("The quantized upstream tests split no vector product")
         return "quantized", entry, None, None
-    entry = qmm_layout.select("float32", GROUP, BITS, m, n, k, batches, transpose)
+    entry = qmm_layout.select(dtype, group, bits, m, n, k, batches, transpose)
     if qmm_layout.signature(entry)["kernel"] != "qmm_t_splitk":
         return "qmm", entry, None, None
-    split = qmm_layout.split_k(m, n, k, GROUP)
+    split = qmm_layout.split_k(m, n, k, group)
     kind = qmm_layout.partition_sum(m, n, split)
-    if kind == "looped":
-        return "qmm", entry, LOOPED_SUM, None
+    small, looped = partition_sums(dtype)
+    if kind == "looped" and dtype == "float32":
+        return "qmm", entry, looped, None
     if kind != "small":
-        raise ValueError("The quantized-shape tests need no two-pass partition sum")
+        raise ValueError(f"The quantized upstream tests need no {kind} partition sum")
     workgroup = (*column_small_layout.geometry(m * n, split), 1)
-    return "qmm", entry, SMALL_SUM, column_small_layout.variant(SMALL_SUM, workgroup)
+    return "qmm", entry, small, column_small_layout.variant(small, workgroup)
 
 
 def reference_operands(w_shape, x_shape, transpose):

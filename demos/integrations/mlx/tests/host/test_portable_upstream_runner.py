@@ -9,6 +9,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     upstream_runner,
+    verify_upstream_qmm,
     verify_upstream_qmm_shapes,
     verify_upstream_qmv,
 )
@@ -28,6 +29,7 @@ RUNNERS = {
     "qmv": verify_upstream_qmv,
     "qvm_splitk": verify_upstream_qvm_splitk,
     "qmm_shapes": verify_upstream_qmm_shapes,
+    "qmm": verify_upstream_qmm,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
@@ -52,7 +54,7 @@ def trace(spec, target):
         for _ in range(count)
     ]
     return items + [
-        {"entry": "all_reduce_maxfloat32", "target": target, "threads": 64},
+        {"entry": spec.REDUCTIONS[0], "target": target, "threads": 64},
         {"entry": "rbitsc", "target": target},
     ]
 
@@ -98,12 +100,13 @@ def test_check_trace_requires_exact_routed_dispatches(fault):
 
 
 def test_translate_ahead_places_column_sums_beside_the_maxima(tmp_path, monkeypatch):
+    from demos.integrations.mlx.portable_host import packages as operator_packages
     from demos.integrations.mlx.portable_host import reduction_packages
 
     packages = tmp_path / "packages"
     packages.mkdir()
     (packages / "index.json").write_text(json.dumps({"target": "opengl"}))
-    builds, reductions = [], []
+    builds, reductions, operators = [], [], []
 
     class Builder:
         @staticmethod
@@ -118,15 +121,23 @@ def test_translate_ahead_places_column_sums_beside_the_maxima(tmp_path, monkeypa
             (output, target, options)
         ),
     )
+    monkeypatch.setattr(
+        operator_packages,
+        "build_packages",
+        lambda root, output, target, **options: operators.append(
+            (output, target, options)
+        ),
+    )
     output = tmp_path / "reductions"
+    maximum = "all_reduce_maxfloat32"
     upstream_runner.translate_ahead(
-        tmp_path, packages, output, 2, [(Builder, ["a"])], ("max",)
+        tmp_path, packages, output, 2, [(Builder, ["a"])], (maximum,)
     )
     assert reductions == [
-        (output, "opengl", {"family": "all", "entries": ("max",), "on_demand": True})
+        (output, "opengl", {"family": "all", "entries": (maximum,), "on_demand": True})
     ]
     upstream_runner.translate_ahead(
-        tmp_path, packages, output, 2, [(Builder, ["a"])], ("max",), columns=["col"]
+        tmp_path, packages, output, 2, [(Builder, ["a"])], (maximum,), columns=["col"]
     )
     assert reductions[2:] == [
         (
@@ -136,6 +147,56 @@ def test_translate_ahead_places_column_sums_beside_the_maxima(tmp_path, monkeypa
         )
     ]
     assert builds == [("opengl", ["a"], 2)] * 2
+    assert operators == []
+    # A float16 maximum has its own family beside the float32 one, and each
+    # element-wise family its own directory.
+    del reductions[:]
+    upstream_runner.translate_ahead(
+        tmp_path,
+        packages,
+        output,
+        2,
+        [],
+        ("all_reduce_maxfloat16", maximum, "all_reduce_minfloat16"),
+        operators=("half", "half-arithmetic"),
+    )
+    assert reductions == [
+        (output, "opengl", {"family": "all", "entries": (maximum,), "on_demand": True}),
+        (
+            tmp_path / "reductions-half",
+            "opengl",
+            {
+                "family": "half",
+                "entries": ("all_reduce_maxfloat16", "all_reduce_minfloat16"),
+                "on_demand": True,
+            },
+        ),
+    ]
+    assert operators == [
+        (tmp_path / "half-packages", "opengl", {"family": "half"}),
+        (
+            tmp_path / "half-arithmetic-packages",
+            "opengl",
+            {"family": "half-arithmetic"},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "maxima, message",
+    [(("all_reduce_maxint8",), "reduction family"), (("row_reduce_x",), "family")],
+)
+def test_maxima_need_a_whole_array_family(maxima, message):
+    with pytest.raises(ValueError, match=message):
+        upstream_runner.maxima_directories(Path("r"), maxima)
+
+
+def test_operator_families_are_the_ones_the_worker_loads():
+    assert upstream_runner.operator_directory(Path("o/r"), "half") == Path(
+        "o/half-packages"
+    )
+    with pytest.raises(ValueError, match="operator package family"):
+        upstream_runner.operator_directory(Path("o/r"), "bfloat")
 
 
 def test_cli_worker_loads_every_reduction_directory(monkeypatch):
@@ -143,7 +204,9 @@ def test_cli_worker_loads_every_reduction_directory(monkeypatch):
     monkeypatch.setattr(
         upstream_runner,
         "worker",
-        lambda args, tests, trace_values: seen.append(args.reductions),
+        lambda args, tests, trace_values: seen.append(
+            (args.reductions, args.half, args.half_arithmetic)
+        ),
     )
     common = ["--mlx-root", "m", "--packages", "p", "--output-dir", "o"]
     upstream_runner.main(
@@ -151,7 +214,16 @@ def test_cli_worker_loads_every_reduction_directory(monkeypatch):
         [*common, "--worker", "native", "--reductions", "r", "--reductions", "c"],
     )
     upstream_runner.main(verify_upstream_qvm, [*common, "--worker", "cpu"])
-    assert seen == [[Path("r"), Path("c")], None]
+    upstream_runner.main(
+        verify_upstream_qmm,
+        [*common, "--worker", "native", "--reductions", "h"]
+        + ["--half", "a", "--half-arithmetic", "b"],
+    )
+    assert seen == [
+        ([Path("r"), Path("c")], None, None),
+        (None, None, None),
+        ([Path("h")], Path("a"), Path("b")),
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(RUNNERS))
@@ -227,10 +299,23 @@ def test_runner_prepares_packages_before_both_workers(
                 for index, item in enumerate(command)
                 if item == "--reductions"
             ]
-            expected_reductions = [str(output / "reductions")]
+            expected_reductions = [
+                str(output / ("reductions-half" if name == "qmm" else "reductions"))
+            ]
             if getattr(spec, "COLUMN_SUMS", ()):
                 expected_reductions.append(str(output / "reductions-column"))
             assert loaded == expected_reductions
+            operators = {
+                option: command[command.index(option) + 1]
+                for option in ("--half", "--half-arithmetic")
+                if option in command
+            }
+            assert operators == {
+                upstream_runner.OPERATOR_OPTIONS[family]: str(
+                    output / f"{family}-packages"
+                )
+                for family in getattr(spec, "OPERATORS", ())
+            }
             assert command[command.index("--random") + 1] == str(
                 output / "random-packages"
             )

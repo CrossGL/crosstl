@@ -415,8 +415,9 @@ steel GEMM or split-K route.
 
 `verify_upstream_qvm.py`, `verify_upstream_qmv.py`,
 `verify_upstream_qvm_splitk.py` (`test_qvm_splitk` and
-`test_qvm_splitk_multi_row`) and `verify_upstream_qmm_shapes.py`
-(`test_qmm_shapes`, `test_small_matrix` and `test_non_multiples`) run those
+`test_qvm_splitk_multi_row`), `verify_upstream_qmm_shapes.py`
+(`test_qmm_shapes`, `test_small_matrix` and `test_non_multiples`) and
+`verify_upstream_qmm.py` (`test_qmm`) run those
 tests unchanged, first on MLX's CPU and then through the translated host, with
 the shared steps in `upstream_runner.py`. Each runner translates every quantized and
 floating-point product entry the test reaches before the native worker starts,
@@ -426,10 +427,17 @@ quantized.cpp and matmul.cpp would make for every subtest: `test_qmv` reaches
 60 `affine_qmv_quad`, `affine_qmv_fast` and `affine_qmv` entries, both `gemv`
 tiles, two fused GEMM entries and the split-K product with its accumulation;
 the quantized-shape tests reach `affine_qmv`, `affine_qvm`, `affine_qmm_n` and
-`affine_qmm_t_splitk` with its small partition sum. `test_qmm` and
-`test_qmm_large_dims` multiply float16 operands on the GPU device and are not
-run yet. The `MLX upstream` jobs run each test on Metal, Direct3D 12 (WARP) and
-OpenGL (Mesa) in the heavy tier.
+`affine_qmm_t_splitk` with its small partition sum. `test_qmm` computes in
+float16 on the GPU device, so its native run is float16 throughout while the
+CPU run is float32: 288 products over three group sizes and three widths reach
+`affine_qmv`, `affine_qmv_fast`, `affine_qmv_quad`, `affine_qmm_n`,
+`affine_qmm_t` and `affine_qmm_t_splitk` with the float16 small partition sum,
+against float16 steel GEMM and split-K references. Its runner also translates
+the `half` and `half-arithmetic` families for the casts and the error bound's
+difference, absolute value and comparison, and packages the float16 maximum in
+its own reduction directory. `test_qmm_large_dims` (outputs over 2^15 rows or
+columns) is not run yet. The `MLX upstream` jobs run each test on Metal,
+Direct3D 12 (WARP) and OpenGL (Mesa) in the heavy tier.
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
