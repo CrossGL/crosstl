@@ -49,6 +49,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
 
+      - name: Rewrite test modules
+        # Otherwise each xdist worker rewrites the asserts of all 800 test modules itself.
+        run: python -m tools.pytest_warm tests demos/integrations
+
       - name: Run complete test suite
         run: |
           mkdir -p build/reports
