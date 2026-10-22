@@ -34,11 +34,12 @@ BORROWED = {
 # Feature groups whose SPIR-V does not identify them: glam writes Vec3's methods in plain Rust arithmetic, so
 # ``Vec3::dot`` lowers to multiplies and adds rather than to OpDot.
 UNIDENTIFIED = {("rust", "vec3"): "glam computes it with Rust arithmetic"}
-# Instructions that only move or address values. They never identify a call.
+# Instructions that only move or address values, or structure control flow. They never identify a call; the
+# unreachable block after a call that never returns, such as Rust's ``kill() -> !``, ends in OpUnreachable.
 _MEMORY = frozenset(
     "OpLoad OpStore OpAccessChain OpInBoundsAccessChain OpPtrAccessChain OpVariable OpCopyObject OpCopyMemory "
     "OpLine OpNoLine OpLabel OpBranch OpBranchConditional OpSelectionMerge OpLoopMerge OpPhi OpUndef OpReturn "
-    "OpReturnValue OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
+    "OpReturnValue OpUnreachable OpFunction OpFunctionEnd OpFunctionParameter OpFunctionCall".split()
 )
 # Instructions that also reshape or convert the call's result for the output buffer. They identify a call only when
 # it lowers to nothing else, as a bit cast or a select does.

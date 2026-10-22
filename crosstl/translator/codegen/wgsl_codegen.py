@@ -59,6 +59,7 @@ from .image_access_contracts import (
     merge_image_access_requirement,
 )
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
@@ -386,6 +387,7 @@ class WGSLCodeGen:
         "samplerstate",
     }
     COMPARISON_SAMPLER_TYPE_NAMES = {
+        "comparison_sampler",
         "samplercomparisonstate",
     }
     TEXTURE_FUNCTION_NAMES = {
@@ -662,6 +664,9 @@ class WGSLCodeGen:
 
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
+        # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
+        ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
@@ -3800,7 +3805,7 @@ class WGSLCodeGen:
         if not self.is_comparison_sampler_type(sampler_type):
             raise ValueError(
                 f"WGSL target requires {function_name}() explicit sampler operand "
-                "to use samplerComparisonState"
+                "to be a comparison_sampler"
             )
 
     def require_zero_compare_level_operand(self, args, function_name, *, implicit):

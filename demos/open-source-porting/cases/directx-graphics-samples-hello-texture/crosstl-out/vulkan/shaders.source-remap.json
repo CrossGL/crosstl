@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 109,
-        "endOffset": 2825,
+        "endLine": 108,
+        "endOffset": 2803,
         "file": "crosstl-out/vulkan/shaders.spvasm",
-        "length": 2825,
+        "length": 2803,
         "line": 1,
         "offset": 0
       },

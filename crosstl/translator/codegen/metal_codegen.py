@@ -25647,7 +25647,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         texture_type = query_descriptor["texture_type"]
         size_descriptor = query_descriptor["size_descriptor"]
         if size_descriptor is None:
-            return None
+            # MSL has no free textureSize function: emitting the call verbatim would not compile.
+            return self.refuse_lowering(
+                f"texture size query: textureSize on {texture_type or texture_name} "
+                "has no Metal size query",
+                "int2(0)",
+            )
 
         if self.is_texture1d_sample_resource(texture_type):
             lod_arg_string = self.metal_texture1d_read_lod_argument(lod_arg)
@@ -25739,6 +25744,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
     def sampled_texture_size_descriptor(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
+        # The size query depends on the image shape alone, so an integer or half texture
+        # (texture2d<uint>, texturecube<half>) has the descriptor of its float form.
+        texture_type = re.sub(
+            r"^(\w+)<(?:int|uint|half|short|ushort|bfloat)>$",
+            r"\1<float>",
+            texture_type,
+        )
         make_descriptor = resource_query_method_size_descriptor
         descriptors = {
             "texture1d<float>": make_descriptor("int", (("get_width", True),)),

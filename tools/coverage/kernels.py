@@ -263,6 +263,40 @@ class Rust(Dialect):
         body = ["let i = 0usize;", *body, "*color = Vec4::ZERO;"]
         return self._entry(("#[spirv(fragment)]",), buffers, body, parts)
 
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        entry = (
+            "#[spirv(geometry(input_points = 1, output_points = 1, output_vertices = 1))]",
+        )
+        return self._entry(entry, buffers, ["let i = 0usize;", *body], parts)
+
+    # Hit shaders take the ray payload and the triangle's barycentrics, as the other languages' hit probes do.
+    _PAYLOAD = ("pub struct Payload {", "    pub color: Vec4,", "}")
+    _HIT_PARAMETERS = (
+        "#[spirv(incoming_ray_payload)] payload: &mut Payload",
+        "#[spirv(hit_attribute)] attributes: &mut Vec2",
+    )
+
+    def raytracing(
+        self, stage: str, buffers: list[Buffer], body: list[str], **parts
+    ) -> str:
+        entry = (f"#[spirv({stage.replace('-', '_')})]",)
+        if stage in ("any-hit", "closest-hit"):
+            entry += self._HIT_PARAMETERS
+            declarations = [*self._PAYLOAD, *parts.get("declarations", ())]
+            parts = {**parts, "declarations": declarations}
+        return self._entry(entry, buffers, ["let i = 0usize;", *body], parts)
+
+    # SPV_EXT_mesh_shader needs SPIR-V 1.4, and rust-gpu's libraries are built for Vulkan 1.1 (SPIR-V 1.3).
+    _MESH = (
+        "rust-gpu mesh and task shaders need SPIR-V 1.4; the probes target Vulkan 1.1"
+    )
+
+    def mesh(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        raise ProbeError(self._MESH)
+
+    def task(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        raise ProbeError(self._MESH)
+
     def _entry(
         self,
         entry: tuple[str, ...],

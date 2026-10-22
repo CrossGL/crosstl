@@ -470,7 +470,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "image2D dst @texture(0) @writeonly",
-            "sampler2DMS src @texture(1)",
+            "texture2DMS src @texture(1)",
             "imageStore(dst, pos, texelFetch(src, pos, 0));",
         ],
         "source": (

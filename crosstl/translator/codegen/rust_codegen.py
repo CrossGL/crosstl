@@ -56,6 +56,7 @@ from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_refusals import RustLoweringRefused
+from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -646,6 +647,8 @@ class RustCodeGen(LoweringRefusalMixin):
         A construct with no Rust lowering is recorded as a refusal while generation continues, and the program is
         then refused as a whole with every reason listed (:class:`RustLoweringRefused`).
         """
+        # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
+        ast = canonicalize_separate_textures(ast)
         return self.refusals.run(self.generate_program, ast)
 
     def generate_program(self, ast):

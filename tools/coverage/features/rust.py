@@ -51,15 +51,25 @@ _CONSTANTS = {
 # A memory barrier has to order memory, so its semantics name an ordering and a storage class.
 _BARRIER = "{ Semantics::ACQUIRE_RELEASE.bits() | Semantics::UNIFORM_MEMORY.bits() }"
 _FUNCTION_CONSTANTS = {"memory_barrier": {"SEMANTICS": _BARRIER}}
-# The stage each spirv_std::arch module's functions need; the others run in compute kernels.
+# The stage each spirv_std::arch module's functions need; the others run in compute kernels. A ray-tracing function
+# is probed in a closest-hit shader, which allows most of them.
 _STAGES = {
     "demote_to_helper_invocation_ext": "fragment",
     "derivative": "fragment",
     "mesh_shading": "mesh",
     "primitive": "geometry",
-    "ray_tracing": "raytracing",
+    "ray_tracing": "closest-hit",
 }
-_FRAGMENT_ONLY = frozenset({"kill"})
+# Functions of a module that only another stage has (SPIR-V specification, OpKill, OpIgnoreIntersectionKHR,
+# OpTerminateRayKHR, OpReportIntersectionKHR and OpEmitMeshTasksEXT).
+_FUNCTION_STAGES = {
+    "kill": "fragment",
+    "ignore_intersection": "any-hit",
+    "terminate_ray": "any-hit",
+    "report_intersection": "intersection",
+    "emit_mesh_tasks_ext": "task",
+    "emit_mesh_tasks_ext_payload": "task",
+}
 # Functions whose bare name is a CrossGL function that computes something else, so they have no CrossGL spelling.
 _DIFFERENT = {
     "Float::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
@@ -216,7 +226,12 @@ def signature(
         if kind.startswith("&"):
             direction, kind = "inout", re.sub(r"^&\s*(?:mut\s+)?", "", kind)
         params.append(Param(rust_type(kind, types, self_type, aliases), direction))
-    returned = rust_type(result, types, self_type, aliases) if result else VOID
+    # A function that never returns (``-> !``) is called as a statement, like one that returns nothing.
+    returned = (
+        rust_type(result, types, self_type, aliases)
+        if result not in ("", "!")
+        else VOID
+    )
     constants = [name for name, constant in order if constant]
     # A constant the arguments determine, such as a vector's length, needs no value.
     missing = [c for c in constants if c not in _CONSTANTS and c != "N"]
@@ -287,7 +302,7 @@ def arch(
                     found,
                     spelling,
                     note,
-                    "fragment" if name in _FRAGMENT_ONLY else stage,
+                    _FUNCTION_STAGES.get(name, stage),
                     glsl_names,
                 )
             )

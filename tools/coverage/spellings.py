@@ -182,6 +182,8 @@ RENAMES = {
         "subgroup_all": "allInvocations",
         "subgroup_any": "anyInvocation",
         "subgroup_all_equal": "allInvocationsEqual",
+        "emit_vertex": "EmitVertex",
+        "end_primitive": "EndPrimitive",
     },
 }
 # HIP spells its device functions the way CUDA does, and Slang its built-in functions the way HLSL does.

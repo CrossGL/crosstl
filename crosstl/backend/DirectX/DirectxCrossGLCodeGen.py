@@ -275,17 +275,18 @@ class HLSLToCrossGLConverter(
             # Matrix Types: HLSL floatRxC is CrossGL matCxR (ADR 0004)
             **hlsl_matrix_type_map(),
             # Texture Types
-            "Texture1D": "sampler1D",
-            "Texture1DArray": "sampler1DArray",
-            "Texture2D": "sampler2D",
+            # HLSL textures are separate from their samplers (SRVs): CrossGL's separate texture types.
+            "Texture1D": "texture1D",
+            "Texture1DArray": "texture1DArray",
+            "Texture2D": "texture2D",
             "sampler2D_half": "sampler2D",
             "sampler2D_float": "sampler2D",
-            "Texture3D": "sampler3D",
-            "TextureCube": "samplerCube",
-            "Texture2DArray": "sampler2DArray",
-            "TextureCubeArray": "samplerCubeArray",
-            "Texture2DMS": "sampler2DMS",
-            "Texture2DMSArray": "sampler2DMSArray",
+            "Texture3D": "texture3D",
+            "TextureCube": "textureCube",
+            "Texture2DArray": "texture2DArray",
+            "TextureCubeArray": "textureCubeArray",
+            "Texture2DMS": "texture2DMS",
+            "Texture2DMSArray": "texture2DMSArray",
             "SubpassInput": "sampler2d",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
@@ -330,14 +331,16 @@ class HLSLToCrossGLConverter(
             "samplerCUBE": "samplerCube",
             "Sampler": "sampler",
             "SamplerState": "sampler",
-            "SamplerComparisonState": "sampler",
+            "SamplerComparisonState": "comparison_sampler",
         }
         self.type_map.update(self.minimum_precision_type_map())
         self.shadow_texture_type_map = {
-            "Texture2D": "sampler2DShadow",
-            "Texture2DArray": "sampler2DArrayShadow",
-            "TextureCube": "samplerCubeShadow",
-            "TextureCubeArray": "samplerCubeArrayShadow",
+            "Texture1D": "texture1DShadow",
+            "Texture1DArray": "texture1DArrayShadow",
+            "Texture2D": "texture2DShadow",
+            "Texture2DArray": "texture2DArrayShadow",
+            "TextureCube": "textureCubeShadow",
+            "TextureCubeArray": "textureCubeArrayShadow",
         }
         self.function_map = {
             "countbits": "bitCount",
@@ -4110,6 +4113,9 @@ class HLSLToCrossGLConverter(
             (
                 "sampler",
                 "isampler",
+                "texture",
+                "itexture",
+                "utexture",
                 "usampler",
                 "image",
                 "iimage",
@@ -5286,7 +5292,9 @@ class HLSLToCrossGLConverter(
                 # Swizzle the four-component texel directly; the selected
                 # components all exist in the declared element type.
                 obj = self.generate_texel_access(expr.object, is_main, narrow=False)
-                if obj is None and isinstance(expr.object, FunctionCallNode):
+                if obj is None and isinstance(
+                    expr.object, (FunctionCallNode, TextureSampleNode)
+                ):
                     self.read_raw_texel_method_result = True
             if obj is None:
                 obj = self.generate_expression(expr.object, is_main)
@@ -5341,13 +5349,20 @@ class HLSLToCrossGLConverter(
             expression = self.generate_expression(expr.expression, is_main)
             return f"{target_type}({expression})"
         elif isinstance(expr, TextureSampleNode):
+            # Sample returns the texture's element type; CrossGL returns four.
+            narrowing = (
+                ""
+                if self.read_raw_texel_method_result
+                else self.texel_narrowing_suffix(self.expression_raw_type(expr.texture))
+            )
+            self.read_raw_texel_method_result = False
             texture = self.generate_expression(expr.texture, is_main)
             sampler = self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
             if getattr(expr, "lod", None) is not None:
                 lod = self.generate_expression(expr.lod, is_main)
-                return f"textureLod({texture}, {sampler}, {coords}, {lod})"
-            return f"texture({texture}, {sampler}, {coords})"
+                return f"textureLod({texture}, {sampler}, {coords}, {lod}){narrowing}"
+            return f"texture({texture}, {sampler}, {coords}){narrowing}"
 
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_expression(expr.condition, is_main)
