@@ -128,6 +128,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
+from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -3918,6 +3919,8 @@ class GLSLCodeGen(
             return True
 
         include_target = stripped[len("#include") :].strip()
+        if include_target.startswith("<") and is_apple_sdk_include(include_target):
+            return False
         return not include_target.lower().startswith(("<metal", '"metal'))
 
     def should_emit_glsl_preprocessor_directive(self, directive):
@@ -3932,6 +3935,8 @@ class GLSLCodeGen(
         match = re.match(r'^[<"]([^>"]+)[>"]', content)
         include_name = match.group(1) if match else content.split()[0]
         normalized = include_name.strip().replace("\\", "/").lower()
+        if content.startswith("<") and is_apple_sdk_include(normalized):
+            return False
         return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
