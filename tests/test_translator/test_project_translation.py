@@ -48497,7 +48497,7 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "uint i = gl_GlobalInvocationID.x;" in outputs["opengl"]
     assert not re.search(r"\b(?:f32|u32)\b", outputs["opengl"])
 
-    assert "RWStructuredBuffer<float> out : register(u0);" in outputs["directx"]
+    assert "RWStructuredBuffer<float> out_ : register(u0);" in outputs["directx"]
     assert "StructuredBuffer<float> in_ : register(t1);" in outputs["directx"]
     assert "RWStructuredBuffer<float> in_" not in outputs["directx"]
     assert "cbuffer scale_Args : register(b2)" in outputs["directx"]
