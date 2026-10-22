@@ -219,6 +219,10 @@ from .glsl_refusals import (
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
+from .glsl_runtime_resource_arrays import (
+    runtime_indexed_resource_arrays,
+    unsized_resource_array_size,
+)
 from .glsl_shadow_lod import (
     SHADOW_LOD_EXTENSION_SAMPLERS,
     is_zero_lod_literal,
@@ -4002,7 +4006,11 @@ class GLSLCodeGen(
         stage_names = self.glsl_stage_names(ast, target_stage)
 
         lines = []
-        if self.uses_nonuniform_ext(ast):
+        if self.uses_nonuniform_ext(ast) or (
+            runtime_indexed_resource_arrays(self, ast)
+            and not self.glsl_version_is_es(self.current_glsl_version_line)
+        ):
+            # GL_EXT_nonuniform_qualifier also makes a resource array runtime-sized.
             lines.append("#extension GL_EXT_nonuniform_qualifier : require")
         if stage_names & self.MESH_STAGE_NAMES:
             lines.append("#extension GL_EXT_mesh_shader : require")
@@ -8812,6 +8820,7 @@ class GLSLCodeGen(
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
+        runtime_indexed_resource_arrays(self, ast)
         self.unsupported_structured_buffer_array_functions = (
             self.collect_unsupported_structured_buffer_array_functions(functions)
         )
@@ -55539,7 +55548,7 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             )
             if not array_size and self.is_inferable_resource_array_type(vtype):
-                array_size = "1"
+                array_size = unsized_resource_array_size(self, node_name)
             # An array of arrays: the outer dimension is the first suffix, the element's own ones follow it.
             vtype, element_suffix = split_array_type_suffix(vtype)
             array_suffix = (f"[{array_size}]" if array_size else "[]") + element_suffix
