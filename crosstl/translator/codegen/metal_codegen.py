@@ -372,6 +372,7 @@ from .metal_hlsl_matrix import (
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
@@ -4290,7 +4291,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if lowering is not None:
                     lowerings.setdefault(struct_name, {})[member.name] = lowering
-        return lowerings
+        return collect_metal_nested_stage_io_member_lowerings(
+            self, structs, stage_io_names, lowerings
+        )
 
     def metal_stage_io_member_lowering(
         self, member, default_member_semantics=None, struct_name=None
