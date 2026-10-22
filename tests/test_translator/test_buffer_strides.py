@@ -195,6 +195,53 @@ shader main {
         translate(tmp_path, "cuda", mixed, "cgl")
 
 
+OVERLOADED_HLSL = """
+RWTexture2D<float4> image : register(u0);
+StructuredBuffer<float> weights : register(t0);
+RWStructuredBuffer<uint> results : register(u1);
+
+uint width(RWTexture2D<float4> resource)
+{
+    uint w, h;
+    resource.GetDimensions(w, h);
+    return w;
+}
+
+uint width(StructuredBuffer<float> resource)
+{
+    uint count, stride;
+    resource.GetDimensions(count, stride);
+    return stride;
+}
+
+[numthreads(1, 1, 1)]
+void main()
+{
+    results[0] = width(image);
+    results[1] = width(weights);
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["opengl", "cuda"])
+def test_texture_and_buffer_overloads_of_a_helper(tmp_path, backend):
+    # Only the buffer overload is reached by a buffer, so it takes that buffer's 4-byte stride.
+    code = translate(tmp_path, backend, OVERLOADED_HLSL)
+    assert stride_assignments(code) == [("stride", "4")]
+
+
+def test_buffer_overloads_reached_by_different_strides_are_refused(tmp_path):
+    # Both overloads take a buffer, so each counts both calls, and float and float4 strides disagree.
+    source = OVERLOADED_HLSL.replace(
+        "RWTexture2D<float4> resource", "StructuredBuffer<float4> resource"
+    ).replace(
+        "RWTexture2D<float4> image : register(u0);",
+        "StructuredBuffer<float4> image : register(t1);",
+    )
+    with pytest.raises(StructuredLayoutUnsupportedError, match="strides 4, 16"):
+        translate(tmp_path, "opengl", source)
+
+
 def test_queries_in_expressions_are_refused(tmp_path):
     from crosstl.translator import ast as A
     from crosstl.translator.semantics.buffer_strides import (
