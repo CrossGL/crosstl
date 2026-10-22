@@ -23,8 +23,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ..model import OPENCL_ATOMICS as ATOMIC_TYPES
 from ..model import OPENCL_ENUMERATIONS as ENUMERATIONS
 from ..model import VOID, Feature, Param, Signature, Type
+from ..objects import UNIFORMS
 
 # Vendor extensions, which the specification and the Khronos registry leave to their vendors.
 _VENDOR = re.compile(r"\bcl_(?:intel|amd|arm)_\w+")
@@ -62,6 +64,9 @@ _SCALARS = {
     "float": "float",
     "double": "double",
     "half": "half",
+    "char": "int8",
+    "uchar": "uint8",
+    "unsigned char": "uint8",
     "short": "int16",
     "ushort": "uint16",
     "unsigned short": "uint16",
@@ -82,8 +87,10 @@ _WIDTH = re.compile(
 )
 # The width a function the specification writes with ``n`` is probed at.
 PROBED_WIDTH = "4"
-# The rank of each scalar type when one overload is chosen: the plainest types first.
+# The rank of each scalar type when one overload is chosen: the plainest types first. An atomic function is probed on
+# int, which every atomic function takes; atomic float arithmetic is an extension (cl_ext_float_atomics).
 _PREFERENCE = ("float", "int", "uint", "bool", "int64", "uint64", "double")
+_ATOMIC_PREFERENCE = ("int", "uint", "float", "int64", "uint64", "double")
 
 
 @dataclass(frozen=True)
@@ -145,6 +152,11 @@ def parameter(text: str, atomic: bool, first: bool) -> tuple[Param, str]:
     if text.count("*") > 1:
         return Param(Type.other(" ".join(text.split()))), space
     kind = opencl_type(pointee)
+    if kind.opaque in ATOMIC_TYPES and first:
+        return (
+            Param(Type(ATOMIC_TYPES[kind.opaque], opaque=kind.opaque), "inout"),
+            space,
+        )
     if kind.opaque:
         return Param(Type.other(" ".join(text.split()))), space
     if atomic and first:
@@ -164,19 +176,28 @@ def _rank(declaration: _Declaration) -> tuple:
     signature = declaration.signature
     kinds = [signature.result, *(p.type for p in signature.params)]
     spelled = [k for k in kinds if k != VOID and k.opaque not in ENUMERATIONS]
-    opaque = sum(1 for k in spelled if k.opaque)
-    scalars = sum(
-        _PREFERENCE.index(k.scalar) if k.scalar in _PREFERENCE else len(_PREFERENCE)
-        for k in spelled
-        if not k.opaque
+    opaque = sum(1 for k in spelled if not k.scalar and k.opaque not in _SPELLED)
+    values = [k for k in spelled if k.scalar]
+    preference = (
+        _ATOMIC_PREFERENCE
+        if declaration.name.startswith(("atomic_", "atom_"))
+        else _PREFERENCE
     )
-    shapes = sum(len(k.shape) for k in spelled if not k.opaque)
+    scalars = sum(
+        preference.index(k.scalar) if k.scalar in preference else len(preference)
+        for k in values
+    )
+    shapes = sum(len(k.shape) for k in values)
     spaces = sum(
         space != ("__global" if param.direction == "inout" else "")
         for param, space in zip(signature.params, declaration.spaces)
         if space != "-"
     )
     return opaque, spaces, scalars, shapes
+
+
+# The opaque types a probe passes: the images and the sampler it declares.
+_SPELLED = frozenset(UNIFORMS["opencl"])
 
 
 def _kept(stack: list[tuple[str, bool]]) -> bool:

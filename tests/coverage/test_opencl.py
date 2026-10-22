@@ -24,6 +24,8 @@ float __ovld sincos(float x, __global float *cosval);
 
 // OpenCL v1.1/1.2/2.0 s6.2.3 - Explicit conversions
 int __ovld __cnfn convert_int_rte(float);
+char __ovld __cnfn convert_char(float);
+uchar4 __ovld __cnfn convert_uchar4_sat(int4);
 int4 __ovld __cnfn convert_int4_rte(float4);
 
 // OpenCL v1.1 s6.11.7, v1.2 s6.12.7, v2.0 s6.13.7 - Vector Data Load and Store Functions
@@ -37,6 +39,21 @@ void __ovld __conv barrier(cl_mem_fence_flags);
 // OpenCL v1.1 s6.11.1, v1.2 s6.12.11 - Atomic Functions
 int __ovld atomic_add(volatile __local int *, int);
 int __ovld atomic_add(volatile __global int *, int);
+
+// OpenCL v2.0 s6.13.11 - Atomics Functions
+#if defined(__opencl_c_generic_address_space)
+float __ovld atomic_fetch_add(volatile atomic_float *, float);
+int __ovld atomic_fetch_add(volatile atomic_int *, int);
+#endif
+int __ovld atomic_fetch_add(volatile __global atomic_int *, int);
+bool __ovld atomic_flag_test_and_set(volatile __global atomic_flag *);
+
+// OpenCL v1.1 s6.11.3, v1.2 s6.12.14, v2.0 s6.13.14 - Image Read and Write Functions
+float4 __ovld __purefn read_imagef(read_only image1d_t, sampler_t, float);
+float4 __ovld __purefn read_imagef(read_only image2d_t, sampler_t, int2);
+float4 __ovld __purefn read_imagef(read_only image2d_t, sampler_t, float2);
+void __ovld write_imagef(write_only image2d_t, int2, float4);
+int __ovld __cnfn get_image_depth(read_only image3d_t);
 
 #ifdef __OPENCL_CPP_VERSION__
 float __ovld cpp_only(float);
@@ -162,6 +179,46 @@ def test_opencl_probe_spells_casts_vector_literals_and_constants():
     )
 
 
+def test_opencl_probes_8_bit_scalars_through_32_bit_buffers():
+    features = by_name(opencl.parse(HEADER))
+    assert features["convert_char"].signature.result == Type("int8")
+    assert opencl.opencl_type("uchar4") == Type("uint8", (4,))
+    source = _probe("convert_char")
+    assert "char r = convert_char(a0);" in source
+    assert "outp[i] = (int)r;" in source
+
+
+def test_opencl_probes_c11_atomics_on_an_atomic_int_buffer():
+    features = by_name(opencl.parse(HEADER))
+    # The core atomic_int overload, not the cl_ext_float_atomics one, and its global form.
+    assert features["atomic_fetch_add"].signature.params == (
+        Param(Type("int", opaque="atomic_int"), "inout"),
+        Param(Type("int")),
+    )
+    source = _probe("atomic_fetch_add")
+    assert "__global atomic_int* outp" in source
+    assert "atomic_fetch_add(&outp[i], a1);" in source
+    assert "__global atomic_flag* outp" in _probe("atomic_flag_test_and_set")
+
+
+def test_opencl_passes_2d_images_as_kernel_arguments():
+    features = by_name(opencl.parse(HEADER))
+    params = features["read_imagef"].signature.params
+    assert [p.type for p in params] == [
+        Type.other("read_only image2d_t"),
+        Type.other("sampler_t"),
+        Type("float", (2,)),
+    ]
+    source = _probe("read_imagef")
+    kernel = source.index("__kernel void probe(")
+    assert source.index("__constant sampler_t u1 = ") < kernel
+    assert ", read_only image2d_t u0) {" in source
+    assert "float4 r = read_imagef(u0, u1, a2);" in source
+    assert ", write_only image2d_t u0) {" in _probe("write_imagef")
+    with pytest.raises(probes.ProbeError, match="image3d_t"):
+        _probe("get_image_depth")
+
+
 def test_opencl_declares_workgroup_variables_inside_the_kernel():
     shared = Feature(
         "opencl",
@@ -178,7 +235,19 @@ def test_opencl_declares_workgroup_variables_inside_the_kernel():
     not validators.available("opencl"), reason="clang or DXC is missing"
 )
 def test_opencl_probes_are_valid_opencl_c():
-    for name in ("sincos", "vloadn", "barrier", "get_global_id", "atomic_add", "clz"):
+    for name in (
+        "sincos",
+        "vloadn",
+        "barrier",
+        "get_global_id",
+        "atomic_add",
+        "clz",
+        "convert_char",
+        "atomic_fetch_add",
+        "atomic_flag_test_and_set",
+        "read_imagef",
+        "write_imagef",
+    ):
         verdict = validators.validate("opencl", _probe(name))
         assert verdict.accepted, (name, verdict.log)
 

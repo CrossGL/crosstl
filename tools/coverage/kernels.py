@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .dialect import Buffer, Dialect, ProbeError
+from .model import OPENCL_ATOMICS as ATOMIC_TYPES
 from .model import OPENCL_ENUMERATIONS as ENUMERATIONS
 from .model import Type
 
@@ -82,7 +83,10 @@ class OpenCL(Dialect):
     entry = "probe"
     wide_integers = True
     narrow_scalars = True
+    byte_scalars = True
     _SCALARS = {
+        "int8": "char",
+        "uint8": "uchar",
         "int16": "short",
         "uint16": "ushort",
         "int64": "long",
@@ -90,11 +94,24 @@ class OpenCL(Dialect):
     }
     _HALF = re.compile(r"\bhalf\d*\b")
     _FP16 = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
+    # An image is a kernel argument, declared with its access qualifier.
+    _IMAGE = re.compile(r"(?:read_only|write_only|read_write) image")
+    # A sampler every image read accepts: integer and floating-point coordinates, and integer image formats.
+    _SAMPLER = (
+        "CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST"
+    )
 
     def type(self, kind: Type) -> str:
         if kind.opaque in ENUMERATIONS:
             return kind.opaque
+        if kind.opaque in ATOMIC_TYPES:
+            return kind.opaque
         return super().type(kind)
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        if spelling == "sampler_t":
+            return f"__constant sampler_t {name} = {self._SAMPLER};"
+        return f"{spelling} {name};"
 
     def scalar(self, scalar: str) -> str:
         return self._SCALARS.get(scalar, scalar)
@@ -148,11 +165,13 @@ class OpenCL(Dialect):
         # OpenCL C declares a __local variable in the kernel's own scope, not at program scope.
         declarations = list(parts.get("declarations", ()))
         shared = [line for line in declarations if line.startswith("__local ")]
+        images = [line for line in declarations if self._IMAGE.match(line)]
         params = [f"__global {kind}* {name}" for kind, name in buffers]
+        params += [line.rstrip(";") for line in images]
         params += parts.get("params", ())
         lines = [
             *parts.get("prelude", ()),
-            *(line for line in declarations if line not in shared),
+            *(line for line in declarations if line not in shared + images),
             f"__kernel void probe({', '.join(params)}) {{",
             "    uint i = get_global_id(0);",
         ]

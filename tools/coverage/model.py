@@ -16,16 +16,19 @@ SCALARS = (
     "half",
     "int16",
     "uint16",
+    "int8",
+    "uint8",
     "int8x4_packed",
     "uint8x4_packed",
 )
-# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit scalars, and the
-# 32-bit words that pack four 8-bit integers (HLSL shader model 6.6).
+# Scalars a probe reads from and stores as 32-bit buffer elements: the 64-bit integers, the 16-bit and 8-bit scalars,
+# and the 32-bit words that pack four 8-bit integers (HLSL shader model 6.6).
 WIDE_INTEGERS = frozenset({"int64", "uint64"})
 NARROW_SCALARS = frozenset({"half", "int16", "uint16"})
+BYTES = frozenset({"int8", "uint8"})
 PACKED_BYTES = frozenset({"int8x4_packed", "uint8x4_packed"})
 # Overload selection prefers a signature without these when a function has one.
-OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS
+OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS | BYTES
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",
@@ -121,6 +124,19 @@ OPENCL_ENUMERATIONS = {
     "cl_mem_fence_flags": "CLK_LOCAL_MEM_FENCE",
     "memory_scope": "memory_scope_work_group",
     "memory_order": "memory_order_relaxed",
+}
+# The C11 atomic types of OpenCL C (OpenCL C 3.0, section 6.15.12.6), by the type of the value each holds. They are
+# kept as that type with the atomic type as ``opaque``; a probe passes the address of an element of an output buffer
+# of the atomic type.
+OPENCL_ATOMICS = {
+    "atomic_int": "int",
+    "atomic_uint": "uint",
+    "atomic_long": "int64",
+    "atomic_ulong": "uint64",
+    "atomic_float": "float",
+    "atomic_double": "double",
+    "atomic_half": "half",
+    "atomic_flag": "int",
 }
 # A constant string argument, such as the tag a C library ``nan`` takes; probes pass the empty string.
 STRING = Type.other("string")

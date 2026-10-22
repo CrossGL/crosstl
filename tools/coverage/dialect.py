@@ -6,7 +6,7 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
-from .model import NARROW_SCALARS, PACKED_BYTES, STRING, WIDE_INTEGERS, Type
+from .model import BYTES, NARROW_SCALARS, PACKED_BYTES, STRING, WIDE_INTEGERS, Type
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
@@ -49,9 +49,10 @@ class Dialect:
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
-    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS and PACKED_BYTES.
+    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, BYTES and PACKED_BYTES.
     wide_integers = False
     narrow_scalars = False
+    byte_scalars = False
     packed_bytes = False
     # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
     string = ""
@@ -71,6 +72,8 @@ class Dialect:
             raise ProbeError(f"no 64-bit integer probe for {self.language} yet")
         if kind.scalar in NARROW_SCALARS and not self.narrow_scalars:
             raise ProbeError(f"no 16-bit probe for {self.language} yet")
+        if kind.scalar in BYTES and not self.byte_scalars:
+            raise ProbeError(f"no 8-bit probe for {self.language} yet")
         if kind.scalar in PACKED_BYTES and not self.packed_bytes:
             raise ProbeError(f"{self.language} has no packed 8-bit integer types")
         if not kind.shape:
@@ -117,6 +120,8 @@ class Dialect:
             "uint": "0u",
             "uint16": "0u",
             "uint64": "0u",
+            "int8": "0",
+            "uint8": "0u",
             "int8x4_packed": "0u",
             "uint8x4_packed": "0u",
         }
@@ -129,7 +134,7 @@ class Dialect:
         """An argument of ``kind`` that the language requires to be a constant expression. An unsigned scalar is a
         count, a size or an index, and one is the smallest value all of them take: a cluster size must be a power of
         two (SPIR-V 1.6, OpGroupNonUniformRotateKHR)."""
-        if kind.scalar in ("uint", "uint16", "uint64") and not kind.shape:
+        if kind.scalar in ("uint", "uint16", "uint64", "uint8") and not kind.shape:
             return self.one
         return self.literal(kind)
 
