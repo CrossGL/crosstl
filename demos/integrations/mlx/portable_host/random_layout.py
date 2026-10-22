@@ -1,6 +1,11 @@
 """Map logical random output bytes to the unchanged kernel's per-key storage."""
 
+import struct
 from dataclasses import dataclass
+
+from crosstl.project.runtime_values import exact_types_within
+
+INT_TYPES = frozenset({int})
 
 MAX_KEY_ELEMENTS = 65535
 MAX_WORKGROUP_COUNT = 65535
@@ -76,15 +81,18 @@ class RandomOutputLayout:
 
     def unpack(self, values):
         """Copy logical bytes from signed native carriers without changing their bits."""
-        if len(values) != self.native_byte_count or any(
-            type(value) is not int or not -128 <= value <= 127 for value in values
+        if (
+            len(values) != self.native_byte_count
+            or not exact_types_within(values, INT_TYPES)
+            or (values and not (-128 <= min(values) and max(values) <= 127))
         ):
             raise ValueError(
                 "Random readback must contain the exact signed byte storage"
             )
         if not self.bytes_per_key:
             return b""
-        raw = bytes(value & 255 for value in values)
+        # Signed bytes in [-128, 127] pack to the same bits as ``value & 255``.
+        raw = struct.pack(f"<{len(values)}b", *values)
         return b"".join(
             raw[start : start + self.bytes_per_key]
             for start in (

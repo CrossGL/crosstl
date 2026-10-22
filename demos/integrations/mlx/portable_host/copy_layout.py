@@ -22,11 +22,30 @@ INOUT = 2
 
 
 def destination_indices(metadata):
-    for coordinates in itertools.product(*(range(size) for size in metadata["shape"])):
-        yield metadata["destinationOffset"] + sum(
-            coordinate * stride
-            for coordinate, stride in zip(coordinates, metadata["destinationStrides"])
-        )
+    """Yield each destination element index in row-major coordinate order.
+
+    The index of coordinates ``c`` is ``destinationOffset + sum(c[i] * s[i])``
+    over the strides the shape has (a missing stride counts as zero). Rows of
+    the last axis are produced as arithmetic ranges, so a copy of millions of
+    elements does not sum strides per element.
+    """
+    shape = list(metadata["shape"])
+    if not shape:
+        yield metadata["destinationOffset"]
+        return
+    if any(size <= 0 for size in shape):
+        return
+    strides = list(metadata["destinationStrides"])[: len(shape)]
+    strides += [0] * (len(shape) - len(strides))
+    bases = [metadata["destinationOffset"]]
+    for size, stride in zip(shape[:-1], strides[:-1]):
+        bases = [base + index * stride for base in bases for index in range(size)]
+    length, stride = shape[-1], strides[-1]
+    for base in bases:
+        if stride:
+            yield from range(base, base + length * stride, stride)
+        else:
+            yield from itertools.repeat(base, length)
 
 
 def launch_regions(shape, source_strides, destination_strides, destination_offset):

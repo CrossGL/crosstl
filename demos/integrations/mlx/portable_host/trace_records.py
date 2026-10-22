@@ -3,7 +3,10 @@
 import hashlib
 import json
 
+from crosstl.project.runtime_values import exact_types_within
+
 COMPACT_TRACE_LIMIT = 256
+_SCALAR_TYPES = frozenset({type(None), bool, int, float, str})
 
 
 def compact_trace_values(value):
@@ -16,8 +19,12 @@ def compact_trace_values(value):
     if isinstance(value, dict):
         return {key: compact_trace_values(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        if len(value) > COMPACT_TRACE_LIMIT and all(
-            item is None or isinstance(item, (bool, int, float, str)) for item in value
+        if len(value) > COMPACT_TRACE_LIMIT and (
+            exact_types_within(value, _SCALAR_TYPES)
+            or all(
+                item is None or isinstance(item, (bool, int, float, str))
+                for item in value
+            )
         ):
             encoded = json.dumps(list(value), separators=(",", ":")).encode()
             return {

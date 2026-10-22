@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 # Exact types whose element-wise flattening is ``[item]``.
@@ -21,6 +21,8 @@ _LEAF_TYPES = frozenset({int, float, bool, str, bytes, bytearray})
 # Exact types ``copy.deepcopy`` returns unchanged.
 _ATOMIC_TYPES = frozenset({int, float, bool, str, bytes, type(None)})
 _NUMERIC_TYPES = frozenset({int, float})
+_INT_TYPES = frozenset({int})
+_BOOL_TYPES = frozenset({bool})
 _FLOAT_FORMATS = {"float16": "e", "float32": "f"}
 _INTEGER_RANGES = {
     **{
@@ -31,6 +33,16 @@ _INTEGER_RANGES = {
 }
 
 
+def exact_types_within(values: Iterable[Any], allowed: frozenset[type]) -> bool:
+    """Whether the exact type of every item in ``values`` is in ``allowed``.
+
+    The type lookup runs in C over the whole sequence, which is several times
+    faster than an ``all`` over a generator for lists of millions of scalars.
+    Subclasses do not match: ``bool`` is not accepted where only ``int`` is.
+    """
+    return allowed.issuperset(map(type, values))
+
+
 def flatten_values(value: Any, *, keep_none: bool = False) -> list[Any]:
     """Flatten nested sequences of runtime values in order.
 
@@ -39,6 +51,9 @@ def flatten_values(value: Any, *, keep_none: bool = False) -> list[Any]:
     """
     if value is None:
         return [None] if keep_none else []
+    if type(value) is list and exact_types_within(value, _LEAF_TYPES):
+        # A flat list of leaves is its own flattening.
+        return list(value)
     if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
         return [value]
     result: list[Any] = []
@@ -53,7 +68,7 @@ def flatten_values(value: Any, *, keep_none: bool = False) -> list[Any]:
 
 def copy_values(values: Any) -> Any:
     """``copy.deepcopy(values)``, as one list copy for a list of atomic scalars."""
-    if type(values) is list and all(type(item) in _ATOMIC_TYPES for item in values):
+    if type(values) is list and exact_types_within(values, _ATOMIC_TYPES):
         return list(values)
     return copy.deepcopy(values)
 
@@ -67,14 +82,14 @@ def scalars_fit(values: Sequence[Any], dtype: str) -> bool:
     element-wise check must then judge the values.
     """
     if dtype == "bool":
-        return all(type(item) is bool for item in values)
+        return exact_types_within(values, _BOOL_TYPES)
     if dtype in _INTEGER_RANGES:
         low, high = _INTEGER_RANGES[dtype]
-        return all(type(item) is int for item in values) and (
+        return exact_types_within(values, _INT_TYPES) and (
             not values or (low <= min(values) and max(values) <= high)
         )
     if dtype in _FLOAT_FORMATS:
-        if not all(type(item) in _NUMERIC_TYPES for item in values):
+        if not exact_types_within(values, _NUMERIC_TYPES):
             return False
         try:
             if not all(map(math.isfinite, values)):

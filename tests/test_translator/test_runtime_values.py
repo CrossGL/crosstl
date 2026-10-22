@@ -9,7 +9,12 @@ import pytest
 
 from crosstl.project import native_loader_dispatch, native_runtime_drivers
 from crosstl.project.runtime_value_encoding import storage_words
-from crosstl.project.runtime_values import copy_values, flatten_values, scalars_fit
+from crosstl.project.runtime_values import (
+    copy_values,
+    exact_types_within,
+    flatten_values,
+    scalars_fit,
+)
 
 
 class Words(list):
@@ -179,3 +184,53 @@ def test_storage_words_bulk_path_keeps_range_checks(width):
     for invalid in ([1 << width], [-1], [True], [1.0]):
         with pytest.raises(ValueError, match="storage values"):
             storage_words(invalid, width=width)
+
+
+def test_exact_types_within_matches_exact_types_only():
+    ints = frozenset({int})
+    assert exact_types_within([], ints)
+    assert exact_types_within([0, -1, 2**70], ints)
+    assert not exact_types_within([1, True], ints)
+    assert not exact_types_within([1, 1.0], ints)
+    assert not exact_types_within([Number(1.0)], frozenset({float}))
+    assert exact_types_within((value for value in (1.0, 2.5)), frozenset({float}))
+
+
+@pytest.mark.parametrize(
+    "dtype, values, accepted",
+    [
+        ("bool", [True, False], True),
+        ("bool", [True, 1], False),
+        ("int8", [-128, 0, 127], True),
+        ("int8", [128], False),
+        ("uint8", [-1], False),
+        ("uint16", [65535, True], False),
+        ("int16", [1.0], False),
+    ],
+)
+def test_bulk_packing_keeps_bool_and_narrow_integer_checks(dtype, values, accepted):
+    if not accepted:
+        with pytest.raises(native_runtime_drivers.RuntimeExecutorUnavailable):
+            native_runtime_drivers._pack_values(
+                values, dtype, expected_count=len(values)
+            )
+        return
+    packed = native_runtime_drivers._pack_values(
+        values, dtype, expected_count=len(values)
+    )
+    code = native_runtime_drivers._dtype_format(dtype)
+    assert packed == struct.pack("<" + code * len(values), *values)
+
+
+def test_unpacking_rejects_noncanonical_bool_bytes_and_keeps_order():
+    assert native_runtime_drivers._unpack_values(b"\x01\x00\x01", "bool") == [
+        True,
+        False,
+        True,
+    ]
+    with pytest.raises(native_runtime_drivers.RuntimeAdapterDispatchError):
+        native_runtime_drivers._unpack_values(b"\x01\x02", "bool")
+    words = [0, 1, 0xFFFFFFFF]
+    payload = struct.pack("<3I", *words)
+    assert native_runtime_drivers._unpack_values(payload, "uint32") == words
+    assert native_runtime_drivers._unpack_values(b"", "float32") == []
