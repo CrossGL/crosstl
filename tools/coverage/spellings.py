@@ -10,6 +10,9 @@ from __future__ import annotations
 
 # The CrossGL spelling of a function that reads a vector's element at an index, which CrossGL writes as ``v[i]``.
 SUBSCRIPT = "[]"
+# The CrossGL spelling of a function that returns a vector with the element at an index replaced, which CrossGL writes
+# as an assignment, ``v[i] = x``, to a copy of the vector.
+ELEMENT = "[]="
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
 # feature list has the new name; any other backend function is probed under its own spelling.

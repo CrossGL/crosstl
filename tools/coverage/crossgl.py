@@ -26,7 +26,7 @@ from .model import (
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
-from .spellings import SUBSCRIPT
+from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -311,6 +311,14 @@ class CrossGL(Dialect):
     def pointer(self, kind: Type, name: str) -> str:
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
+
+    def assignment(
+        self, name: str, kind: Type, arguments: list[str]
+    ) -> tuple[list[str], str] | None:
+        if name != ELEMENT:
+            return None
+        vector, index, element = arguments
+        return [self.declare(kind, "w", vector), f"w[{index}] = {element};"], "w"
 
     def call(self, name: str, arguments: list[str]) -> str:
         if name == SUBSCRIPT:

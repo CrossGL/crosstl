@@ -56,6 +56,7 @@ def cause(feature: dict, language: str = "") -> str:
         None,
         "",
         spellings.SUBSCRIPT,
+        spellings.ELEMENT,
     }
     renames = spellings.RENAMES.get(language, {})
     names |= {renames[name] for name in names if name in renames}

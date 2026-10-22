@@ -198,6 +198,13 @@ class Dialect:
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
 
+    def assignment(
+        self, name: str, kind: Type, arguments: list[str]
+    ) -> tuple[list[str], str] | None:
+        """For a function this dialect writes as an assignment rather than a call, the statements that compute its
+        result of type ``kind``, and the local that holds it; None for a call."""
+        return None
+
     def out_argument(self, name: str) -> str:
         return name
 

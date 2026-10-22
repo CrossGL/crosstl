@@ -254,6 +254,7 @@ void [[]] IgnoreHit();
 uint [[]] GetRemainingRecursionLevels();
 void [[]]   abort();
 void [[]] source_mark();
+void [[]] printf(in string Format, ...);
 void [[]] Barrier(in uint MemoryTypeFlags, in uint SemanticFlags);
 $type1 [[rn]] NonUniformResourceIndex(in any<> index) : nonuniform_resource_index;
 $match<1, 1> any<c, r> [[rn]] transpose(in any<r, c> x);
@@ -337,6 +338,9 @@ def test_hlsl_reads_intrinsics_and_methods_from_the_dxc_table():
     assert features["ddx"].stage == "fragment"
     assert features["GetGroupWaveIndex"].signature is None
     assert features["GetGroupWaveIndex"].note == "needs shader model 6.10"
+    # The probes compile to DXIL, where DXC has no printf.
+    assert features["printf"].signature is None
+    assert features["printf"].note.startswith("DXC compiles printf only to SPIR-V")
     # Ray-tracing intrinsics run in a closest-hit shader unless another stage alone has them.
     assert features["WorldRayOrigin"].stage == "closest-hit"
     assert features["IgnoreHit"].stage == "any-hit"

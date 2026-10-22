@@ -41,6 +41,14 @@ pub unsafe fn vector_extract_dynamic<T: Scalar, const N: usize>(
     T::default()
 }
 
+pub unsafe fn vector_insert_dynamic<T: Scalar, V: Vector<T, N>, const N: usize>(
+    vector: V,
+    index: usize,
+    element: T,
+) -> V {
+    vector
+}
+
 pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
     0
 }
@@ -180,6 +188,7 @@ def test_rust_reads_spirv_std_arch_and_expands_its_macros():
         "subgroup_logical_and",
         "unsigned_max",
         "vector_extract_dynamic",
+        "vector_insert_dynamic",
     ]
     assert features["unsigned_max"].signature == Signature(
         Type("uint"), (Param(Type("uint")), Param(Type("uint")))
@@ -283,6 +292,21 @@ def test_rust_probes_pointer_sized_integers():
     assert "float r = a0[a1];" in crossgl
     with pytest.raises(probes.ProbeError, match="no pointer-sized integer type"):
         probes.spell(Type("usize"), "glsl")
+
+
+def test_rust_probes_an_element_insert_as_an_assignment():
+    insert = parse()["vector_insert_dynamic"]
+    # V: Vector<T, N> is a vector of T's probe scalar.
+    assert insert.signature == Signature(
+        VEC3_TYPE, (Param(VEC3_TYPE), Param(Type("usize")), Param(Type("float")))
+    )
+    source = probes.build(insert, "rust").source
+    assert "let r: Vec3 = unsafe { vector_insert_dynamic(a0, a1, a2) };" in source
+    # CrossGL replaces an element by assigning to a copy of the vector, a statement rather than an expression.
+    crossgl = probes.build(insert, "crossgl").source
+    assert "vec3 w = a0;\n" in crossgl
+    assert "w[a1] = a2;\n" in crossgl
+    assert "vec3 r = w;\n" in crossgl
 
 
 def test_rust_has_no_probe_for_vectors_spirv_std_lacks():

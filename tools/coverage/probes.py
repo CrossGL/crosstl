@@ -278,8 +278,11 @@ class _Builder:
         atomic = output is not None
         if self.receiver:
             name = self.receiver.call(name)
-        call = dialect.call(name, arguments)
         result = signature.result
+        assigned = dialect.assignment(name, result, arguments)
+        if assigned:
+            self.lines += assigned[0]
+        call = assigned[1] if assigned else dialect.call(name, arguments)
         reading = dialect.reading(result.opaque) if result.opaque else None
         held = dialect.holding(result.opaque) if result.opaque else ""
         if output is None and reading:

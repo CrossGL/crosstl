@@ -116,11 +116,13 @@ _UNSPELLED = {
         "no CrossGL function writes a vector's elements to an array"
     ),
 }
-# CrossGL builds vectors with constructors and reads an element with the subscript operator, rather than functions.
+# CrossGL builds vectors with constructors, and reads or replaces an element with the subscript operator, rather than
+# with functions.
 _CONSTRUCTORS = {
     "Vec3::new": "vec3",
     "Vec3::splat": "vec3",
     "vector_extract_dynamic": spellings.SUBSCRIPT,
+    "vector_insert_dynamic": spellings.ELEMENT,
 }
 # Parameters a probe passes as literals. The probes target Vulkan 1.1 (SPIR-V 1.3), where a subgroup broadcast's lane
 # id and a quad broadcast's index must be constants (SPIR-V specification, OpGroupNonUniformBroadcast and
@@ -233,6 +235,11 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
         scalar = re.search(r"Scalar\s*=\s*(?:impl\s+)?(\w+)", bounds)
         if re.search(r"\bVector<\s*bool\b", bounds):
             types[name] = Type("bool", (3,))
+            continue
+        # A vector of an earlier type parameter's scalar, as in ``V: Vector<T, N>``.
+        element = re.search(r"\bVector<\s*(\w+)\s*,", bounds)
+        if element and element.group(1) in types:
+            types[name] = Type(types[element.group(1)].scalar, (3,))
             continue
         for word in [scalar.group(1) if scalar else "", *re.findall(r"\w+", bounds)]:
             if word in _SCALARS:
