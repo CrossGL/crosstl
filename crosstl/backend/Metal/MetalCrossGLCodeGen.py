@@ -9964,16 +9964,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         # restricting these to `uint3` wrongly denied them the explicit
         # stage-entry path and collapsed every materialized kernel to an unnamed
         # "main" entry point (invalid SPIR-V: duplicate entry-point names).
-        positional_builtin_types = {"uint", "uint2", "uint3"}
+        positional_builtin_types = {
+            "uint",
+            "uint2",
+            "uint3",
+            "ushort",
+            "ushort2",
+            "ushort3",
+        }
+        index_builtin_types = {"uint", "ushort"}
         expected_types = {
             "thread_position_in_grid": positional_builtin_types,
             "thread_position_in_threadgroup": positional_builtin_types,
             "threadgroup_position_in_grid": positional_builtin_types,
-            "thread_index_in_threadgroup": {"uint"},
+            "thread_index_in_threadgroup": index_builtin_types,
             "threads_per_threadgroup": positional_builtin_types,
             "threadgroups_per_grid": positional_builtin_types,
-            "thread_index_in_simdgroup": {"uint"},
-            "threads_per_simdgroup": {"uint"},
+            "thread_index_in_simdgroup": index_builtin_types,
+            "threads_per_simdgroup": index_builtin_types,
         }
         for param in getattr(func, "params", []) or []:
             semantic = self.compute_builtin_attribute_name(param)
