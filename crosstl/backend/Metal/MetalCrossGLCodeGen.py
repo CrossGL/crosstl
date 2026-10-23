@@ -1177,6 +1177,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "tan",
         "tanh",
         "trunc",
+        # Lowered or refused per target by translator.semantics.metal_math_spellings.
+        "powr",
+        "exp10",
+        "tanpi",
+        "asinpi",
+        "acospi",
+        "atanpi",
+        "atan2pi",
     }
     materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {

@@ -51,6 +51,7 @@ from .intrinsic_named_functions import (
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .metal_math_spellings import lower_metal_math_spellings
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
@@ -204,6 +205,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
+    lower_metal_math_spellings(program, report.target)
     canonicalize_texture_swizzles(program)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
