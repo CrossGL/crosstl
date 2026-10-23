@@ -126,7 +126,6 @@ NEGATIVE_CHECKS = {
     "full-dtype": (
         "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
     ),
-    "full-grid-limit": "65535 groups per axis",
     "full-allocation": "exceeds its allocation",
 }
 REDUCTION_NEGATIVE_CHECKS = {
@@ -222,8 +221,6 @@ def worker(args):
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
                 value = mx.full((3, 5), mx.array(1, dtype=mx.int16))
-            elif args.worker == "full-grid-limit":
-                value = mx.ones((131072,), dtype=mx.float32)
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)

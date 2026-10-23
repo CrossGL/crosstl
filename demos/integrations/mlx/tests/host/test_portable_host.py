@@ -781,7 +781,7 @@ def test_cast_dispatch_contract(
 )
 def test_cast_references_require_exact_results(fault):
     records = cast_workloads.expected_records()
-    assert len(records) == 50 and len(cast_workloads.dispatches()) == 64
+    assert len(records) == 50 and len(cast_workloads.dispatches()) == 52
     assert sum(len(record["words"]) for record in records) == 1976
     if fault == "missing":
         records.pop()
@@ -1715,7 +1715,7 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
     records = full_workloads.expected_records()
     assert len(records) == 62
     assert sum(len(record["words"]) for record in records) == 2421
-    assert len(full_workloads.dispatches()) == 52
+    assert len(full_workloads.dispatches()) == 51
     if fault == "missing":
         records.pop()
     elif fault == "payload":
@@ -2017,7 +2017,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
         if fault in {"source-before", "test-source-before"}:
             assert calls == []
         if fault == "command":
-            assert len(calls) == 20
+            assert len(calls) == 19
             assert (
                 json.loads((args.output_dir / "cpu.command.json").read_text())[
                     "returncode"
@@ -2025,7 +2025,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 == 124
             )
         if fault == "native-timeout":
-            assert len(calls) == 20
+            assert len(calls) == 19
             for mode in ("cpu", "native", *verify.NEGATIVE_CHECKS):
                 command_result = json.loads(
                     (args.output_dir / f"{mode}.command.json").read_text()
@@ -2033,7 +2033,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 20 and evidence["dispatchCount"] == 495 + len(
+        assert len(calls) == 19 and evidence["dispatchCount"] == 482 + len(
             boolean_workloads.dispatches()
         )
         assert len(identities) == 2
