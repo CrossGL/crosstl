@@ -249,6 +249,7 @@ from .hlsl_texel_buffers import (
     HLSLTexelBuffers,
     texel_buffer_base_type,
 )
+from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -26652,6 +26653,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         storage_read = self.hlsl_half_storage.read(expr)
         if storage_read is not None:
             return storage_read
+        unavailable = hlsl_unavailable_builtin(self, expr)
+        if unavailable is not None:
+            return unavailable
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
