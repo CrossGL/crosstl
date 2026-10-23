@@ -3167,6 +3167,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-quantized/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-quantized/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
@@ -3403,6 +3406,9 @@ jobs:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
           path: .mlx-portable-quantized/base
           merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-quantized/base
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail

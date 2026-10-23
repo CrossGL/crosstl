@@ -50,8 +50,16 @@ def test_host_package_downloads_unpack_outside_the_artifact_stream():
             )
             assert "if" not in unpack and "continue-on-error" not in unpack
             consumers[name] = with_["path"]
-    assert len(consumers) == 6
-    assert len(set(consumers.values())) == 6
+    assert consumers == {
+        "small-row-reductions": ".mlx-portable-small-rows/base",
+        "half-host": ".mlx-portable-half/base",
+        "quantized-host": ".mlx-portable-quantized/base",
+        "quantized-upstream-host": ".mlx-portable-quantized/base",
+        "integer64-host": ".mlx-portable-integer64/base",
+        "slice-update-host": ".mlx-portable-slice-update/base",
+        "scatter-host": ".mlx-portable-scatter/base",
+        "reductions": ".mlx-portable-reductions/base",
+    }
 
 
 @pytest.mark.parametrize("family", ["column", "row"])
