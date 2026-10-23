@@ -51,7 +51,12 @@ def cause(feature: dict, language: str = "") -> str:
     detail = diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
     rest = detail[len(prefix) :]
-    names = {feature.get("name"), feature.get("crossgl")} - {None, ""}
+    # An operator spelling such as spellings.SUBSCRIPT names no function a diagnostic could mention.
+    names = {feature.get("name"), feature.get("crossgl")} - {
+        None,
+        "",
+        spellings.SUBSCRIPT,
+    }
     renames = spellings.RENAMES.get(language, {})
     names |= {renames[name] for name in names if name in renames}
     for name in sorted(names, key=lambda n: (-len(n), n)):

@@ -343,6 +343,7 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "debugPrintfEXT": "printf",
             "traceRayEXT": "TraceRay",
             "reportIntersectionEXT": "ReportHit",
             "executeCallableEXT": "CallShader",
@@ -2236,13 +2237,19 @@ class GLSLToCrossGLConverter:
         return block_name
 
     def generate_arrayed_descriptor_set_uniform_block(self, var):
+        """``uniform B { ... } name[N];`` as ``ConstantBuffer<B> name[N]``: ``N`` uniform buffers, one per element.
+
+        An array of uniform blocks is an array of block instances, each backed by a buffer of its own (GLSL 4.60
+        section 4.3.9), which a Vulkan binding holds as ``N`` descriptors. A ``uniform B name[N]`` would declare one
+        buffer holding an array of ``B``.
+        """
         block_name = self.uniform_block_name(var)
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, [var]
-        )
+        ) + self.uniform_block_buffer_layout_suffix(block_name, [var])
         var_type = self.convert_type(block_name)
         array_suffix = self.array_suffix(var)
-        return f"uniform {var_type} {var.name}{array_suffix}{attributes};\n"
+        return f"ConstantBuffer<{var_type}> {var.name}{array_suffix}{attributes};\n"
 
     def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
         layout = self.uniform_block_layout(block_name, uniforms)

@@ -42,6 +42,9 @@ from crosstl.translator.codegen.metal_codegen import (
     UnsupportedMetalFeatureError,
 )
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from crosstl.translator.codegen.resource_array_bounds import (
+    ResourceArrayIndexUnboundedError,
+)
 from tests.metal_refusal_helpers import metal_partial_output, refused_metal
 
 
@@ -6568,19 +6571,9 @@ def test_metal_dynamic_only_unsized_structured_buffer_arrays_keep_fallback_size(
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(shader)))
-
-    assert "array<device uint*, 1> counts" in generated_code
-    assert "device uint* afterCounts" in generated_code
-    assert (
-        "uint readCount(array<device uint*, 1> localCounts, uint which, uint index)"
-        in generated_code
-    )
-    assert "return localCounts[which][index];" in generated_code
-    assert (
-        "return readCount(counts, which, index) + afterCounts[index];" in generated_code
-    )
-    assert "array<device uint*, 2> counts" not in generated_code
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="counts"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_metal_unsized_structured_buffer_array_rejects_multiple_fixed_helper_sizes():
@@ -19635,7 +19628,7 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "rgFloat.write(float4(rgValue + float2(input.amount), 0.0, 0.0), uint2(input.pixel));"
+        "rgFloat.write(float4(rgValue + float2(input.amount), 0.0, 1.0), uint2(input.pixel));"
         in generated_code
     )
     assert (
@@ -19643,7 +19636,7 @@ def test_metal_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "unsignedLayers.write(uint4(layerValue + uint2(input.unsignedAmount), 0u, 0u), uint2(input.pixelLayer.xy), uint(input.pixelLayer.z));"
+        "unsignedLayers.write(uint4(layerValue + uint2(input.unsignedAmount), 0u, 1u), uint2(input.pixelLayer.xy), uint(input.pixelLayer.z));"
         in generated_code
     )
     assert (
@@ -20286,22 +20279,16 @@ def test_metal_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = image.read(uint2(pixel)).x;" in generated_code
     assert "uint oldValue = image.read(uint2(pixel)).x;" in generated_code
-    assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
-    assert (
-        "image.write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "image.write(float4(oldValue + value), uint2(pixel));" in generated_code
+    assert "image.write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert "uint2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixel));" in generated_code
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixel));" in generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -20439,12 +20426,12 @@ def test_metal_explicit_rg_image_formats():
         in generated_code
     )
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
-    assert "image.write(int4(oldValue + value, 0, 0), uint3(voxel));" in generated_code
+    assert "image.write(int4(oldValue + value, 0, 1), uint3(voxel));" in generated_code
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixelLayer.xy), uint(pixelLayer.z));"
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixelLayer.xy), uint(pixelLayer.z));"
         in generated_code
     )
     assert "texture2d<float4, access::read_write> rgFloat" not in generated_code
@@ -20561,16 +20548,16 @@ def test_metal_explicit_narrow_rg_image_formats():
     assert "int2 oldValue = image.read(uint3(voxel)).xy;" in generated_code
     assert "uint2 oldValue = image.read(uint2(pixel)).xy;" in generated_code
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
-        "image.write(float4(oldValue + value, 0.0, 0.0), uint2(pixelLayer.xy), uint(pixelLayer.z));"
+        "image.write(float4(oldValue + value, 0.0, 1.0), uint2(pixelLayer.xy), uint(pixelLayer.z));"
         in generated_code
     )
-    assert "image.write(int4(oldValue + value, 0, 0), uint3(voxel));" in generated_code
+    assert "image.write(int4(oldValue + value, 0, 1), uint3(voxel));" in generated_code
     assert (
-        "image.write(uint4(oldValue + value, 0u, 0u), uint2(pixel));" in generated_code
+        "image.write(uint4(oldValue + value, 0u, 1u), uint2(pixel));" in generated_code
     )
     assert "texture2d<float4, access::read_write> rg8Float" not in generated_code
     assert ".read(uint2(pixel)).x;" not in generated_code
@@ -20759,7 +20746,7 @@ def test_metal_formatted_image_arrays_preserve_format_metadata():
     assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "float4 oldValue = images[1].read(uint3(voxel));" in generated_code
@@ -20843,7 +20830,7 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
     assert "float2 readPair(ImagePack pack, int index, int2 pixel)" in generated_code
     assert "return pack.pairs[index].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "pack.targets[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        "pack.targets[index].write(float4(value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -20868,7 +20855,7 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
         in generated_code
     )
     assert (
-        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -20945,7 +20932,7 @@ def test_metal_struct_held_storage_image_element_aliases_preserve_access():
         "texture2d<float, access::write> targetAlias = pack.targets[index];"
         in generated_code
     )
-    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel));" in (
+    assert "targetAlias.write(float4(value, 0.0, 1.0), uint2(pixel));" in (
         generated_code
     )
     assert (
@@ -21072,23 +21059,17 @@ def test_metal_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = images[1].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[1].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[1].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[0].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert "float oldValue = images[1].read(uint2(pixel));" not in generated_code
@@ -21178,23 +21159,17 @@ def test_metal_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[1].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -21312,23 +21287,17 @@ def test_metal_transitive_rg_image_arrays_share_call_site_size():
         in generated_code
     )
     assert "float oldValue = images[3].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[1].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint oldValue = images[3].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[1].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u), uint2(pixel));"
+        "images[0].write(uint4(oldValue + value, 0u, 1u), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -22102,15 +22071,9 @@ def test_metal_shadowed_rg_image_array_constant_keeps_scalar_context():
     )
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0, 0.0), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(float4(oldValue + value), uint2(pixel));" in generated_code
     assert "uint oldValue = images[LAYER].read(uint2(pixel)).x;" in generated_code
-    assert (
-        "images[0].write(uint4(oldValue + value, 0u, 0u, 0u), uint2(pixel));"
-        in generated_code
-    )
+    assert "images[0].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert (
         "array<texture2d<float, access::read_write>, 4> rgFloatImages"
         not in generated_code
@@ -22181,7 +22144,7 @@ def test_metal_formatted_image_arrays_preserve_expression_sizes():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[1].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[1].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
@@ -22254,7 +22217,7 @@ def test_metal_unsized_formatted_image_arrays_preserve_format_metadata():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert (
@@ -22335,7 +22298,7 @@ def test_metal_formatted_image_arrays_infer_named_constant_size():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[LAYER].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
@@ -22425,7 +22388,7 @@ def test_metal_readonly_formatted_image_array_parameters_use_resource_arrays():
     )
     assert "images[layer].read(uint2(pixel)).xy" in generated_code
     assert (
-        "images[layer].write(float4(value, 0.0, 0.0), uint2(pixel))" in generated_code
+        "images[layer].write(float4(value, 0.0, 1.0), uint2(pixel))" in generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -22553,7 +22516,7 @@ def test_metal_formatted_image_arrays_infer_transitive_helper_size():
     assert "images[1].write(uint4(oldValue + value), uint2(pixel));" in generated_code
     assert "float2 oldValue = images[2].read(uint2(pixel)).xy;" in generated_code
     assert (
-        "images[0].write(float4(oldValue + value, 0.0, 0.0), uint2(pixel));"
+        "images[0].write(float4(oldValue + value, 0.0, 1.0), uint2(pixel));"
         in generated_code
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
@@ -23257,7 +23220,7 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23275,7 +23238,10 @@ def test_metal_unsized_texture_and_sampler_arrays_preserve_dynamic_indexing():
     )
     assert "textures[layer].sample(samplers[layer], uv)" in generated_code
     assert "textures[3].sample(samplers[3], uv)" in generated_code
-    assert "sampleLayer(textures, samplers, input.layer, input.uv)" in generated_code
+    assert (
+        "sampleLayer(textures, samplers, clamp(input.layer, 0, 3), input.uv)"
+        in generated_code
+    )
     assert "array<texture2d<float>, 1> textures" not in generated_code
     assert "array<sampler, 1> samplers" not in generated_code
 
@@ -23325,19 +23291,10 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_unsupported_indices():
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="samplers"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in dynamic_code
-    assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers"
-        in dynamic_code
-    )
-    assert "textures[layer].sample(samplers[layer], uv)" in dynamic_code
-    assert "array<texture2d<float>, 2> textures" not in dynamic_code
-    assert "texture2d<float> afterTexture [[texture(2)]]" not in dynamic_code
 
     assert "array<texture2d<float>, 1> textures [[texture(0)]]" in negative_code
     assert "texture2d<float> afterTexture [[texture(1)]]" in negative_code
@@ -23442,7 +23399,7 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, input.layer, input.uv) + texture(afterTexture, input.uv);
+                return sampleLayer(textures, samplers, clamp(input.layer, 0, 1), input.uv) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -23451,11 +23408,11 @@ def test_metal_unsized_texture_and_sampler_arrays_ignore_shadowed_constant_name(
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "constant int LAYER = 3;" in generated_code
-    assert "array<texture2d<float>, 1> textures [[texture(0)]]" in generated_code
-    assert "texture2d<float> afterTexture [[texture(1)]]" in generated_code
-    assert "array<sampler, 1> samplers [[sampler(0)]]" in generated_code
+    assert "array<texture2d<float>, 2> textures [[texture(0)]]" in generated_code
+    assert "texture2d<float> afterTexture [[texture(2)]]" in generated_code
+    assert "array<sampler, 2> samplers [[sampler(0)]]" in generated_code
     assert (
-        "float4 sampleLayer(array<texture2d<float>, 1> textures, array<sampler, 1> samplers, int LAYER"
+        "float4 sampleLayer(array<texture2d<float>, 2> textures, array<sampler, 2> samplers, int LAYER"
         in generated_code
     )
     assert "textures[LAYER].sample(samplers[LAYER], uv)" in generated_code
@@ -31696,7 +31653,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth);
                 float singleShadow = textureCompare(afterShadow, afterSampler, input.uv, input.depth);
                 return vec4(arrayShadow + singleShadow);
             }
@@ -31723,7 +31680,7 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_preserve_dynamic_indexi
         "shadowMaps[3].sample_compare(shadowSamplers[3], uv, depth)" in generated_code
     )
     assert (
-        "shadowLayer(shadowMaps, shadowSamplers, input.layer, input.uv, input.depth)"
+        "shadowLayer(shadowMaps, shadowSamplers, clamp(input.layer, 0, 3), input.uv, input.depth)"
         in generated_code
     )
     assert (
@@ -31788,23 +31745,10 @@ def test_metal_unsized_shadow_texture_and_sampler_arrays_ignore_unsupported_indi
     }
     """
 
-    dynamic_code = MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="shadowMaps"):
+        MetalCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = MetalCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(1)]]" in dynamic_code
-    assert "array<sampler, 1> shadowSamplers [[sampler(0)]]" in dynamic_code
-    assert "sampler afterSampler [[sampler(1)]]" in dynamic_code
-    assert (
-        "float shadowLayer(array<depth2d<float>, 1> shadowMaps, array<sampler, 1> shadowSamplers"
-        in dynamic_code
-    )
-    assert (
-        "shadowMaps[layer].sample_compare(shadowSamplers[layer], uv, depth)"
-        in dynamic_code
-    )
-    assert "array<depth2d<float>, 2> shadowMaps" not in dynamic_code
-    assert "depth2d<float> afterShadow [[texture(2)]]" not in dynamic_code
 
     assert "array<depth2d<float>, 1> shadowMaps [[texture(0)]]" in negative_code
     assert "depth2d<float> afterShadow [[texture(1)]]" in negative_code

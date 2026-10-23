@@ -8,7 +8,6 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
-from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 
 CONSTANT_BUFFERS_HLSL = """
 struct Camera { float4x4 projection; float4 eye; };
@@ -108,21 +107,19 @@ def test_hlsl_round_trip_keeps_the_constant_buffer_declarations(tmp_path):
     assert "ConstantBuffer<Material> material : register(b1);" in hlsl
 
 
-@pytest.mark.parametrize(
-    "backend, error, reason",
-    [
-        (
-            "vulkan",
-            SpirvLoweringRefused,
-            "array of constant buffers 'lights': the SPIR-V emitter does not declare descriptor arrays",
-        ),
-        (
-            "metal",
-            MetalLoweringRefused,
-            "array of constant buffers 'lights': Metal binds an array of buffers only through an argument buffer",
-        ),
-    ],
-)
-def test_arrays_of_constant_buffers_are_refused(tmp_path, backend, error, reason):
-    with pytest.raises(error, match=re.escape(reason)):
-        _translate(tmp_path, CONSTANT_BUFFER_ARRAY_HLSL, backend, "shader.frag.hlsl")
+def test_spirv_declares_an_array_of_constant_buffers_as_a_descriptor_array(tmp_path):
+    spirv = _translate(
+        tmp_path, CONSTANT_BUFFER_ARRAY_HLSL, "vulkan", "shader.frag.hlsl"
+    )
+
+    # One Uniform variable of four Block structs: four descriptors, not one buffer holding an array.
+    assert len(re.findall(r"= OpVariable %\w+ Uniform\b", spirv)) == 1
+    assert re.search(r"OpTypeArray %\w+ %\w+", spirv)
+    assert len(re.findall(r"OpDecorate %\w+ Block\b", spirv)) == 1
+    assert "Unknown type" not in spirv
+
+
+def test_metal_refuses_arrays_of_constant_buffers(tmp_path):
+    reason = "array of constant buffers 'lights': Metal binds an array of buffers only through an argument buffer"
+    with pytest.raises(MetalLoweringRefused, match=re.escape(reason)):
+        _translate(tmp_path, CONSTANT_BUFFER_ARRAY_HLSL, "metal", "shader.frag.hlsl")

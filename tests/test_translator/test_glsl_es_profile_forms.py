@@ -16,6 +16,7 @@ from crosstl.translator.codegen.glsl_refusals import (
     OpenGLLoweringRefused,
     WebGLLoweringRefused,
 )
+from crosstl.translator.semantics import DebugPrintfUnsupportedError
 
 ES_FORMS_CGL = """
 shader main {
@@ -127,14 +128,20 @@ float4 main(float4 pos : POSITION, uint view : SV_ViewID) : SV_Position {
 """
 
 
-@pytest.mark.parametrize("backend", ["opengl", "webgl"])
-def test_hlsl_printf_is_glsl_debug_printf(tmp_path, backend):
-    code = _translate(tmp_path, PRINTF_HLSL, ".hlsl", backend)
+def test_hlsl_printf_is_glsl_debug_printf(tmp_path):
+    code = _translate(tmp_path, PRINTF_HLSL, ".hlsl", "opengl")
 
     assert "#extension GL_EXT_debug_printf : require" in code
     assert 'debugPrintfEXT("Position = %v4f", pos);' in code
     assert not re.search(r"(?<!debugP)printf\(", code)
     _validate(tmp_path, code, "vert")
+
+
+def test_hlsl_printf_is_refused_for_webgl(tmp_path):
+    # GLSL ES 3.00 section 3.5: "#extension ... : require" is an error when the extension is unsupported, and no
+    # WebGL 2 implementation exposes GL_EXT_debug_printf.
+    with pytest.raises(DebugPrintfUnsupportedError, match="WebGL 2"):
+        _translate(tmp_path, PRINTF_HLSL, ".hlsl", "webgl")
 
 
 @pytest.mark.parametrize(

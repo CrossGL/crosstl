@@ -51,7 +51,10 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from ..matrix_shape import (
     crossgl_matrix_shape,
     length_method_object,
@@ -114,6 +117,7 @@ from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
@@ -124,8 +128,10 @@ from .spirv_exponent_builtins import (
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
+    SHADER_IMAGE_FORMATS,
     atomic_storage_image_format,
     emit_four_component_image_read,
+    image_load_in_context,
     narrow_image_texel,
 )
 from .spirv_inline_requirements import (
@@ -170,6 +176,12 @@ from .spirv_stage_distances import (
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
+from .spirv_uniform_block_arrays import (
+    declare_uniform_block_array,
+    is_uniform_block_array_node,
+    lowered_constant_buffer_nodes,
+    require_non_uniform_block_array_indexing,
+)
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
@@ -567,6 +579,7 @@ class VulkanSPIRVCodeGen(
         self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
+        self.module_compute_entry_config = None
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -842,6 +855,9 @@ class VulkanSPIRVCodeGen(
             self.require_capability("InputAttachment")
         if dim == "Buffer":
             self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
+        if image_format not in SHADER_IMAGE_FORMATS:
+            # SPIR-V 3.11: every other Image Format operand needs this capability.
+            self.require_capability("StorageImageExtendedFormats")
 
         id_value = self.get_id()
         self.emit(
@@ -2515,6 +2531,7 @@ class VulkanSPIRVCodeGen(
             self.is_non_uniform_value(index) for index in indices
         ):
             self.mark_non_uniform_result(spirv_id)
+            require_non_uniform_block_array_indexing(self, base_id, indices)
         return spirv_id
 
     def access_chain_result_pointer_type(
@@ -6561,7 +6578,12 @@ class VulkanSPIRVCodeGen(
                 metadata, "StorageImageReadWithoutFormat"
             )
             return emit_four_component_image_read(
-                self, result_type, image_id, coord_id, image_operands
+                self,
+                result_type,
+                image_id,
+                coord_id,
+                image_operands,
+                metadata.get("component_count"),
             )
 
         if function_name == "imageStore":
@@ -20233,6 +20255,8 @@ class VulkanSPIRVCodeGen(
         storage_class = self.infer_global_storage_class(
             node, default_storage_class, var_type_name
         )
+        if is_uniform_block_array_node(node):
+            return declare_uniform_block_array(self, node, var_type)
         if storage_class == "Uniform" and self.uniform_array_requires_block(var_type):
             return self.process_uniform_array_block_declaration(node, var_type)
         if storage_class in {"Uniform", "Private"} and is_push_constant_block(
@@ -20474,6 +20498,7 @@ class VulkanSPIRVCodeGen(
         yield from self.global_resource_nodes(ast)
         yield from self.global_structured_buffer_nodes(ast)
         yield from getattr(ast, "cbuffers", []) or []
+        yield from lowered_constant_buffer_nodes(ast)
 
     def global_structured_buffer_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -21675,7 +21700,10 @@ class VulkanSPIRVCodeGen(
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression_with_precision(expr, precise)
+            value = self.process_expression_with_precision(expr, precise)
+            return image_load_in_context(
+                self, expr, value, self.current_expression_expected_type
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
 
@@ -29376,6 +29404,12 @@ class VulkanSPIRVCodeGen(
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if (
+                callee_name in DEBUG_PRINTF_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
                 and not self.has_function_reference(callee_name)
             ):
@@ -30635,7 +30669,10 @@ class VulkanSPIRVCodeGen(
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
         """Return compute workgroup dimensions from a stage execution config."""
-        config = getattr(stage, "execution_config", {}) or {}
+        if stage is None:
+            config = self.module_compute_entry_config or {}
+        else:
+            config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31206,7 +31243,7 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = [
+        debug_names = list(getattr(self, "debug_strings", ())) + [
             f'OpSourceExtension "{extension}"'
             for extension in sorted(getattr(self, "source_extensions", ()))
         ]
@@ -31407,9 +31444,9 @@ class VulkanSPIRVCodeGen(
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
-                f"array of constant buffers '{name}': the SPIR-V emitter does not declare descriptor arrays "
-                "of uniform blocks yet"
+                f"array of arrays of constant buffers '{name}': a SPIR-V descriptor array has one dimension"
             ),
+            block_arrays=True,
         )
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
@@ -31642,6 +31679,17 @@ class VulkanSPIRVCodeGen(
             else:
                 helper_functions.append(func)
 
+        compute_entry_configs = [
+            function_entry_execution_config(func)
+            for func, qualifier in top_level_entries
+            if qualifier == "compute"
+        ]
+        if compute_entry_configs and all(
+            config == compute_entry_configs[0] for config in compute_entry_configs
+        ):
+            # Built-ins read outside a stage take the size of the module's compute entries.
+            self.module_compute_entry_config = compute_entry_configs[0]
+
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:
                 if qualifier == "tessellation_control":
@@ -31716,7 +31764,11 @@ class VulkanSPIRVCodeGen(
                     "TessellationControl",
                     "TessellationEvaluation",
                 }
-                stage_metadata = func if is_tessellation_entry else None
+                stage_metadata = (
+                    func
+                    if is_tessellation_entry or execution_model == "GLCompute"
+                    else None
+                )
                 entry_points.append(
                     (execution_model, function_id, func.name, stage_metadata)
                 )

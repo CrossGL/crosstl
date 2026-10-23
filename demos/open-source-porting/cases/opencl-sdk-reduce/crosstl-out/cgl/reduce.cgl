@@ -24,7 +24,7 @@ u32 zmin(u32 a, u32 b) {
 
 // Kernel: reduce
 @compute
-@workgroup_size(1, 1, 1)
+@host_workgroup_size(64, 1, 1)
 fn reduce(
     @group(0) @binding(0) var<storage, read_write> front: array<i32>,
     @group(0) @binding(1) var<storage, read_write> back: array<i32>,
@@ -32,11 +32,6 @@ fn reduce(
     u64 length,
     i32 zero_elem
 ) {
-    let thread_id = gl_GlobalInvocationID;
-    let block_id = gl_WorkGroupID;
-    let thread_local_id = gl_LocalInvocationID;
-    let block_dim = gl_WorkGroupSize;
-
     var lid: u32 = gl_LocalInvocationID.x;
     var lsi: u32 = gl_WorkGroupSize.x;
     var wid: u32 = gl_WorkGroupID.x;

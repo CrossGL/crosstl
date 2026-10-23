@@ -709,8 +709,10 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
+    # GLSL rejects a non-constant index into an implicitly sized block array, so
+    # the constant-valued index sizes the array as Metal does.
     assert (
-        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[];"
+        "layout(std430, binding = 1) buffer buffersBuffer { int data[]; } buffers[2];"
         in glsl
     )
     assert "int value = buffers[dynamicIndex].data[2];" in glsl
@@ -5291,8 +5293,8 @@ def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
         image2D afterImage @rg32f;
 
         vec2 readLayer(image2D images[] @rg32f, ivec2 pixel) {
-            return imageLoad(images[int(BASE + 2)], pixel)
-                + imageLoad(images[ivec2(1, 3).y], pixel);
+            return imageLoad(images[int(BASE + 2)], pixel).xy
+                + imageLoad(images[ivec2(1, 3).y], pixel).xy;
         }
 
         compute {
@@ -6126,7 +6128,7 @@ def test_codegen_nested_loop_helper_indices_infer_image_size():
                     result = result + imageLoad(
                         images[pickLayer(layers, i, j)],
                         pixel
-                    );
+                    ).xy;
                 }
             }
             return result;
@@ -7441,13 +7443,13 @@ def test_codegen_for_in_shadowed_counter_type_is_scoped_to_loop_body():
     assert "texture2d<int, access::read_write> vectorImage [[texture(1)]]" in metal
     assert "for (int value = 0; value < 1; ++value)" in metal
     assert "scalarImage.write(int4(value), uint2(int2(0, 0)));" in metal
-    assert "vectorImage.write(int4(value, 0, 0), uint2(int2(1, 0)));" in metal
+    assert "vectorImage.write(int4(value, 0, 1), uint2(int2(1, 0)));" in metal
 
     assert "layout(r32i, binding = 0) uniform iimage2D scalarImage;" in glsl
     assert "layout(rg32i, binding = 1) uniform iimage2D vectorImage;" in glsl
     assert "for (int value = 0; value < 1; ++value)" in glsl
     assert "imageStore(scalarImage, ivec2(0, 0), ivec4(value));" in glsl
-    assert "imageStore(vectorImage, ivec2(1, 0), ivec4(value, 0, 0));" in glsl
+    assert "imageStore(vectorImage, ivec2(1, 0), ivec4(value, 0, 1));" in glsl
 
 
 def test_codegen_loop_assigned_outer_vector_preserves_sampled_correlation():
@@ -8013,7 +8015,7 @@ def test_codegen_ternary_index_alias_initializers_infer_size():
 
         fragment {
             vec4 main(vec2 uv, bool outer, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, outer, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, outer, inner, clamp(dynamicLayer, 0, 5)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8098,7 +8100,7 @@ def test_codegen_ternary_index_alias_assignments_infer_size():
 
         compute {
             void main(bool outer, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), outer, inner, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8194,7 +8196,7 @@ def test_codegen_branch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, bool inner, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, inner, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, inner, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8284,7 +8286,7 @@ def test_codegen_branch_merged_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, bool inner, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, inner, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8384,7 +8386,7 @@ def test_codegen_switch_merged_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int mode, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, mode, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, mode, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8483,7 +8485,7 @@ def test_codegen_match_merged_index_aliases_infer_image_size():
 
         compute {
             void main(int mode, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), mode, choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8578,7 +8580,7 @@ def test_codegen_for_loop_carried_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, int limit, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, limit, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, limit, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8671,7 +8673,7 @@ def test_codegen_while_do_loop_carried_index_aliases_infer_image_size():
 
         compute {
             void main(int limit, bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), limit, choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -8775,7 +8777,7 @@ def test_codegen_helper_return_index_aliases_infer_sampled_size():
 
         fragment {
             vec4 main(vec2 uv, bool choose, int dynamicLayer) @ gl_FragColor {
-                return sampleLayer(textures, samplers, uv, choose, dynamicLayer) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, uv, choose, clamp(dynamicLayer, 0, 6)) + texture(afterTexture, uv);
             }
         }
     }
@@ -8872,7 +8874,7 @@ def test_codegen_nested_helper_return_index_aliases_infer_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 4));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9250,7 +9252,7 @@ def test_codegen_arithmetic_alias_helper_return_infers_image_size():
 
         compute {
             void main(bool choose, int dynamicLayer) {
-                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, dynamicLayer);
+                vec2 result = readLayer(rgFloatImages, ivec2(0, 1), choose, clamp(dynamicLayer, 0, 5));
                 imageStore(afterImage, ivec2(1, 2), result);
             }
         }
@@ -9517,7 +9519,7 @@ def test_codegen_switch_match_unsized_sampled_arrays_infer_case_literal_size():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 0, 4), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -9591,10 +9593,10 @@ def test_codegen_switch_match_unsized_image_arrays_infer_case_literal_size():
             }
             match mode {
                 0 => {
-                    result = result + imageLoad(images[layer], pixel);
+                    result = result + imageLoad(images[layer], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[2], pixel);
+                    result = result + imageLoad(images[2], pixel).xy;
                 }
             }
             imageStore(images[0], pixel, result);
@@ -9763,10 +9765,10 @@ def test_codegen_switch_match_image_array_returns_infer_case_literal_size():
             }
             match mode {
                 2 => {
-                    return result + imageLoad(images[2], pixel);
+                    return result + imageLoad(images[2], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[0], pixel);
+                    result = result + imageLoad(images[0], pixel).xy;
                 }
             }
             return result;
@@ -9797,8 +9799,8 @@ def test_codegen_switch_match_image_array_returns_infer_case_literal_size():
     assert "case 0: {" in hlsl
     assert "return images[3][pixel];" in hlsl
     assert "result = images[1][pixel];" in hlsl
-    assert "return (result + images[2][pixel]);" in hlsl
-    assert "result = (result + images[0][pixel]);" in hlsl
+    assert "return (result + images[2][pixel].xy);" in hlsl
+    assert "result = (result + images[0][pixel].xy);" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
 
     assert (
@@ -9947,11 +9949,11 @@ def test_codegen_switch_match_loop_transitive_image_arrays_infer_case_only_size(
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for (int i = 0; i < 1; i = i + 1) {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             int j = 0;
             while (j < 1) {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
                 j = j + 1;
             }
             return result;
@@ -9998,8 +10000,8 @@ def test_codegen_switch_match_loop_transitive_image_arrays_infer_case_only_size(
     assert "float2 mid(RWTexture2D<float2> images[4], int2 pixel, int mode)" in hlsl
     assert "for (int i = 0; (i < 1); i = (i + 1))" in hlsl
     assert "while ((j < 1))" in hlsl
-    assert "result = (result + images[3][pixel]);" in hlsl
-    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = (result + images[3][pixel].xy);" in hlsl
+    assert "result = (result + images[2][pixel].xy);" in hlsl
     assert "result = leaf(images, pixel);" in hlsl
     assert "result = (result + leaf(images, pixel));" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
@@ -10107,10 +10109,10 @@ def test_codegen_switch_match_fixed_loop_image_transitive_conflicts_are_rejected
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for (int i = 0; i < 1; i = i + 1) {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             while (false) {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10273,10 +10275,10 @@ def test_codegen_switch_match_for_in_transitive_image_arrays_infer_size():
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
             vec2 result = vec2(0.0);
             for i in 0..1 {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             for j in limit {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10325,8 +10327,8 @@ def test_codegen_switch_match_for_in_transitive_image_arrays_infer_size():
     )
     assert "for (int i = 0; i < 1; ++i)" in hlsl
     assert "for (int j = 0; j < limit; ++j)" in hlsl
-    assert "result = (result + images[3][pixel]);" in hlsl
-    assert "result = (result + images[2][pixel]);" in hlsl
+    assert "result = (result + images[3][pixel].xy);" in hlsl
+    assert "result = (result + images[2][pixel].xy);" in hlsl
     assert "result = leaf(images, pixel, limit);" in hlsl
     assert "result = (result + leaf(images, pixel, limit));" in hlsl
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in hlsl
@@ -10434,10 +10436,10 @@ def test_codegen_switch_match_fixed_for_in_image_transitive_conflicts_are_reject
         vec2 leaf(image2D images[] @rg32f, ivec2 pixel, int limit) {
             vec2 result = vec2(0.0);
             for i in 0..1 {
-                result = result + imageLoad(images[3], pixel);
+                result = result + imageLoad(images[3], pixel).xy;
             }
             for j in limit {
-                result = result + imageLoad(images[2], pixel);
+                result = result + imageLoad(images[2], pixel).xy;
             }
             return result;
         }
@@ -10562,7 +10564,7 @@ def test_codegen_for_in_image_shadowed_const_restores_after_loop():
         vec2 imageLoop(image2D images[4] @rg32f, ivec2 pixel) {
             vec2 result = vec2(0.0);
             for COUNT in 0..1 {
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             }
             return result;
         }
@@ -10605,7 +10607,7 @@ def test_codegen_for_in_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -10717,14 +10719,14 @@ def test_codegen_for_in_switch_match_image_shadowed_const_restores_after_loop():
             for COUNT in 0..1 {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[COUNT], pixel);
+                        result = result + imageLoad(images[COUNT], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[COUNT], pixel);
+                        result = result + imageLoad(images[COUNT], pixel).xy;
                     }
                     _ => {
                     }
@@ -10777,7 +10779,7 @@ def test_codegen_for_in_switch_match_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -10888,15 +10890,15 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
             vec2 result = vec2(0.0);
             while (false) {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             }
             do {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             } while (false);
             loop {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
                 break;
             }
             return result;
@@ -10949,7 +10951,7 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -11053,14 +11055,14 @@ def test_codegen_do_while_switch_match_image_arrays_infer_size():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11237,14 +11239,14 @@ def test_codegen_do_while_transitive_image_arrays_infer_size():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11472,12 +11474,12 @@ def test_codegen_for_in_do_while_transitive_image_arrays_infer_size():
             vec2 result = vec2(0.0);
             for i in 0..1 {
                 do {
-                    result = result + imageLoad(images[3], pixel);
+                    result = result + imageLoad(images[3], pixel).xy;
                 } while (false);
             }
             do {
                 for j in limit {
-                    result = result + imageLoad(images[1], pixel);
+                    result = result + imageLoad(images[1], pixel).xy;
                 }
             } while (false);
             return result;
@@ -11665,14 +11667,14 @@ def test_codegen_do_while_fixed_transitive_image_conflicts_are_rejected():
             do {
                 switch (mode) {
                     case 0:
-                        result = result + imageLoad(images[3], pixel);
+                        result = result + imageLoad(images[3], pixel).xy;
                         break;
                     default:
                         break;
                 }
                 match mode {
                     1 => {
-                        result = result + imageLoad(images[2], pixel);
+                        result = result + imageLoad(images[2], pixel).xy;
                     }
                     _ => {
                     }
@@ -11816,7 +11818,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
             vec2 result = vec2(0.0);
             do {
                 int COUNT = 0;
-                result = result + imageLoad(images[COUNT], pixel);
+                result = result + imageLoad(images[COUNT], pixel).xy;
             } while (false);
             return result;
         }
@@ -11884,7 +11886,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
 
     conflict_crossgl = safe_crossgl.replace(
         "return result;",
-        "return result + imageLoad(images[COUNT], pixel);",
+        "return result + imageLoad(images[COUNT], pixel).xy;",
     )
     conflict_ast = parse_crossgl(conflict_crossgl)
     assert conflict_ast is not None
@@ -12212,7 +12214,7 @@ def test_codegen_switch_match_shadowed_transitive_image_arrays_infer_size():
                     int COUNT = 0;
                     switch (mode) {
                         case 1:
-                            result = result + imageLoad(images[COUNT], pixel);
+                            result = result + imageLoad(images[COUNT], pixel).xy;
                             result = result + leaf(images, pixel);
                             break;
                         default:
@@ -12319,7 +12321,7 @@ def test_codegen_switch_match_sampled_arrays_ignore_dynamic_negative_indices():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return sampleCases(textures, samplers, input.layer, input.uv, input.mode) + texture(afterTexture, input.uv);
+                return sampleCases(textures, samplers, clamp(input.layer, 1, 3), input.uv, input.mode) + texture(afterTexture, input.uv);
             }
         }
     }
@@ -12397,18 +12399,18 @@ def test_codegen_switch_match_image_arrays_ignore_dynamic_negative_indices():
             vec2 result = imageLoad(images[layer + 1], pixel);
             switch (mode) {
                 case 0:
-                    result = result + imageLoad(images[-1], pixel);
+                    result = result + imageLoad(images[-1], pixel).xy;
                     break;
                 default:
-                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                    result = result + imageLoad(images[BASE + OFFSET], pixel).xy;
                     break;
             }
             match mode {
                 1 => {
-                    result = result + imageLoad(images[layer - 1], pixel);
+                    result = result + imageLoad(images[layer - 1], pixel).xy;
                 }
                 _ => {
-                    result = result + imageLoad(images[BASE + OFFSET], pixel);
+                    result = result + imageLoad(images[BASE + OFFSET], pixel).xy;
                 }
             }
             return result;
@@ -12754,7 +12756,7 @@ def test_codegen_switch_match_fixed_image_arrays_shadowed_case_const_stays_dynam
             match mode {
                 0 => {
                     int COUNT = 0;
-                    result = result + imageLoad(images[COUNT], pixel);
+                    result = result + imageLoad(images[COUNT], pixel).xy;
                 }
                 _ => {
                 }
@@ -13905,10 +13907,10 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)]);" in hlsl
-    assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
+    assert "float floatCast = __crossgl_uint_to_float1(counters[int2(0, 0)].x);" in hlsl
+    assert "uint uintCast = uint(values[int2(1, 1)].x);" in hlsl
     assert (
-        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)]);" in hlsl
+        "target[int2(0, 0)] = __crossgl_uint_to_float1(counters[int2(2, 2)].x);" in hlsl
     )
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
@@ -14023,7 +14025,10 @@ def test_codegen_allows_matching_image_load_result_contexts():
     assert "float scalarFromRg = rgFloat[int2(0, 0)].x;" in hlsl
     assert "float2 rgExact = rgFloat[int2(1, 1)];" in hlsl
     assert "float4 rgbaExact = rgbaFloat[int2(2, 2)];" in hlsl
-    assert "float2 explicitScalarCast = ((float2)(scalarFloat[int2(3, 3)]));" in hlsl
+    assert (
+        "float2 explicitScalarCast = "
+        "float2(float4(scalarFloat[int2(3, 3)], 0.0, 0.0, 1.0).xy);" in hlsl
+    )
     assert "uint2 unsignedExact = rgUnsigned[int2(4, 4)];" in hlsl
 
     assert "float scalarFromRg = rgFloat.read(uint2(int2(0))).x;" in metal
@@ -14031,14 +14036,16 @@ def test_codegen_allows_matching_image_load_result_contexts():
     assert "float4 rgbaExact = rgbaFloat.read(uint2(int2(2)));" in metal
     assert (
         "float2 explicitScalarCast = "
-        "float2(scalarFloat.read(uint2(int2(3))).x);" in metal
+        "float2(scalarFloat.read(uint2(int2(3))).xy);" in metal
     )
     assert "uint2 unsignedExact = rgUnsigned.read(uint2(int2(4))).xy;" in metal
 
     assert "float scalarFromRg = imageLoad(rgFloat, ivec2(0)).x;" in glsl
     assert "vec2 rgExact = imageLoad(rgFloat, ivec2(1)).xy;" in glsl
     assert "vec4 rgbaExact = imageLoad(rgbaFloat, ivec2(2));" in glsl
-    assert "vec2 explicitScalarCast = vec2(imageLoad(scalarFloat, ivec2(3)).x);" in glsl
+    assert (
+        "vec2 explicitScalarCast = vec2(imageLoad(scalarFloat, ivec2(3)).xy);" in glsl
+    )
     assert "uvec2 unsignedExact = imageLoad(rgUnsigned, ivec2(4)).xy;" in glsl
 
 
@@ -14134,6 +14141,7 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
                 imageStore(rgbaTarget, ivec2(6), vec4(3.0));
                 imageStore(rgbaTarget, ivec2(7), 4.0);
                 imageStore(floatTarget, ivec2(8), float2(5.0));
+                imageStore(unsignedTarget, ivec2(9), uvec4(1u));
                 return vec4(0.0);
             }
         }
@@ -14147,38 +14155,39 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 0u);" in hlsl
+    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 1u);" in hlsl
     assert "unsignedTarget[int2(1, 1)] = uint2(2u, 2u);" in hlsl
-    assert "floatTarget[int2(2, 2)] = float2(1.0, 0.0);" in hlsl
+    assert "floatTarget[int2(2, 2)] = float2(1.0, 1.0);" in hlsl
     assert "floatTarget[int2(3, 3)] = float2(2.0, 2.0);" in hlsl
-    assert "floatTarget[int2(4, 4)] = source[int2(5, 5)];" in hlsl
+    assert (
+        "floatTarget[int2(4, 4)] = (float4(source[int2(5, 5)], 0.0, 1.0)).xy;" in hlsl
+    )
     assert "rgbaTarget[int2(6, 6)] = float4(3.0, 3.0, 3.0, 3.0);" in hlsl
     assert "rgbaTarget[int2(7, 7)] = float4(4.0, 4.0, 4.0, 4.0);" in hlsl
     assert "floatTarget[int2(8, 8)] = float2(5.0, 5.0);" in hlsl
+    # A four-component value is a whole texel (GLSL 4.60 section 8.12), of which
+    # an rg32ui image keeps the first two components.
+    assert "unsignedTarget[int2(9, 9)] = (uint4(1u, 1u, 1u, 1u)).xy;" in hlsl
 
-    assert "unsignedTarget.write(uint4(1u, 0u, 0u, 0u), uint2(int2(0)));" in metal
-    assert "unsignedTarget.write(uint4(uint2(2u), 0u, 0u), uint2(int2(1)));" in metal
-    assert "floatTarget.write(float4(1.0, 0.0, 0.0, 0.0), uint2(int2(2)));" in metal
-    assert "floatTarget.write(float4(float2(2.0), 0.0, 0.0), uint2(int2(3)));" in metal
-    assert (
-        "floatTarget.write(float4(source.read(uint2(int2(5))).xy, 0.0, 0.0), "
-        "uint2(int2(4)));" in metal
-    )
+    assert "unsignedTarget.write(uint4(1u), uint2(int2(0)));" in metal
+    assert "unsignedTarget.write(uint4(uint2(2u), 0u, 1u), uint2(int2(1)));" in metal
+    assert "floatTarget.write(float4(1.0), uint2(int2(2)));" in metal
+    assert "floatTarget.write(float4(float2(2.0), 0.0, 1.0), uint2(int2(3)));" in metal
+    assert "floatTarget.write(source.read(uint2(int2(5))), uint2(int2(4)));" in metal
     assert "rgbaTarget.write(float4(3.0), uint2(int2(6)));" in metal
     assert "rgbaTarget.write(float4(4.0), uint2(int2(7)));" in metal
-    assert "floatTarget.write(float4(float2(5.0), 0.0, 0.0), uint2(int2(8)));" in metal
+    assert "floatTarget.write(float4(float2(5.0), 0.0, 1.0), uint2(int2(8)));" in metal
+    assert "unsignedTarget.write(uint4(1u), uint2(int2(9)));" in metal
 
-    assert "imageStore(unsignedTarget, ivec2(0), uvec4(1u, 0u, 0u, 0u));" in glsl
-    assert "imageStore(unsignedTarget, ivec2(1), uvec4(uvec2(2u), 0u, 0u));" in glsl
-    assert "imageStore(floatTarget, ivec2(2), vec4(1.0, 0.0, 0.0, 0.0));" in glsl
-    assert "imageStore(floatTarget, ivec2(3), vec4(vec2(2.0), 0.0, 0.0));" in glsl
-    assert (
-        "imageStore(floatTarget, ivec2(4), "
-        "vec4(imageLoad(source, ivec2(5)).xy, 0.0, 0.0));" in glsl
-    )
+    assert "imageStore(unsignedTarget, ivec2(0), uvec4(1u));" in glsl
+    assert "imageStore(unsignedTarget, ivec2(1), uvec4(uvec2(2u), 0u, 1u));" in glsl
+    assert "imageStore(floatTarget, ivec2(2), vec4(1.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(3), vec4(vec2(2.0), 0.0, 1.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(4), imageLoad(source, ivec2(5)));" in glsl
     assert "imageStore(rgbaTarget, ivec2(6), vec4(3.0));" in glsl
     assert "imageStore(rgbaTarget, ivec2(7), vec4(4.0));" in glsl
-    assert "imageStore(floatTarget, ivec2(8), vec4(vec2(5.0), 0.0, 0.0));" in glsl
+    assert "imageStore(floatTarget, ivec2(8), vec4(vec2(5.0), 0.0, 1.0));" in glsl
+    assert "imageStore(unsignedTarget, ivec2(9), uvec4(1u));" in glsl
 
 
 @pytest.mark.parametrize(
@@ -14314,21 +14323,6 @@ def test_codegen_rejects_mismatched_multicomponent_image_store_values(crossgl, m
             }
             """,
             "requires scalar or 2-component value for rg32f images",
-        ),
-        (
-            """
-            shader FourComponentStoredToRgImage {
-                uimage2D target @rg32ui;
-                struct VSOutput { vec2 uv; };
-                fragment {
-                    vec4 main(VSOutput input) @ gl_FragColor {
-                        imageStore(target, ivec2(0), uvec4(1u));
-                        return vec4(0.0);
-                    }
-                }
-            }
-            """,
-            "requires scalar or 2-component value for rg32ui images",
         ),
         (
             """
@@ -15189,20 +15183,19 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
         in glsl
     )
     assert (
-        "imageStore(rgFloat, imageBlock.pixel, vec4(imageBlock.scalarValue, "
-        "0.0, 0.0, 0.0));" in glsl
+        "imageStore(rgFloat, imageBlock.pixel, vec4(imageBlock.scalarValue));" in glsl
     )
     assert (
         "imageStore(rgFloat, readPixel(imageBlock), "
-        "vec4(readRg(imageBlock), 0.0, 0.0));" in glsl
+        "vec4(readRg(imageBlock), 0.0, 1.0));" in glsl
     )
     assert (
         "imageStore(unsignedLayers, imageBlock.pixelLayer, "
-        "uvec4(imageBlock.unsignedValue, 0u, 0u, 0u));" in glsl
+        "uvec4(imageBlock.unsignedValue));" in glsl
     )
     assert (
         "imageStore(unsignedLayers, readPixelLayer(imageBlock), "
-        "uvec4(readUnsignedRg(imageBlock), 0u, 0u));" in glsl
+        "uvec4(readUnsignedRg(imageBlock), 0u, 1u));" in glsl
     )
 
 

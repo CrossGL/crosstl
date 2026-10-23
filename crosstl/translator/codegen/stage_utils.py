@@ -1,6 +1,9 @@
 """Utilities for normalizing and matching shader stage qualifiers."""
 
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (  # noqa: F401
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 

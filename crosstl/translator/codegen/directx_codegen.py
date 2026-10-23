@@ -77,12 +77,14 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import resource_identity_marker
+from ..semantics.constant_buffers import constant_buffer_element
 from ..semantics.hlsl_ray_payloads import (
     PAYLOAD_ACCESS_ATTRIBUTES,
     PAYLOAD_STAGES,
     RAY_PAYLOAD_ATTRIBUTE,
     HlslRayPayloadUnsupportedError,
 )
+from ..semantics.narrowing_constructors import select_narrowing_constructor_components
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
 from ..standard_constants import render_standard_math_constant
@@ -226,6 +228,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
+from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
@@ -234,6 +237,7 @@ from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
+    STORAGE_TEXEL_BUFFER_TYPES,
     HLSLTexelBuffers,
     texel_buffer_base_type,
 )
@@ -272,12 +276,10 @@ from .image_access_contracts import (
     image_format_component_kind,
     image_format_component_type,
     image_format_or_default_channel_count,
-    image_format_result_type,
     image_format_vector_type,
     image_load_result_kind_error,
     image_load_result_kind_mismatch,
     image_load_result_shape_error,
-    image_load_result_shape_mismatch,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
@@ -285,7 +287,6 @@ from .image_access_contracts import (
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
-    image_store_value_shape_mismatch,
     integer_coordinate_dimension_from_type_name,
     is_floating_scalar_type_name,
     is_image_atomic_operation,
@@ -461,12 +462,21 @@ from .stage_utils import (
     compute_local_size,
     declaration_signature,
     deduplicate_named_declarations,
+    function_entry_execution_config,
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
+)
+from .storage_image_texels import (
+    TEXEL_COMPONENTS,
+    image_load_swizzle_extent,
+    load_context_allowed,
+    reshaped_texel_expression,
+    store_value_allowed,
+    texel_vector_type,
 )
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
@@ -2303,6 +2313,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
@@ -3364,6 +3376,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         """
         ast = legalize_hlsl_keyword_names(ast)
         lower_relational_builtins(ast)
+        select_narrowing_constructor_components(ast)
         return merge_adjacent_hlsl_barriers(
             self.refusals.run(self.render_program, ast, target_stage)
         )
@@ -3691,6 +3704,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
@@ -4311,7 +4326,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.generic_enum_specializations,
         )
 
-        self.hlsl_texel_buffers.prepare(ast)
+        self.hlsl_atomic_resources.prepare(ast)
         comparison_texture_names, comparison_sampler_names = (
             self.collect_comparison_resources(ast)
         )
@@ -4398,7 +4413,11 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                         vtype = base_type
                         if array_size:
                             array_suffix = f"[{array_size}]"
-                        elif self.is_resource_array_hint_type(base_type):
+                        elif (
+                            self.is_resource_array_hint_type(base_type)
+                            or constant_buffer_element(base_type) is not None
+                        ):
+                            # An unbounded resource array, ConstantBuffer<T> name[] included (SM 5.1).
                             array_suffix = "[]"
                         else:
                             raise UnsizedArrayUnsupportedError(
@@ -5056,6 +5075,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 functions_code += self.generate_function(
                     func,
                     shader_type="compute",
+                    execution_config=function_entry_execution_config(func),
                     entry_name=stage_entry_names.get(id(func)),
                 )
             else:
@@ -27617,7 +27637,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return block_load
             obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
             member = getattr(expr, "member", "")
-            obj = self.generate_expression_with_expected(obj_expr, None)
+            previous_extent = self.hlsl_image_load_swizzle_extent
+            self.hlsl_image_load_swizzle_extent = image_load_swizzle_extent(
+                obj_expr, member, self.expression_name
+            )
+            try:
+                obj = self.generate_expression_with_expected(obj_expr, None)
+            finally:
+                self.hlsl_image_load_swizzle_extent = previous_extent
             return f"{obj}.{member}"
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             expected_type = self.current_expression_expected_type
@@ -46575,11 +46602,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def image_load_result_type(self, image_arg):
+        # imageLoad yields four components whatever the format.
         image_format = self.image_resource_format(image_arg)
         if image_format:
-            return image_format_result_type(image_format)
-        image_type = self.texture_argument_resource_type(image_arg)
-        return self.hlsl_storage_image_component_type(image_type)
+            component_kind = image_format_component_kind(image_format)
+        else:
+            image_type = self.texture_argument_resource_type(image_arg)
+            component_kind = self.hlsl_storage_image_component_kind(image_type)
+        return texel_vector_type(
+            component_kind, {"float": "float", "int": "int", "uint": "uint"}
+        )
+
+    def hlsl_storage_image_element_count(self, image_type):
+        """Components of the HLSL element type of a storage image, or ``None``."""
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        if component_type is None:
+            return None
+        return self.value_component_count(component_type)
 
     def image_atomic_result_type(self, func_name, image_arg):
         image_format = self.image_resource_format(image_arg)
@@ -46919,19 +46958,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
-        actual_channels = self.expression_component_count(value_arg)
-        if self.allows_three_component_image_value_padding(
-            expected_channels, actual_channels
-        ):
-            return
-        if self.hlsl_scalar_storage_image_vector_value(
-            image_type, image_format, value_arg
-        ):
-            return
-        value_channels = image_store_value_shape_mismatch(
-            expected_channels, actual_channels
-        )
-        if value_channels is None:
+        value_channels = self.expression_component_count(value_arg)
+        if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(image_type)
         raise ValueError(
@@ -46985,75 +47013,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
-        if self.allows_three_component_image_value_padding(
-            loaded_channels, expected_channels
-        ):
-            return
-        if self.hlsl_scalar_storage_image_vector_context(image_type, image_format):
-            return
-        expected_channels = image_load_result_shape_mismatch(
-            loaded_channels,
-            expected_channels,
-        )
-        if expected_channels is None:
+        if load_context_allowed(loaded_channels, expected_channels):
             return
         raise ValueError(
             image_load_result_shape_error(
                 "DirectX", format_label, loaded_channels, expected_channels
             )
         )
-
-    def allows_three_component_image_value_padding(
-        self, image_channels, value_channels
-    ):
-        return image_channels == 4 and value_channels == 3
-
-    def image_load_component_suffix(self, image_type, image_format):
-        expected_channels = self.expected_component_count()
-        loaded_channels = self.image_load_channel_count(image_type, image_format)
-        if self.allows_three_component_image_value_padding(
-            loaded_channels, expected_channels
-        ):
-            return ".xyz"
-        return ""
-
-    def hlsl_scalar_storage_image_vector_context(self, image_type, image_format):
-        component_type = self.hlsl_storage_image_component_type(image_type)
-        component_count = (
-            image_format_or_default_channel_count(image_format, 1)
-            if image_format
-            else self.value_component_count(component_type)
-        )
-        if component_count != 1:
-            return False
-        if self.expected_component_count() != 4:
-            return False
-        component_kind = (
-            image_format_component_kind(image_format)
-            if image_format
-            else self.hlsl_storage_image_component_kind(image_type)
-        )
-        return self.expected_component_kind() == component_kind
-
-    def hlsl_scalar_storage_image_vector_value(
-        self, image_type, image_format, value_arg
-    ):
-        component_type = self.hlsl_storage_image_component_type(image_type)
-        component_count = (
-            image_format_or_default_channel_count(image_format, 1)
-            if image_format
-            else self.value_component_count(component_type)
-        )
-        if component_count != 1:
-            return False
-        if self.expression_component_count(value_arg) != 4:
-            return False
-        component_kind = (
-            image_format_component_kind(image_format)
-            if image_format
-            else self.hlsl_storage_image_component_kind(image_type)
-        )
-        return self.expression_component_kind(value_arg) == component_kind
 
     def three_component_image_store_constructor(self, texture_type):
         constructor = self.four_component_image_store_constructor(texture_type)
@@ -52301,6 +52267,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:
             mapped_type = f"{texture_type}<{component_type}>"
+        elif texture_type and base_type.startswith(("iimage", "uimage")):
+            # An integer storage image without a format is as wide as its texels,
+            # except as an image atomic's target, which needs a scalar element.
+            component_kind = "int" if base_type.startswith("i") else "uint"
+            atomic_target = self.hlsl_atomic_resources.is_atomic_declaration(node)
+            width = "" if atomic_target else str(TEXEL_COMPONENTS)
+            mapped_type = f"{texture_type}<{component_kind}{width}>"
+        elif base_type in STORAGE_TEXEL_BUFFER_TYPES and node is not None:
+            # Parameters take the declaration a global of the same name would.
+            mapped_type = self.hlsl_texel_buffers.storage_declaration_type(
+                getattr(node, "name", None),
+                base_type,
+                STORAGE_TEXEL_BUFFER_TYPES[base_type],
+                node,
+            )
         else:
             mapped_type = self.map_type(vtype)
         return self.rasterizer_ordered_resource_type(mapped_type, node)
@@ -53943,6 +53924,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.image_atomic_expression(func_name, args)
 
         if func_name == "imageLoad" and len(args) >= 2:
+            swizzle_extent = self.hlsl_image_load_swizzle_extent
+            self.hlsl_image_load_swizzle_extent = None
             image_name = self.generate_expression(args[0])
             coord = self.generate_expression(args[1])
             texture_type = self.texture_resource_type(args[0])
@@ -53955,24 +53938,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 load_expr = f"{image_name}[{coord}]"
             image_format = self.image_resource_format(args[0])
             self.validate_image_load_result_type(texture_type, image_format)
-            if self.hlsl_scalar_storage_image_vector_context(
-                texture_type, image_format
-            ):
-                return self.hlsl_scalar_splat_cast(
-                    self.current_expression_expected_type, load_expr
+            # A CrossGL texel has four components; the HLSL element may have fewer.
+            component_kind = self.image_load_component_kind(texture_type, image_format)
+            element_count = self.hlsl_storage_image_element_count(texture_type)
+            target_count = self.expected_component_count() or TEXEL_COMPONENTS
+            if swizzle_extent is not None and element_count is not None:
+                # A swizzle within the element reads it as it is.
+                target_count = (
+                    element_count
+                    if swizzle_extent <= element_count
+                    else TEXEL_COMPONENTS
                 )
-            if self.four_component_image_store_constructor(
-                texture_type
-            ) and self.is_scalar_value_type(self.current_expression_expected_type):
-                return f"{load_expr}.x"
-            if self.two_component_image_store_constructor(
-                texture_type
-            ) and self.is_scalar_value_type(self.current_expression_expected_type):
-                return f"{load_expr}.x"
-            load_suffix = self.image_load_component_suffix(texture_type, image_format)
-            if load_suffix:
-                return f"{load_expr}{load_suffix}"
-            return load_expr
+            return reshaped_texel_expression(
+                component_kind,
+                component_kind,
+                load_expr,
+                element_count,
+                target_count,
+            )
 
         if func_name == "imageStore" and len(args) >= 3:
             image_name = self.generate_expression(args[0])
@@ -53995,6 +53978,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     texture_type, image_format, value_arg
                 ),
             )
+            element_count = self.hlsl_storage_image_element_count(texture_type)
+            value_count = self.expression_component_count(value_arg)
+            if (
+                element_count is not None
+                and value_count is not None
+                and value_count > 1
+                and value_count != element_count
+            ):
+                # Keep the leading components the element holds, or fill the
+                # components a narrower value lacks.
+                component_kind = self.image_load_component_kind(
+                    texture_type, image_format
+                )
+                if value_count > element_count:
+                    value = f"({value})"
+                value = reshaped_texel_expression(
+                    component_kind,
+                    component_kind,
+                    value,
+                    value_count,
+                    element_count,
+                )
+                return f"{store_target} = {value}"
             four_component_constructor = self.four_component_image_store_constructor(
                 texture_type
             )
@@ -54029,12 +54035,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if two_component_constructor and self.is_scalar_value_type(
                 self.expression_result_type(value_arg)
             ):
-                constructor, zero_value = two_component_constructor
-                value = f"{constructor}({value}, {zero_value})"
-            if self.hlsl_scalar_storage_image_vector_value(
-                texture_type, image_format, value_arg
-            ):
-                value = f"({value}).x"
+                # A stored scalar is splatted (``storage_image_texels``).
+                constructor, _zero_value = two_component_constructor
+                if self.hlsl_expression_is_repeatable(value_arg):
+                    value = f"{constructor}({value}, {value})"
+                else:
+                    value = self.hlsl_scalar_splat_cast(constructor, value)
             return f"{store_target} = {value}"
 
         if len(args) < 2:

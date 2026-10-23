@@ -114,22 +114,7 @@ class HLSLTexelBuffers:
     def __init__(self, codegen):
         self.codegen = codegen
         self.declared_types = {}
-        self.atomic_targets = set()
         self.helpers = {}
-
-    def prepare(self, ast):
-        """Record the texel buffers that image atomics target."""
-        from ..ast import FunctionCallNode
-
-        for node in self.codegen.walk_ast(ast):
-            if (
-                isinstance(node, FunctionCallNode)
-                and self.codegen.expression_name(node.name) in IMAGE_ATOMIC_INTRINSICS
-                and node.args
-            ):
-                name = self.codegen.expression_name(node.args[0])
-                if name:
-                    self.atomic_targets.add(name)
 
     def declaration_type(self, var_name, vtype, node, mapped_type):
         """HLSL declaration type of a global texel buffer, or ``mapped_type``."""
@@ -165,7 +150,7 @@ class HLSLTexelBuffers:
                 )
             count = image_format_channel_count(image_format)
             return f"RWBuffer<{family}{'' if count == 1 else count}>"
-        if var_name in self.atomic_targets:
+        if self.codegen.hlsl_atomic_resources.is_atomic_declaration(node):
             return f"RWBuffer<{family}>"
         return HLSL_TEXEL_BUFFER_TYPES[crossgl_type]
 
@@ -180,6 +165,9 @@ class HLSLTexelBuffers:
         hlsl_type = None
         if crossgl_type != str(result_type).split("[", 1)[0].strip():
             hlsl_type = str(result_type).split("[", 1)[0].strip()
+        elif name in codegen.current_hlsl_parameter_resource_types:
+            hlsl_type = str(codegen.current_hlsl_parameter_resource_types[name])
+            hlsl_type = hlsl_type.split("[", 1)[0].strip()
         elif name and name not in codegen.local_variable_types:
             hlsl_type = self.declared_types.get(name)
         if hlsl_type is None:
