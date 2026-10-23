@@ -23,6 +23,11 @@ MLX_QUANTIZED_HEADER = f"{MLX_KERNEL_ROOT}/quantized.h"
 MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
+# affine_quantize reduces each quantization group with simd_min/simd_max, so
+# its result depends on the dispatch shape. MLX's quantize_impl launches up to
+# maxTotalThreadsPerThreadgroup threads per group; any multiple of the 32-lane
+# SIMD-group keeps every quantization group inside one SIMD-group.
+MLX_QUANTIZED_WORKGROUP_SIZE = (64, 1, 1)
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -88,6 +93,7 @@ ENTRY_CONTRACTS = {
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "quantize",
         "indexRangeAssertions": INDEX_RANGE_ASSERTIONS,
+        "workgroupSize": MLX_QUANTIZED_WORKGROUP_SIZE,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
@@ -622,7 +628,8 @@ def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
         source.count("#version 450 core") == 1
         and source.count("void main()") == 1
         and (
-            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in source
+            "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"
+            in source
         ),
         "generated GLSL compute entry-point contract is incomplete",
     )
@@ -653,6 +660,7 @@ def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
         "status": "passed",
         "entryPoint": "main",
         "requiredExtensions": list(required_extensions),
+        "workgroupSize": list(MLX_QUANTIZED_WORKGROUP_SIZE),
         "semanticOperations": list(_GENERATED_SEMANTIC_SENTINELS),
         "normalizedIndexExpressions": list(INDEX_RANGE_EXPRESSIONS),
     }

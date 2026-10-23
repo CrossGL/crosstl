@@ -22,6 +22,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     assert_deferred_metal_compiler_diagnostics,
     corpus_workspace,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -43,7 +44,7 @@ REDUCE_METAL_CONTRACT_PATH = (
     / "reduce.metal-roundtrip.json"
 )
 REDUCE_METAL_CONTRACT_SHA256 = (
-    "a96dabc394744a80859acfba2ab72a207325984bae0b429fabf431010d2cc579"
+    "a52fc59f2c6b1fbb5a361e7524f1809dabef2a383bc5a034a87dff8302f1b789"
 )
 RESOURCE_ABI_FIELDS = ("name", "kind", "set", "binding", "access", "type")
 REDUCE_METAL_TYPE_NAMES = {
@@ -813,11 +814,9 @@ def _translate_reduce_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,

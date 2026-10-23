@@ -211,7 +211,7 @@ def test_atomic_fence_helper_stage_is_not_guessed_for_mixed_modules():
 
 
 @pytest.mark.parametrize(
-    "expression", ["subgroupBarrier()", "subgroupExecutionBarrier", "gl_SubgroupID"]
+    "expression", ["subgroupBarrier", "subgroupExecutionBarrier", "gl_SubgroupID"]
 )
 def test_execution_barrier_does_not_enable_raw_hardware_builtins(expression):
     source = _canonical(
@@ -325,3 +325,92 @@ def test_execution_barrier_runtime_is_required_in_ci():
     )[0]
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_subgroup_execution_barriers.py" in step
+
+
+MEMORY_BARRIER = "subgroupBarrier();"
+
+
+def _fenced_barriers(generated):
+    """How many ``memoryBarrier(); barrier(); memoryBarrier();`` runs ``generated`` holds."""
+    lines = [line.strip() for line in generated.splitlines()]
+    return sum(
+        lines[index - 1 : index + 2]
+        == ["memoryBarrier();", "barrier();", "memoryBarrier();"]
+        for index in range(1, len(lines) - 1)
+        if lines[index] == "barrier();"
+    )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize("form", ["standalone", "helper", "loop"])
+def test_memory_barrier_lowers_to_a_fenced_workgroup_barrier(tmp_path, target, form):
+    # Software subgroups are slices of the workgroup: the subgroup barrier over
+    # buffer, image and shared memory becomes the workgroup barrier with fences
+    # that order all three.
+    helpers = ""
+    body = MEMORY_BARRIER
+    if form == "helper":
+        helpers = f"void inner() {{{MEMORY_BARRIER}}} void outer() {{inner();}}"
+        body = "outer();"
+    elif form == "loop":
+        body = f"for (int i=0; i<3; ++i) {{{MEMORY_BARRIER}}}"
+    source = _canonical(body + "results[invocation] = invocation;", helpers)
+    generated = _codegen(target).generate_stage(parse(source), "compute")
+    assert "subgroupBarrier" not in generated
+    if target == "directx":
+        assert "AllMemoryBarrierWithGroupSync();" in generated
+    else:
+        assert _fenced_barriers(generated) == 1
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    "body,helpers",
+    [
+        (f"if(invocation<32u) {{{MEMORY_BARRIER}}}", ""),
+        (f"if(invocation==0u) {{return;}} {MEMORY_BARRIER}", ""),
+        ("if(invocation<32u) {inner();}", f"void inner() {{{MEMORY_BARRIER}}}"),
+    ],
+)
+def test_memory_barrier_rejects_unproven_participation(target, body, helpers):
+    with pytest.raises(ValueError) as error:
+        _codegen(target).generate_stage(parse(_canonical(body, helpers)), "compute")
+    assert getattr(error.value, "reason", None) in {
+        "potentially-divergent-control-flow",
+        "early-return-unproven",
+        "helper-call-not-uniform",
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_memory_barrier_rejects_arguments(target):
+    with pytest.raises(ValueError) as error:
+        _codegen(target).generate_stage(
+            parse(_canonical("subgroupBarrier(1u);")), "compute"
+        )
+    assert getattr(error.value, "reason", None) == "invalid-argument-count"
+
+
+def test_metal_simdgroup_memory_barrier_translates_to_opengl_software_subgroups(
+    tmp_path,
+):
+    source = """#include <metal_stdlib>
+using namespace metal;
+kernel void k(device uint* out [[buffer(0)]],
+              uint lane [[thread_index_in_simdgroup]],
+              uint tid [[thread_position_in_grid]]) {
+    threadgroup uint shared_values[64];
+    shared_values[tid % 64] = lane;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    out[tid] = simd_sum(shared_values[(tid + 1) % 64]);
+}
+"""
+    _, _, package = _package(
+        tmp_path, "opengl", "uint", (64, 1, 1), source=source, software_subgroups=True
+    )
+    (generated,) = (
+        path.read_text() for path in tmp_path.joinpath("out").rglob("*.glsl")
+    )
+    assert _fenced_barriers(generated) == 1
+    _compile(generated, "opengl", tmp_path)

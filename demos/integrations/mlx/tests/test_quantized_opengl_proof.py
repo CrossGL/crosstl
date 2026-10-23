@@ -51,7 +51,7 @@ def _generated_glsl():
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_shuffle_relative : require
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 float crossgl_metal_round_float(float value) {
     uint bits = floatBitsToUint(value);
     uint magnitude = (bits & 2147483647u);
@@ -153,11 +153,21 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
     artifact_path.write_text(generated or _generated_glsl(), encoding="utf-8")
     artifact_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     assertions = [dict(assertion) for assertion in module.INDEX_RANGE_ASSERTIONS]
+    entry_point = module.MLX_QUANTIZED_ENTRY_POINT
+    workgroup = list(module.MLX_QUANTIZED_WORKGROUP_SIZE)
+    rule_path = f'project.workgroup_size_rules["{module.MLX_QUANTIZED_SOURCE}"]'
     payload = {
         "kind": "crosstl-project-portability-report",
         "project": {
             "indexRangeAssertionCount": 3,
             "indexRangeAssertions": assertions,
+            "workgroupSize": None,
+            "workgroupSizeRules": {
+                module.MLX_QUANTIZED_SOURCE: [str(value) for value in workgroup]
+            },
+            "workgroupSizeRuleCount": 1,
+            "subgroupWidthRules": {},
+            "subgroupWidthRuleCount": 0,
         },
         "summary": {
             "unitCount": 1,
@@ -229,6 +239,38 @@ def _translated_payload(module, mlx_root, work_dir, generated=None):
                     "value": artifact_hash,
                 },
                 "generatedSizeBytes": artifact_path.stat().st_size,
+                "execution": {
+                    "sourceEntryPoints": [entry_point],
+                    "provenance": {
+                        "kind": "materialized-template-rule",
+                        "path": rule_path,
+                    },
+                    "identity": {"algorithm": "sha256", "value": "1" * 64},
+                    "entryPoints": [
+                        {
+                            "sourceEntryPoint": entry_point,
+                            "materializedEntryPoint": entry_point,
+                            "targetEntryPoint": "main",
+                            "workgroupSize": workgroup,
+                            "rule": {
+                                "components": [str(value) for value in workgroup],
+                                "sourcePattern": module.MLX_QUANTIZED_SOURCE,
+                                "path": rule_path,
+                            },
+                            "materialization": {
+                                "name": "affine_quantize",
+                                "hostName": entry_point,
+                                "materializedName": entry_point,
+                            },
+                            "parameters": {
+                                "T": "float",
+                                "bits": "2",
+                                "group_size": "32",
+                            },
+                            "identity": {"algorithm": "sha256", "value": "2" * 64},
+                        }
+                    ],
+                },
             }
         ],
     }
@@ -717,6 +759,18 @@ def test_quantized_opengl_generated_contract_rejects_semantic_drift(
     artifact_path.write_text(_generated_glsl().replace(removed, ""), encoding="utf-8")
 
     with pytest.raises(module.MlxQuantizedOpenGLProofError, match=message):
+        module._validate_generated_glsl(artifact_path)
+
+
+def test_quantized_opengl_quantize_contract_requires_the_pinned_workgroup(tmp_path):
+    module = _load_proof()
+    artifact_path = tmp_path / "quantized.glsl"
+    artifact_path.write_text(
+        _generated_glsl().replace("local_size_x = 64", "local_size_x = 1"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.MlxQuantizedOpenGLProofError, match="entry-point"):
         module._validate_generated_glsl(artifact_path)
 
 

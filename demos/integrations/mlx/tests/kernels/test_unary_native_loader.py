@@ -29,6 +29,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tools.compile_artifact_bundle import write_bundle_entry
 
 from ..corpus_evidence import (
@@ -1080,11 +1081,11 @@ def _translate_unary_artifact(
         "algorithm": "sha256",
         "value": MLX_UNARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     expected_target_entry = {
         "directx": "CSMain",
         "metal": workload.entry_point,

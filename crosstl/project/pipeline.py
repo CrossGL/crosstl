@@ -1594,7 +1594,7 @@ WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specializat
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
 # Targets that fix the workgroup size in the shader, so a configured project size must reach them.
 WORKGROUP_SIZE_FIXED_TARGETS = frozenset(("directx", "opengl", "vulkan"))
-WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl"))
+WORKGROUP_SIZE_RULE_TARGETS = frozenset(("directx", "metal", "opengl", "vulkan"))
 SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
 SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
 DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
@@ -12108,6 +12108,13 @@ def _target_entry_points_for_crossgl_stages(
             str(getattr(getattr(stage, "entry_point", None), "name", "main")): "main"
             for stage in stages
         }
+    if target == "vulkan":
+        # A SPIR-V module keeps every compute entry, each under its own name.
+        names = (
+            str(getattr(getattr(stage, "entry_point", None), "name", "main"))
+            for stage in stages
+        )
+        return {name: name for name in names}
     if target not in {"directx", "metal"}:
         return {}
     codegen = get_codegen(target)

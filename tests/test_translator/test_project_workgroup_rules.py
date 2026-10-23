@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 import sys
 import textwrap
 from dataclasses import replace
@@ -734,9 +735,49 @@ def test_project_workgroup_rule_reuses_one_materialized_ast_per_target(
     assert ast_calls == [("directx", True), ("opengl", True)]
 
 
+def test_project_workgroup_rules_give_each_vulkan_entry_its_local_size(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+
+    payload = project_api.translate_project(
+        _rule_config(repo, targets=("vulkan",)),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1, payload["diagnostics"]
+    assert payload["summary"]["failedCount"] == 0
+    (artifact,) = payload["artifacts"]
+    entries = artifact["execution"]["entryPoints"]
+    assert {
+        entry["sourceEntryPoint"]: (entry["targetEntryPoint"], entry["workgroupSize"])
+        for entry in entries
+    } == {
+        "tile_large": ("tile_large", [32, 4, 2]),
+        "tile_small": ("tile_small", [32, 2, 1]),
+    }
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    entry_ids = {
+        name: function_id
+        for function_id, name in re.findall(
+            r'OpEntryPoint GLCompute %(\d+) "(\w+)"', generated
+        )
+    }
+    local_sizes = {
+        function_id: tuple(int(value) for value in size)
+        for function_id, *size in re.findall(
+            r"OpExecutionMode %(\d+) LocalSize (\d+) (\d+) (\d+)", generated
+        )
+    }
+    assert {name: local_sizes[entry_ids[name]] for name in entry_ids} == {
+        "tile_large": (32, 4, 2),
+        "tile_small": (32, 2, 1),
+    }
+
+
 @pytest.mark.parametrize(
     "target",
-    ("vulkan", "cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"),
+    ("cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"),
 )
 def test_project_workgroup_rule_rejects_unsupported_target(tmp_path, target):
     repo = tmp_path / "repo"
@@ -773,7 +814,7 @@ def test_project_workgroup_rule_rejects_unsupported_target(tmp_path, target):
                 "components": ["32", "BN", "BM"],
                 "path": 'project.workgroup_size_rules["shaders/tiled.metal"]',
                 "sourcePattern": "shaders/tiled.metal",
-                "supportedTargets": ["directx", "metal", "opengl"],
+                "supportedTargets": ["directx", "metal", "opengl", "vulkan"],
                 "target": target,
             },
             "sourceEntryPoints": [],

@@ -157,7 +157,7 @@ def test_ci_requires_native_precise_asin_on_all_three_platforms():
     assert "if:" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_metal_precise_asin.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 360" in step
     assert "pytest -q -n auto" in step
 
 

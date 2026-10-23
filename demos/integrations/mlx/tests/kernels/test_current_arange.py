@@ -33,6 +33,7 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_power import (
     MLX_COMMIT,
     ROOT,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_fused_math import _oracle as _fma_bits
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
@@ -760,11 +761,9 @@ def test_current_mlx_arange_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": record["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+            check_generated_artifact(
+                artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
+            )
             assert artifact["provenance"].get("floatingContractionProfile") == (
                 CONTRACTION_PROFILE if target in CONTRACTION_TARGETS else None
             )
