@@ -6,7 +6,8 @@ the generators would copy it into the target verbatim, where it is at best a com
 type of the same spelling. :func:`refuse_undeclared_types` raises :class:`UndeclaredTypeError` for the first such
 name, so the translation fails with a typed diagnostic instead.
 
-Only plain names in code a stage entry can reach are checked (every function of a program without entries). Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
+Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
+trait bounds of generic parameters are not types. Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
 (``metal::texture2d``, ``Outer.Inner``) and parenthesised parts are resource or library spellings the generators
 resolve themselves.
 """
@@ -160,8 +161,15 @@ def undeclared_type_uses(program):
     name keeps its unresolved parameter types, for example).
     """
     declared = declared_type_names(program)
+    # Trait bounds (``generic<T: Numeric + Copy>``) constrain a parameter; they are not types any generator emits.
+    bounds = {
+        id(bound)
+        for node in _nodes(program)
+        if isinstance(node, A.GenericParameterNode)
+        for bound in node.constraints
+    }
     uses = []
-    for node in _nodes(program, _dead_functions(program)):
+    for node in _nodes(program, _dead_functions(program) | bounds):
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name

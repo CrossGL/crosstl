@@ -13,8 +13,11 @@ __all__ = ["BUILTIN_TYPE_NAMES"]
 _COUNTS = (2, 3, 4)
 _SHAPES = tuple(f"{c}x{r}" for c in _COUNTS for r in _COUNTS)
 
-# Scalars of every language: plain, sized (``int8``, ``uint16_t``) and HLSL minimum-precision spellings.
+# Scalars of every language: plain, sized (``int8``, ``uint16_t``) and HLSL minimum-precision spellings, and CrossGL's
+# ``Self`` (the implementing type inside a trait or ``impl`` block) and ``str`` (an enum payload's string slice).
 _SCALARS = (
+    "Self",
+    "str",
     "void",
     "bool",
     "int",

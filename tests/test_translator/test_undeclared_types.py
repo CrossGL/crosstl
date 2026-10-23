@@ -184,3 +184,29 @@ def test_every_function_of_a_program_without_entries_is_checked():
 def test_a_dead_helper_does_not_block_translation(tmp_path):
     path = _write(tmp_path, "dead.cgl", DEAD_HELPER)
     assert "values" in crosstl.translate(path, backend="opengl")
+
+
+def test_crossgl_trait_and_payload_types_are_built_in():
+    assert {"Self", "str"} <= BUILTIN_TYPE_NAMES
+
+
+BOUNDED = """
+shader Bounded {
+    generic<T: Numeric + Copy> fn twice(a: T) -> T {
+        return a + a;
+    }
+
+    compute {
+        buffer float values[];
+
+        @compute @workgroup_size(1, 1, 1)
+        void main() {
+            values[0] = twice(1.0);
+        }
+    }
+}
+"""
+
+
+def test_trait_bounds_are_not_type_uses():
+    assert undeclared_type_uses(_program(BOUNDED)) == []
