@@ -234,6 +234,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
     flattened_stage_output_assignment,
@@ -21000,6 +21001,8 @@ class GLSLCodeGen(
         for declaration in self.stage_builtin_parameter_local_alias_declarations(
             func, shader_type
         ):
+            code += f"    {declaration}\n"
+        for declaration in stage_input_struct_value_declarations(self, func):
             code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
             code += self.generate_glsl_hlsl_cbuffer_loads(1)
