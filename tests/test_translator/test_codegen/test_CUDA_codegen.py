@@ -19398,3 +19398,16 @@ class TestCudaCodeGen:
         assert "RWStructuredBuffer<" not in cuda_code
         assert ".Store(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_scalar_f64_constructor_emits_double_cast():
+    source_code = """
+    shader DoubleCast {
+        f64 cast_it(f64 value) {
+            return f64(value);
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    assert "f64(" not in cuda_code
+    assert "double(" in cuda_code
