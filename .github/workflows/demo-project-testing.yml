@@ -1474,6 +1474,7 @@ jobs:
           demos/integrations/mlx/tests/host/test_portable_scans.py
           demos/integrations/mlx/tests/host/test_random_packages.py
           demos/integrations/mlx/tests/host/test_reduction_cache.py
+          demos/integrations/mlx/tests/host/test_portable_upstream_ops.py
       - name: Validate platform host ABI
         id: platform-host-abi
         if: runner.os != 'Linux'
@@ -2529,7 +2530,7 @@ jobs:
     name: MLX small-row reductions (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 340
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -2753,6 +2754,20 @@ jobs:
               --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
               --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/random-evidence \
               2>&1 | tee .mlx-portable-small-rows/random-verification.log
+      - name: Execute unchanged upstream op tests on the small-row families
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1260 --label "MLX upstream op verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
+              --bitwise .mlx-portable-small-rows/bitwise-packages --selection .mlx-portable-small-rows/selection-packages \
+              --absolute .mlx-portable-small-rows/absolute-packages --reductions .mlx-portable-small-rows/init-packages \
+              --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/upstream-op-evidence \
+              2>&1 | tee .mlx-portable-small-rows/upstream-op-verification.log
       - name: Retain small-row execution evidence
         if: always()
         uses: actions/upload-artifact@v7

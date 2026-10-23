@@ -1646,6 +1646,30 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
+The same job then runs 17 more unchanged `test_ops` tests on the families it
+has already translated:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
+  --mlx-root mlx-upstream --packages host-packages --random random-packages \
+  --bitwise bitwise-packages --selection selection-packages \
+  --absolute absolute-packages --reductions init-packages \
+  --reductions random-reductions --output-dir upstream-op-evidence
+```
+
+They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
+`test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
+`test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
+`test_triu`, `test_as_strided` and `test_depends`. Each runs once on the MLX
+CPU and once through the translated host, in separate processes, and every
+native run must dispatch. Every dispatch must belong to exactly one of the
+base, random, bitwise, selection, absolute-value or reduction indexes and pass
+that family's artifact and native-identity checks, so a test that reaches
+gather, scatter, scans or 64-bit and 16-bit kernels fails instead of running an
+unchecked package. A separate process checks that a missing comparison
+package is refused before dispatch. On Metal the native run dispatches 1,504
+translated kernels.
+
 ### Kernel Evidence
 
 Successful compilation alone does not establish numerical parity. The
