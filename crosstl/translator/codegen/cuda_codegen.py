@@ -29,6 +29,9 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from .array_utils import (
     parse_array_type,
     prepend_array_dimension,
@@ -164,6 +167,10 @@ CUDA_FP16_VECTOR_TYPES = {
     "float16vec4": 4,
     "half4": 4,
 }
+
+
+def _refuse_buffer_counter(reason):
+    raise ValueError(f"CUDA buffer counter: {reason}")
 
 
 class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
@@ -320,6 +327,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Generate complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
+        # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
+        ast_node = materialize_structured_buffer_counters(
+            ast_node, _refuse_buffer_counter
+        )
         self.output = []
         self.indent_level = 0
         self.validate_supported_stage_types(ast_node)

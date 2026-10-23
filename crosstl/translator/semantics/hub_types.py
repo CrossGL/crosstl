@@ -243,6 +243,33 @@ def _struct_name(node):
     return None
 
 
+_TEXEL_READ_CALLS = frozenset(
+    {
+        "imageLoad",
+        "subpassLoad",
+        "texelFetch",
+        "texelFetchOffset",
+        "texture",
+        "textureGather",
+        "textureGatherOffset",
+        "textureGrad",
+        "textureGradOffset",
+        "textureLod",
+        "textureLodOffset",
+        "textureOffset",
+        "textureProj",
+        "textureProjGrad",
+        "textureProjLod",
+        "textureProjOffset",
+    }
+)
+_SHADOW_GATHER_CALLS = frozenset({"textureGather", "textureGatherOffset"})
+_TEXEL_RESOURCE = re.compile(
+    r"([iu]?)(image|sampler|texture|subpassInput)\w*?(Shadow)?"
+)
+_TEXEL_KINDS = {"": FLOAT32, "i": INT32, "u": UINT32}
+
+
 class TypeScope:
     """Lexical scopes of declared names, plus the program's structures, constants and functions."""
 
@@ -440,9 +467,28 @@ class TypeScope:
             for argument in arguments[1:]:
                 result = arithmetic_result(result, self.infer(argument))
             return result
+        texel = self._infer_texel_call(name, arguments)
+        if texel is not None:
+            return texel
         if name in self.functions:
             return type_from_node(self.functions[name])
         return None
+
+    def _infer_texel_call(self, name, arguments):
+        """The four-component texel a texture or storage-image read returns.
+
+        GLSL 4.60 sections 8.9 and 8.12: reads return a ``gvec4`` of the
+        resource's component type; a depth comparison returns a ``float``.
+        """
+        if name not in _TEXEL_READ_CALLS or not arguments:
+            return None
+        resource = self.node_type(arguments[0])
+        match = _TEXEL_RESOURCE.fullmatch(str(getattr(resource, "name", "") or ""))
+        if match is None:
+            return None
+        if match.group(3) and name not in _SHADOW_GATHER_CALLS:
+            return FLOAT32
+        return _TEXEL_KINDS[match.group(1)].with_lanes(4)
 
 
 def is_pure_callee(name: str) -> bool:

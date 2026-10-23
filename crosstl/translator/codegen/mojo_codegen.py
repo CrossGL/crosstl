@@ -9024,6 +9024,12 @@ class MojoCodeGen:
                 return self.generate_buffer_consume_call(expr.args)
             if func_name == "buffer_dimensions":
                 return self.generate_buffer_dimensions_call(expr.args)
+            if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+                raise ValueError(
+                    f"Unsupported Mojo buffer counter call {func_name}; "
+                    "structured-buffer counters are not available in the Mojo "
+                    "placeholder backend"
+                )
             reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
             if reinterpret_name is not None:
                 return self.generate_reinterpret_call(reinterpret_name, expr.args)

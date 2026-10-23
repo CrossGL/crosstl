@@ -976,7 +976,8 @@ def test_codegen_debug_printf_string_literal_roundtrip_from_saschawillems():
     """).strip()
 
     crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
-    assert 'debugPrintfEXT("Position = %v4f", pos);' in crossgl
+    assert 'printf("Position = %v4f", pos);' in crossgl
+    assert "debugPrintfEXT" not in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert 'debugPrintfEXT("Position = %v4f", pos);' in glsl
@@ -2744,7 +2745,11 @@ def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():
 
     assert "struct UBO" in crossgl
     assert "Foo foo;" in crossgl
-    assert "uniform UBO ubos[2] @set(2) @binding(4);" in crossgl
+    # An array of uniform blocks is one buffer per element: an array of constant buffers.
+    assert (
+        "ConstantBuffer<UBO> ubos[2] @set(2) @binding(4) @buffer_layout(std140);"
+        in crossgl
+    )
     assert "cbuffer Uniforms" not in crossgl
     assert "ubos[1].foo.v" in crossgl
 

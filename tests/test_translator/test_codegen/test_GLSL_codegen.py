@@ -77,6 +77,9 @@ from crosstl.translator.codegen.GLSL_codegen import (
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
+from crosstl.translator.codegen.resource_array_bounds import (
+    ResourceArrayIndexUnboundedError,
+)
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -6825,34 +6828,9 @@ def test_unsized_structured_buffer_array_helper_emits_diagnostic_fallback():
     }
     """
 
-    generated, generated_refusal = glsl_partial_output(
-        generate_code, parse_code(tokenize_code(code))
-    )
-
-    assert (
-        "layout(std430, binding = 3) buffer buffersBuffer { uint data[]; } buffers[];"
-        in generated
-    )
-    assert "uint readOne(uint which, uint index)" in generated
-    assert "void writeOne(uint which, uint index, uint value)" in generated
-    assert "structured buffer array parameter readOne.localBuffers" in generated_refusal
-    assert (
-        "structured buffer array parameter writeOne.localBuffers" in generated_refusal
-    )
-    assert "return 0u;" in generated
-    assert "uint value = readOne(which, index);" in generated
-    assert (
-        "writeOne(which, index, "
-        "bitfieldExtract(uint((int(value) + "
-        "int(bitfieldExtract(uint(1u), 0, 16)))), 0, 16));" in generated
-    )
-    assert "readOne(buffers, which, index)" not in generated
-    assert "writeOne(buffers, which, index" not in generated
-    assert "localBuffers[which][index]" not in generated
-    assert "uint localBuffers[]" not in generated
-    assert "buffer_load" not in generated
-    assert "buffer_store" not in generated
-    assert "uint16_t" not in generated
+    # No call bounds ``which``, so no size of ``buffers`` is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="buffers"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_unsized_global_structured_buffer_arrays_infer_static_sizes():
@@ -6913,7 +6891,7 @@ def test_unsized_global_structured_buffer_direct_index_sizes_dynamic_helper():
         }
 
         uint combine(uint which, uint index) {
-            return buffer_load(counts[2], index) + readDynamic(counts, which, index) + buffer_load(afterCounts, index);
+            return buffer_load(counts[2], index) + readDynamic(counts, min(which, 2u), index) + buffer_load(afterCounts, index);
         }
     }
     """
@@ -6943,8 +6921,8 @@ def test_unsized_global_structured_buffer_direct_index_sizes_dynamic_helper():
         in generated
     )
     assert (
-        "readDynamic(counts[0].data, counts[1].data, counts[2].data, which, index)"
-        in generated
+        "readDynamic(counts[0].data, counts[1].data, counts[2].data, "
+        "min(which, 2u), index)" in generated
     )
     assert "unsupported GLSL structured buffer array parameter" not in generated
     assert "readLeaf(localCounts, which, index)" not in generated
@@ -21488,8 +21466,8 @@ def test_glsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "uvec4 mask2D = imageLoad(maskImage, pixel);" in generated_code
     assert "ivec4 label2D = imageLoad(labelImage, pixel).x;" not in generated_code
     assert "uvec4 mask2D = imageLoad(maskImage, pixel).x;" not in generated_code
-    assert "imageStore(labelImage, pixel, ivec4(label2D));" in generated_code
-    assert "imageStore(maskImage, pixel, uvec4(mask2D));" in generated_code
+    assert "imageStore(labelImage, pixel, label2D);" in generated_code
+    assert "imageStore(maskImage, pixel, mask2D);" in generated_code
 
 
 def test_glsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
@@ -21597,22 +21575,16 @@ def test_glsl_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = imageLoad(image, pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(image, pixel).x;" in generated_code
-    assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(image, pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(image, pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
 
 
@@ -32348,7 +32320,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, clamp(layer, 0, 3), uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -32364,7 +32336,7 @@ def test_opengl_unsized_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(textures[layer], uv)" in generated_code
     assert "texture(textures[3], uv)" in generated_code
-    assert "sampleLayer(textures, layer, uv)" in generated_code
+    assert "sampleLayer(textures, clamp(layer, 0, 3), uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" not in generated_code
     assert "sampler samplers" not in generated_code
@@ -32416,17 +32388,10 @@ def test_opengl_unsized_texture_array_ignores_unsupported_indices():
     }
     """
 
-    dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="textures"):
+        GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "layout(binding = 0) uniform sampler2D textures[1];" in dynamic_code
-    assert "layout(binding = 1) uniform sampler2D afterTexture;" in dynamic_code
-    assert "vec4 sampleLayer(sampler2D textures[1], int layer, vec2 uv)" in dynamic_code
-    assert "texture(textures[layer], uv)" in dynamic_code
-    assert "layout(binding = 0) uniform sampler2D textures[];" not in dynamic_code
-    assert "layout(binding = 2) uniform sampler2D afterTexture;" not in dynamic_code
-    assert "sampler samplers" not in dynamic_code
-    assert "samplers[layer]" not in dynamic_code
 
     assert "layout(binding = 0) uniform sampler2D textures[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2D afterTexture;" in negative_code
@@ -32532,7 +32497,7 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                return sampleLayer(textures, samplers, layer, uv) + texture(afterTexture, uv);
+                return sampleLayer(textures, samplers, clamp(layer, 0, 1), uv) + texture(afterTexture, uv);
             }
         }
     }
@@ -32541,13 +32506,13 @@ def test_opengl_unsized_texture_array_ignores_shadowed_constant_name():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const int LAYER = 3;" in generated_code
-    assert "layout(binding = 0) uniform sampler2D textures[1];" in generated_code
-    assert "layout(binding = 1) uniform sampler2D afterTexture;" in generated_code
+    assert "layout(binding = 0) uniform sampler2D textures[2];" in generated_code
+    assert "layout(binding = 2) uniform sampler2D afterTexture;" in generated_code
     assert (
-        "vec4 sampleLayer(sampler2D textures[1], int LAYER, vec2 uv)" in generated_code
+        "vec4 sampleLayer(sampler2D textures[2], int LAYER, vec2 uv)" in generated_code
     )
     assert "texture(textures[LAYER], uv)" in generated_code
-    assert "sampleLayer(textures, layer, uv)" in generated_code
+    assert "sampleLayer(textures, clamp(layer, 0, 1), uv)" in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[];" not in generated_code
     assert "layout(binding = 0) uniform sampler2D textures[4];" not in generated_code
     assert "layout(binding = 4) uniform sampler2D afterTexture;" not in generated_code
@@ -37683,7 +37648,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 0.0));"
+        "imageStore(rgFloat, pixel, vec4((rgValue + vec2(amount)), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -37691,7 +37656,7 @@ def test_opengl_direct_stage_explicit_image_formats_use_input_members():
         in generated_code
     )
     assert (
-        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 0u));"
+        "imageStore(unsignedLayers, pixelLayer, uvec4((layerValue + uvec2(unsignedAmount)), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -38085,14 +38050,14 @@ def test_opengl_explicit_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixelLayer).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(image, pixelLayer, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "layout(rg32i, binding = 1) uniform image3D" not in generated_code
@@ -38174,18 +38139,18 @@ def test_opengl_explicit_narrow_rg_image_formats():
     assert "ivec2 oldValue = imageLoad(image, voxel).xy;" in generated_code
     assert "uvec2 oldValue = imageLoad(image, pixel).xy;" in generated_code
     assert (
-        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(image, pixelLayer, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
-        "imageStore(image, voxel, ivec4((oldValue + value), 0, 0));" in generated_code
+        "imageStore(image, voxel, ivec4((oldValue + value), 0, 1));" in generated_code
     )
     assert (
-        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 0u));" in generated_code
+        "imageStore(image, pixel, uvec4((oldValue + value), 0u, 1u));" in generated_code
     )
     assert "layout(rg8i, binding = 5) uniform image2D" not in generated_code
     assert "layout(rg8ui, binding = 7) uniform image2D" not in generated_code
@@ -38331,7 +38296,7 @@ def test_opengl_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "vec4 oldValue = imageLoad(images[1], voxel);" in generated_code
@@ -38410,23 +38375,17 @@ def test_opengl_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[1], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[1], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "float oldValue = imageLoad(images[1], pixel);" not in generated_code
@@ -38509,23 +38468,17 @@ def test_opengl_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert (
@@ -38639,20 +38592,14 @@ def test_opengl_transitive_rg_image_arrays_share_call_site_size():
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert "uint oldValue = imageLoad(images[3], pixel).x;" in generated_code
     assert "uvec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
+    assert "imageStore(images[1], pixel, vec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
+    assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[1], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u));"
+        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 1u));"
         in generated_code
     )
     assert "vec2 vectorFloatDeep(image2D images[3]" not in generated_code
@@ -39352,14 +39299,8 @@ def test_opengl_shadowed_rg_image_array_constant_keeps_scalar_context():
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
-    assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0, 0.0));"
-        in generated_code
-    )
-    assert (
-        "imageStore(images[0], pixel, uvec4((oldValue + value), 0u, 0u, 0u));"
-        in generated_code
-    )
+    assert "imageStore(images[0], pixel, vec4((oldValue + value)));" in generated_code
+    assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];"
         not in generated_code
@@ -39423,7 +39364,7 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39483,7 +39424,7 @@ def test_opengl_unsized_formatted_image_arrays_preserve_format_metadata():
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[0], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "layout(r32ui, binding = 0) uniform image2D counters" not in generated_code
@@ -39544,7 +39485,7 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[LAYER], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert (
@@ -39677,7 +39618,7 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     assert "imageStore(images[1], pixel, uvec4((oldValue + value)));" in generated_code
     assert "vec2 oldValue = imageLoad(images[2], pixel).xy;" in generated_code
     assert (
-        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
+        "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 1.0));"
         in generated_code
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
@@ -46360,7 +46301,7 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
 
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
-                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, layer, uv, depth);
+                float arrayShadow = shadowLayer(shadowMaps, shadowSamplers, clamp(layer, 0, 3), uv, depth);
                 float singleShadow = textureCompare(afterShadow, afterSampler, uv, depth);
                 return vec4(arrayShadow + singleShadow);
             }
@@ -46381,7 +46322,7 @@ def test_opengl_unsized_shadow_texture_array_preserves_dynamic_indexing():
     )
     assert "texture(shadowMaps[layer], vec3(uv, depth))" in generated_code
     assert "texture(shadowMaps[3], vec3(uv, depth))" in generated_code
-    assert "shadowLayer(shadowMaps, layer, uv, depth)" in generated_code
+    assert "shadowLayer(shadowMaps, clamp(layer, 0, 3), uv, depth)" in generated_code
     assert "texture(afterShadow, vec3(uv, depth))" in generated_code
     assert (
         "layout(binding = 0) uniform sampler2DShadow shadowMaps[];"
@@ -46449,25 +46390,10 @@ def test_opengl_unsized_shadow_texture_array_ignores_unsupported_indices():
     }
     """
 
-    dynamic_code = GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
+    # No bound reaches the index, so no array size is sound.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="shadowMaps"):
+        GLSLCodeGen().generate(crosstl.translator.parse(dynamic_shader))
     negative_code = GLSLCodeGen().generate(crosstl.translator.parse(negative_shader))
-
-    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in dynamic_code
-    assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in dynamic_code
-    assert (
-        "float shadowLayer(sampler2DShadow shadowMaps[1], int layer, vec2 uv, float depth)"
-        in dynamic_code
-    )
-    assert "texture(shadowMaps[layer], vec3(uv, depth))" in dynamic_code
-    assert (
-        "layout(binding = 0) uniform sampler2DShadow shadowMaps[];" not in dynamic_code
-    )
-    assert (
-        "layout(binding = 2) uniform sampler2DShadow afterShadow;" not in dynamic_code
-    )
-    assert "sampler shadowSamplers" not in dynamic_code
-    assert "shadowSamplers[layer]" not in dynamic_code
-    assert "textureCompare(" not in dynamic_code
 
     assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[1];" in negative_code
     assert "layout(binding = 1) uniform sampler2DShadow afterShadow;" in negative_code

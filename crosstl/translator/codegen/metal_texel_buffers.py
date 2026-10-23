@@ -65,6 +65,16 @@ def texel_buffer_base_type(type_name):
     return text if text in TEXEL_BUFFER_TYPES else None
 
 
+def texel_buffer_component_type(metal_type):
+    """``float``/``int``/``uint`` element of a Metal ``texture_buffer<T, ...>`` type."""
+    text = str(metal_type or "").strip()
+    if not text.startswith("texture_buffer<"):
+        return None
+    component = text[len("texture_buffer<") :].split(",", 1)[0].split(">", 1)[0]
+    component = component.strip()
+    return component if component in {"float", "int", "uint"} else None
+
+
 class MetalTexelBuffers:
     """Texel-buffer operations and helpers for one Metal program."""
 
