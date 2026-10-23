@@ -374,7 +374,7 @@ def test_public_docs_reference_project_porting_workflow():
         assert "validate-project" in text
         assert "inspect-report" in text
         assert "--format text" in text
-        assert "project-porting" in text
+        assert "porting-guide" in text
 
 
 def test_public_docs_use_root_package_cli_entrypoint():
@@ -382,6 +382,9 @@ def test_public_docs_use_root_package_cli_entrypoint():
         "README.md": (ROOT / "README.md").read_text(encoding="utf-8"),
         "docs/source/quickstart.rst": (
             (ROOT / "docs" / "source" / "quickstart.rst").read_text(encoding="utf-8")
+        ),
+        "docs/source/porting-guide.rst": (
+            (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
         ),
         "docs/source/project-porting.rst": (
             (ROOT / "docs" / "source" / "project-porting.rst").read_text(
@@ -436,9 +439,7 @@ def test_public_api_docs_include_project_api():
 
 
 def test_project_porting_guide_references_python_project_api():
-    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
-        encoding="utf-8"
-    )
+    guide = (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
 
     assert (
         "from crosstl.project import inspect_project_report, translate_project" in guide
@@ -448,9 +449,7 @@ def test_project_porting_guide_references_python_project_api():
 
 
 def test_project_porting_guide_documents_dispatch_artifact_generation():
-    guide = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
-        encoding="utf-8"
-    )
+    guide = (ROOT / "docs" / "source" / "porting-guide.rst").read_text(encoding="utf-8")
     normalized_guide = " ".join(guide.split())
 
     for field in (
