@@ -207,11 +207,33 @@ def test_sparse_reads_translate_to_hlsl_status_overloads(tmp_path):
         _run([dxc, "-T", "ps_6_0", "-E", "PSMain", str(path)])
 
 
-def test_vulkan_refuses_residency_queries(tmp_path):
+def test_sparse_reads_translate_to_spirv_sparse_instructions(tmp_path):
+    code = _translate(tmp_path, FRAGMENT, "vulkan")
+
+    assert "OpCapability SparseResidency" in code
+    for instruction in (
+        "OpImageSparseSampleExplicitLod",
+        "OpImageSparseFetch",
+        "OpImageSparseGather",
+        "OpImageSparseSampleDrefImplicitLod",
+        "OpImageSparseDrefGather",
+        "OpImageSparseSampleImplicitLod",
+    ):
+        assert f"= {instruction} " in code
+    assert code.count("OpImageSparseTexelsResident") == 6
+    if shutil.which("spirv-as") and shutil.which("spirv-val"):
+        asm = tmp_path / "out.spvasm"
+        asm.write_text(code)
+        binary = tmp_path / "out.spv"
+        _run(["spirv-as", "--target-env", "vulkan1.1", str(asm), "-o", str(binary)])
+        _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)])
+
+
+def test_slang_refuses_residency_queries(tmp_path):
     with pytest.raises(TextureResidencyUnsupportedError) as raised:
-        _translate(tmp_path, HALF_FRAGMENT, "vulkan")
+        _translate(tmp_path, HALF_FRAGMENT, "slang")
     assert raised.value.project_diagnostic_code == (
-        "project.translate.vulkan-texture-residency-unsupported"
+        "project.translate.slang-texture-residency-unsupported"
     )
 
 

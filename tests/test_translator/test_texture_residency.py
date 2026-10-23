@@ -133,6 +133,12 @@ def _validate(tmp_path, backend, code):
         path = tmp_path / "out.frag"
         path.write_text(code)
         _run(["glslangValidator", "-S", "frag", str(path)])
+    elif backend == "vulkan" and shutil.which("spirv-as") and shutil.which("spirv-val"):
+        path = tmp_path / "out.spvasm"
+        path.write_text(code)
+        binary = tmp_path / "out.spv"
+        _run(["spirv-as", "--target-env", "vulkan1.1", str(path), "-o", str(binary)])
+        _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)])
     elif backend == "metal" and _has_metal_compiler():
         path = tmp_path / "out.metal"
         path.write_text(code)
@@ -201,7 +207,6 @@ def test_crossgl_residency_lowers_to_arb_sparse_texture2(tmp_path):
         ("wgsl", "WGSL has no sparse textures"),
         ("cuda", "CUDA texture fetches report no tile residency"),
         ("hip", "HIP texture fetches report no tile residency"),
-        ("vulkan", "no lowering for texture residency feedback"),
         ("slang", "no lowering for texture residency feedback"),
         ("rust", "no lowering for texture residency feedback"),
         ("mojo", "no lowering for texture residency feedback"),
@@ -283,7 +288,7 @@ def test_glsl_sparse_functions_import_to_crossgl_residency_queries(tmp_path):
     assert "ARB(" not in code
 
 
-@pytest.mark.parametrize("backend", ["metal", "opengl"])
+@pytest.mark.parametrize("backend", ["metal", "opengl", "vulkan"])
 def test_glsl_sparse_functions_translate_to_valid_targets(tmp_path, backend):
     code = _translate(tmp_path, GLSL_FRAGMENT, ".frag", backend)
 
