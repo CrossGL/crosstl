@@ -188,6 +188,7 @@ from .enum_utils import (
 )
 from .exponent_builtins import emit_glsl_exponent_helpers, glsl_exponent_call
 from .extended_arithmetic_builtins import glsl_extended_arithmetic_call
+from .fixed_sampler_contracts import fixed_sampler_records, with_glsl_fixed_samplers
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -485,6 +486,7 @@ from .resource_arrays import (
     is_private_pointer_parameter,
 )
 from .sampler_pairs import (
+    COMBINED_SAMPLER_PAIRS,
     lower_combined_sampler_pairs,
     with_combined_sampler_header,
 )
@@ -8402,6 +8404,12 @@ class GLSLCodeGen(
         code = with_combined_sampler_header(
             code, getattr(self, "combined_sampler_records", ())
         )
+        code = with_glsl_fixed_samplers(
+            code,
+            fixed_sampler_records(ast),
+            getattr(self, "combined_sampler_pairs", ()),
+            ast,
+        )
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
@@ -8441,6 +8449,9 @@ class GLSLCodeGen(
         ast = lower_private_vector_views(ast, "opengl")
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
+        )
+        self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
+            COMBINED_SAMPLER_PAIRS, []
         )
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
