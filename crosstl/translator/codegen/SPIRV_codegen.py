@@ -115,6 +115,10 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_constant_folding import (
+    spirv_evaluated_scalar_initializer,
+    spirv_folded_constant,
+)
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
@@ -166,10 +170,6 @@ from .spirv_ray_builtins import (
     transposed_ray_builtin,
 )
 from .spirv_refusals import SpirvRefusals
-from .spirv_scalar_folding import (
-    spirv_evaluated_scalar_initializer,
-    spirv_folded_scalar_constant,
-)
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -26779,6 +26779,10 @@ class VulkanSPIRVCodeGen(
         if isinstance(expr, LiteralNode):
             return self.process_expression(expr)
 
+        folded = spirv_folded_constant(self, expr, target_type)
+        if folded is not None:
+            return folded
+
         if isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = getattr(callee_expr, "name", callee_expr)
@@ -26819,10 +26823,6 @@ class VulkanSPIRVCodeGen(
                         components.append(self.default_value_for_type(component_type))
 
                     return self.register_vector_constant(vector_type, components)
-
-        folded_scalar = spirv_folded_scalar_constant(self, expr, target_type)
-        if folded_scalar is not None:
-            return folded_scalar
 
         specialization_constant_op = self.process_specialization_constant_operation(
             expr, target_type

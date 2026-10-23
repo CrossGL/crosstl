@@ -180,7 +180,7 @@ def _normalized(constant: ScalarConstant) -> ScalarConstant | None:
     return ScalarConstant(kind, _wrap_integer(kind, value))
 
 
-def _common_kind(left: str, right: str, *, arithmetic: bool = True) -> str:
+def common_kind(left: str, right: str, *, arithmetic: bool = True) -> str:
     kind = max(left, right, key=_KIND_RANK.__getitem__)
     if arithmetic and kind == "bool":
         return "int"
@@ -332,7 +332,12 @@ class ScalarConstantFolder:
         operand = self.fold(node.operand)
         if operand is None:
             return None
-        operator = node.operator
+        return self.unary_value(node.operator, operand)
+
+    def unary_value(self, operator, operand: ScalarConstant) -> ScalarConstant | None:
+        """Apply unary *operator* to a folded operand."""
+        if operand is None:
+            return None
         kind = operand.kind
         if operator == "!":
             if kind != "bool":
@@ -352,25 +357,29 @@ class ScalarConstantFolder:
         return None
 
     def fold_binary(self, node: BinaryOpNode) -> ScalarConstant | None:
-        operator = node.operator
+        # Both operands must be constant expressions, even where the value of
+        # && and || short-circuits.
         left = self.fold(node.left)
         if left is None:
             return None
+        right = self.fold(node.right)
+        if right is None:
+            return None
+        return self.binary_value(node.operator, left, right)
+
+    def binary_value(
+        self, operator, left: ScalarConstant, right: ScalarConstant
+    ) -> ScalarConstant | None:
+        """Apply binary *operator* to folded operands."""
+        if left is None or right is None:
+            return None
         operator = _LOGICAL_SPELLINGS.get(operator, operator)
         if operator in {"&&", "||"}:
-            # Both operands must still be constant expressions; only the value
-            # short-circuits.
-            right = self.fold(node.right)
-            if right is None:
-                return None
             left_bool = convert_scalar_constant(left, "bool").value
             right_bool = convert_scalar_constant(right, "bool").value
             if operator == "&&":
                 return ScalarConstant("bool", left_bool and right_bool)
             return ScalarConstant("bool", left_bool or right_bool)
-        right = self.fold(node.right)
-        if right is None:
-            return None
         if operator == "^^":
             left_bool = convert_scalar_constant(left, "bool").value
             right_bool = convert_scalar_constant(right, "bool").value
@@ -378,7 +387,7 @@ class ScalarConstantFolder:
         if operator in {"<<", ">>"}:
             return self.fold_shift(operator, left, right)
         if operator in _COMPARISONS:
-            kind = _common_kind(left.kind, right.kind, arithmetic=False)
+            kind = common_kind(left.kind, right.kind, arithmetic=False)
             left = convert_scalar_constant(left, kind)
             right = convert_scalar_constant(right, kind)
             if left is None or right is None:
@@ -386,7 +395,7 @@ class ScalarConstantFolder:
             return ScalarConstant(
                 "bool", bool(_COMPARISONS[operator](left.value, right.value))
             )
-        kind = _common_kind(left.kind, right.kind)
+        kind = common_kind(left.kind, right.kind)
         left = convert_scalar_constant(left, kind)
         right = convert_scalar_constant(right, kind)
         if left is None or right is None:
@@ -430,7 +439,16 @@ class ScalarConstantFolder:
         false_value = self.fold(node.false_expr)
         if condition is None or true_value is None or false_value is None:
             return None
-        kind = _common_kind(true_value.kind, false_value.kind, arithmetic=False)
+        return self.ternary_value(condition, true_value, false_value)
+
+    def ternary_value(
+        self,
+        condition: ScalarConstant,
+        true_value: ScalarConstant,
+        false_value: ScalarConstant,
+    ) -> ScalarConstant | None:
+        """Select between folded operands as ``condition ? a : b`` would."""
+        kind = common_kind(true_value.kind, false_value.kind, arithmetic=False)
         chosen = (
             true_value
             if convert_scalar_constant(condition, "bool").value
@@ -449,6 +467,10 @@ class ScalarConstantFolder:
             if folded is None:
                 return None
             arguments.append(folded)
+        return self.call_value(name, arguments)
+
+    def call_value(self, name: str, arguments: list) -> ScalarConstant | None:
+        """Fold a constructor or built-in call over folded *arguments*."""
         kind = self.kind_of_type(name)
         if kind is not None:
             if len(arguments) != 1:
@@ -503,7 +525,7 @@ _ROUNDING = {"floor": math.floor, "ceil": math.ceil, "trunc": math.trunc}
 def _float_arguments(arguments: list[ScalarConstant]) -> list | None:
     kind = "float"
     for argument in arguments:
-        kind = _common_kind(kind, argument.kind)
+        kind = common_kind(kind, argument.kind)
     converted = [convert_scalar_constant(argument, kind) for argument in arguments]
     if any(value is None or not math.isfinite(value.value) for value in converted):
         return None
@@ -558,7 +580,7 @@ def fold_math_builtin(
     if integer and name in {"abs", "min", "max", "clamp", "sign"}:
         kind = arguments[0].kind
         for argument in arguments[1:]:
-            kind = _common_kind(kind, argument.kind)
+            kind = common_kind(kind, argument.kind)
         values = [convert_scalar_constant(a, kind).value for a in arguments]
         width, signed = INTEGER_KINDS[kind]
         if name == "abs" and len(values) == 1:
@@ -604,6 +626,7 @@ __all__ = (
     "ScalarConstant",
     "ScalarConstantFolder",
     "canonical_float_value",
+    "common_kind",
     "convert_scalar_constant",
     "fold_math_builtin",
     "round_to_binary32",

@@ -1,0 +1,265 @@
+"""Fold scalar and vector constant initializers for the SPIR-V generator.
+
+SPIR-V module scope can only hold constant instructions, so a CrossGL
+``const`` whose initializer is an operator expression, a conversion, a swizzle
+or a math built-in call has to be evaluated during translation. Evaluation uses
+:mod:`vector_constant_folding`, which rounds binary32 values after every
+operation and wraps integers, so the constant has the value the shader would
+have computed.
+
+Names resolve only at module scope: inside a function a local could shadow a
+module-scope constant, and the generator's ordinary expression path handles
+that case.
+"""
+
+from __future__ import annotations
+
+from ..ast import (
+    ArrayAccessNode,
+    BinaryOpNode,
+    CastNode,
+    FunctionCallNode,
+    MemberAccessNode,
+    SwizzleNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VectorType,
+)
+from ..float_limit_constants import float_limit_constant
+from ..standard_constants import standard_math_constant
+from .scalar_constant_folding import (
+    FLOAT_KINDS,
+    SCALAR_KINDS,
+    ScalarConstant,
+    canonical_float_value,
+    convert_scalar_constant,
+    fold_math_builtin,
+)
+from .vector_constant_folding import (
+    VectorConstant,
+    VectorConstantFolder,
+    convert_vector_constant,
+    make_vector,
+)
+
+# Initializers that need evaluation. Bare literals and names keep the
+# generator's existing literal path, so their spelling does not change.
+_EVALUATED_NODES = (
+    ArrayAccessNode,
+    BinaryOpNode,
+    CastNode,
+    FunctionCallNode,
+    MemberAccessNode,
+    SwizzleNode,
+    TernaryOpNode,
+    UnaryOpNode,
+)
+
+
+def spirv_scalar_kind(generator, type_value) -> str | None:
+    """Return the scalar kind (``float``, ``int``, ...) of *type_value*, if any."""
+    if type_value is None:
+        return None
+    name = (
+        type_value if isinstance(type_value, str) else getattr(type_value, "name", None)
+    )
+    if not isinstance(name, str):
+        return None
+    kind = generator.normalize_primitive_name(name)
+    return kind if kind in SCALAR_KINDS else None
+
+
+def _is_spirv_type(type_value) -> bool:
+    return hasattr(type_value, "id") and hasattr(type_value, "type")
+
+
+def spirv_vector_shape(generator, type_value) -> tuple[str, int] | None:
+    """Return ``(kind, size)`` when *type_value* is a foldable vector type."""
+    if type_value is None:
+        return None
+    if _is_spirv_type(type_value):
+        info = generator.vector_type_info_from_type(type_value)
+        if info is None or info[0] is None:
+            return None
+        component_type, size = info
+        kind = spirv_scalar_kind(generator, component_type.type.base_type)
+        return None if kind is None else (kind, size)
+    if isinstance(type_value, VectorType):
+        kind = spirv_scalar_kind(generator, type_value.element_type)
+        return None if kind is None else (kind, type_value.size)
+    name = (
+        type_value if isinstance(type_value, str) else getattr(type_value, "name", None)
+    )
+    if not isinstance(name, str):
+        return None
+    info = generator.vector_component_type_and_count(name)
+    if info is None:
+        return None
+    component_name, size = info
+    kind = spirv_scalar_kind(generator, component_name)
+    return None if kind is None or not 2 <= size <= 4 else (kind, size)
+
+
+def _integer_constant(value: int) -> ScalarConstant:
+    for kind, low, high in (
+        ("int", -(1 << 31), (1 << 31) - 1),
+        ("uint", 0, (1 << 32) - 1),
+        ("i64", -(1 << 63), (1 << 63) - 1),
+    ):
+        if low <= value <= high:
+            return ScalarConstant(kind, value)
+    return ScalarConstant("u64", value)
+
+
+def _scalar_value_of(generator, constant_id) -> ScalarConstant | None:
+    value = generator.constant_values_by_id.get(constant_id.id)
+    type_id = generator.value_types.get(constant_id.id)
+    base_type = getattr(getattr(type_id, "type", None), "base_type", None)
+    kind = spirv_scalar_kind(generator, base_type)
+    if value is None or kind is None:
+        return None
+    return ScalarConstant(kind, value)
+
+
+def _vector_value_of(generator, constant_id) -> VectorConstant | None:
+    shape = spirv_vector_shape(generator, generator.value_types.get(constant_id.id))
+    if shape is None:
+        return None
+    for table in (generator.vector_constants, generator.composite_constants):
+        for (_type_key, component_ids), registered in table.items():
+            if registered.id != constant_id.id:
+                continue
+            components = []
+            for component_id in component_ids:
+                value = generator.constant_values_by_id.get(component_id)
+                if value is None:
+                    return None
+                components.append(ScalarConstant(shape[0], value))
+            vector = make_vector(components)
+            return vector if vector is not None and vector.size == shape[1] else None
+    return None
+
+
+def _resolve_name(generator, name: str):
+    if generator.current_function_name is not None:
+        return None
+    constant_id = generator.named_constants.get(name)
+    if constant_id is not None:
+        # Specialization constants have no entry in the value tables, so
+        # expressions over them keep the OpSpecConstantOp path.
+        scalar = _scalar_value_of(generator, constant_id)
+        if scalar is not None:
+            return scalar
+        return _vector_value_of(generator, constant_id)
+    int_value = generator.active_literal_int_constants().get(name)
+    if isinstance(int_value, int) and not isinstance(int_value, bool):
+        return _integer_constant(int_value)
+    limit = float_limit_constant(name)
+    if limit is not None:
+        return ScalarConstant("float", limit.value)
+    standard = standard_math_constant(name)
+    if standard is not None:
+        kind = spirv_scalar_kind(generator, standard.scalar_type)
+        if kind in FLOAT_KINDS:
+            return ScalarConstant(kind, float(standard.decimal))
+    return None
+
+
+def spirv_fold_constant(generator, expr):
+    """Fold *expr* to a scalar or vector constant, or return ``None``."""
+    folder = VectorConstantFolder(
+        lambda name: _resolve_name(generator, name),
+        lambda type_value: spirv_scalar_kind(generator, type_value),
+        lambda type_value: spirv_vector_shape(generator, type_value),
+        fold_builtin=fold_math_builtin,
+    )
+    return folder.fold(expr)
+
+
+def spirv_fold_scalar(generator, expr, kind: str | None) -> ScalarConstant | None:
+    """Fold *expr* to a scalar, converted to *kind* when given, or ``None``."""
+    folded = spirv_fold_constant(generator, expr)
+    if not isinstance(folded, ScalarConstant) or kind is None:
+        return folded if isinstance(folded, ScalarConstant) else None
+    return convert_scalar_constant(folded, kind)
+
+
+def _python_value(folded: ScalarConstant):
+    if folded.kind in FLOAT_KINDS:
+        return canonical_float_value(folded.kind, folded.value)
+    return folded.value
+
+
+def spirv_evaluated_scalar_initializer(generator, expr, type_id):
+    """Return the Python value of an evaluated scalar initializer, or ``None``.
+
+    Only operator expressions, conversions, swizzles and calls are handled;
+    bare literals and names are left to the generator's literal path.
+    """
+    if not isinstance(expr, _EVALUATED_NODES):
+        return None
+    kind = spirv_scalar_kind(generator, type_id.type.base_type)
+    if kind is None:
+        return None
+    folded = spirv_fold_scalar(generator, expr, kind)
+    return None if folded is None else _python_value(folded)
+
+
+def _register_vector(generator, folded, target_type):
+    if target_type is None:
+        if not isinstance(folded, VectorConstant):
+            return None
+        component_type = generator.register_primitive_type(folded.kind)
+        vector_type = generator.register_vector_type(component_type, folded.size)
+    else:
+        kind, size = spirv_vector_shape(generator, target_type)
+        component_type, _size = generator.vector_type_info_from_type(target_type)
+        if isinstance(folded, ScalarConstant):
+            # A scalar initializer of a vector constant fills every component.
+            folded = make_vector((folded,) * size)
+        if folded is None or folded.size != size:
+            return None
+        folded = convert_vector_constant(folded, kind)
+        if folded is None:
+            return None
+        vector_type = target_type
+    components = [
+        generator.register_constant(_python_value(component), component_type)
+        for component in folded.components
+    ]
+    return generator.register_vector_constant(vector_type, components)
+
+
+def spirv_folded_constant(generator, expr, target_type) -> object | None:
+    """Return a constant id for a foldable scalar or vector expression, or ``None``."""
+    if not isinstance(expr, _EVALUATED_NODES):
+        return None
+    if target_type is not None and spirv_vector_shape(generator, target_type):
+        return _register_vector(
+            generator, spirv_fold_constant(generator, expr), target_type
+        )
+    if target_type is not None:
+        kind = spirv_scalar_kind(generator, target_type.type.base_type)
+        if kind is None:
+            return None
+        folded = spirv_fold_scalar(generator, expr, kind)
+        if folded is None:
+            return None
+        return generator.register_constant(_python_value(folded), target_type)
+    folded = spirv_fold_constant(generator, expr)
+    if isinstance(folded, VectorConstant):
+        return _register_vector(generator, folded, None)
+    if folded is None:
+        return None
+    type_id = generator.register_primitive_type(folded.kind)
+    return generator.register_constant(_python_value(folded), type_id)
+
+
+__all__ = (
+    "spirv_evaluated_scalar_initializer",
+    "spirv_fold_constant",
+    "spirv_fold_scalar",
+    "spirv_folded_constant",
+    "spirv_scalar_kind",
+    "spirv_vector_shape",
+)
