@@ -15759,6 +15759,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
             return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
+            if len(args) > 2:
+                # semantics.buffer_strides assigns the stride; an output left here would stay unassigned.
+                raise BufferLengthUnsupportedError(
+                    "metal",
+                    f"buffer_dimensions({self.generate_expression(args[0])}) has a stride output "
+                    "that was not lowered",
+                )
             length_expr = self.structured_buffer_length_reference(args[0])
             if length_expr is None:
                 raise BufferLengthUnsupportedError(

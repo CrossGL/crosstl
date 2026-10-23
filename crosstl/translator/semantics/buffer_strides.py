@@ -3,9 +3,9 @@
 HLSL's ``GetDimensions(count, stride)`` on a structured buffer writes the element count and the element stride in
 bytes. The stride is that of the declared element type under the buffer's layout rules, and DXC folds it to a
 literal: for ``StructuredBuffer<S>`` with ``struct S { float4 a; float b; }`` ``cs_6_0`` stores ``i32 20``. HLSL and
-Slang spell the three-output query and MSL has ``sizeof``, but GLSL's ``length()``, SPIR-V's ``OpArrayLength`` and
-the CUDA, HIP, Mojo, Rust and WGSL buffers count elements only, so those generators left ``stride`` unassigned or
-refused the call.
+Slang spell the three-output query, but GLSL's ``length()``, SPIR-V's ``OpArrayLength``, the element count a Metal
+host passes beside a buffer and the CUDA, HIP, Mojo, Rust and WGSL buffers count elements only, so those generators
+left ``stride`` unassigned or refused the call.
 
 :func:`materialize_buffer_strides` rewrites, for those targets, each statement ``buffer_dimensions(b, count,
 stride)`` into ``buffer_dimensions(b, count); stride = N;``, ``N`` being the element stride
@@ -13,7 +13,7 @@ stride)`` into ``buffer_dimensions(b, count); stride = N;``, ``N`` being the ele
 * under the buffer's ``@buffer_layout`` (``hlsl_structured``, ``metal`` or ``std430``, with the rules of
   :mod:`.structured_layouts`);
 * else under the target's own buffer rules, std430 for GLSL and SPIR-V (GLSL 4.60 section 7.6.2.2) and for WGSL
-  (WGSL's host-shareable layout aligns ``vec3`` to 16 bytes like std430);
+  (WGSL's host-shareable layout aligns ``vec3`` to 16 bytes like std430), and MSL's for Metal;
 * for a buffer parameter, from the buffers its calls pass, whose strides must agree.
 
 The pass runs after :func:`.structured_layouts.legalize_structured_layouts`, which already rewrote the query on the
@@ -34,7 +34,7 @@ __all__ = ["TARGETS", "materialize_buffer_strides"]
 
 _QUERY = "buffer_dimensions"
 # Targets whose generators cannot spell the stride output, with the buffer rules of an unmarked buffer where they
-# are modelled. HLSL and Slang spell it natively and MSL as ``sizeof`` of the element type.
+# are modelled. HLSL and Slang spell it natively.
 _TARGET_RULES = {
     "opengl": "std430",
     "glsl": "std430",
@@ -43,6 +43,7 @@ _TARGET_RULES = {
     "spirv": "std430",
     "wgsl": "std430",
     "webgpu": "std430",
+    "metal": "metal",
 }
 TARGETS = frozenset(_TARGET_RULES) | frozenset({"cuda", "hip", "mojo", "rust"})
 _LAYOUT_RULES = {"hlsl_structured": "hlsl", "metal": "metal", "std430": "std430"}
