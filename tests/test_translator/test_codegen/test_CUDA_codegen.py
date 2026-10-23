@@ -19410,4 +19410,73 @@ def test_scalar_f64_constructor_emits_double_cast():
     """
     cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
     assert "f64(" not in cuda_code
-    assert "double(" in cuda_code
+    assert "return static_cast<double>(value);" in cuda_code
+
+
+@pytest.mark.parametrize(
+    ("alias", "cuda_type"),
+    [
+        ("f32", "float"),
+        ("f64", "double"),
+        ("i8", "char"),
+        ("u8", "unsigned char"),
+        ("i16", "short"),
+        ("u16", "unsigned short"),
+        ("i32", "int"),
+        ("u32", "unsigned int"),
+        ("i64", "long long"),
+        ("u64", "unsigned long long"),
+    ],
+)
+def test_sized_scalar_constructor_lowers_to_static_cast(alias, cuda_type):
+    # Several of these types are more than one word, and C++ has no functional cast such as
+    # `unsigned int(x)` for them.
+    source_code = f"""
+    shader SizedCast {{
+        f64 widen(i32 value) {{
+            return f64({alias}(value));
+        }}
+    }}
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert f"return static_cast<double>(static_cast<{cuda_type}>(value));" in cuda_code
+    assert f"{alias}(" not in cuda_code
+
+
+def test_sized_scalar_constructors_from_issue_2330_compile_with_nvcc(tmp_path):
+    source_code = """
+    shader Cast {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer int* iin;
+            buffer double* outp;
+
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = f64(iin[i]) + f64(i64(iin[i])) + f64(u32(iin[i]));
+            }
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert (
+        "static_cast<double>(iin[i]) + "
+        "static_cast<double>(static_cast<long long>(iin[i]))"
+    ) in cuda_code
+    assert "static_cast<double>(static_cast<unsigned int>(iin[i]))" in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_unsized_scalar_constructors_keep_functional_casts():
+    source_code = """
+    shader PlainCast {
+        f64 plain(i32 value) {
+            return double(float(int(uint(value))));
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "return double(float(int(uint(value))));" in cuda_code
