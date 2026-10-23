@@ -80,6 +80,11 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.source_closure_memo import (
+    memoized_entry_discovery,
+    memoized_preprocessor_run,
+    memoized_source_host_interface,
+)
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointError,
     ProjectTranslationCheckpointRecorder,
@@ -9742,7 +9747,8 @@ def _discover_project_source_entries(
 ) -> tuple[SourceEntryDiscovery, list[ProjectDiagnostic]]:
     try:
         source = path.read_text(encoding="utf-8")
-        discovery = source_spec.discover_entry_points(
+        discovery = memoized_entry_discovery(
+            source_spec,
             source,
             file_path=str(path),
             include_paths=_frontend_include_dirs(config),
@@ -13940,25 +13946,61 @@ def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates, key=lambda candidate: _relpath(candidate, config.root))
 
 
-def _runtime_reference_for_match(
-    *,
-    config: ProjectConfig,
-    path: Path,
-    line_number: int,
-    match: re.Match[str],
-    backend: str,
-    kind: str,
-    fallback_symbol: str | None,
-) -> dict[str, Any]:
-    symbol = fallback_symbol or match.group(1)
-    return {
-        "path": _relpath(path, config.root),
-        "line": line_number,
-        "column": match.start() + 1,
-        "backend": backend,
-        "kind": kind,
-        "symbol": symbol,
-    }
+_runtime_text_reference_cache: OrderedDict[
+    tuple[str, bool], tuple[tuple[int, int, str, str, str], ...]
+] = OrderedDict()
+_runtime_text_reference_cache_lock = Lock()
+RUNTIME_TEXT_REFERENCE_CACHE_LIMIT = 8192
+
+
+def _runtime_text_references(
+    text: str, *, build_candidate: bool
+) -> tuple[tuple[int, int, str, str, str], ...]:
+    """Return (line, column, backend, kind, symbol) matches in one file's text.
+
+    The result is a pure function of the text and whether the file is a build
+    description, so repeated scans of an unchanged repository reuse it.
+    """
+
+    key = (
+        hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
+        build_candidate,
+    )
+    with _runtime_text_reference_cache_lock:
+        cached = _runtime_text_reference_cache.get(key)
+        if cached is not None:
+            _runtime_text_reference_cache.move_to_end(key)
+            return cached
+    rules = [
+        rule
+        for rule in RUNTIME_REFERENCE_RULES
+        if build_candidate or rule[1] != "build-system"
+    ]
+    matches: list[tuple[int, int, str, str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for backend, kind, pattern, fallback_symbol in rules:
+            for match in pattern.finditer(line):
+                matches.append(
+                    (
+                        line_number,
+                        match.start() + 1,
+                        backend,
+                        kind,
+                        fallback_symbol or match.group(1),
+                    )
+                )
+                if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                    break
+            if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                break
+        if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+            break
+    result = tuple(matches)
+    with _runtime_text_reference_cache_lock:
+        _runtime_text_reference_cache[key] = result
+        while len(_runtime_text_reference_cache) > RUNTIME_TEXT_REFERENCE_CACHE_LIMIT:
+            _runtime_text_reference_cache.popitem(last=False)
+    return result
 
 
 def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
@@ -13967,30 +14009,25 @@ def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
         try:
             if path.stat().st_size > RUNTIME_REFERENCE_FILE_SIZE_LIMIT:
                 continue
-            lines = path.read_text(encoding="utf-8").splitlines()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for line_number, line in enumerate(lines, start=1):
-            for backend, kind, pattern, fallback_symbol in RUNTIME_REFERENCE_RULES:
-                if (
-                    kind == "build-system"
-                    and not _is_runtime_build_reference_candidate(path)
-                ):
-                    continue
-                for match in pattern.finditer(line):
-                    references.append(
-                        _runtime_reference_for_match(
-                            config=config,
-                            path=path,
-                            line_number=line_number,
-                            match=match,
-                            backend=backend,
-                            kind=kind,
-                            fallback_symbol=fallback_symbol,
-                        )
-                    )
-                    if len(references) >= RUNTIME_REFERENCE_LIMIT:
-                        return references
+        relative_path = _relpath(path, config.root)
+        for line, column, backend, kind, symbol in _runtime_text_references(
+            text, build_candidate=_is_runtime_build_reference_candidate(path)
+        ):
+            references.append(
+                {
+                    "path": relative_path,
+                    "line": line,
+                    "column": column,
+                    "backend": backend,
+                    "kind": kind,
+                    "symbol": symbol,
+                }
+            )
+            if len(references) >= RUNTIME_REFERENCE_LIMIT:
+                return references
     return references
 
 
@@ -14103,6 +14140,18 @@ def _is_template_hostile_target(target: str) -> bool:
 
 
 def _metal_preprocess_without_template_materialization(
+    preprocessor: Any, code: str, *, file_path: str
+) -> str:
+    return memoized_preprocessor_run(
+        preprocessor,
+        code,
+        file_path=file_path,
+        source_backend="metal",
+        run=_expand_metal_without_template_materialization,
+    )
+
+
+def _expand_metal_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
     from crosstl.backend.Metal.preprocessor import PRESERVED_INCLUDE_SENTINEL
@@ -32695,16 +32744,16 @@ def _runtime_manifest_source_host_interface(
         return None
 
     try:
-        ast = source_spec.parse(
+        host_interface = memoized_source_host_interface(
+            source_spec,
             source_path.read_text(encoding="utf-8"),
             file_path=str(source_path),
+            reflect=_runtime_host_interface_from_ast,
+            reflect_options={"parser": parser_name or "", "source": "source-artifact"},
         )
     except Exception:
         return None
 
-    host_interface = _runtime_host_interface_from_ast(
-        ast, parser=parser_name or "", source="source-artifact"
-    )
     if (
         host_interface["entryPointCount"] == 0
         and host_interface["resourceCount"] == 0
