@@ -54,6 +54,8 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Scatter",
                     "DivMod",
                     "Power",
+                    "ArcTan2",
+                    "Sort",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
@@ -124,7 +126,10 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
             f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         )
         assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
-    assert "NO_GPU(Power)" in (backend / "crosstl_primitives.cpp").read_text()
+    for name in ("Power", "ArcTan2"):
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
+    assert "NO_GPU(Sort)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2
@@ -1689,22 +1694,31 @@ def test_registration_retains_callback_and_uses_platform_library(
         host.install()
 
 
-def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
+def test_unary_dtype_rejection_uses_complex_storage(tmp_path, monkeypatch):
     installed = []
     arrays = []
+    message = (
+        "CrossTL unary dispatch requires matching real (bool, integer, float16, "
+        "bfloat16 or float32) arrays."
+    )
+    source = Path(verify.__file__).with_name("backend.cpp").read_text()
+    assert (
+        '"CrossTL unary dispatch requires matching real (bool, integer, float16, "'
+        in source
+    )
     module = SimpleNamespace(
         gpu="gpu",
-        int16="int16",
+        complex64="complex64",
         metal=SimpleNamespace(is_available=lambda: False),
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
         array=lambda values, *, dtype: arrays.append((values, dtype)) or values,
-        abs=lambda values, *, stream: values,
+        negative=lambda values, *, stream: values,
     )
 
     def evaluate(value):
-        assert arrays == [([-3, 2], "int16")]
-        raise ValueError("CrossTL unary dispatch requires float32 arrays")
+        assert arrays == [([-3, 2], "complex64")]
+        raise ValueError(message)
 
     module.eval = evaluate
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))

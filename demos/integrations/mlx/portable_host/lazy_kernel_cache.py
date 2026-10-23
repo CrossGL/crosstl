@@ -7,6 +7,7 @@ the kernel source, so a changed translator or recipe never reuses an older
 package. Loading checks that the cached descriptor still matches its package.
 """
 
+import gzip
 import hashlib
 import json
 import shutil
@@ -81,6 +82,20 @@ def project_config(output, target, source, entry, options=""):
 
 def _sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def retain_translation(work, destination):
+    """Keep ``work`` as evidence, with its project report gzip-compressed.
+
+    A single-entry report still lists every unit of the whole pinned source,
+    a few megabytes per entry, so the retained copy is ``report.json.gz``
+    (no timestamp, so equal reports give equal bytes).
+    """
+    work, destination = Path(work), Path(destination)
+    shutil.copytree(work, destination, ignore=shutil.ignore_patterns("report.json"))
+    (destination / "report.json.gz").write_bytes(
+        gzip.compress((work / "report.json").read_bytes(), mtime=0)
+    )
 
 
 class LazyKernelCache:
@@ -202,7 +217,7 @@ class LazyKernelCache:
             )
             report.write_json(work / "report.json")
             payload = report.to_json()
-            shutil.copytree(work, output / "translation")
+            retain_translation(work, output / "translation")
             if (
                 payload["summary"]["failedCount"]
                 or len(payload["artifacts"]) != 1

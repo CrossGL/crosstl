@@ -37,6 +37,7 @@ from demos.integrations.mlx.portable_host import (
     copy_dispatch,
     copy_layout,
     divmod_dispatch,
+    elementwise_dispatch,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
@@ -74,6 +75,15 @@ from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD
 from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
 from demos.integrations.mlx.portable_host.divmod_packages import (
     signature as divmod_signature,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    CACHE as ELEMENTWISE_CACHE,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ENTRIES as LAZY_ELEMENTWISE_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ElementwisePackageCache,
 )
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
@@ -448,6 +458,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # So do the unary and binary vectors of every other real dtype.
+        self.elementwise = (
+            ElementwisePackageCache(
+                mlx_root, self.directory / ELEMENTWISE_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -593,6 +611,8 @@ class HostRuntime:
                 return 1
             if name in LAZY_COPY_ENTRIES and self.copies is not None:
                 return 1
+            if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
+                return 1
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
@@ -697,9 +717,21 @@ class HostRuntime:
             and self.copies is not None
         )
 
+    def lazy_elementwise(self, entry):
+        """Whether ``entry`` runs from the lazy unary or binary cache."""
+        return (
+            entry in LAZY_ELEMENTWISE_ENTRIES
+            and entry not in self.descriptors
+            and self.elementwise is not None
+        )
+
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if self.lazy_copy(entry):
             return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if self.lazy_elementwise(entry):
+            return elementwise_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(divmod_dispatch.ENTRY_PREFIXES):

@@ -12,12 +12,16 @@ recomputed from its retained inputs and native modules. DivMod's
 is recomputed from its retained operands. Casts and copies that no installed
 family covers (the narrow integers and the 16-bit float pairs) translate from
 ``copy.metal`` on first use; each is recomputed from its retained words and
-must name the package its cache derives again. Scans and small row and column
+must name the package its cache derives again. Unary and binary vectors of the
+other real dtypes (the 16-bit floats, the narrow integers, Boolean arithmetic
+and the 64-bit bitwise operations) translate from ``unary.metal`` and
+``binary.metal`` the same way; each must name its cached package and native
+modules, and integer and Boolean ones are recomputed from their operands.
+Scans and small row and column
 reductions are also translated on first use; each of their dispatches must
 name the package its cache derives again from the event. Every other dispatch
-must come from one of those indexes, so a test that reaches another family
-(for example the 16-bit families) fails the trace instead of passing on an
-unchecked package.
+must come from one of those indexes, so a test that reaches an uninstalled
+family fails the trace instead of passing on an unchecked package.
 """
 
 import argparse
@@ -31,6 +35,7 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import (
     copy_evidence,
     divmod_evidence,
+    elementwise_evidence,
     gather_evidence,
     lazy_package_evidence,
     random_evidence,
@@ -44,6 +49,15 @@ from demos.integrations.mlx.portable_host.copy_packages import (
 from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
 from demos.integrations.mlx.portable_host.divmod_dispatch import (
     ENTRY_PREFIXES as DIVMOD_PREFIXES,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    CACHE as ELEMENTWISE_CACHE,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ENTRIES as LAZY_ELEMENTWISE_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ElementwisePackageCache,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.random_packages import (
@@ -109,6 +123,18 @@ UPSTREAM_TESTS = tuple(
         "test_prod",
         # This also reaches lazily translated casts.
         "test_subnormal_bool_cast",
+        # These reach lazily translated unary and binary vectors.
+        "test_binary_ops",
+        "test_bitwise_ops",
+        "test_divide",
+        "test_floor_divide",
+        "test_integer_power",
+        "test_remainder",
+        "test_scalar_inputs",
+        "test_sigmoid",
+        "test_tensordot",
+        "test_unary_ops",
+        "test_zeros_ones_empty_like_dtype",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -134,8 +160,9 @@ RETAINED_VALUES = (
     "all_reduce_",
     "init_reduce_",
 )
-# The CI step bounds the three workers and the audit at 3,600 seconds.
-TIMEOUTS = {"cpu": 300, "native": 3000, "missing": 60}
+# The CI step bounds the three workers and the audit at 5,000 seconds; a cold
+# native run also translates about a hundred lazy vectors.
+TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
 
 
 def write_json(path, value):
@@ -161,10 +188,18 @@ def install(args, output):
     )
     if args.worker == "missing":
         host.descriptors.pop("vv_Equalint32")
-    # Lazy copies are recomputed from their values; installed copies are not.
+        # Without the pinned source the comparison has no package at all.
+        host.elementwise = None
+    # Lazy copies and integer or Boolean lazy vectors are recomputed from their
+    # values; installed families are not.
     host.trace_values = (
         *RETAINED_VALUES,
         *(entry for entry in LAZY_COPY_ENTRIES if host.lazy_copy(entry)),
+        *(
+            entry
+            for entry in LAZY_ELEMENTWISE_ENTRIES
+            if host.lazy_elementwise(entry) and elementwise_evidence.recomputable(entry)
+        ),
     )
     host.install()
     return host
@@ -305,7 +340,7 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         owners[i] += 1
     installed = set().union(*(index["descriptors"] for index in indexes.values()))
     copies = CopyPackageCache(args.mlx_root, args.packages / COPY_CACHE, target)
-    lazy_copies = set()
+    lazy_checked = set()
     for i, event in enumerate(trace):
         if event["entry"] not in LAZY_COPY_ENTRIES or event["entry"] in installed:
             continue
@@ -313,7 +348,23 @@ def audit_trace(np, args, trace, target, indexes, reductions):
             raise ValueError("Upstream op copy dispatch targets another backend")
         # Recomputes the destination and derives the cached package again.
         copy_evidence.audit_event(event, copies)
-        lazy_copies.add(i)
+        lazy_checked.add(i)
+        owners[i] += 1
+    elementwise = ElementwisePackageCache(
+        args.mlx_root, args.packages / ELEMENTWISE_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if (
+            event["entry"] not in LAZY_ELEMENTWISE_ENTRIES
+            or event["entry"] in installed
+        ):
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op vector dispatch targets another backend")
+        # Derives the cached package again and checks the native modules;
+        # integer and Boolean results are recomputed from their operands.
+        elementwise_evidence.audit_event(event, elementwise)
+        lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
     modules = Path(args.output_dir) / "native/native-modules"
@@ -333,7 +384,7 @@ def audit_trace(np, args, trace, target, indexes, reductions):
             and indexing_auditor(event["entry"]) is None
             and not event["entry"].startswith(DIVMOD_PREFIXES)
             and i not in executed
-            and i not in lazy_copies
+            and i not in lazy_checked
         ],
         target,
     )

@@ -111,32 +111,13 @@ void dispatch_unary(
     mlx::core::array& out,
     const char* operation) {
   require_runtime();
-  const bool logical = std::string(operation) == "LogicalNot";
-  const bool invert = std::string(operation) == "BitwiseInvert";
-  const bool absolute = std::string(operation) == "Abs" && inputs.size() == 1 &&
-      (inputs[0].dtype() == mlx::core::float16 ||
-       inputs[0].dtype() == mlx::core::bfloat16 ||
-       inputs[0].dtype() == mlx::core::int32 ||
-       inputs[0].dtype() == mlx::core::uint32 ||
-       inputs[0].dtype() == mlx::core::int64 ||
-       inputs[0].dtype() == mlx::core::uint64 ||
-       inputs[0].dtype() == mlx::core::bool_);
-  if (invert &&
-      (inputs.size() != 1 ||
-       (inputs[0].dtype() != mlx::core::int32 &&
-        inputs[0].dtype() != mlx::core::uint32) ||
-       out.dtype() != inputs[0].dtype())) {
+  // unary.metal instantiates each operation for the real types it supports,
+  // with matching outputs; the runtime refuses an entry it cannot serve.
+  const char* dtype = inputs.size() == 1 ? cast_type(inputs[0].dtype()) : nullptr;
+  if (!dtype || out.dtype() != inputs[0].dtype()) {
     throw std::invalid_argument(
-        "CrossTL BitwiseInvert requires matching int32 or uint32 arrays.");
-  }
-  const auto type = (invert || absolute) ? inputs[0].dtype()
-      : logical                         ? mlx::core::bool_
-                                        : mlx::core::float32;
-  const char* dtype = type == mlx::core::float16 ? "float16" :
-      type == mlx::core::bfloat16 ? "bfloat16" : storage_type(type);
-  if (inputs.size() != 1 || inputs[0].dtype() != type || out.dtype() != type) {
-    throw std::invalid_argument(
-        "CrossTL unary dispatch requires float32 arrays, or bool for LogicalNot.");
+        "CrossTL unary dispatch requires matching real (bool, integer, float16, "
+        "bfloat16 or float32) arrays.");
   }
   auto in = inputs[0];
   if (in.shape() != out.shape()) {
@@ -1003,6 +984,8 @@ void dispatch_empty_reduce(mlx::core::array& out, const char* operation) {
 
 int64_t remainder_operand(const mlx::core::array& value, size_t index) {
   switch (value.dtype()) {
+    case mlx::core::bool_:
+      return value.data<bool>()[index];
     case mlx::core::int8:
       return value.data<int8_t>()[index];
     case mlx::core::int16:
@@ -1021,7 +1004,8 @@ int64_t remainder_operand(const mlx::core::array& value, size_t index) {
       // Only zero matters for unsigned divisors; keep the value nonnegative.
       return value.data<uint64_t>()[index] != 0;
     default:
-      throw std::invalid_argument("CrossTL integer remainders require integer arrays.");
+      throw std::invalid_argument(
+          "CrossTL integer divisions require integer or Boolean arrays.");
   }
 }
 
@@ -1045,18 +1029,13 @@ void dispatch_binary(
       inputs[1].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL binary inputs must match output shape and dtype.");
   }
-  const char* dtype = inputs[0].dtype() == mlx::core::float16 ?
-      "float16" : inputs[0].dtype() == mlx::core::bfloat16 ?
-      "bfloat16" : storage_type(inputs[0].dtype());
-  if (!dtype || (!comparison && !bitwise && inputs[0].dtype() == mlx::core::bool_) ||
-      (bitwise && inputs[0].dtype() != mlx::core::int32 &&
-       inputs[0].dtype() != mlx::core::uint32 && inputs[0].dtype() != mlx::core::bool_)) {
+  // binary.metal instantiates every real type; the runtime refuses an
+  // operation/type entry it cannot serve.
+  const char* dtype = cast_type(inputs[0].dtype());
+  if (!dtype) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported dtype.");
   }
-  if (std::string(operation) == "Divide" && out.dtype() != mlx::core::float32 &&
-      out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
-    throw std::invalid_argument("CrossTL division requires float16, bfloat16 or float32 arrays.");
-  }
+  const bool floating = mlx::core::issubdtype(inputs[0].dtype(), mlx::core::floating);
   if (std::string(operation) == "LogAddExp" && out.dtype() != mlx::core::float32 &&
       out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
     throw std::invalid_argument("CrossTL LogAddExp requires float16, bfloat16 or float32 arrays.");
@@ -1075,25 +1054,34 @@ void dispatch_binary(
   }
   auto a = dense_input(inputs[0]);
   auto b = dense_input(inputs[1]);
-  if (std::string(operation) == "Remainder" &&
-      mlx::core::issubdtype(b.dtype(), mlx::core::integer)) {
-    // Integer % by zero, and INT_MIN % -1, are undefined in Metal, HLSL and GLSL.
+  if ((std::string(operation) == "Remainder" || std::string(operation) == "Divide") &&
+      !floating) {
+    // Integer / or % by zero, and INT_MIN by -1, are undefined in Metal, HLSL and GLSL.
     for (size_t i = 0; i < b.size(); ++i) {
       const int64_t divisor = remainder_operand(b, i);
       const int64_t dividend = remainder_operand(a, i);
       if (divisor == 0 || (mlx::core::issubdtype(b.dtype(), mlx::core::signedinteger) &&
                            divisor == -1 && dividend == remainder_minimum(b.dtype()))) {
         throw std::invalid_argument(
-            "CrossTL integer remainders require nonzero divisors without signed overflow.");
+            "CrossTL integer divisions and remainders require nonzero divisors "
+            "without signed overflow.");
       }
     }
   }
   if (bitwise && (std::string(operation) == "LeftShift" || std::string(operation) == "RightShift")) {
+    // Shifts promote narrow operands to 32 bits, so counts must stay below
+    // the promoted width.
+    const bool wide = b.itemsize() == 8;
     for (size_t i = 0; i < b.size(); ++i) {
-      const int64_t shift = b.dtype() == mlx::core::int32
-          ? b.data<int32_t>()[i] : b.data<uint32_t>()[i];
-      if (shift < 0 || shift >= 32) {
-        throw std::invalid_argument("CrossTL 32-bit shifts require counts in [0, 31].");
+      const bool valid = b.dtype() == mlx::core::uint64
+          ? b.data<uint64_t>()[i] < 64
+          : [&] {
+              const int64_t shift = remainder_operand(b, i);
+              return shift >= 0 && shift < (wide ? 64 : 32);
+            }();
+      if (!valid) {
+        throw std::invalid_argument(
+            "CrossTL shifts require counts in [0, 31], or [0, 63] for 64-bit integers.");
       }
     }
   }
@@ -2266,6 +2254,8 @@ CROSSTL_BINARY_GPU(Maximum)
 CROSSTL_BINARY_GPU(Divide)
 CROSSTL_BINARY_GPU(Remainder)
 CROSSTL_BINARY_GPU(LogAddExp)
+CROSSTL_BINARY_GPU(Power)
+CROSSTL_BINARY_GPU(ArcTan2)
 
 #undef CROSSTL_BINARY_GPU
 

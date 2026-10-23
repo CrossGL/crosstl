@@ -24,7 +24,8 @@ NEGATIVE_CHECKS = {
     "float16": "matching float32/int32/uint32/bool values",
     "over-limit": "at most 65535 elements",
     "absolute-missing": "No translated package for v_Absint32int32",
-    "absolute-int16": "unary dispatch requires float32 arrays",
+    # Without the pinned source no package serves 16-bit absolute values.
+    "absolute-int16": "No translated package for v_Absint16int16",
     "absolute-large-allocation": "exceeds its allocation",
 }
 

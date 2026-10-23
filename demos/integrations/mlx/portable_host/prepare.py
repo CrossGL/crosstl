@@ -67,6 +67,8 @@ def adapted_sources(original, primitives, events):
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,
         *BINARY_OPERATIONS,
+        "Power",
+        "ArcTan2",
         *CAST_PRIMITIVES,
         *COMPARISON_OPERATIONS,
         *LOGICAL_OPERATIONS,

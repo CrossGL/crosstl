@@ -107,7 +107,9 @@ NEGATIVE_CHECKS = {
     "unsupported": "no GPU implementation",
     "over-limit": "65535",
     "missing": "artifact",
-    "unary-dtype": "float32",
+    "unary-dtype": (
+        "unary dispatch requires matching real (bool, integer, float16, bfloat16 or float32) arrays"
+    ),
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-large-allocation": "exceeds its allocation",
@@ -163,13 +165,13 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                value = mx.power(
-                    mx.array([-3.0, 2.0]), mx.array([1.0, 1.0]), stream=mx.gpu
-                )
+                value = mx.sort(mx.array([-3.0, 2.0]), stream=mx.gpu)
             elif args.worker == "over-limit":
                 value = mx.arange(65536, stream=mx.gpu)
             elif args.worker == "unary-dtype":
-                value = mx.abs(mx.array([-3, 2], dtype=mx.int16), stream=mx.gpu)
+                value = mx.negative(
+                    mx.array([-3, 2], dtype=mx.complex64), stream=mx.gpu
+                )
             elif args.worker == "unary-allocation":
                 source = mx.as_strided(
                     mx.array([1.0, 2.0, 3.0]), (2,), (1,), 2, stream=mx.gpu
@@ -196,7 +198,8 @@ def worker(args):
                 value = mx.contiguous(source, stream=mx.gpu)
             elif args.worker == "binary-dtype":
                 value = mx.add(
-                    mx.array([1, 2], dtype=mx.int16), mx.array([2, 3], dtype=mx.int16)
+                    mx.array([1, 2], dtype=mx.complex64),
+                    mx.array([2, 3], dtype=mx.complex64),
                 )
             elif args.worker == "binary-large-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)

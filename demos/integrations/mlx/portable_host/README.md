@@ -270,6 +270,35 @@ binary32 subnormals cast to or from bfloat16, and integers that would need two
 roundings to reach a 16-bit float. Each audited dispatch must also name the
 package its cache derives again, and its retained native modules are checked.
 
+## Unary and binary vectors of every real dtype
+
+Unary operations, binary arithmetic, comparisons, logical and bitwise
+operations, `Power` and `ArcTan2` accept every real dtype MLX instantiates for
+them: Booleans, the 8-, 16-, 32- and 64-bit integers, float16, bfloat16 and
+float32. Complex arrays are refused before dispatch. Each launch runs the
+unchanged `v_<op><type><type>` entry of `unary.metal` or `vv_<op><type>` entry
+of `binary.metal` with one element per invocation. When an installed family
+provides the entry it is used; otherwise `elementwise_packages` translates it
+from the pinned source on first use through `lazy_kernel_cache`. Its tables are
+exactly the 375 real `v_` and `vv_` instantiations of the pinned sources
+(complex64 and the FP8 conversions are excluded), and each floating entry pins
+the Metal profiles the complete binary and unary kernel proofs use: rne-flush
+additive, multiplicative and division results, flushed comparison and
+remainder operands for binary32 and bfloat16, the binary32 quotient for
+binary16 remainders, flushed `Power` operands with portable-finite binary32
+accuracy, and flushed `ArcTan2` and `Log` operands.
+
+The host refuses operands no target defines before dispatch: shift counts
+outside [0, 31] (or [0, 63] for the 64-bit integers, since narrower operands
+promote to 32 bits), and integer or Boolean divisions and remainders by zero or
+of the signed minimum by -1. An output must have its own allocation or be
+exactly a donated input. `elementwise_evidence` recomputes every integer and
+Boolean dispatch from its retained operands: C++ promotes narrow operands to
+`int`, so results wrap modulo their width and Booleans keep whether the
+promoted result is nonzero. Floating dispatches are checked by package and
+native identity like the prebuilt float families, and their values by the
+upstream tests' own comparisons with the CPU.
+
 ## DivMod
 
 `DivMod` is MLX's two-output floored quotient and remainder. Its host port
@@ -1714,7 +1743,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 42 more unchanged `test_ops` tests on all three
+A dedicated job then runs 53 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1739,7 +1768,11 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_take_along_axis`, `test_unary_ops_from_non_array`, `test_add`,
 `test_any`, `test_bitwise_grad`, `test_count_nonzero`,
 `test_irregular_binary_ops`, `test_linspace`, `test_linspace_endpoint`,
-`test_mean`, `test_min_and_max`, `test_prod` and `test_subnormal_bool_cast`.
+`test_mean`, `test_min_and_max`, `test_prod`, `test_subnormal_bool_cast`,
+`test_binary_ops`, `test_bitwise_ops`, `test_divide`, `test_floor_divide`,
+`test_integer_power`, `test_remainder`, `test_scalar_inputs`,
+`test_sigmoid`, `test_tensordot`, `test_unary_ops` and
+`test_zeros_ones_empty_like_dtype`.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
@@ -1747,8 +1780,11 @@ base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
 indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from
 the pinned sources are recomputed from their retained inputs and their native
-modules are checked, and so are the casts and copies that no installed family
-covers (see "Casts and copies of every real dtype"). Scans and small row and column reductions must name the
+modules are checked, and so are the casts, copies and integer or Boolean
+unary and binary vectors that no installed family covers (see "Casts and
+copies of every real dtype" and "Unary and binary vectors of every real
+dtype"). Lazy floating vectors must name the package their cache derives
+again and pass the native-identity checks. Scans and small row and column reductions must name the
 package their cache derives again from the recorded entry, launch and
 metadata (and, for scans and Direct3D or OpenGL dispatch regions, retained
 native modules). A test that reaches the 16-bit package families, or row and

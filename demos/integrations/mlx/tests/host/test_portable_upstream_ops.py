@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 42
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 53
     assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
@@ -100,6 +100,12 @@ def audit(monkeypatch, tmp_path):
         return event["entry"].startswith("contig_scan_")
 
     monkeypatch.setattr(ops.lazy_package_evidence, "audit_event", lazy)
+
+    def vectors(event, cache):
+        assert cache.target == "metal"
+        seen.setdefault("vectors", []).append(event["entry"])
+
+    monkeypatch.setattr(ops.elementwise_evidence, "audit_event", vectors)
     monkeypatch.setattr(ops.random_evidence, "audit_event", lambda np, e: None)
     monkeypatch.setattr(
         ops.random_evidence, "verify_packages", lambda e, root, d, target: None
@@ -153,6 +159,8 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         event("contig_scan_inclusive_sum_int32_int32"),
         event("row_reduce_small_1_reduce_sumint32", 32),
         event("col_reduce_small_1_reduce_sumint32", 32),
+        event("vv_Addfloat16"),
+        event("v_Absint8int8"),
     ]
     count = ops.audit_trace(
         None, audit.args, trace, "metal", audit.indexes, audit.reductions
@@ -171,6 +179,9 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         "row_reduce_small_1_reduce_sumint32",
         "col_reduce_small_1_reduce_sumint32",
     ]
+    # Lazy vectors are audited once, including their native modules.
+    assert audit.seen["vectors"] == ["vv_Addfloat16", "v_Absint8int8"]
+    assert not {"vv_Addfloat16", "v_Absint8int8"} & set(audit.seen["native"])
     # Scans' own audit covers native execution; small reductions keep it.
     assert "contig_scan_inclusive_sum_int32_int32" not in audit.seen["native"]
     assert {
@@ -257,7 +268,8 @@ def test_upstream_op_indexing_audit_failures_fail_the_trace(audit, monkeypatch):
     [
         event("row_reduce_looped_1_32_32_reduce_sumint32"),
         event("all_reduce_andbool_", 256),
-        event("vv_Addfloat16"),
+        # Selection has no lazy family, so an uninstalled dtype is unknown.
+        event("v_Selectfloat16"),
     ],
 )
 def test_upstream_op_trace_rejects_unindexed_families(audit, unknown):

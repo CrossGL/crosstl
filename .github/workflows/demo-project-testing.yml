@@ -2786,7 +2786,7 @@ jobs:
     name: MLX upstream op tests (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 270
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -2916,6 +2916,11 @@ jobs:
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
               2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX lazy vector translation" -- \
+            python -m demos.integrations.mlx.portable_host.elementwise_warm --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages \
+              --jobs ${{ runner.os == 'macOS' && 3 || 4 }} --summary .mlx-portable-upstream-ops/lazy-vectors.json \
+              2>&1 | tee .mlx-portable-upstream-ops/lazy-vector-translation.log
       - name: Configure the upstream op reductions
         run: |
           set -euo pipefail
@@ -2934,7 +2939,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX upstream op verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 5000 --label "MLX upstream op verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
               --packages .mlx-portable-upstream-ops/base/packages --random .mlx-portable-upstream-ops/random-packages \
               --bitwise .mlx-portable-upstream-ops/bitwise-packages --selection .mlx-portable-upstream-ops/selection-packages \
