@@ -1561,6 +1561,8 @@ class GLSLCodeGen(
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
