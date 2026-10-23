@@ -182,16 +182,15 @@ class GLSLToCrossGLConverter:
         "rayQueryInitializeEXT": "Initialize",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
-        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
-        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGenerateIntersectionEXT": "CommitProceduralPrimitiveHit",
+        "rayQueryConfirmIntersectionEXT": "CommitNonOpaqueTriangleHit",
         "rayQueryGetRayTMinEXT": "RayTMin",
         "rayQueryGetRayFlagsEXT": "RayFlags",
         "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
         "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
-        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
     }
     RAY_QUERY_COMMITTED_METHODS = {
-        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedStatus"),
         "rayQueryGetIntersectionPrimitiveIndexEXT": (
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
@@ -211,8 +210,8 @@ class GLSLToCrossGLConverter:
             "CommittedInstanceID",
         ),
         "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
         ),
         "rayQueryGetIntersectionObjectRayOriginEXT": (
             "CandidateObjectRayOrigin",
@@ -222,7 +221,7 @@ class GLSLToCrossGLConverter:
             "CandidateObjectRayDirection",
             "CommittedObjectRayDirection",
         ),
-        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionTEXT": ("CandidateTriangleRayT", "CommittedRayT"),
         "rayQueryGetIntersectionBarycentricsEXT": (
             "CandidateTriangleBarycentrics",
             "CommittedTriangleBarycentrics",
@@ -3864,6 +3863,10 @@ class GLSLToCrossGLConverter:
         return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
+        if name == "rayQueryGetIntersectionCandidateAABBOpaqueEXT" and len(args) == 1:
+            # CrossGL follows DXR, which asks whether the candidate is non-opaque.
+            query = self.generate_expression(args[0])
+            return f"(!{query}.CandidateProceduralPrimitiveNonOpaque())"
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:
             query = self.generate_expression(args[0])
             method = self.RAY_QUERY_SIMPLE_METHODS[name]

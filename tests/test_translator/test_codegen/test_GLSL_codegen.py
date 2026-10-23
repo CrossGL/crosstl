@@ -24177,7 +24177,7 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
                 );
                 bool active = rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 uint primitiveIndex = rq.CandidatePrimitiveIndex();
                 uint instanceId = rq.CommittedInstanceIndex();
                 uint geometryIndex = rq.CandidateGeometryIndex();
@@ -24415,18 +24415,18 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 float tMin = rq.RayTMin();
                 uint customIndex = rq.CommittedInstanceID();
                 uint sbtOffset =
-                    rq.CandidateInstanceShaderBindingTableRecordOffset();
+                    rq.CandidateInstanceContributionToHitGroupIndex();
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();
                 bool frontFace = rq.CommittedTriangleFrontFace();
-                bool aabbOpaque = rq.CandidateAABBOpaque();
+                bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 mat4x3 objectToWorld = rq.CommittedObjectToWorld();
                 mat4x3 worldToObject = rq.CandidateWorldToObject3x4();
                 vec3 trianglePositions[3];
                 rq.CandidateTriangleVertexPositions(trianglePositions);
                 rq.CommittedTriangleVertexPositions(trianglePositions);
-                rq.GenerateIntersection(1.0);
-                rq.ConfirmIntersection();
-                rq.Terminate();
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
             }
         }
     }
@@ -24464,7 +24464,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         in generated_code
     )
     assert (
-        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);"
+        "bool nonOpaque = (!rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq));"
         in generated_code
     )
     assert (
@@ -24489,8 +24489,8 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
     assert "rayQueryTerminateEXT(rq);" in generated_code
     assert ".WorldRayOrigin(" not in generated_code
     assert ".CandidateTriangleVertexPositions(" not in generated_code
-    assert ".GenerateIntersection(" not in generated_code
-    assert ".ConfirmIntersection(" not in generated_code
+    assert ".CommitProceduralPrimitiveHit(" not in generated_code
+    assert ".CommitNonOpaqueTriangleHit(" not in generated_code
 
 
 def test_glsl_ray_query_member_calls_reject_invalid_arities():

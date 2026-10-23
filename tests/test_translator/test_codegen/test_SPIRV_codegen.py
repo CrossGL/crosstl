@@ -9846,7 +9846,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "hitDistance",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "customAttributeToken",
@@ -9881,7 +9881,7 @@ class TestVulkanSPIRVCodeGen:
             "IntersectionKHR stages"
         ) in spv_code
         assert "Proceed yet" in spv_code
-        assert "CandidateRayT yet" in spv_code
+        assert "CandidateTriangleRayT yet" in spv_code
         assert "CommittedTriangleCustomAttribute yet" in spv_code
         assert "SetMeshOutputCounts yet" in spv_code
         assert (
@@ -11911,7 +11911,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "candidateT",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "committedT",
@@ -11953,7 +11953,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed();
-                    float candidateT = rq.CandidateRayT();
+                    float candidateT = rq.CandidateTriangleRayT();
                     float committedT = rq.CommittedRayT();
                 }
             }
@@ -12068,10 +12068,10 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort();
-                    rq.Terminate();
-                    rq.GenerateIntersection(1.0);
+                    rq.Abort();
+                    rq.CommitProceduralPrimitiveHit(1.0);
                     rq.CommitProceduralPrimitiveHit(2.0);
-                    rq.ConfirmIntersection();
+                    rq.CommitNonOpaqueTriangleHit();
                     rq.CommitNonOpaqueTriangleHit();
                 }
             }
@@ -12087,7 +12087,9 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpRayQueryGenerateIntersectionKHR") == 2
         assert spv_code.count("OpRayQueryConfirmIntersectionKHR") == 2
         assert "RayQuery.Abort yet; using a default" not in spv_code
-        assert "RayQuery.GenerateIntersection yet; using a default" not in spv_code
+        assert (
+            "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
+        )
         assert (
             "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
         )
@@ -12104,7 +12106,7 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort(1);
                     rq.CommitNonOpaqueTriangleHit(1.0);
-                    rq.GenerateIntersection(vec3(0.0, 1.0, 2.0));
+                    rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                     rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                 }
             }
@@ -12120,7 +12122,7 @@ class TestVulkanSPIRVCodeGen:
             "SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 " "arguments"
         ) in spv_code_refused
         assert (
-            "SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance argument "
             "must be a 32-bit floating-point scalar"
         ) in spv_code_refused
         assert (
@@ -12137,7 +12139,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     uint candidateType = rq.CandidateType();
-                    uint committedType = rq.CommittedType();
+                    uint committedType = rq.CommittedStatus();
                     uint candidatePrimitive = rq.CandidatePrimitiveIndex();
                     uint committedPrimitive = rq.CommittedPrimitiveIndex();
                     uint candidateInstance = rq.CandidateInstanceIndex();
@@ -12216,9 +12218,9 @@ class TestVulkanSPIRVCodeGen:
                     uint candidateCustomIndex = rq.CandidateInstanceID();
                     uint committedCustomIndex = rq.CommittedInstanceID();
                     uint candidateSbt =
-                        rq.CandidateInstanceShaderBindingTableRecordOffset();
+                        rq.CandidateInstanceContributionToHitGroupIndex();
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset();
+                        rq.CommittedInstanceContributionToHitGroupIndex();
                 }
             }
         }
@@ -12258,7 +12260,7 @@ class TestVulkanSPIRVCodeGen:
                     uint rayFlags = rq.RayFlags(1);
                     uint candidateCustomIndex = rq.CandidateInstanceID(1);
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset(1);
+                        rq.CommittedInstanceContributionToHitGroupIndex(1);
                 }
             }
         }
@@ -12275,7 +12277,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code_refused
         assert (
             "SPIR-V "
-            "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
+            "RayQuery.CommittedInstanceContributionToHitGroupIndex requires 0 "
             "arguments"
         ) in spv_code_refused
 
@@ -12437,7 +12439,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque();
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 }
             }
         }
@@ -12449,7 +12451,11 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCapability RayQueryKHR" in spv_code
         assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
         assert spv_code.count("OpRayQueryGetIntersectionCandidateAABBOpaqueKHR") == 1
-        assert "CandidateAABBOpaque yet; using a default" not in spv_code
+        # DXR asks whether the candidate is non-opaque: the opaque bit is negated.
+        assert spv_code.count("OpLogicalNot") == 1
+        assert (
+            "CandidateProceduralPrimitiveNonOpaque yet; using a default" not in spv_code
+        )
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -12459,7 +12465,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque(1);
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque(1);
                 }
             }
         }
@@ -12470,7 +12476,7 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert (
-            "SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            "SPIR-V RayQuery.CandidateProceduralPrimitiveNonOpaque requires 0 arguments"
             in spv_code_refused
         )
 
@@ -12730,7 +12736,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed(1);
-                    float candidateT = rq.CandidateRayT(2);
+                    float candidateT = rq.CandidateTriangleRayT(2);
                 }
             }
         }
@@ -12741,7 +12747,10 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert "SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code_refused
-        assert "SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code_refused
+        assert (
+            "SPIR-V RayQuery.CandidateTriangleRayT requires 0 arguments"
+            in spv_code_refused
+        )
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
@@ -32183,7 +32192,7 @@ class TestSpirvShaderValidation:
                     VariableNode(
                         "status",
                         uint_type,
-                        RayQueryOpNode("CommittedType", "rq", []),
+                        RayQueryOpNode("CommittedStatus", "rq", []),
                     ),
                 ]
             ),

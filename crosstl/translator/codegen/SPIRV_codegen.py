@@ -8229,7 +8229,9 @@ class VulkanSPIRVCodeGen(
 
     def ray_query_candidate_getter_info(self, operation: str):
         getters = {
-            "CandidateAABBOpaque": (
+            # Negated after the read: DXR asks whether the candidate is
+            # non-opaque, SPIR-V whether it is opaque.
+            "CandidateProceduralPrimitiveNonOpaque": (
                 "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR",
                 "bool",
             ),
@@ -8238,14 +8240,14 @@ class VulkanSPIRVCodeGen(
 
     def ray_query_candidate_getter_operations(self):
         return {
-            "CandidateAABBOpaque",
+            "CandidateProceduralPrimitiveNonOpaque",
         }
 
     def ray_query_intersection_getter_info(self, operation: str):
         getters = {
             "CandidateType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
-            "CommittedType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
-            "CandidateRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CommittedStatus": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CandidateTriangleRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
             "CommittedRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
             "CandidatePrimitiveIndex": (
                 "OpRayQueryGetIntersectionPrimitiveIndexKHR",
@@ -8273,11 +8275,11 @@ class VulkanSPIRVCodeGen(
                 "OpRayQueryGetIntersectionInstanceIdKHR",
                 "uint",
             ),
-            "CandidateInstanceShaderBindingTableRecordOffset": (
+            "CandidateInstanceContributionToHitGroupIndex": (
                 "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
                 "uint",
             ),
-            "CommittedInstanceShaderBindingTableRecordOffset": (
+            "CommittedInstanceContributionToHitGroupIndex": (
                 "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
                 "uint",
             ),
@@ -8382,8 +8384,8 @@ class VulkanSPIRVCodeGen(
     def ray_query_intersection_getter_operations(self):
         return {
             "CandidateType",
-            "CommittedType",
-            "CandidateRayT",
+            "CommittedStatus",
+            "CandidateTriangleRayT",
             "CommittedRayT",
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
@@ -8391,8 +8393,8 @@ class VulkanSPIRVCodeGen(
             "CommittedInstanceID",
             "CandidateInstanceIndex",
             "CommittedInstanceIndex",
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
             "CandidateObjectRayOrigin",
             "CommittedObjectRayOrigin",
             "CandidateObjectRayDirection",
@@ -8447,6 +8449,11 @@ class VulkanSPIRVCodeGen(
         id_value = self.get_id()
         self.emit(f"%{id_value} = {opcode} %{result_type.id} %{query_pointer.id}")
         self.value_types[id_value] = result_type
+        if operation == "CandidateProceduralPrimitiveNonOpaque":
+            negated = self.get_id()
+            self.emit(f"%{negated} = OpLogicalNot %{result_type.id} %{id_value}")
+            self.value_types[negated] = result_type
+            return SpirvId(negated, result_type.type)
         return SpirvId(id_value, result_type.type)
 
     def process_ray_query_intersection_getter(
@@ -8783,10 +8790,7 @@ class VulkanSPIRVCodeGen(
                 "Abort",
                 "CommitNonOpaqueTriangleHit",
                 "CommitProceduralPrimitiveHit",
-                "ConfirmIntersection",
                 "Proceed",
-                "GenerateIntersection",
-                "Terminate",
                 "TraceRayInline",
             }
             | self.ray_query_state_getter_operations()
@@ -8819,10 +8823,7 @@ class VulkanSPIRVCodeGen(
         supported_argument_counts = {
             "Proceed": 0,
             "Abort": 0,
-            "Terminate": 0,
-            "ConfirmIntersection": 0,
             "CommitNonOpaqueTriangleHit": 0,
-            "GenerateIntersection": 1,
             "CommitProceduralPrimitiveHit": 1,
             "TraceRayInline": {4, 7},
         }
@@ -8859,15 +8860,15 @@ class VulkanSPIRVCodeGen(
         if operation == "TraceRayInline":
             return self.process_ray_query_initialize(query_pointer, arguments)
 
-        if operation in {"Abort", "Terminate"}:
+        if operation == "Abort":
             self.emit(f"OpRayQueryTerminateKHR %{query_pointer.id}")
             return None
 
-        if operation in {"ConfirmIntersection", "CommitNonOpaqueTriangleHit"}:
+        if operation == "CommitNonOpaqueTriangleHit":
             self.emit(f"OpRayQueryConfirmIntersectionKHR %{query_pointer.id}")
             return None
 
-        if operation in {"GenerateIntersection", "CommitProceduralPrimitiveHit"}:
+        if operation == "CommitProceduralPrimitiveHit":
             hit_t = self.ray_query_float_operand(
                 arguments[0], "hit distance", operation=operation
             )

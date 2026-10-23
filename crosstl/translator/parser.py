@@ -273,7 +273,7 @@ RAYQUERY_METHODS = {
     "Proceed",
     "Abort",
     "CandidateType",
-    "CommittedType",
+    "CommittedStatus",
     "CandidatePrimitiveIndex",
     "CommittedPrimitiveIndex",
     "CandidateInstanceID",
@@ -285,7 +285,7 @@ RAYQUERY_METHODS = {
     "CommittedObjectRayOrigin",
     "CommittedObjectRayDirection",
     "CommittedRayT",
-    "CandidateRayT",
+    "CandidateTriangleRayT",
     "TraceRayInline",
 }
 
