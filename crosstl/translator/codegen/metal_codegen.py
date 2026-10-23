@@ -15758,6 +15758,23 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_reference(args[0])
+            if len(args) > 2 and length_expr is not None:
+                # semantics.buffer_strides answers the stride of a laid-out buffer; one left here holds
+                # MSL-laid-out elements, whose stride is their size.
+                buffer_type = str(
+                    self.resource_base_type(self.expression_result_type(args[0]))
+                )
+                if "<" not in buffer_type or not buffer_type.endswith(">"):
+                    raise BufferLengthUnsupportedError(
+                        "metal",
+                        f"buffer_dimensions({self.generate_expression(args[0])}) has a stride output "
+                        "and no known element type",
+                    )
+                element = self.structured_buffer_element_type(buffer_type)
+                return (
+                    f"{self.generate_expression(args[1])} = {length_expr}, "
+                    f"{self.generate_expression(args[2])} = uint(sizeof({element}))"
+                )
             if length_expr is None:
                 raise BufferLengthUnsupportedError(
                     "metal",
