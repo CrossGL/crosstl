@@ -7,6 +7,7 @@ from .floating_point import reject_contraction_tokens
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+from .signed_type_spellings import fold_signed_type_spellings
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -2609,7 +2610,7 @@ class MetalParser:
         previous = ""
         compact_before = {">", ",", "]", ")", "*", "&", "::"}
         compact_after = {"<", ",", "[", "(", "::"}
-        for token in tokens:
+        for token in fold_signed_type_spellings(tokens):
             token = str(token)
             if (
                 text

@@ -21,9 +21,10 @@ entry point, which compiles and reads and writes nothing; the HLSL emitter left 
 Members keep their location, interpolation and built-in attributes; a fragment output's location names its colour
 attachment, ``gl_FragData[N]``, which both emitters map to ``SV_TargetN`` or ``[[color(N)]]``. Built-in inputs that
 GLSL types ``int`` but HLSL and MSL deliver as ``uint`` (vertex, instance, primitive and sample indices) arrive in a
-``uint`` parameter and are converted once at the start of the entry point. A stage whose entry point already takes
-parameters or returns a value besides stage-level variables, or whose functions declare a name that is also an
-interface variable, is refused with :class:`StageInterfaceUnsupportedError`.
+``uint`` parameter and are converted once at the start of the entry point. An entry point that already takes
+parameters keeps them when the stage-level variables are only outputs and built-ins. A stage whose entry point
+returns a value besides stage-level variables, or takes parameters besides stage-level user inputs, or whose
+functions declare a name that is also an interface variable, is refused with :class:`StageInterfaceUnsupportedError`.
 """
 
 from __future__ import annotations
@@ -121,7 +122,13 @@ class _Gatherer:
         entry = self.entry
         if entry is None or not isinstance(getattr(entry, "body", None), A.BlockNode):
             return
-        if entry.parameters or not _is_void(entry.return_type):
+        # An entry point that takes its inputs as parameters keeps them when the stage-level variables are only
+        # outputs and built-ins (a GLSL fragment shader with several outputs takes its varyings as a structure).
+        reads_stage_inputs = any(
+            _direction(variable) == "input" and _builtin_name(variable) is None
+            for variable in self.variables
+        )
+        if not _is_void(entry.return_type) or (entry.parameters and reads_stage_inputs):
             self.refuse(
                 f"the {self.stage_name} entry point '{entry.name}' takes parameters or returns a value as well as "
                 "reading and writing stage-level interface variables",
@@ -197,7 +204,7 @@ class _Gatherer:
                 )
             tokens[variable.name] = (name, variable.var_type, None)
             renames[variable.name] = A.IdentifierNode(name)
-        entry.parameters = parameters
+        entry.parameters = list(entry.parameters or []) + parameters
         entry.body.statements[0:0] = conversions
         if outputs:
             output_name = self._local_name("output")

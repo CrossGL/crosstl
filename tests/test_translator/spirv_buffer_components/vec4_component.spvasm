@@ -1,0 +1,83 @@
+; #version 450
+; layout(local_size_x = 64) in;
+; layout(std430, binding = 0) readonly buffer In { vec4 values[]; } inb;
+; layout(std430, binding = 1) buffer Out { uint result[]; } outb;
+; void main() {
+;     uint i = gl_GlobalInvocationID.x;
+;     outb.result[i] = uint(inb.values[i].y);
+; }
+; SPIR-V
+; Version: 1.3
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 39
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+               OpExecutionMode %main LocalSize 64 1 1
+               OpSource GLSL 450
+               OpName %main "main"
+               OpName %i "i"
+               OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
+               OpName %Out "Out"
+               OpMemberName %Out 0 "result"
+               OpName %outb "outb"
+               OpName %In "In"
+               OpMemberName %In 0 "values"
+               OpName %inb "inb"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %Out Block
+               OpMemberDecorate %Out 0 Offset 0
+               OpDecorate %outb Binding 1
+               OpDecorate %outb DescriptorSet 0
+               OpDecorate %_runtimearr_v4float ArrayStride 16
+               OpDecorate %In Block
+               OpMemberDecorate %In 0 NonWritable
+               OpMemberDecorate %In 0 Offset 0
+               OpDecorate %inb NonWritable
+               OpDecorate %inb Binding 0
+               OpDecorate %inb DescriptorSet 0
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %uint_0 = OpConstant %uint 0
+%_ptr_Input_uint = OpTypePointer Input %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+        %Out = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_Out = OpTypePointer StorageBuffer %Out
+       %outb = OpVariable %_ptr_StorageBuffer_Out StorageBuffer
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+      %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+%_runtimearr_v4float = OpTypeRuntimeArray %v4float
+         %In = OpTypeStruct %_runtimearr_v4float
+%_ptr_StorageBuffer_In = OpTypePointer StorageBuffer %In
+        %inb = OpVariable %_ptr_StorageBuffer_In StorageBuffer
+     %uint_1 = OpConstant %uint 1
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+    %uint_64 = OpConstant %uint 64
+%gl_WorkGroupSize = OpConstantComposite %v3uint %uint_64 %uint_1 %uint_1
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+          %i = OpVariable %_ptr_Function_uint Function
+         %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
+         %15 = OpLoad %uint %14
+               OpStore %i %15
+         %22 = OpLoad %uint %i
+         %29 = OpLoad %uint %i
+         %32 = OpAccessChain %_ptr_StorageBuffer_float %inb %int_0 %29 %uint_1
+         %33 = OpLoad %float %32
+         %34 = OpConvertFToU %uint %33
+         %36 = OpAccessChain %_ptr_StorageBuffer_uint %outb %int_0 %22
+               OpStore %36 %34
+               OpReturn
+               OpFunctionEnd

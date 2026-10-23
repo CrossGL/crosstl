@@ -1,0 +1,104 @@
+; SPIR-V
+; Version: 1.6
+; Generator: Khronos Glslang Reference Front End; 11
+; Bound: 51
+; Schema: 0
+               OpCapability MeshShadingEXT
+               OpExtension "SPV_EXT_mesh_shader"
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint MeshEXT %4 "main" %15 %34 %41 %43
+               OpExecutionModeId %4 LocalSizeId %7 %7 %7
+               OpExecutionMode %4 OutputVertices 3
+               OpExecutionMode %4 OutputPrimitivesEXT 1
+               OpExecutionMode %4 OutputTrianglesEXT
+               OpSource GLSL 450
+               OpSourceExtension "GL_EXT_mesh_shader"
+               OpName %4 "main"
+               OpName %12 "gl_MeshPerVertexEXT"
+               OpMemberName %12 0 "gl_Position"
+               OpMemberName %12 1 "gl_PointSize"
+               OpMemberName %12 2 "gl_ClipDistance"
+               OpMemberName %12 3 "gl_CullDistance"
+               OpName %15 "gl_MeshVerticesEXT"
+               OpName %31 "gl_MeshPerPrimitiveEXT"
+               OpMemberName %31 0 "gl_PrimitiveID"
+               OpMemberName %31 1 "gl_Layer"
+               OpMemberName %31 2 "gl_ViewportIndex"
+               OpMemberName %31 3 "gl_CullPrimitiveEXT"
+               OpName %34 "gl_MeshPrimitivesEXT"
+               OpName %41 "gl_PrimitiveTriangleIndicesEXT"
+               OpName %43 "gl_LocalInvocationIndex"
+               OpDecorate %12 Block
+               OpMemberDecorate %12 0 BuiltIn Position
+               OpMemberDecorate %12 1 BuiltIn PointSize
+               OpMemberDecorate %12 2 BuiltIn ClipDistance
+               OpMemberDecorate %12 3 BuiltIn CullDistance
+               OpDecorate %31 Block
+               OpMemberDecorate %31 0 BuiltIn PrimitiveId
+               OpMemberDecorate %31 0 PerPrimitiveEXT
+               OpMemberDecorate %31 1 BuiltIn Layer
+               OpMemberDecorate %31 1 PerPrimitiveEXT
+               OpMemberDecorate %31 2 BuiltIn ViewportIndex
+               OpMemberDecorate %31 2 PerPrimitiveEXT
+               OpMemberDecorate %31 3 BuiltIn CullPrimitiveEXT
+               OpMemberDecorate %31 3 PerPrimitiveEXT
+               OpDecorate %41 BuiltIn PrimitiveTriangleIndicesEXT
+               OpDecorate %43 BuiltIn LocalInvocationIndex
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeInt 32 0
+          %7 = OpConstant %6 1
+          %8 = OpConstant %6 3
+          %9 = OpTypeFloat 32
+         %10 = OpTypeVector %9 4
+         %11 = OpTypeArray %9 %7
+         %12 = OpTypeStruct %10 %9 %11 %11
+         %13 = OpTypeArray %12 %8
+         %14 = OpTypePointer Output %13
+         %15 = OpVariable %14 Output
+         %16 = OpTypeInt 32 1
+         %17 = OpConstant %16 0
+         %18 = OpConstant %9 0
+         %19 = OpConstant %9 -1
+         %20 = OpConstant %9 1
+         %21 = OpConstantComposite %10 %18 %19 %18 %20
+         %22 = OpTypePointer Output %10
+         %24 = OpConstant %16 1
+         %25 = OpConstantComposite %10 %19 %20 %18 %20
+         %27 = OpConstant %16 2
+         %28 = OpConstantComposite %10 %20 %20 %18 %20
+         %30 = OpTypeBool
+         %31 = OpTypeStruct %16 %16 %16 %30
+         %32 = OpTypeArray %31 %7
+         %33 = OpTypePointer Output %32
+         %34 = OpVariable %33 Output
+         %35 = OpConstant %16 3
+         %36 = OpTypePointer Output %16
+         %38 = OpTypeVector %6 3
+         %39 = OpTypeArray %38 %7
+         %40 = OpTypePointer Output %39
+         %41 = OpVariable %40 Output
+         %42 = OpTypePointer Input %6
+         %43 = OpVariable %42 Input
+         %45 = OpConstant %6 0
+         %46 = OpConstant %6 2
+         %47 = OpConstantComposite %38 %45 %7 %46
+         %48 = OpTypePointer Output %38
+         %50 = OpConstantComposite %38 %7 %7 %7
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+               OpSetMeshOutputsEXT %8 %7
+         %23 = OpAccessChain %22 %15 %17 %17
+               OpStore %23 %21
+         %26 = OpAccessChain %22 %15 %24 %17
+               OpStore %26 %25
+         %29 = OpAccessChain %22 %15 %27 %17
+               OpStore %29 %28
+         %37 = OpAccessChain %36 %34 %17 %17
+               OpStore %37 %35
+         %44 = OpLoad %6 %43
+         %49 = OpAccessChain %48 %41 %44
+               OpStore %49 %47
+               OpReturn
+               OpFunctionEnd
