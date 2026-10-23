@@ -52,6 +52,13 @@ def event(entry, descriptor, **extra):
         ("strided_scan_reverse_exclusive_max_float32_float32", "scan"),
         ("row_reduce_small_1_reduce_sumint32", "small-row"),
         ("col_reduce_small_1_reduce_orbool_", "small-column"),
+        ("gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0", "gemv"),
+        (
+            "steel_gemm_fused_nn_float32_float32_bm64_bn64_bk16_wm2_wn2"
+            "_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_n_align_K_n",
+            "gemm",
+        ),
+        ("steel_gemm_splitk_accum_float32_float32", "gemm-splitk"),
         ("row_reduce_looped_1_32_32_reduce_sumint32", None),
         ("all_reduce_sumint32", None),
         ("vv_Addint64", None),
@@ -110,6 +117,58 @@ def test_scans_require_their_package_root_and_native_execution(tmp_path, monkeyp
             broken["details"]["request"]["dispatch"]["workgroupSize"] = [64, 1, 1]
         with pytest.raises(ValueError):
             lazy.audit_event(broken, Packages([(descriptor, root)]), tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["none", "root", "entry", "launch", "target"])
+def test_matrix_kernels_require_their_package_entry_and_native_execution(
+    tmp_path, monkeypatch, fault
+):
+    descriptor, root = package(tmp_path, "gemm")
+    name = "steel_gemm_fused_nn_float32_float32_bm64_bn64"
+    descriptor["entryPoint"] = {"name": name, "stage": "compute"}
+    entry = name + "_has_batch_n_use_out_source_n"
+    request = {
+        "target": "metal",
+        "entryPoint": name,
+        "dispatch": {"workgroupCount": [1, 1, 1], "workgroupSize": [32, 1, 1]},
+    }
+    record = event(entry, descriptor, packageRoot=str(root))
+    record["details"] = {"request": request}
+    if fault == "root":
+        del record["packageRoot"]
+    elif fault == "entry":
+        request["entryPoint"] = entry
+    elif fault == "launch":
+        request["dispatch"]["workgroupCount"] = [2, 1, 1]
+    elif fault == "target":
+        request["target"] = "opengl"
+    audited = []
+    monkeypatch.setattr(lazy, "audit_native_execution", audited.append)
+    packages = Packages([(descriptor, root)])
+    if fault != "none":
+        with pytest.raises(ValueError):
+            lazy.audit_event(record, packages, tmp_path)
+        assert audited == []
+        return
+    assert lazy.audit_event(record, packages, tmp_path) is True
+    assert audited == [record] and packages.requests == [entry]
+
+
+def test_matrix_caches_are_derived_per_entry(tmp_path):
+    lazy_packages = lazy.LazyPackages(tmp_path / "mlx", tmp_path / "packages", "metal")
+    requested = []
+    for name in lazy.MATRIX_FAMILIES:
+        lazy_packages.caches[name] = SimpleNamespace(
+            get=lambda entry, name=name: requested.append((name, entry)) or ("d", "p")
+        )
+    entries = [
+        "gemv_t_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0",
+        "steel_gemm_fused_tn_float16_float16_bm64_bn64_bk16_wm2_wn2",
+        "steel_gemm_splitk_nn_float32_float32_bm16_bn32_bk16_wm2_wn2",
+    ]
+    for entry in entries:
+        assert lazy_packages.packages({"entry": entry}) == [("d", "p")]
+    assert requested == list(zip(lazy.MATRIX_FAMILIES, entries))
 
 
 @pytest.mark.parametrize("fault", ["none", "count", "module", "outside", "root"])

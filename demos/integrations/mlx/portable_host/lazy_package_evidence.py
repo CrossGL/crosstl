@@ -1,19 +1,26 @@
-"""Tie lazily translated scan and small reduction dispatches to their caches.
+"""Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
-Scans, small row reductions and small column reductions are translated from
-the pinned sources on first use, so no static index lists their packages. Each
-dispatch is checked by deriving its package again from the same cache, from the
-event's entry, launch and metadata, and by comparing the recorded artifact with
-the unchanged cached source. Scans run through the source-specialized
-executor, so their retained native modules are checked as for indexing
-kernels. Small rows on Direct3D and OpenGL run as dispatch regions, each of
-which must name its cached region package and a retained native module.
+Scans, small row reductions, small column reductions, GEMV, steel GEMM and
+split-K GEMM kernels are translated from the pinned sources on first use, so
+no static index lists their packages. Each dispatch is checked by deriving its
+package again from the same cache, from the event's entry, launch and
+metadata, and by comparing the recorded artifact with the unchanged cached
+source. Scans and matrix kernels run through the source-specialized executor,
+so their retained native modules are checked as for indexing kernels. Small
+rows on Direct3D and OpenGL run as dispatch regions, each of which must name
+its cached region package and a retained native module.
 """
 
 import hashlib
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import column_small_layout, scan_layout
+from demos.integrations.mlx.portable_host import (
+    column_small_layout,
+    gemm_layout,
+    gemm_splitk_layout,
+    gemv_layout,
+    scan_layout,
+)
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
 )
@@ -24,13 +31,32 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
 )
+from demos.integrations.mlx.portable_host.gemm_packages import (
+    CACHE_DIRECTORY as GEMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_packages import GemmPackageCache
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import (
+    CACHE_DIRECTORY as SPLITK_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import SplitKPackageCache
+from demos.integrations.mlx.portable_host.gemv_packages import (
+    CACHE_DIRECTORY as GEMV_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
 
-FAMILIES = ("scan", "small-row", "small-column")
+# Matrix kernels: one package per entry, launched by the source-specialized
+# executor like scans.
+MATRIX_FAMILIES = {
+    "gemv": gemv_layout.ENTRY_PREFIXES,
+    "gemm": gemm_layout.ENTRY_PREFIXES,
+    "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
+}
+FAMILIES = ("scan", "small-row", "small-column", *MATRIX_FAMILIES)
 GEOMETRY = ("workgroupCount", "workgroupSize")
 
 
@@ -44,6 +70,9 @@ def family(entry):
         return "small-row"
     if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
         return "small-column"
+    for name, prefixes in MATRIX_FAMILIES.items():
+        if entry.startswith(prefixes):
+            return name
     return None
 
 
@@ -60,6 +89,11 @@ class LazyPackages:
             ),
             "small-column": SmallColumnPackageCache(
                 mlx_root, packages / SMALL_COLUMN_CACHE, target
+            ),
+            "gemv": GemvPackageCache(mlx_root, packages / GEMV_CACHE, target),
+            "gemm": GemmPackageCache(mlx_root, packages / GEMM_CACHE, target),
+            "gemm-splitk": SplitKPackageCache(
+                mlx_root, packages / SPLITK_CACHE, target
             ),
         }
 
@@ -79,6 +113,8 @@ class LazyPackages:
                     workgroup_size=event["workgroupSize"],
                 )
             )
+        if name in MATRIX_FAMILIES:
+            return [cache.get(entry)]
         key = column_small_layout.variant(entry, tuple(event["workgroupSize"]))
         return [cache.get(key)]
 
@@ -142,21 +178,28 @@ def audit_event(event, lazy, modules):
         audit_regions(event, packages, Path(modules).resolve())
         return True
     require(len(packages) == 1, "Lazy dispatch skipped its regions")
+    executed = name == "scan" or name in MATRIX_FAMILIES
     require(
-        ("packageRoot" in event or name != "scan")
+        ("packageRoot" in event or not executed)
         and Path(event.get("packageRoot", packages[0][1])).resolve()
         == Path(packages[0][1]).resolve(),
         "Lazy dispatch names another package",
     )
-    if name != "scan":
+    if not executed:
         return False
     request = event["details"]["request"]
+    entry_point = (
+        packages[0][0]["entryPoint"]["name"]
+        if name in MATRIX_FAMILIES
+        else {"metal": event["entry"], "opengl": "main", "directx": "CSMain"}[
+            lazy.target
+        ]
+    )
     require(
         request["target"] == lazy.target
-        and request["entryPoint"]
-        == {"metal": event["entry"], "opengl": "main", "directx": "CSMain"}[lazy.target]
+        and request["entryPoint"] == entry_point
         and all(request["dispatch"][key] == event[key] for key in GEOMETRY),
-        "Scan native launch differs",
+        "Lazy native launch differs",
     )
     audit_native_execution(event)
     return True

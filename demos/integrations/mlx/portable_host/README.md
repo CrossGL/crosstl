@@ -1784,17 +1784,18 @@ modules are checked, and so are the casts, copies and integer or Boolean
 unary and binary vectors that no installed family covers (see "Casts and
 copies of every real dtype" and "Unary and binary vectors of every real
 dtype"). Lazy floating vectors must name the package their cache derives
-again and pass the native-identity checks. Scans and small row and column reductions must name the
-package their cache derives again from the recorded entry, launch and
-metadata (and, for scans and Direct3D or OpenGL dispatch regions, retained
-native modules). A test that reaches the 16-bit package families, or row and
+again and pass the native-identity checks. Scans, small row and column
+reductions, GEMV, steel GEMM and split-K GEMM kernels must name the package
+their cache derives again from the recorded entry, launch and metadata (and,
+for scans, matrix kernels and Direct3D or OpenGL dispatch regions, the
+package's entry point and retained native modules). A test that reaches the 16-bit package families, or row and
 column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 5,337 translated kernels, 16 of them indexing kernels and
-6 lazily translated Boolean casts of 16-bit floats; the whole verification
-takes about seven minutes.
+native run dispatches 8,006 translated kernels, 16 of them indexing kernels and
+6 steel GEMM kernels; the whole verification takes about 18 minutes on a
+loaded machine.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share
