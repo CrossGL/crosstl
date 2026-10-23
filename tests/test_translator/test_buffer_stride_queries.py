@@ -68,7 +68,16 @@ CGL = textwrap.dedent("""
 def _translate(tmp_path, source, suffix, backend):
     path = tmp_path / f"strides{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    # SPIR-V is checked unformatted: the formatter renames ids through spirv-dis only where SPIRV-Tools exist.
+    return crosstl.translate(
+        str(path), backend=backend, format_output=backend != "vulkan"
+    )
+
+
+def _spirv_id(code, name):
+    match = re.search(rf'OpName (%\S+) "{name}"', code)
+    assert match, f"no OpName for {name}"
+    return re.escape(match.group(1))
 
 
 def _run(tmp_path, *commands):
@@ -91,9 +100,10 @@ def test_opengl_assigns_the_declared_hlsl_strides(tmp_path):
 
 def test_spirv_lowers_the_stride_query(tmp_path):
     code = _translate(tmp_path, HLSL, ".comp.hlsl", "vulkan")
-    assert "OpArrayLength %uint %lights 0" in code
-    assert re.search(r"OpConstant %uint 32\b", code)
-    assert re.search(r"OpConstant %uint 16\b", code)
+    assert re.search(rf"OpArrayLength %\S+ {_spirv_id(code, 'lights')} 0", code)
+    assert re.search(rf"OpArrayLength %\S+ {_spirv_id(code, 'spots')} 0", code)
+    assert re.search(r"OpConstant %\S+ 32\b", code)
+    assert re.search(r"OpConstant %\S+ 16\b", code)
     if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
         pytest.skip("SPIRV-Tools are not installed")
     (tmp_path / "a.spvasm").write_text(code, encoding="utf-8")
@@ -123,7 +133,7 @@ def test_hlsl_keeps_get_dimensions(tmp_path):
 def test_unmarked_buffers_use_the_target_layout(tmp_path, backend, stride):
     code = _translate(tmp_path, CGL, ".cgl", backend)
     if backend == "vulkan":
-        assert re.search(rf"OpConstant %uint {stride}\b", code)
+        assert re.search(rf"OpConstant %\S+ {stride}\b", code)
         assert "OpArrayLength" in code
     else:
         assert f"stride = {stride}u;" in code
