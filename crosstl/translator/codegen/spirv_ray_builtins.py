@@ -18,6 +18,8 @@ The ray flag and hit kind constants (GLSL_EXT_ray_tracing section 7.2, GL_EXT_ra
 
 from __future__ import annotations
 
+from ..ray_query_vocabulary import ray_query_constant
+
 __all__ = [
     "RAY_CONSTANTS",
     "RAY_EXECUTION_MODELS",
@@ -92,5 +94,12 @@ RAY_CONSTANTS = {
 
 
 def ray_constant_value(name):
-    """The ``uint`` value of a GLSL ray flag or hit kind constant, or ``None`` for other names."""
-    return RAY_CONSTANTS.get(str(name))
+    """The ``uint`` value of a ray flag, intersection kind or hit kind constant, or ``None``.
+
+    Both the GLSL and the DXR spellings are accepted.
+    """
+    value = RAY_CONSTANTS.get(str(name))
+    if value is not None:
+        return value
+    constant = ray_query_constant(name)
+    return None if constant is None else constant.value

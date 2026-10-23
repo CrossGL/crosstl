@@ -24400,7 +24400,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         compute {
             void main() {
                 RayQuery<RAY_FLAG_NONE> rq;
-                rq.Initialize(
+                rq.TraceRayInline(
                     topLevelAS,
                     gl_RayFlagsNoneEXT,
                     255u,
@@ -24500,8 +24500,8 @@ def test_glsl_ray_query_member_calls_reject_invalid_arities():
             r"GLSL ray query Proceed expects 0 arguments, got 1",
         ),
         (
-            "rq.Initialize(topLevelAS, gl_RayFlagsNoneEXT);",
-            r"GLSL ray query Initialize expects 4 or 7 arguments, got 2",
+            "rq.TraceRayInline(topLevelAS, gl_RayFlagsNoneEXT);",
+            r"GLSL ray query TraceRayInline expects 4 or 7 arguments, got 2",
         ),
         (
             "vec3 position = rq.CandidateTriangleVertexPositions();",

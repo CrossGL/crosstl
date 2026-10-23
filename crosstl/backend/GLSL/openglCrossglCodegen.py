@@ -179,7 +179,9 @@ class GLSLToCrossGLConverter:
         "ray_callable",
     }
     RAY_QUERY_SIMPLE_METHODS = {
-        "rayQueryInitializeEXT": "Initialize",
+        # TraceRayInline with the seven rayQueryInitializeEXT operands in place
+        # of DXR's RayDesc.
+        "rayQueryInitializeEXT": "TraceRayInline",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
         "rayQueryGenerateIntersectionEXT": "CommitProceduralPrimitiveHit",

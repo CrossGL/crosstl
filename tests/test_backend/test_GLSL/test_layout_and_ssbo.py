@@ -1225,7 +1225,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
 
     assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
     assert "rayQueryEXT rq;" in crossgl
-    assert "rq.Initialize(" in crossgl
+    assert "rq.TraceRayInline(" in crossgl
     assert "bool active = rq.Proceed();" in crossgl
     assert "uint hitType = rq.CommittedStatus();" in crossgl
     assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl

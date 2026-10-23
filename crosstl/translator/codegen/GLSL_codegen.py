@@ -217,6 +217,11 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_ray_queries import (
+    glsl_ray_desc_declaration,
+    glsl_ray_query_constant_expression,
+    glsl_ray_query_initialize_flags,
+)
 from .glsl_refusals import (
     OpenGLLoweringRefused,
     patch_parameter_refusal_reason,
@@ -1622,7 +1627,6 @@ class GLSLCodeGen(
         "callable",
     }
     RAY_QUERY_METHOD_MAP = {
-        "Initialize": ("rayQueryInitializeEXT", None),
         "TraceRayInline": ("rayQueryInitializeEXT", None),
         "Proceed": ("rayQueryProceedEXT", None),
         "Abort": ("rayQueryTerminateEXT", None),
@@ -1764,7 +1768,6 @@ class GLSLCodeGen(
         "CommittedTriangleVertexPositions",
     }
     RAY_QUERY_METHOD_ARITIES = {
-        "Initialize": (4, 7),
         "TraceRayInline": (4, 7),
         "Proceed": (0,),
         "Abort": (0,),
@@ -9293,6 +9296,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
@@ -19733,6 +19737,8 @@ class GLSLCodeGen(
             call_args.append(committed)
         args = self.ray_query_initialize_arguments(operation, args)
         args = [self.generate_expression(arg) for arg in args]
+        if operation == "TraceRayInline" and len(args) > 1:
+            args[1] = glsl_ray_query_initialize_flags(self, query, args[1])
         call_args.extend(args)
         call = f"{function_name}({', '.join(call_args)})"
         if operation == "CandidateProceduralPrimitiveNonOpaque":
@@ -19787,7 +19793,7 @@ class GLSLCodeGen(
         return f"{' or '.join(str(arity) for arity in allowed_arities)} arguments"
 
     def ray_query_initialize_arguments(self, operation, args):
-        if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
+        if operation != "TraceRayInline" or len(args) != 4:
             return args
 
         acceleration, ray_flags, cull_mask, ray_desc = args
@@ -39302,6 +39308,9 @@ complex64_t crossgl_complex64_mod_assign(
             return storage_read
         if expr is None:
             return ""
+        ray_query_constant = glsl_ray_query_constant_expression(self, expr)
+        if ray_query_constant is not None:
+            return ray_query_constant
         if isinstance(expr, PointerReinterpretNode):
             target_type = self.type_name_string(
                 getattr(getattr(expr, "target_type", None), "pointee_type", None)

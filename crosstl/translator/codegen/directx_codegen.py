@@ -234,6 +234,11 @@ from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlock
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .hlsl_ray_queries import (
+    hlsl_ray_query_expression,
+    hlsl_ray_query_helpers,
+    hlsl_ray_query_type,
+)
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
@@ -5196,6 +5201,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
+            + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
         )
         return (
@@ -26640,6 +26646,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         storage_read = self.hlsl_half_storage.read(expr)
         if storage_read is not None:
             return storage_read
+        ray_query = hlsl_ray_query_expression(self, expr)
+        if ray_query is not None:
+            return ray_query
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -34668,7 +34677,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_ray_query_receiver(query_expr, shader_type, operation)
 
         expected_arg_counts = {
-            "TraceRayInline": {4},
+            # Seven operands are the GLSL rayQueryInitializeEXT shape, whose
+            # ray operands are packed into a RayDesc on emission.
+            "TraceRayInline": {4, 7},
             "CommitProceduralPrimitiveHit": {1},
         }
         default_expected_counts = {0}
@@ -34698,13 +34709,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 shader_type,
                 "RayQuery.TraceRayInline",
             )
-            self.validate_hlsl_ray_exact_type_argument(
-                args[3],
-                shader_type,
-                "RayQuery.TraceRayInline",
-                "ray descriptor",
-                "RayDesc",
-            )
+            if len(args) == 4:
+                self.validate_hlsl_ray_exact_type_argument(
+                    args[3],
+                    shader_type,
+                    "RayQuery.TraceRayInline",
+                    "ray descriptor",
+                    "RayDesc",
+                )
         elif operation == "CommitProceduralPrimitiveHit":
             self.validate_hlsl_ray_scalar_float_argument(
                 args[0],
@@ -54521,6 +54533,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        ray_query_type = hlsl_ray_query_type(vtype_str)
+        if ray_query_type is not None:
+            return ray_query_type
 
         aliases = getattr(self, "hlsl_type_aliases", {})
         if vtype_str in aliases:
