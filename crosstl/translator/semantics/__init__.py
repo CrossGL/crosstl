@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .buffer_strides import BufferStrideUnsupportedError, lower_buffer_stride_queries
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
@@ -87,6 +88,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "BufferStrideUnsupportedError",
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
@@ -171,7 +173,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
-    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), and constant
+    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), the stride output
+    of ``buffer_dimensions`` becomes the element stride for targets whose length queries report none
+    (:mod:`.buffer_strides`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -220,6 +224,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
+    lower_buffer_stride_queries(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)

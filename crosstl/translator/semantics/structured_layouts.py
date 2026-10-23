@@ -49,6 +49,8 @@ from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 __all__ = [
     "TARGETS",
     "StructuredLayoutUnsupportedError",
+    "declared_buffer_layout",
+    "element_stride",
     "legalize_structured_layouts",
 ]
 
@@ -974,6 +976,18 @@ def _declared_layout(declaration):
             value = getattr(argument, "name", getattr(argument, "value", argument))
             return str(value).strip().strip('"').lower()
     return None
+
+
+declared_buffer_layout = _declared_layout
+
+
+def element_stride(program, element_type, rules, context) -> int:
+    """The bytes between consecutive elements of a runtime array of ``element_type`` under ``rules`` (``hlsl``,
+    ``std430`` or ``metal``); raises :class:`StructuredLayoutUnsupportedError` for a type without a layout.
+    """
+    shapes = _Shapes(program, "metal" if rules == "metal" else "hlsl")
+    size, alignment, _leaves = _layout(shapes.of(element_type, context), rules)
+    return _round(size, alignment)
 
 
 def _buffer_type(declaration):
