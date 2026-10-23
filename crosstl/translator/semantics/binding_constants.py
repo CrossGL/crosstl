@@ -22,6 +22,11 @@ operators. The argument becomes the integer literal. An index that refers to any
 constant, a name the program does not define, a non-integer value or a negative result) is refused with
 :class:`BindingIndexUnresolvedError`, because no target can bind it as written. Arguments that are already literals,
 and the ``space1`` and ``set1`` register spellings, are left to the generators.
+
+WGSL output is the one exception for a name the program does not declare. WGSL has no preprocessor, and the
+``@group`` and ``@binding`` attributes take any const-expression (WGSL, "Resource Interface"), so a host that numbers
+its bind groups declares those constants in the module text it compiles. Such an index is kept as written, and the
+runtime package reports it as a symbolic binding that reflection cannot resolve.
 """
 
 from __future__ import annotations
@@ -34,9 +39,13 @@ from .storage_blocks import _walk
 
 __all__ = [
     "BindingIndexUnresolvedError",
+    "HOST_DECLARED_INDEX_TARGETS",
     "INDEX_ATTRIBUTES",
     "fold_binding_constants",
 ]
+
+# Targets whose output keeps an index that names an undeclared constant, for the host to declare.
+HOST_DECLARED_INDEX_TARGETS = frozenset({"wgsl"})
 
 INDEX_ATTRIBUTES = frozenset(
     {
@@ -96,9 +105,10 @@ class BindingIndexUnresolvedError(TranslationDiagnostic):
 
 
 class _Unresolved(Exception):
-    def __init__(self, reason):
+    def __init__(self, reason, *, undeclared=False):
         super().__init__(reason)
         self.reason = reason
+        self.undeclared = undeclared
 
 
 def _type_name(node):
@@ -215,7 +225,9 @@ class _ConstantTable:
             return self.values[name]
         entry = self.entries.get(name)
         if entry is None:
-            raise _Unresolved(f"{name} is not an enumerator or integer constant")
+            raise _Unresolved(
+                f"{name} is not an enumerator or integer constant", undeclared=True
+            )
         if entry is _AMBIGUOUS:
             raise _Unresolved(f"{name} names several constants")
         if entry[0] == "unresolved":
@@ -310,6 +322,8 @@ def _fold_attribute(attribute, table, target):
         try:
             value = table.evaluate(argument)
         except _Unresolved as error:
+            if error.undeclared and target in HOST_DECLARED_INDEX_TARGETS:
+                continue
             reason = error.reason
             if not isinstance(argument, A.IdentifierNode):
                 reason = f"the expression is not a constant integer: {reason}"

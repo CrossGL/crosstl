@@ -156,7 +156,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
 
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
-    :class:`BindingIndexUnresolvedError` (:mod:`.binding_constants`).
+    :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
+    declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V

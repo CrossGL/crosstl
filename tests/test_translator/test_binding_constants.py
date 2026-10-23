@@ -229,3 +229,34 @@ def test_literal_and_register_spellings_are_left_to_the_generators():
             }
             """))
     assert fold_binding_constants(program, "metal") == 0
+
+
+WGSL_HOST_GROUP = textwrap.dedent("""
+    shader main {
+        const int SLOT = 3;
+        layout(set = BIND_GROUP, binding = SLOT + 1) uniform sampler2D colorTexture;
+        fragment {
+            vec4 main() {
+                return texture(colorTexture, vec2(0.5));
+            }
+        }
+    }
+    """)
+
+
+def test_wgsl_keeps_an_undeclared_index_for_the_host_and_folds_the_rest(tmp_path):
+    code = _translate(tmp_path, WGSL_HOST_GROUP, ".cgl", "wgsl")
+    assert "@group(BIND_GROUP) @binding(4)" in code
+    assert "@binding(SLOT" not in code
+
+
+@pytest.mark.parametrize("backend", ["opengl", "directx", "metal", "vulkan"])
+def test_other_targets_refuse_the_undeclared_index(tmp_path, backend):
+    with pytest.raises(BindingIndexUnresolvedError, match="BIND_GROUP"):
+        _translate(tmp_path, WGSL_HOST_GROUP, ".cgl", backend)
+
+
+def test_wgsl_still_refuses_a_declared_constant_it_cannot_fold(tmp_path):
+    source = WGSL_HOST_GROUP.replace("const int SLOT = 3;", "const float SLOT = 3.0;")
+    with pytest.raises(BindingIndexUnresolvedError, match="SLOT is not an integer"):
+        _translate(tmp_path, source, ".cgl", "wgsl")
