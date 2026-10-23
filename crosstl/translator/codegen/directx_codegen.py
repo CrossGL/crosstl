@@ -235,6 +235,7 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
@@ -11795,7 +11796,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value, const_type)
+            value_code = hlsl_brace_struct_initializer(self, value, const_type)
+            if value_code is None:
+                value_code = self.generate_constant_expression(value, const_type)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
@@ -49992,11 +49995,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         rendered_args = []
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
-                rendered_args.append(
-                    self.generate_expression_with_expected(
-                        positional_args[index],
-                        field_type,
+                argument = positional_args[index]
+                if isinstance(
+                    argument, ArrayLiteralNode
+                ) and self.hlsl_outer_array_type(field_type):
+                    # The helper call cannot take an array literal; only a
+                    # declaration initializer can use an initializer list.
+                    self.hlsl_aggregate_error(
+                        argument,
+                        expected_type=self.map_type(field_type),
+                        reason="array-argument-unsupported",
+                        detail=(
+                            "HLSL has no fixed-array literal expression for a "
+                            f"{type_name} constructor field outside a declaration "
+                            "initializer"
+                        ),
                     )
+                rendered_args.append(
+                    self.generate_expression_with_expected(argument, field_type)
                 )
                 continue
             if field_name in named_args:
