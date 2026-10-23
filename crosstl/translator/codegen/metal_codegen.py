@@ -360,6 +360,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
@@ -22742,6 +22743,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
     def generate_glsl_buffer_block_store(self, target, rhs, op):
+        component_store = metal_buffer_component_store(self, target, rhs, op)
+        if component_store is not None:
+            return component_store
         access = self.glsl_buffer_block_array_access(target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
