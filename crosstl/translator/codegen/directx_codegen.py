@@ -235,6 +235,7 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
@@ -1706,6 +1707,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES = frozenset(
@@ -15155,6 +15158,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "packed",
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
+            # MSL's half texture element type; the image format attribute gives HLSL its element type.
+            "metal_texture_element_half",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata
@@ -38494,7 +38499,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
         if shader_type == "vertex" and return_type == "float4":
             return "gl_Position"
-        if shader_type == "fragment" and return_type == "float4":
+        if shader_type == "fragment" and is_render_target_value_type(return_type):
+            # A fragment function's value return is colour attachment 0 (MSL 5.2.3.4, GLSL 4.60 section 4.4.2),
+            # whatever its numeric scalar or vector type.
             return "gl_FragColor"
         return None
 
