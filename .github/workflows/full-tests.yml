@@ -375,6 +375,7 @@ jobs:
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
           CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
           CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           CROSSTL_REQUIRE_BUFFER_PARAMETER_EXECUTION: "1"
           EGL_PLATFORM: surfaceless
@@ -386,7 +387,8 @@ jobs:
             tests/test_backend/test_directx/test_hlsl_buffer_parameter_layouts.py \
             tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
             tests/test_translator/test_structured_buffer_counters.py \
-            tests/test_translator/test_append_consume_layouts.py
+            tests/test_translator/test_append_consume_layouts.py \
+            tests/test_translator/test_structured_buffer_array_layouts.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'
