@@ -363,6 +363,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
+            # Slang keeps HLSL's spelling: roundEven is written as round, as the HLSL generator does.
+            "roundEven": "round",
             "floatBitsToInt": "asint",
             "floatBitsToUint": "asuint",
             "intBitsToFloat": "asfloat",

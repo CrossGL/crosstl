@@ -46,6 +46,7 @@ class MetalHlslValueMixin:
         "reflect",
         "refract",
         "round",
+        "roundEven",
         "rsqrt",
         "saturate",
         "sin",

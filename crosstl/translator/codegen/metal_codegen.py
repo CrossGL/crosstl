@@ -10501,6 +10501,9 @@ class MetalCodeGen(
                 and args
                 and func_name not in self.user_function_names
             ):
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                if unified_type is not None:
+                    return unified_type
                 return self.expression_result_type(args[0])
             if (
                 func_name in self.METAL_DERIVATIVE_FUNCTION_ALIASES
@@ -12296,7 +12299,15 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 # MSL rint() rounds halfway cases to the nearest even integer (MSL 4.1 section 6.5).
-                arg = self.generate_expression(expr.args[0])
+                # It has only float and half overloads, so integer operands are converted to float.
+                unified_args = self.generate_metal_unified_builtin_arguments(
+                    func_name, expr.args
+                )
+                arg = (
+                    unified_args[0]
+                    if unified_args is not None
+                    else self.generate_expression(expr.args[0])
+                )
                 rint_name = (
                     "metal::rint"
                     if self.metal_function_name_is_shadowed("rint")
