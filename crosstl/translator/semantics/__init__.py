@@ -86,6 +86,7 @@ from .tessellation_patches import (
     lower_tessellation_patches,
 )
 from .texture_lod_clamp import refuse_texture_lod_clamp
+from .texture_residency import refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
@@ -188,7 +189,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
     prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
-    minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
+    minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
+    and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
@@ -242,6 +244,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
+    refuse_texture_residency(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     annotate_hlsl_ray_payloads(program, report.target)
