@@ -371,6 +371,11 @@ from .metal_hlsl_matrix import (
 )
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
+from .metal_keyword_identifiers import (
+    METAL_KEYWORD_IDENTIFIERS,
+    rename_metal_keyword_members,
+    rename_metal_keyword_parameters,
+)
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_refusals import metal_refusals
@@ -601,7 +606,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "mesh",
         "object",
         "amplification",
-    }
+    } | METAL_KEYWORD_IDENTIFIERS
     METAL_INTERPOLATION_ATTRIBUTES = {
         "center_no_perspective": "center_no_perspective",
         "center_perspective": "center_perspective",
@@ -1997,7 +2002,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
+        ast = rename_metal_keyword_parameters(ast)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (
