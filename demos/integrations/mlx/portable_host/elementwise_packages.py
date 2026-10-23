@@ -1,11 +1,12 @@
-"""Translate unchanged ``unary.metal`` and ``binary.metal`` vector entries on use.
+"""Translate unchanged ``unary.metal``, ``binary.metal`` and ``ternary.metal`` vectors on use.
 
-MLX instantiates ``v_<op><in><out>`` (``unary_v``) and ``vv_<op><type>``
-(``binary_vv``) for every real dtype an operation supports. The prebuilt
-families cover the float32, 32-bit integer, 64-bit integer and Boolean sets
-the host was first proven on; every other real instantiation, such as the
-16-bit floats' transcendentals or the narrow integers' arithmetic, is
-translated once from the pinned source and cached by ``lazy_kernel_cache``.
+MLX instantiates ``v_<op><in><out>`` (``unary_v``), ``vv_<op><type>``
+(``binary_vv``) and ``v_Select<type>`` (``ternary_v``) for every real dtype an
+operation supports. The prebuilt families cover the float32, 32-bit integer,
+64-bit integer and Boolean sets the host was first proven on; every other real
+instantiation, such as the 16-bit floats' transcendentals, the narrow
+integers' arithmetic or a float16 selection, is translated once from the
+pinned source and cached by ``lazy_kernel_cache``.
 
 The tables below mirror the pinned instantiation macros exactly, including
 the explicit ``complex64`` instantiations (``complex64_t`` storage is a packed
@@ -24,11 +25,16 @@ from demos.integrations.mlx.portable_host.lazy_kernel_cache import (
     KernelRecipe,
     LazyKernelCache,
 )
-from demos.integrations.mlx.portable_host.packages import BINARY_SOURCE, UNARY_SOURCE
+from demos.integrations.mlx.portable_host.packages import (
+    BINARY_SOURCE,
+    SELECTION_ENTRIES,
+    SELECTION_SOURCE,
+    UNARY_SOURCE,
+)
 
 CACHE = "elementwise"
-UNARY, BINARY = "v_", "vv_"
-ENTRY_PREFIXES = (UNARY, BINARY)
+# Ternary vectors share the unary prefix, so their kind names the template.
+UNARY, BINARY, TERNARY = "v_", "vv_", "ternary_v"
 FLOATS = ("float16", "float32", "bfloat16")
 INTEGERS = tuple(dtype for dtype in DTYPES if dtype.startswith(("int", "uint")))
 # instantiate_unary_types / instantiate_unary_float / instantiate_unary_int
@@ -122,6 +128,11 @@ BINARY_TYPES = {
     "RightShift": INTEGERS,
 }
 BOOLEAN_RESULTS = frozenset((*COMPARISONS, "NaNEqual"))
+# instantiate_ternary_types(Select); the selection family installs the
+# float32, 32-bit integer and Boolean vectors.
+TERNARY_TYPES = tuple(
+    dtype for dtype in (*DTYPES, COMPLEX) if f"v_Select{dtype}" not in SELECTION_ENTRIES
+)
 ENTRIES = {
     **{
         f"{UNARY}{operation}{dtype}{dtype}": (UNARY, operation, dtype, dtype)
@@ -142,6 +153,10 @@ ENTRIES = {
         for operation, dtypes in BINARY_TYPES.items()
         for dtype in dtypes
     },
+    **{
+        f"{UNARY}Select{dtype}": (TERNARY, "Select", dtype, dtype)
+        for dtype in TERNARY_TYPES
+    },
 }
 PROFILES = (
     ("binary32_fma_profile", "rne-flush"),
@@ -161,9 +176,21 @@ def signature(entry):
         raise ValueError("Unknown elementwise entry") from error
 
 
+def operand_types(entry):
+    """The element type of every source parameter of ``entry``, its output last."""
+    kernel, _, source, destination = signature(entry)
+    if kernel == UNARY:
+        return {"in": source, "out": destination}
+    if kernel == BINARY:
+        return {"a": source, "b": source, "c": destination}
+    return {"a": "bool_", "b": source, "c": source, "d": destination}
+
+
 def operation_profiles(kernel, operation, dtype):
     """The pinned Metal float profiles one operation and input type need."""
     profiles = []
+    if kernel == TERNARY:
+        return ()
     if kernel == UNARY:
         if operation == "Log" and (dtype in FLOATING or dtype == COMPLEX):
             profiles.append(("binary32_log_profile", "flush-subnormals"))
@@ -213,8 +240,11 @@ def _kernel_signature(kernel):
     return checked
 
 
+SOURCES = {UNARY: UNARY_SOURCE, BINARY: BINARY_SOURCE, TERNARY: SELECTION_SOURCE}
+
+
 def _source(entry):
-    return UNARY_SOURCE if signature(entry)[0] == UNARY else BINARY_SOURCE
+    return SOURCES[signature(entry)[0]]
 
 
 UNARY_RECIPE = KernelRecipe(
@@ -223,16 +253,19 @@ UNARY_RECIPE = KernelRecipe(
 BINARY_RECIPE = KernelRecipe(
     "Binary", BINARY_SOURCE, _kernel_signature(BINARY), options, __file__
 )
+TERNARY_RECIPE = KernelRecipe(
+    "Ternary", SELECTION_SOURCE, _kernel_signature(TERNARY), options, __file__
+)
 
 
 class ElementwisePackageCache:
-    """One target's lazy ``v_`` and ``vv_`` packages, one cache per source."""
+    """One target's lazy vector packages, one cache per source."""
 
     def __init__(self, root, directory, target):
         self.target = target
         self.caches = {
-            UNARY_SOURCE: LazyKernelCache(root, directory, target, UNARY_RECIPE),
-            BINARY_SOURCE: LazyKernelCache(root, directory, target, BINARY_RECIPE),
+            recipe.source: LazyKernelCache(root, directory, target, recipe)
+            for recipe in (UNARY_RECIPE, BINARY_RECIPE, TERNARY_RECIPE)
         }
 
     def get(self, entry):

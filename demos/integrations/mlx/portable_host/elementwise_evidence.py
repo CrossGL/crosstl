@@ -1,13 +1,14 @@
-"""Audit lazily translated unary and binary dispatches.
+"""Audit lazily translated unary, binary and ternary dispatches.
 
 Every dispatch must name the package its cache derives again from the pinned
 source, and its native request and modules must match the event. Integer and
-Boolean operands are then recomputed exactly from the pinned ``unary_ops.h``
-and ``binary_ops.h``: C++ promotes narrow operands to ``int``, so results
-wrap modulo their storage width and Booleans keep only whether the promoted
-result is nonzero. Floating and complex operands are checked by package and
-native identity like the prebuilt float families; their values are compared
-with the CPU results by the upstream tests themselves.
+Boolean operands are then recomputed exactly from the pinned ``unary_ops.h``,
+``binary_ops.h`` and ``ternary_ops.h``: C++ promotes narrow operands to
+``int``, so results wrap modulo their storage width and Booleans keep only
+whether the promoted result is nonzero. Floating and complex operands are
+checked by package and native identity like the prebuilt float families;
+their values are compared with the CPU results by the upstream tests
+themselves.
 """
 
 import ctypes
@@ -21,7 +22,17 @@ from demos.integrations.mlx.portable_host.element_storage import (
     packet,
 )
 from demos.integrations.mlx.portable_host.elementwise_dispatch import operands
-from demos.integrations.mlx.portable_host.elementwise_packages import signature
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    BINARY,
+    TERNARY,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    UNARY as UNARY_KERNEL,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    operand_types,
+    signature,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -60,7 +71,7 @@ UNARY = {
     "BitwiseInvert": lambda x: ~x,
     "LogicalNot": lambda x: not x,
 }
-BINARY = {
+BINARY_OPERATIONS = {
     "Add": lambda x, y, _: x + y,
     "Subtract": lambda x, y, _: x - y,
     "Multiply": lambda x, y, _: x * y,
@@ -92,22 +103,34 @@ def stored(value, dtype):
     return wrap(int(value), dtype)
 
 
+def _bounds(dtype):
+    return integer_bounds(dtype) if dtype != "bool_" else (0, 1)
+
+
 def expected_words(kernel, operation, source, destination, values):
-    """Every output word of an integer or Boolean unary or binary vector."""
+    """Every output word of an integer or Boolean unary, binary or ternary vector."""
     require(source not in INEXACT, "Elementwise recompute requires integer operands")
-    low, high = integer_bounds(source) if source != "bool_" else (0, 1)
-    for words in values.values():
+    for name, words in values.items():
+        # Only a selection's condition differs from the operand type.
+        low, high = _bounds("bool_" if (kernel, name) == (TERNARY, "a") else source)
         require(
             all(type(word) is int and low <= word <= high for word in words),
             "Elementwise operand outside its storage range",
         )
-    if kernel == "v_":
+    if kernel == UNARY_KERNEL:
         function = UNARY[operation]
         return [stored(function(word), destination) for word in values["in"]]
-    function = BINARY[operation]
+    if kernel == BINARY:
+        function = BINARY_OPERATIONS[operation]
+        return [
+            stored(function(x, y, source), destination)
+            for x, y in zip(values["a"], values["b"], strict=True)
+        ]
+    require(operation == "Select", "Unknown ternary operation")
+    # Select: condition ? x : y
     return [
-        stored(function(x, y, source), destination)
-        for x, y in zip(values["a"], values["b"], strict=True)
+        stored(x if condition else y, destination)
+        for condition, x, y in zip(values["a"], values["b"], values["c"], strict=True)
     ]
 
 
@@ -117,7 +140,7 @@ def recomputable(entry):
 
 
 def audit_event(event, cache=None, *, native=True):
-    """Check one lazy unary or binary dispatch; returns the outputs checked.
+    """Check one lazy unary, binary or ternary dispatch; returns the outputs checked.
 
     ``cache`` derives the event's package again from the pinned source;
     ``native`` also verifies the retained native modules and the request.
@@ -146,8 +169,9 @@ def audit_event(event, cache=None, *, native=True):
             "Elementwise readback extent differs",
         )
         uploads = [*event["inputs"].values()]
+        types = operand_types(entry)
         for value in (
-            *(packet(source, target, values[name]) for name in names),
+            *(packet(types[name], target, values[name]) for name in names),
             packet(
                 destination,
                 target,

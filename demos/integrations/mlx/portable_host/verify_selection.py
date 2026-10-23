@@ -19,9 +19,10 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 UPSTREAM_TEST = "test_ops.TestOps.test_where"
 NEGATIVE_CHECKS = {
     "missing": "No translated package for v_Selectint32",
-    "int64": "matching float32/int32/uint32/bool values",
-    "uint8": "matching float32/int32/uint32/bool values",
-    "float16": "matching float32/int32/uint32/bool values",
+    # Without the pinned source no package serves the other dtypes' selection.
+    "int64": "No translated package for v_Selectint64",
+    "uint8": "No translated package for v_Selectuint8",
+    "float16": "No translated package for v_Selectfloat16",
     "over-limit": "at most 65535 elements",
     "absolute-missing": "No translated package for v_Absint32int32",
     # Without the pinned source no package serves 16-bit absolute values.

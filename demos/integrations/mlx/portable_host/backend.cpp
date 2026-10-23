@@ -2295,12 +2295,13 @@ void BitwiseBinary::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  const char* dtype = storage_type(out.dtype());
-  if (inputs.size() != 3 || !dtype || out.dtype() == int64 || out.dtype() == uint64 ||
-      inputs[0].dtype() != bool_ ||
+  // The selection family installs float32, 32-bit integer and Boolean
+  // vectors; every other GPU dtype's v_Select translates on first use.
+  const char* dtype = cast_type(out.dtype());
+  if (inputs.size() != 3 || !dtype || inputs[0].dtype() != bool_ ||
       inputs[1].dtype() != out.dtype() || inputs[2].dtype() != out.dtype()) {
     throw std::invalid_argument(
-        "CrossTL selection requires Boolean conditions and matching float32/int32/uint32/bool values.");
+        "CrossTL selection requires Boolean conditions and matching values of a GPU dtype.");
   }
   if (out.size() > 65535) {
     throw std::invalid_argument("CrossTL selection supports at most 65535 elements.");

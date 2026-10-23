@@ -88,7 +88,8 @@ comparison outputs. Shift counts are checked across the complete input before
 the first binary dispatch. Input materialization still inherits the copy limits.
 Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
 Optional selection packages support `where` with Boolean conditions and
-float32, int32, uint32 or bool values. Optional absolute-value packages extend
+float32, int32, uint32 or bool values; with the pinned source, the other GPU
+dtypes' selections translate on first use. Optional absolute-value packages extend
 `abs` to int32, uint32 and bool. Other primitives retain MLX's explicit
 unsupported-GPU errors. Other unary inputs except Abs, LogicalNot and BitwiseInvert
 must be float32. Stored-contiguous broadcasts and column-major views retain
@@ -234,15 +235,16 @@ place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
 
-## Casts and copies of every real dtype
+## Casts and copies of every GPU dtype
 
 `AsType` and the copies behind reshapes, transposes and other layout changes
-accept every real MLX dtype: Booleans, the 8-, 16-, 32- and 64-bit integers,
-float16, bfloat16 and float32. Complex arrays are refused before dispatch. A
-cast runs the unchanged `v_copy<source><destination>` entry of `copy.metal`,
+accept every dtype MLX instantiates on the GPU: Booleans, the 8-, 16-, 32- and
+64-bit integers, float16, bfloat16, float32 and complex64 (float64 has no
+Metal type). A cast runs the unchanged `v_copy<source><destination>` entry of `copy.metal`,
 and a general copy runs `ggn2_dynamic_copy` on unsigned storage words of the
-element width (Booleans and the 16-bit floats keep their own kernels), so NaN
-payloads, subnormals and signed zeros survive. When an installed package family
+element width (Booleans and the 16-bit floats keep their own kernels, and a
+complex64 element is one 64-bit word), so NaN payloads, subnormals and signed
+zeros survive. When an installed package family
 already provides the entry, it is used. Otherwise `copy_packages` translates
 the entry from the pinned source on first use and caches it under an identity
 that covers the translator, the recipe, the shared `lazy_kernel_cache` module
@@ -252,7 +254,9 @@ the same offset bounds as the prebuilt copy family.
 `element_storage` carries each logical type in the reflected physical storage:
 Direct3D and OpenGL keep Booleans and the narrow integers they lack in 32-bit
 words, OpenGL keeps 16-bit floats in float32 carriers and Direct3D keeps
-bfloat16 bits in uint16 words. Uploads are exact. A readback that does not hold
+bfloat16 bits in uint16 words. A complex64 element is one 64-bit word with the
+real bits low and the imaginary bits high; every target must reflect it as the
+packed `{real, imag}` float32 pair. Uploads are exact. A readback that does not hold
 a value of its logical type, such as a widened int8 word outside the int8
 range or a Boolean other than zero or one, is refused instead of wrapped. Every
 destination carries a trailing guard; a fresh destination is filled with guard
@@ -262,7 +266,9 @@ write must come back unchanged.
 `copy_evidence` recomputes each dispatch from its retained words. General
 copies must move exactly the words their strides select. Casts follow `cast_to`
 in the pinned `utils.h`: Booleans test for nonzero storage (subnormals and NaNs
-are true), floating results round to nearest even with gradual underflow, and
+are true, and a complex value is true when either part is), complex64 converts
+to and from its real part as a float32 with a +0 imaginary part
+(`complex.h`), floating results round to nearest even with gradual underflow, and
 integers wrap modulo their width. Floating values truncate toward zero into
 integers. The audit refuses what no target defines or what the pinned profiles
 leave open: NaN, infinite or out-of-range values converted to integers,
@@ -270,23 +276,27 @@ binary32 subnormals cast to or from bfloat16, and integers that would need two
 roundings to reach a 16-bit float. Each audited dispatch must also name the
 package its cache derives again, and its retained native modules are checked.
 
-## Unary and binary vectors of every real dtype
+## Unary, binary and selection vectors of every GPU dtype
 
 Unary operations, binary arithmetic, comparisons, logical and bitwise
-operations, `Power` and `ArcTan2` accept every real dtype MLX instantiates for
-them: Booleans, the 8-, 16-, 32- and 64-bit integers, float16, bfloat16 and
-float32. Complex arrays are refused before dispatch. Each launch runs the
-unchanged `v_<op><type><type>` entry of `unary.metal` or `vv_<op><type>` entry
-of `binary.metal` with one element per invocation. When an installed family
-provides the entry it is used; otherwise `elementwise_packages` translates it
-from the pinned source on first use through `lazy_kernel_cache`. Its tables are
-exactly the 375 real `v_` and `vv_` instantiations of the pinned sources
-(complex64 and the FP8 conversions are excluded), and each floating entry pins
+operations, `Power`, `ArcTan2` and `where` accept every dtype MLX instantiates
+for them: Booleans, the 8-, 16-, 32- and 64-bit integers, float16, bfloat16,
+float32 and, where the pinned sources instantiate it, complex64 (including
+`Conjugate`, `Real` and `Imag`). Each launch runs the unchanged
+`v_<op><type><type>` entry of `unary.metal`, `vv_<op><type>` entry of
+`binary.metal` or `v_Select<type>` entry of `ternary.metal` with one element
+per invocation. When an installed family provides the entry it is used;
+otherwise `elementwise_packages` translates it from the pinned source on first
+use through `lazy_kernel_cache`. Its tables are exactly the 415 `v_` and `vv_`
+instantiations of the pinned sources (only the six FP8 conversions are
+excluded) and the nine `v_Select` vectors the selection family does not
+install, 424 entries in all, and each floating entry pins
 the Metal profiles the complete binary and unary kernel proofs use: rne-flush
 additive, multiplicative and division results, flushed comparison and
 remainder operands for binary32 and bfloat16, the binary32 quotient for
 binary16 remainders, flushed `Power` operands with portable-finite binary32
-accuracy, and flushed `ArcTan2` and `Log` operands.
+accuracy, and flushed `ArcTan2` and `Log` operands; the complex logarithms and
+inverse sines and cosines also pin the flushed `atan2` profile.
 
 The host refuses operands no target defines before dispatch: shift counts
 outside [0, 31] (or [0, 63] for the 64-bit integers, since narrower operands
@@ -295,9 +305,11 @@ of the signed minimum by -1. An output must have its own allocation or be
 exactly a donated input. `elementwise_evidence` recomputes every integer and
 Boolean dispatch from its retained operands: C++ promotes narrow operands to
 `int`, so results wrap modulo their width and Booleans keep whether the
-promoted result is nonzero. Floating dispatches are checked by package and
-native identity like the prebuilt float families, and their values by the
-upstream tests' own comparisons with the CPU.
+promoted result is nonzero; an integer or Boolean selection must return the
+second operand where the condition is true and the third elsewhere. Floating
+and complex dispatches are checked by package and native identity like the
+prebuilt float families, and their values by the upstream tests' own
+comparisons with the CPU.
 
 ## DivMod
 
@@ -1786,9 +1798,9 @@ indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from
 the pinned sources are recomputed from their retained inputs and their native
 modules are checked, and so are the casts, copies and integer or Boolean
-unary and binary vectors that no installed family covers (see "Casts and
-copies of every real dtype" and "Unary and binary vectors of every real
-dtype"). Lazy floating vectors must name the package their cache derives
+unary, binary and selection vectors that no installed family covers (see "Casts and
+copies of every GPU dtype" and "Unary, binary and selection vectors of every GPU
+dtype"). Lazy floating and complex vectors must name the package their cache derives
 again and pass the native-identity checks. Scans, small row and column
 reductions, GEMV, steel GEMM and split-K GEMM kernels must name the package
 their cache derives again from the recorded entry, launch and metadata (and,
@@ -2343,7 +2355,9 @@ The optional `selection` family contains four unchanged `v_Select` entries from
 `ternary.metal`. MLX performs its normal dtype promotion and broadcasting, then
 the adapter materializes strided operands through translated copies and dispatches
 the selected kernel. Values may be float32, int32, uint32 or bool; the condition
-must reach the adapter as bool. Outputs are limited to 65,535 elements. Empty
+must reach the adapter as bool. Given the pinned source, the other GPU dtypes'
+`v_Select` vectors translate on first use (see "Unary, binary and selection
+vectors of every GPU dtype"). Outputs are limited to 65,535 elements. Empty
 results do not dispatch.
 
 The optional `absolute` family contains three unchanged `v_Abs` entries from
@@ -2382,8 +2396,8 @@ and native outputs include checked guard values and launch geometry.
 The same workers run `test_ops.TestOps.test_where` from the pinned checkout
 without changing its assertions. The native proof requires all workload
 dispatches, upstream execution, compiler/dispatch identity and artifact hashes.
-Eight separate processes check missing packages, unsupported types and oversized
-inputs without dispatch. Before/after source checks require byte-identical
+Eight separate processes check missing packages, types that have no package
+without the pinned source and oversized inputs without dispatch. Before/after source checks require byte-identical
 upstream tests and unchanged prepared sources. These 69 workloads and one
 upstream test extend coverage; they do not establish full-suite parity.
 

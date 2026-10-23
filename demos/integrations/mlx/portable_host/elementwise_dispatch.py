@@ -1,7 +1,7 @@
-"""Dispatch contiguous unary and binary vectors through lazily translated kernels.
+"""Dispatch contiguous unary, binary and ternary vectors through lazy kernels.
 
-The native host passes ``v_<op>`` and ``vv_<op>`` launches of at most 65535
-one-thread groups for every dtype MLX instantiates on the GPU. Each buffer is checked
+The native host passes ``v_<op>``, ``vv_<op>`` and ``v_Select`` launches of at
+most 65535 one-thread groups for every dtype MLX instantiates on the GPU. Each buffer is checked
 against its kernel's source contract before upload: one element per invocation
 in every vector, the reflected storage of every binding, and an output that
 either has its own allocation or is exactly a donated input. The output
@@ -25,8 +25,10 @@ from demos.integrations.mlx.portable_host.element_storage import (
     unpack,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
+    BINARY,
     ENTRIES,
     UNARY,
+    operand_types,
     signature,
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
@@ -39,7 +41,9 @@ MAX_VECTOR = 65535
 
 def operands(kernel):
     """The source parameters that read elements, then the one that writes."""
-    return (("in",), "out") if kernel == UNARY else (("a", "b"), "c")
+    if kernel == UNARY:
+        return ("in",), "out"
+    return (("a", "b"), "c") if kernel == BINARY else (("a", "b", "c"), "d")
 
 
 def _span(buffer, dtype):
@@ -79,12 +83,13 @@ def validate(entry, buffers, threads, execution):
     """Check a vector launch: one invocation per element of every vector."""
     kernel, operation, source, destination = signature(entry)
     inputs, output = operands(kernel)
+    types = operand_types(entry)
     if type(threads) is not int or not 0 < threads <= MAX_VECTOR:
         raise ValueError("Elementwise size exceeds the host contract")
     if set(buffers) != {*inputs, output, "size"}:
         raise ValueError("Elementwise buffers do not match their kernel")
     expected = {
-        **{name: (source, 0) for name in inputs},
+        **{name: (types[name], 0) for name in inputs},
         output: (destination, 1),
         "size": ("uint32", 0),
     }
@@ -107,7 +112,7 @@ def validate(entry, buffers, threads, execution):
         raise ValueError("Elementwise launch does not match its vector")
     written = _span(buffers[output], destination)
     for name in inputs:
-        read = _span(buffers[name], source)
+        read = _span(buffers[name], types[name])
         # MLX donates an input to the output only as the identical allocation.
         if read != written and max(read[0], written[0]) < min(read[1], written[1]):
             raise ValueError("Elementwise input and output allocations overlap")
@@ -124,8 +129,9 @@ def _bind(entry, descriptor, supplied, uploads):
     # Direct3D prefixes constants with the entry; "in" and "out" are keywords.
     prefix = entry.rstrip("_") + "_"
     inputs, outputs, observed, matched = {}, {}, [], {}
-    kernel, _, source, destination = signature(entry)
+    kernel, _, _, destination = signature(entry)
     _, output = operands(kernel)
+    types = operand_types(entry)
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
             continue
@@ -148,9 +154,7 @@ def _bind(entry, descriptor, supplied, uploads):
                     ).contents
                 ),
             }
-        logical = (
-            "uint32" if name == "size" else destination if name == output else source
-        )
+        logical = "uint32" if name == "size" else types[name]
         if not reflected_layout_matches(scalar, value, logical):
             raise ValueError(
                 "Reflected elementwise storage differs from the native buffer"
@@ -186,13 +190,14 @@ def dispatch(host, entry, buffers, count, threads, launch):
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
     target = host.target
-    values = {name: buffer_words(supplied[name], source) for name in names}
+    types = operand_types(entry)
+    values = {name: buffer_words(supplied[name], types[name]) for name in names}
     require_defined(metadata["operation"], source, values)
     # A fresh output is filled with guards, so the readback is never stale.
     initial = guard_words(destination, threads)
     tail = guard_words(destination)
     uploads = {
-        **{name: packet(source, target, words) for name, words in values.items()},
+        **{name: packet(types[name], target, words) for name, words in values.items()},
         output: packet(destination, target, initial + tail),
     }
     descriptor, directory = host.elementwise.get(entry)

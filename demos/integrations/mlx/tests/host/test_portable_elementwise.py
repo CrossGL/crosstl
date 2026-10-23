@@ -1,5 +1,5 @@
-"""Lazy unary and binary vectors mirror the pinned instantiations, check their
-launches and operands, and recompute integer and Boolean results exactly."""
+"""Lazy unary, binary and ternary vectors mirror the pinned instantiations, check
+their launches and operands, and recompute integer and Boolean results exactly."""
 
 import ctypes
 import hashlib
@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host import (
     elementwise_evidence,
     elementwise_packages,
     elementwise_warm,
+    packages,
     runtime,
 )
 
@@ -35,12 +36,34 @@ def pinned_vectors():
     return names
 
 
+def pinned_selections():
+    path = CONTRACTS / "ternary.current-tree.translation.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
+    return {entry for entry in entries if entry.startswith("v_Select")}
+
+
 def test_entries_are_every_pinned_vector_instantiation_but_fp8():
     pinned = pinned_vectors()
     portable = {name for name in pinned if "FP8" not in name}
-    assert set(elementwise_packages.ENTRIES) == portable
+    selections = pinned_selections()
+    assert len(selections) == 13
+    lazy_selections = selections - set(packages.SELECTION_ENTRIES)
+    assert set(elementwise_packages.ENTRIES) == portable | lazy_selections
     assert len(portable) == 415 and len(pinned) - len(portable) == 6
+    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 424
     assert sum("complex64" in name for name in portable) == 40
+    assert elementwise_packages.signature("v_Selectfloat16") == (
+        "ternary_v",
+        "Select",
+        "float16",
+        "float16",
+    )
+    assert elementwise_packages.operand_types("v_Selectcomplex64") == {
+        "a": "bool_",
+        "b": "complex64",
+        "c": "complex64",
+        "d": "complex64",
+    }
     signature = elementwise_packages.signature
     assert signature("vv_Lessbfloat16") == ("vv_", "Less", "bfloat16", "bool_")
     assert signature("v_Absint8int8") == ("v_", "Abs", "int8", "int8")
@@ -58,6 +81,8 @@ def test_entries_are_every_pinned_vector_instantiation_but_fp8():
         "v_copyint8int8",
         "v_ArcTanhcomplex64complex64",
         "vv_ArcTan2complex64",
+        "v_Selectfloat32",
+        "v_Selectbool_",
         None,
     ):
         with pytest.raises(ValueError, match="Unknown elementwise entry"):
@@ -66,6 +91,9 @@ def test_entries_are_every_pinned_vector_instantiation_but_fp8():
         elementwise_packages.UNARY_RECIPE.signature("vv_Addint8")
     with pytest.raises(ValueError, match="Unknown elementwise entry"):
         elementwise_packages.BINARY_RECIPE.signature("v_Absint8int8")
+    with pytest.raises(ValueError, match="Unknown elementwise entry"):
+        elementwise_packages.UNARY_RECIPE.signature("v_Selectint8")
+    assert elementwise_packages.TERNARY_RECIPE.source == packages.SELECTION_SOURCE
 
 
 @pytest.mark.parametrize(
@@ -99,6 +127,8 @@ def test_entries_are_every_pinned_vector_instantiation_but_fp8():
         ("v_ArcTancomplex64complex64", set()),
         ("vv_Multiplycomplex64", set()),
         ("vv_Powercomplex64", set()),
+        ("v_Selectbfloat16", set()),
+        ("v_Selectcomplex64", set()),
     ],
 )
 def test_profiles_follow_the_kernel_proofs(entry, profiles):
@@ -114,9 +144,10 @@ def native_buffers(entry, operands, *, donate=False):
     """A callback's buffers for one vector: inputs, output and size."""
     kernel, _, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
+    types = {**elementwise_packages.operand_types(entry), "size": "uint32"}
     threads = len(operands[names[0]])
     memory = {
-        name: (element_storage.CTYPES[source] * threads)(*operands[name])
+        name: (element_storage.CTYPES[types[name]] * threads)(*operands[name])
         for name in names
     }
     memory[output] = (
@@ -125,7 +156,6 @@ def native_buffers(entry, operands, *, donate=False):
         else (element_storage.CTYPES[destination] * threads)()
     )
     memory["size"] = (ctypes.c_uint32 * 1)(threads)
-    types = {**dict.fromkeys(names, source), output: destination, "size": "uint32"}
     array = (runtime.Buffer * len(memory))(
         *(
             runtime.Buffer(
@@ -146,16 +176,13 @@ class FakeCache:
         self.target = target
 
     def get(self, entry):
-        kernel, _, source, destination = elementwise_packages.signature(entry)
+        kernel, _, _, _ = elementwise_packages.signature(entry)
         names, output = elementwise_dispatch.operands(kernel)
+        types = {**elementwise_packages.operand_types(entry), "size": "uint32"}
         prefix = "" if self.target == "metal" else entry.rstrip("_") + "_"
         bindings = []
         for name in (*names, output, "size"):
-            dtype = (
-                "uint32"
-                if name == "size"
-                else destination if name == output else source
-            )
+            dtype = types[name]
             physical = (
                 element_storage.packet(dtype, self.target, [])["dtype"]
                 if name != "size"
@@ -201,10 +228,12 @@ def run(
         dispatch_count=0,
     )
 
+    types = elementwise_packages.operand_types(entry)
+
     def execute(_, request):
         values = {
             name: element_storage.unpack(
-                source, target, request["inputs"][name + "Binding"]["values"]
+                types[name], target, request["inputs"][name + "Binding"]["values"]
             )
             for name in names
         }
@@ -355,6 +384,71 @@ def test_complex_vectors_dispatch_through_packed_float_pairs(
             compute=numpy_complex,
             fault="guard",
         )
+
+
+def numpy_select(kernel, operation, source, destination, values):
+    """A floating or complex selection fake; the audit never recomputes it."""
+    assert (kernel, operation) == ("ternary_v", "Select")
+    return [x if c else y for c, x, y in zip(values["a"], values["b"], values["c"])]
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_selections_dispatch_with_a_boolean_condition(monkeypatch, tmp_path, target):
+    condition = [1, 0, 1, 0]
+    words, event, host = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Selectint8",
+        {"a": condition, "b": [-128, 5, 127, -1], "c": [1, 2, 3, 4]},
+    )
+    assert host.dispatch_count == 1 and words == [-128, 2, 127, 4]
+    assert event["inputs"]["aBinding"] == element_storage.packet(
+        "bool_", target, condition
+    )
+    assert elementwise_evidence.audit_event(event, native=False) == 4
+    words, event, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Selectuint64",
+        {"a": [0, 1], "b": [2**64 - 1, 7], "c": [0, 2**63]},
+    )
+    assert words == [0, 7]
+    assert elementwise_evidence.audit_event(event, native=False) == 2
+    _, event, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Selectint16",
+        {"a": [1, 0], "b": [1, 2], "c": [3, 4]},
+        fault="result",
+    )
+    with pytest.raises(ValueError, match="result 0 of v_Selectint16 differs"):
+        elementwise_evidence.audit_event(event, native=False)
+    a, b = [1 + 2j, -0.0 - 1j], [3 + 0j, 4 - 4j]
+    words, event, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Selectcomplex64",
+        {"a": [0, 1], "b": complex_words(a), "c": complex_words(b)},
+        compute=numpy_select,
+    )
+    assert words == complex_words([3 + 0j, -0.0 - 1j])
+    assert not elementwise_evidence.recomputable("v_Selectcomplex64")
+    assert not elementwise_evidence.recomputable("v_Selectbfloat16")
+    assert elementwise_evidence.recomputable("v_Selectint64")
+
+
+def test_selection_recompute_requires_boolean_conditions():
+    with pytest.raises(ValueError, match="outside its storage range"):
+        elementwise_evidence.expected_words(
+            "ternary_v", "Select", "int32", "int32", {"a": [2], "b": [1], "c": [0]}
+        )
+    assert elementwise_evidence.expected_words(
+        "ternary_v", "Select", "int32", "int32", {"a": [1], "b": [-5], "c": [0]}
+    ) == [-5]
 
 
 def test_complex_reflection_must_be_the_packed_float_pair():
@@ -612,6 +706,9 @@ def test_runtime_prefers_installed_families_over_lazy_vectors():
     assert lazy(host, "vv_Addint8") and lazy(host, "v_Sinfloat16float16")
     assert not lazy(host, "vv_Addint32")
     assert not lazy(host, "v_copyint8float32")
+    # The selection family installs float32, 32-bit integer and Boolean selections.
+    assert lazy(host, "v_Selectint64") and lazy(host, "v_Selectcomplex64")
+    assert not lazy(host, "v_Selectfloat32") and not lazy(host, "v_Selectbool_")
     host.elementwise = None
     assert not lazy(host, "vv_Addint8")
 
@@ -673,7 +770,7 @@ def test_warm_translates_every_entry_in_parallel_batches(monkeypatch, tmp_path, 
     )
     assert sorted(requested) == sorted(elementwise_packages.ENTRIES)
     record = json.loads(summary.read_text())
-    assert record["entries"] == 415 and record["target"] == "opengl"
+    assert record["entries"] == 424 and record["target"] == "opengl"
     assert record["artifacts"]["vv_Addint8"] == "vv_Addint8"[::-1]
 
 

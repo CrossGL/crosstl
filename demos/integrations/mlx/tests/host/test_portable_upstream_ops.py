@@ -268,8 +268,8 @@ def test_upstream_op_indexing_audit_failures_fail_the_trace(audit, monkeypatch):
     [
         event("row_reduce_looped_1_32_32_reduce_sumint32"),
         event("all_reduce_andbool_", 256),
-        # Selection has no lazy family, so an uninstalled dtype is unknown.
-        event("v_Selectfloat16"),
+        # No family translates the FP8 conversions, so they are unknown.
+        event("v_ToFP8float32uint8"),
     ],
 )
 def test_upstream_op_trace_rejects_unindexed_families(audit, unknown):
