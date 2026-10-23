@@ -18189,11 +18189,6 @@ class GLSLCodeGen(
         used_names = collect_stage_entry_reserved_function_names(
             ast, None, stage_entry_types
         )
-        if (
-            self.should_emit_stage_guards(ast, target_stage)
-            and "main" not in used_names
-        ):
-            return {entry_id: "main" for entry_id, _stage_name, _func in entries}
 
         def target_names(assigned_names):
             return {
@@ -18206,6 +18201,31 @@ class GLSLCodeGen(
                 )
                 for entry_id, name in assigned_names.items()
             }
+
+        if (
+            self.should_emit_stage_guards(ast, target_stage)
+            and "main" not in used_names
+        ):
+            # Each stage's guarded section declares one main: the stage's first entry. Later entries of the
+            # same stage stay ordinary functions, as for a single-stage program.
+            first_of_stage, later = {}, []
+            for entry_id, stage_name, func in entries:
+                if stage_name in first_of_stage.values():
+                    later.append((entry_id, stage_name, func))
+                else:
+                    first_of_stage[entry_id] = stage_name
+            names = {entry_id: "main" for entry_id in first_of_stage}
+            if later:
+                names.update(
+                    target_names(
+                        assign_stage_entry_names(
+                            later,
+                            used_names | {"main"},
+                            lambda stage_name, _func: f"{stage_name}_main",
+                        )
+                    )
+                )
+            return names
 
         stage_names = {stage_name for _entry_id, stage_name, _func in entries}
         if len(entries) > 1 and len(stage_names) == 1 and "main" not in used_names:
