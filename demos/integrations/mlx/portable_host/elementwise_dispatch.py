@@ -1,7 +1,7 @@
 """Dispatch contiguous unary and binary vectors through lazily translated kernels.
 
 The native host passes ``v_<op>`` and ``vv_<op>`` launches of at most 65535
-one-thread groups for every real dtype MLX instantiates. Each buffer is checked
+one-thread groups for every dtype MLX instantiates on the GPU. Each buffer is checked
 against its kernel's source contract before upload: one element per invocation
 in every vector, the reflected storage of every binding, and an output that
 either has its own allocation or is exactly a donated input. The output
@@ -15,8 +15,8 @@ import hashlib
 from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
-    FLOATING,
     GUARD_COUNT,
+    INEXACT,
     buffer_words,
     guard_words,
     packet,
@@ -59,7 +59,7 @@ def require_defined(operation, dtype, values):
                 "CrossTL shifts require counts in [0, 31], or [0, 63] for 64-bit "
                 "integers"
             )
-    if operation in {"Divide", "Remainder"} and dtype not in FLOATING:
+    if operation in {"Divide", "Remainder"} and dtype not in INEXACT:
         minimum = (
             -(1 << (8 * ctypes.sizeof(CTYPES[dtype]) - 1))
             if dtype.startswith("int")
@@ -124,7 +124,8 @@ def _bind(entry, descriptor, supplied, uploads):
     # Direct3D prefixes constants with the entry; "in" and "out" are keywords.
     prefix = entry.rstrip("_") + "_"
     inputs, outputs, observed, matched = {}, {}, [], {}
-    _, output = operands(signature(entry)[0])
+    kernel, _, source, destination = signature(entry)
+    _, output = operands(kernel)
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
             continue
@@ -147,7 +148,10 @@ def _bind(entry, descriptor, supplied, uploads):
                     ).contents
                 ),
             }
-        if not reflected_layout_matches(scalar, value):
+        logical = (
+            "uint32" if name == "size" else destination if name == output else source
+        )
+        if not reflected_layout_matches(scalar, value, logical):
             raise ValueError(
                 "Reflected elementwise storage differs from the native buffer"
             )
@@ -212,9 +216,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
     ):
         raise RuntimeError("Native elementwise output layout differs")
     words = returned.get("values")
-    if not isinstance(words, list) or len(words) != threads + GUARD_COUNT:
+    if not isinstance(words, list):
         raise RuntimeError("Native elementwise output extent differs")
     words = unpack(destination, target, words)
+    if len(words) != threads + GUARD_COUNT:
+        raise RuntimeError("Native elementwise output extent differs")
     if words[threads:] != tail:
         raise RuntimeError("Native elementwise kernel changed its output guard")
     words = words[:threads]

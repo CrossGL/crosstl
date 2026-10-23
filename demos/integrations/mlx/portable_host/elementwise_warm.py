@@ -1,9 +1,9 @@
 """Translate every lazy unary and binary vector entry before a host run.
 
 The host translates a ``v_`` or ``vv_`` entry the first time a test reaches
-it, one entry at a time. Translating the complete real-dtype table ahead of
-the run in parallel worker processes bounds the native run's time and shows
-that all 375 entries translate and package on the runner's platform. The
+it, one entry at a time. Translating the complete table ahead of the run in
+parallel worker processes bounds the native run's time and shows that all
+415 entries translate and package on the runner's platform. The
 packages land in the same content-addressed cache the host and the audits
 use, so they are never trusted on name alone.
 """

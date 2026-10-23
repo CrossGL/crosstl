@@ -3,7 +3,9 @@
 General copies move storage words, so each destination element must equal the
 source element its strides select and every other element must keep its
 uploaded word. Casts follow ``cast_to`` in the pinned ``utils.h``: Booleans
-test for nonzero storage (subnormals and NaNs are true), floating results are
+test for nonzero storage (subnormals and NaNs are true, and a complex value is
+true when either part is), ``complex64_t`` converts to and from its real part
+as a float32 with a +0 imaginary part (``complex.h``), floating results are
 rounded to nearest even with gradual underflow, integers wrap modulo their
 width and floating values truncate toward zero. The audit refuses what no
 target defines or the pinned profiles leave open (NaN or out-of-range values
@@ -19,7 +21,9 @@ from fractions import Fraction
 from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.copy_packages import VECTOR, signature
 from demos.integrations.mlx.portable_host.element_storage import (
+    COMPLEX,
     CTYPES,
+    FLOAT32_MASK,
     FLOATING,
     guard_words,
     packet,
@@ -96,6 +100,17 @@ def wrap(value, dtype):
 
 def cast_word(word, source, destination):
     """The destination storage word of one ``cast_to``; NAN for any NaN."""
+    if source == COMPLEX:
+        real, imag = word & FLOAT32_MASK, word >> 32
+        if destination == "bool_":
+            return int(
+                cast_word(real, "float32", "bool_")
+                or cast_word(imag, "float32", "bool_")
+            )
+        return cast_word(real, "float32", destination)
+    if destination == COMPLEX:
+        # complex_t(U x) stores static_cast<float>(x) and a +0 imaginary part.
+        return cast_word(word, source, "float32")
     if destination == "bool_":
         if source in FLOATING:
             width = FLOATS[source][0]
@@ -155,7 +170,11 @@ def expected_copy(metadata, source, initial):
 
 
 def matches(actual, expected, dtype):
-    return actual == expected or (expected == NAN and is_nan(actual, dtype))
+    if actual == expected or expected != NAN:
+        return actual == expected
+    if dtype == COMPLEX:
+        return actual >> 32 == 0 and is_nan(actual & FLOAT32_MASK, "float32")
+    return is_nan(actual, dtype)
 
 
 def audit_event(event, cache=None, *, native=True):

@@ -5,9 +5,9 @@ source, and its native request and modules must match the event. Integer and
 Boolean operands are then recomputed exactly from the pinned ``unary_ops.h``
 and ``binary_ops.h``: C++ promotes narrow operands to ``int``, so results
 wrap modulo their storage width and Booleans keep only whether the promoted
-result is nonzero. Floating operands are checked by package and native
-identity like the prebuilt float families; their values are compared with
-the CPU results by the upstream tests themselves.
+result is nonzero. Floating and complex operands are checked by package and
+native identity like the prebuilt float families; their values are compared
+with the CPU results by the upstream tests themselves.
 """
 
 import ctypes
@@ -16,7 +16,7 @@ import hashlib
 from demos.integrations.mlx.portable_host.copy_evidence import integer_bounds, wrap
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
-    FLOATING,
+    INEXACT,
     guard_words,
     packet,
 )
@@ -94,7 +94,7 @@ def stored(value, dtype):
 
 def expected_words(kernel, operation, source, destination, values):
     """Every output word of an integer or Boolean unary or binary vector."""
-    require(source not in FLOATING, "Elementwise recompute requires integer operands")
+    require(source not in INEXACT, "Elementwise recompute requires integer operands")
     low, high = integer_bounds(source) if source != "bool_" else (0, 1)
     for words in values.values():
         require(
@@ -113,7 +113,7 @@ def expected_words(kernel, operation, source, destination, values):
 
 def recomputable(entry):
     """Whether the audit recomputes ``entry``'s results from its operands."""
-    return signature(entry)[2] not in FLOATING
+    return signature(entry)[2] not in INEXACT
 
 
 def audit_event(event, cache=None, *, native=True):

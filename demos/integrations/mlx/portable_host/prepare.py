@@ -36,6 +36,8 @@ VIEW_PRIMITIVES = (
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
 COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
 CAST_PRIMITIVES = ("AsType",)
+# Unary primitives MLX instantiates only for complex64 operands.
+COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
 
 
 def replace_once(text, before, after):
@@ -70,6 +72,7 @@ def adapted_sources(original, primitives, events):
         "Power",
         "ArcTan2",
         *CAST_PRIMITIVES,
+        *COMPLEX_PRIMITIVES,
         *COMPARISON_OPERATIONS,
         *LOGICAL_OPERATIONS,
         "LogicalNot",

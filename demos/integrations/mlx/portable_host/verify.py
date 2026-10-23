@@ -108,20 +108,27 @@ NEGATIVE_CHECKS = {
     "over-limit": "65535",
     "missing": "artifact",
     "unary-dtype": (
-        "unary dispatch requires matching real (bool, integer, float16, bfloat16 or float32) arrays"
+        "unary dispatch requires matching bool, integer, float16, bfloat16, float32 or "
+        "complex64 arrays"
     ),
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-large-allocation": "exceeds its allocation",
-    "copy-dtype": "matching real (bool, integer, float16, bfloat16 or float32) arrays",
+    "copy-dtype": (
+        "matching bool, integer, float16, bfloat16, float32 or complex64 arrays"
+    ),
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
     "binary-large-allocation": "exceeds its allocation",
-    "cast-dtype": "casts require real (bool, integer, float16, bfloat16 or float32)",
+    "cast-dtype": (
+        "casts require bool, integer, float16, bfloat16, float32 or complex64"
+    ),
     "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": "matching real (bool, integer, float16, bfloat16 or float32) arrays",
+    "full-dtype": (
+        "matching bool, integer, float16, bfloat16, float32 or complex64 arrays"
+    ),
     "full-allocation": "exceeds its allocation",
 }
 REDUCTION_NEGATIVE_CHECKS = {
@@ -169,9 +176,7 @@ def worker(args):
             elif args.worker == "over-limit":
                 value = mx.arange(65536, stream=mx.gpu)
             elif args.worker == "unary-dtype":
-                value = mx.negative(
-                    mx.array([-3, 2], dtype=mx.complex64), stream=mx.gpu
-                )
+                value = mx.negative(mx.array([-3, 2], dtype=mx.float64), stream=mx.gpu)
             elif args.worker == "unary-allocation":
                 source = mx.as_strided(
                     mx.array([1.0, 2.0, 3.0]), (2,), (1,), 2, stream=mx.gpu
@@ -186,7 +191,7 @@ def worker(args):
                     stream=mx.gpu,
                 )
             elif args.worker == "copy-dtype":
-                source = mx.array(np.arange(12, dtype=np.complex64).reshape(3, 4))
+                source = mx.array(np.arange(12, dtype=np.float64).reshape(3, 4))
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
             elif args.worker == "copy-large-allocation":
                 source = mx.as_strided(
@@ -198,14 +203,14 @@ def worker(args):
                 value = mx.contiguous(source, stream=mx.gpu)
             elif args.worker == "binary-dtype":
                 value = mx.add(
-                    mx.array([1, 2], dtype=mx.complex64),
-                    mx.array([2, 3], dtype=mx.complex64),
+                    mx.array([1, 2], dtype=mx.float64),
+                    mx.array([2, 3], dtype=mx.float64),
                 )
             elif args.worker == "binary-large-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)
                 value = mx.add(source, source, stream=mx.gpu)
             elif args.worker == "cast-dtype":
-                value = mx.array([1, 2], dtype=mx.complex64).astype(mx.float32)
+                value = mx.array([1, 2], dtype=mx.float64).astype(mx.float32)
             elif args.worker == "cast-large-allocation":
                 source = mx.as_strided(
                     mx.array([1, 2, 3], dtype=mx.int32), (65536,), (1,), 2
@@ -217,7 +222,7 @@ def worker(args):
                 )
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
-                value = mx.full((3, 5), mx.array(1, dtype=mx.complex64))
+                value = mx.full((3, 5), mx.array(1, dtype=mx.float64))
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)

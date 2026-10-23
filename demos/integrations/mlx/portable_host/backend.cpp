@@ -111,14 +111,20 @@ void dispatch_unary(
     mlx::core::array& out,
     const char* operation) {
   require_runtime();
-  // unary.metal instantiates each operation for the real types it supports,
-  // with matching outputs; the runtime refuses an entry it cannot serve.
+  // unary.metal instantiates each operation for the types it supports, with
+  // matching outputs except Real and Imag, which read complex64 into float32;
+  // the runtime refuses an entry it cannot serve.
   const char* dtype = inputs.size() == 1 ? cast_type(inputs[0].dtype()) : nullptr;
-  if (!dtype || out.dtype() != inputs[0].dtype()) {
+  const std::string name = operation;
+  const bool part = name == "Real" || name == "Imag";
+  if (!dtype ||
+      out.dtype() != (part ? mlx::core::float32 : inputs[0].dtype()) ||
+      (part && inputs[0].dtype() != mlx::core::complex64)) {
     throw std::invalid_argument(
-        "CrossTL unary dispatch requires matching real (bool, integer, float16, "
-        "bfloat16 or float32) arrays.");
+        "CrossTL unary dispatch requires matching bool, integer, float16, "
+        "bfloat16, float32 or complex64 arrays.");
   }
+  const char* out_type = cast_type(out.dtype());
   auto in = inputs[0];
   if (in.shape() != out.shape()) {
     throw std::invalid_argument("CrossTL unary input must match output shape.");
@@ -137,7 +143,7 @@ void dispatch_unary(
           (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
     throw std::invalid_argument("CrossTL unary input exceeds its allocation.");
   }
-  std::string entry = std::string("v_") + operation + dtype + dtype;
+  std::string entry = std::string("v_") + operation + dtype + out_type;
   require_entry(entry);
   mlx::core::set_unary_output_data(in, out);
   // Contiguous broadcasts and column-major arrays retain their stored layout.
@@ -146,7 +152,7 @@ void dispatch_unary(
         std::min<uint64_t>(65535, in.data_size() - first));
     CrosstlMlxBuffer buffers[] = {
         {"in", dtype, in.data<char>() + first * in.itemsize(), size, 0},
-        {"out", dtype, out.data<char>() + first * out.itemsize(), size, 1},
+        {"out", out_type, out.data<char>() + first * out.itemsize(), size, 1},
         {"size", "uint32", &size, 1, 0},
     };
     char error[2048] = {};
@@ -277,7 +283,7 @@ void dispatch_copy_into(
   require_runtime();
   if (in.dtype() != out.dtype() || !cast_type(in.dtype())) {
     throw std::invalid_argument(
-        "CrossTL copying layouts require matching real (bool, integer, float16, bfloat16 or float32) arrays.");
+        "CrossTL copying layouts require matching bool, integer, float16, bfloat16, float32 or complex64 arrays.");
   }
   constexpr int64_t max_index = std::numeric_limits<int32_t>::max();
   if (in.size() > max_index || in.ndim() > 64 ||
@@ -836,7 +842,7 @@ const char* storage_type(mlx::core::Dtype dtype) {
   return nullptr;
 }
 
-// Every real MLX dtype; complex64 has no translated cast or copy family.
+// Every MLX dtype a GPU kernel instantiates; float64 has no Metal type.
 const char* cast_type(mlx::core::Dtype dtype) {
   switch (dtype) {
     case mlx::core::bool_:
@@ -863,6 +869,8 @@ const char* cast_type(mlx::core::Dtype dtype) {
       return "int32";
     case mlx::core::int64:
       return "int64";
+    case mlx::core::complex64:
+      return "complex64";
     default:
       return nullptr;
   }
@@ -905,7 +913,7 @@ bool prepare_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array&
     throw std::invalid_argument("CrossTL cast input must match output shape.");
   }
   if (!cast_type(inputs[0].dtype()) || !cast_type(out.dtype())) {
-    throw std::invalid_argument("CrossTL casts require real (bool, integer, float16, bfloat16 or float32) arrays.");
+    throw std::invalid_argument("CrossTL casts require bool, integer, float16, bfloat16, float32 or complex64 arrays.");
   }
   if (inputs[0].dtype() == out.dtype()) {
     out.copy_shared_buffer(inputs[0]);
@@ -1035,17 +1043,16 @@ void dispatch_binary(
   if (!dtype) {
     throw std::invalid_argument("CrossTL binary dispatch requires a supported dtype.");
   }
-  const bool floating = mlx::core::issubdtype(inputs[0].dtype(), mlx::core::floating);
-  if (std::string(operation) == "LogAddExp" && out.dtype() != mlx::core::float32 &&
-      out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
-    throw std::invalid_argument("CrossTL LogAddExp requires float16, bfloat16 or float32 arrays.");
+  const bool floating = mlx::core::issubdtype(inputs[0].dtype(), mlx::core::inexact);
+  if (std::string(operation) == "LogAddExp" && !floating) {
+    throw std::invalid_argument(
+        "CrossTL LogAddExp requires float16, bfloat16, float32 or complex64 arrays.");
   }
   if ((std::string(operation) == "LogicalAnd" || std::string(operation) == "LogicalOr") &&
       inputs[0].dtype() != mlx::core::bool_) {
     throw std::invalid_argument("CrossTL logical operations require bool arrays.");
   }
-  if (std::string(operation) == "NaNEqual" && inputs[0].dtype() != mlx::core::float32 &&
-      inputs[0].dtype() != mlx::core::float16 && inputs[0].dtype() != mlx::core::bfloat16) {
+  if (std::string(operation) == "NaNEqual" && !floating) {
     operation = "Equal";
   }
   out.set_data(mlx::core::allocator::malloc(out.nbytes()));
@@ -1109,9 +1116,12 @@ void dispatch_binary(
   }
 }
 
-// binary_two.metal instantiates DivMod for every real type except bool.
+// binary_two.metal instantiates DivMod for every real type except bool;
+// MLX's divmod refuses complex operands before they reach the GPU.
 const char* divmod_type(mlx::core::Dtype dtype) {
-  return dtype == mlx::core::bool_ ? nullptr : cast_type(dtype);
+  return dtype == mlx::core::bool_ || dtype == mlx::core::complex64
+      ? nullptr
+      : cast_type(dtype);
 }
 
 int divmod_launch(
@@ -2238,6 +2248,9 @@ CROSSTL_UNARY_GPU(Tanh)
 CROSSTL_UNARY_GPU(Round)
 CROSSTL_UNARY_GPU(LogicalNot)
 CROSSTL_UNARY_GPU(BitwiseInvert)
+CROSSTL_UNARY_GPU(Conjugate)
+CROSSTL_UNARY_GPU(Real)
+CROSSTL_UNARY_GPU(Imag)
 
 #undef CROSSTL_UNARY_GPU
 

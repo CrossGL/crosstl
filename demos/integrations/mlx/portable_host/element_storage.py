@@ -1,12 +1,15 @@
-"""Exact transport of MLX real-dtype elements through native buffer carriers.
+"""Exact transport of MLX element storage through native buffer carriers.
 
 Host buffers hold MLX's logical storage words: IEEE bits for the floating
-types, two's-complement values for the integers and canonical zero or one
-bytes for Booleans. Each target reflects its own physical carrier. Direct3D
-and OpenGL keep Booleans and the narrow integers they lack in 32-bit words,
-OpenGL keeps 16-bit floats in float32 carriers, and Direct3D keeps bfloat16
-bits in uint16 words. Packing and unpacking are exact: a carrier that does not
-hold a value of its logical type is refused, never rounded or wrapped.
+types, two's-complement values for the integers, canonical zero or one bytes
+for Booleans, and for ``complex64`` one 64-bit word whose low half holds the
+real part's float32 bits and whose high half holds the imaginary part's. Each
+target reflects its own physical carrier. Direct3D and OpenGL keep Booleans
+and the narrow integers they lack in 32-bit words, OpenGL keeps 16-bit floats
+in float32 carriers, Direct3D keeps bfloat16 bits in uint16 words, and every
+target reflects ``complex64_t`` as a tightly packed ``{real, imag}`` float32
+struct. Packing and unpacking are exact: a carrier that does not hold a value
+of its logical type is refused, never rounded or wrapped.
 """
 
 import ctypes
@@ -33,6 +36,10 @@ DTYPES = (
     "bfloat16",
 )
 FLOATING = frozenset({"float16", "float32", "bfloat16"})
+COMPLEX = "complex64"
+# Every MLX dtype a translated kernel can carry exactly; float64 has no GPU path.
+STORAGE_DTYPES = (*DTYPES, COMPLEX)
+INEXACT = FLOATING | {COMPLEX}
 # Floating types are carried as their unsigned storage words.
 CTYPES = {
     "bool_": ctypes.c_uint8,
@@ -47,6 +54,7 @@ CTYPES = {
     "int16": ctypes.c_int16,
     "int32": ctypes.c_int32,
     "int64": ctypes.c_int64,
+    COMPLEX: ctypes.c_uint64,
 }
 # Booleans and the integers a target lacks widen to 32-bit storage words.
 WIDENED = {
@@ -88,12 +96,27 @@ GUARDS = {
     "int16": 0x3555,
     "int32": 0x6A15BEEF,
     "int64": -0x6A15BEEF,
+    COMPLEX: 0x3EAB35556A15BEEF,
 }
+# How every target reflects MLX's complex64_t storage element.
+COMPLEX_LAYOUT = {
+    "elementType": "float32",
+    "physicalType": "complex_t_float",
+    "componentCount": 2,
+    "elementSizeBytes": 8,
+    "elementStrideBytes": 8,
+    "alignmentBytes": 4,
+    "structMembers": [
+        {"name": "real", "offsetBytes": 0, "physicalType": "float"},
+        {"name": "imag", "offsetBytes": 4, "physicalType": "float"},
+    ],
+}
+FLOAT32_MASK = 0xFFFFFFFF
 
 
 def require_dtype(dtype):
     if dtype not in CTYPES:
-        raise ValueError(f"Unsupported real storage dtype: {dtype!r}")
+        raise ValueError(f"Unsupported storage dtype: {dtype!r}")
     return dtype
 
 
@@ -119,6 +142,17 @@ def buffer_words(buffer, dtype):
 def packet(dtype, target, words):
     """The runtime value that carries ``words`` in ``target``'s storage."""
     require_dtype(dtype)
+    if dtype == COMPLEX:
+        if any(type(word) is not int or not 0 <= word < 1 << 64 for word in words):
+            raise ValueError("Complex storage must contain 64-bit words")
+        return {
+            "dtype": "float32",
+            "shape": [2 * len(words)],
+            "encoding": FLOAT32_BITS,
+            "values": [
+                part for word in words for part in (word & FLOAT32_MASK, word >> 32)
+            ],
+        }
     if dtype == "float32":
         return {
             "dtype": "float32",
@@ -170,6 +204,12 @@ def packet(dtype, target, words):
 def unpack(dtype, target, words):
     """Decode a native readback into logical storage words, exactly."""
     require_dtype(dtype)
+    if dtype == COMPLEX:
+        if len(words) % 2 or any(
+            type(word) is not int or not 0 <= word <= FLOAT32_MASK for word in words
+        ):
+            raise ValueError("Native readback returned invalid complex storage")
+        return [real | imag << 32 for real, imag in zip(words[::2], words[1::2])]
     if dtype == "float16":
         return half_storage.unpack(words, target)
     if dtype == "bfloat16":
@@ -185,8 +225,21 @@ def unpack(dtype, target, words):
     return list(words)
 
 
-def reflected_layout_matches(scalar, value):
-    """The reflected element type must carry the packet's exact storage."""
+def reflected_layout_matches(scalar, value, dtype=None):
+    """The reflected element type must carry the packet's exact storage.
+
+    A reflected struct element matches only a ``complex64`` packet, and only
+    as the packed ``{real, imag}`` float32 pair ``complex64_t`` declares.
+    """
+    if dtype == COMPLEX or "componentCount" in scalar or "structMembers" in scalar:
+        return (
+            dtype == COMPLEX
+            and all(scalar.get(key) == item for key, item in COMPLEX_LAYOUT.items())
+            and value["dtype"] == "float32"
+            and value.get("encoding") == FLOAT32_BITS
+            and len(value["shape"]) == 1
+            and value["shape"][0] % 2 == 0
+        )
     storage = scalar.get("storageEncoding")
     if storage is not None:
         return (

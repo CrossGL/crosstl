@@ -1,4 +1,4 @@
-"""Lazy casts and copies check their layouts, carry every real dtype exactly
+"""Lazy casts and copies check their layouts, carry every GPU dtype exactly
 and recompute each destination word from the retained source words."""
 
 import ctypes
@@ -43,13 +43,25 @@ WORDS = {"float16": np.uint16, "float32": np.uint32}
 def test_entries_are_pinned_copy_instantiations():
     pinned = set(json.loads(CONTRACT.read_text(encoding="utf-8"))["entries"])
     assert set(copy_packages.ENTRIES) <= pinned
-    assert len(copy_packages.ENTRIES) == 12 * 11 + 12
+    assert len(copy_packages.ENTRIES) == 13 * 12 + 13
+    assert sum("complex64" in entry for entry in copy_packages.ENTRIES) == 25
     assert copy_packages.signature("v_copyint8float16") == (
         "v_copy",
         "int8",
         "float16",
     )
-    for entry in ("v_copyint8int8", "v_copycomplex64float32", "gg1_copyint8int8", 7):
+    assert copy_packages.signature("v_copycomplex64float32") == (
+        "v_copy",
+        "complex64",
+        "float32",
+    )
+    for entry in (
+        "v_copyint8int8",
+        "v_copycomplex64complex64",
+        "v_copyfloat64complex64",
+        "gg1_copyint8int8",
+        7,
+    ):
         with pytest.raises(ValueError, match="Unknown copy entry"):
             copy_packages.signature(entry)
     opengl = copy_packages.options("opengl", "ggn2_dynamic_copyuint8uint8")
@@ -61,12 +73,19 @@ def test_entries_are_pinned_copy_instantiations():
 
 
 @pytest.mark.parametrize("target", TARGETS)
-@pytest.mark.parametrize("dtype", element_storage.DTYPES)
-def test_storage_packets_round_trip_every_real_dtype(target, dtype):
+@pytest.mark.parametrize("dtype", element_storage.STORAGE_DTYPES)
+def test_storage_packets_round_trip_every_gpu_dtype(target, dtype):
     words = element_storage.guard_words(dtype, 6)
     value = element_storage.packet(dtype, target, words)
     physical = value["dtype"]
     assert element_storage.unpack(dtype, target, value["values"]) == words
+    if dtype == "complex64":
+        # Real part in the low word, imaginary part in the high word.
+        assert value["shape"] == [12] and physical == "float32"
+        assert value["values"][:2] == [0x6A15BEEF, 0x3EAB3555]
+        layout = dict(element_storage.COMPLEX_LAYOUT)
+        assert element_storage.reflected_layout_matches(layout, value, dtype)
+        return
     if dtype == "bool_":
         assert physical == ("bool" if target == "metal" else "uint32")
         assert words == [1, 0, 1, 0, 1, 0]
@@ -93,8 +112,14 @@ def test_storage_refuses_inexact_carriers():
         element_storage.unpack("int8", "opengl", [200])
     with pytest.raises(ValueError, match="invalid scalar storage"):
         element_storage.unpack("uint16", "opengl", [-1])
-    with pytest.raises(ValueError, match="Unsupported real storage"):
-        element_storage.packet("complex64", "metal", [0])
+    with pytest.raises(ValueError, match="Unsupported storage"):
+        element_storage.packet("float64", "metal", [0])
+    with pytest.raises(ValueError, match="64-bit words"):
+        element_storage.packet("complex64", "metal", [1 << 64])
+    with pytest.raises(ValueError, match="invalid complex storage"):
+        element_storage.unpack("complex64", "opengl", [0, 0, 0])
+    with pytest.raises(ValueError, match="invalid complex storage"):
+        element_storage.unpack("complex64", "directx", [0, 1 << 32])
 
 
 def float_words(values, dtype):
@@ -176,6 +201,39 @@ def test_casts_to_bool_test_storage_and_integers_wrap():
     assert copy_evidence.cast_word(1, "bool_", "int8") == 1
 
 
+def complex_word(real, imag):
+    return int(np.array([complex(real, imag)], dtype=np.complex64).view(np.uint64)[0])
+
+
+def test_complex_casts_convert_the_real_part_and_test_both_parts():
+    cast = copy_evidence.cast_word
+    value = complex_word(-2.75, 9.5)
+    assert cast(value, "complex64", "float32") == float_words([-2.75], "float32")[0]
+    assert cast(value, "complex64", "int8") == -2
+    assert cast(complex_word(2.75, 9.5), "complex64", "uint16") == 2
+    with pytest.raises(ValueError, match="outside the integer range"):
+        cast(value, "complex64", "uint16")
+    assert cast(value, "complex64", "float16") == float_words([-2.75], "float16")[0]
+    # Booleans are true when either part's storage is nonzero.
+    assert cast(complex_word(0, 0), "complex64", "bool_") == 0
+    assert cast(complex_word(-0.0, -0.0), "complex64", "bool_") == 0
+    assert cast(complex_word(0, 1e-45), "complex64", "bool_") == 1
+    assert cast(complex_word(float("nan"), 0), "complex64", "bool_") == 1
+    with pytest.raises(ValueError, match="NaN or infinite"):
+        cast(complex_word(float("nan"), 0), "complex64", "int32")
+    # Real values become the real part with a +0 imaginary part.
+    assert cast(1, "bool_", "complex64") == complex_word(1, 0)
+    assert cast(-7, "int64", "complex64") == complex_word(-7, 0)
+    assert cast(0x3C00, "float16", "complex64") == complex_word(1, 0)
+    assert cast(0x8000, "float16", "complex64") == complex_word(-0.0, 0)
+    assert cast(0x7FC00000, "float32", "complex64") == copy_evidence.NAN
+    assert copy_evidence.matches(0x7FC00001, copy_evidence.NAN, "complex64")
+    assert not copy_evidence.matches(
+        0x7FC00000 | 1 << 32, copy_evidence.NAN, "complex64"
+    )
+    assert not copy_evidence.matches(0x3F800000, copy_evidence.NAN, "complex64")
+
+
 def test_casts_from_integers_round_once():
     for value in (0, 1, -3, (1 << 24) + 1, (1 << 62) + (1 << 38) + 1, -(1 << 63)):
         expected = struct.unpack("<I", struct.pack("<f", float(np.float32(value))))[0]
@@ -221,10 +279,14 @@ class FakeCache:
                 else {"dtype": dtype}
             )
             physical = value["dtype"]
-            scalar = {
-                "elementType": physical,
-                "elementStrideBytes": element_storage.PHYSICAL_SIZES[physical],
-            }
+            scalar = (
+                dict(element_storage.COMPLEX_LAYOUT)
+                if dtype == "complex64"
+                else {
+                    "elementType": physical,
+                    "elementStrideBytes": element_storage.PHYSICAL_SIZES[physical],
+                }
+            )
             scalar["memberName"] = prefix + name
             bindings.append({"name": name + "Binding", "scalarLayout": scalar})
         return {"bindings": bindings, "artifact": {"id": entry}}, Path("/packages")
@@ -352,6 +414,46 @@ def test_casts_dispatch_through_the_reflected_carriers(monkeypatch, tmp_path, ta
     assert copy_evidence.audit_event(event, native=False) == 3
     with pytest.raises(RuntimeError, match="guard"):
         run(monkeypatch, tmp_path, target, "v_copyuint16int8", [1, 2], fault="guard")
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_complex_casts_and_copies_dispatch_as_float_pairs(
+    monkeypatch, tmp_path, target
+):
+    values = [-128, -1, 0, 1, 127]
+    words, event, _ = run(monkeypatch, tmp_path, target, "v_copyint8complex64", values)
+    assert words == [complex_word(v, 0) for v in values]
+    assert event["inputs"]["dstBinding"]["shape"] == [2 * (5 + 32)]
+    assert copy_evidence.audit_event(event, native=False) == 5
+    source = [complex_word(0, 0), complex_word(0, -3), complex_word(-1.5, 2)]
+    words, event, _ = run(monkeypatch, tmp_path, target, "v_copycomplex64bool_", source)
+    assert words == [0, 1, 1]
+    assert copy_evidence.audit_event(event, native=False) == 3
+    words, event, _ = run(
+        monkeypatch, tmp_path, target, "v_copycomplex64bfloat16", source
+    )
+    assert words == [0, 0, 0xBFC0]
+    values = [complex_word(index, -index) for index in range(6)]
+    words, event, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "ggn2_dynamic_copycomplex64complex64",
+        values,
+        shape=[3, 2],
+        strides=[1, 3],
+    )
+    assert words == [values[index] for index in (0, 3, 1, 4, 2, 5)]
+    assert copy_evidence.audit_event(event, native=False) == 6
+    with pytest.raises(RuntimeError, match="guard"):
+        run(
+            monkeypatch,
+            tmp_path,
+            target,
+            "v_copyfloat32complex64",
+            [0x3F800000],
+            fault="guard",
+        )
 
 
 def test_widened_results_outside_their_type_are_refused(monkeypatch, tmp_path):

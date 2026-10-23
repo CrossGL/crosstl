@@ -1,14 +1,14 @@
 """Translate unchanged ``copy.metal`` casts and general copies on first use.
 
-``v_copy`` converts a contiguous vector between any two real MLX dtypes and
-``ggn2_dynamic_copy`` copies one dtype's storage between strided layouts, as
-``copy_gpu_inplace`` does for an unknown rank. Both are instantiated for every
-real dtype, so each entry is translated once from the pinned source and cached
+``v_copy`` converts a contiguous vector between any two MLX dtypes, including
+``complex64``, and ``ggn2_dynamic_copy`` copies one dtype's storage between
+strided layouts, as ``copy_gpu_inplace`` does for an unknown rank. Both are
+instantiated for every GPU dtype, so each entry is translated once from the pinned source and cached
 by ``lazy_kernel_cache``. The pinned binary32 profiles and the OpenGL offset
 bounds are the ones the prebuilt copy families use.
 """
 
-from demos.integrations.mlx.portable_host.element_storage import DTYPES
+from demos.integrations.mlx.portable_host.element_storage import STORAGE_DTYPES
 from demos.integrations.mlx.portable_host.lazy_kernel_cache import (
     KernelRecipe,
     LazyKernelCache,
@@ -25,11 +25,11 @@ ENTRY_PREFIXES = (VECTOR, GENERAL)
 ENTRIES = {
     **{
         f"{VECTOR}{source}{destination}": (VECTOR, source, destination)
-        for source in DTYPES
-        for destination in DTYPES
+        for source in STORAGE_DTYPES
+        for destination in STORAGE_DTYPES
         if source != destination
     },
-    **{f"{GENERAL}{dtype}{dtype}": (GENERAL, dtype, dtype) for dtype in DTYPES},
+    **{f"{GENERAL}{dtype}{dtype}": (GENERAL, dtype, dtype) for dtype in STORAGE_DTYPES},
 }
 PROFILES = (
     'binary32_fma_profile = "rne-flush"\n'

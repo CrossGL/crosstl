@@ -35,16 +35,31 @@ def pinned_vectors():
     return names
 
 
-def test_entries_are_every_real_pinned_vector_instantiation():
+def test_entries_are_every_pinned_vector_instantiation_but_fp8():
     pinned = pinned_vectors()
-    real = {name for name in pinned if "complex64" not in name and "FP8" not in name}
-    assert set(elementwise_packages.ENTRIES) == real
-    assert len(real) == 375 and len(pinned) - len(real) == 46
+    portable = {name for name in pinned if "FP8" not in name}
+    assert set(elementwise_packages.ENTRIES) == portable
+    assert len(portable) == 415 and len(pinned) - len(portable) == 6
+    assert sum("complex64" in name for name in portable) == 40
     signature = elementwise_packages.signature
     assert signature("vv_Lessbfloat16") == ("vv_", "Less", "bfloat16", "bool_")
     assert signature("v_Absint8int8") == ("v_", "Abs", "int8", "int8")
     assert signature("vv_Addbool_") == ("vv_", "Add", "bool_", "bool_")
-    for entry in ("v_Sinint32int32", "vv_LeftShiftbool_", "v_copyint8int8", None):
+    assert signature("v_Realcomplex64float32") == ("v_", "Real", "complex64", "float32")
+    assert signature("vv_NaNEqualcomplex64") == (
+        "vv_",
+        "NaNEqual",
+        "complex64",
+        "bool_",
+    )
+    for entry in (
+        "v_Sinint32int32",
+        "vv_LeftShiftbool_",
+        "v_copyint8int8",
+        "v_ArcTanhcomplex64complex64",
+        "vv_ArcTan2complex64",
+        None,
+    ):
         with pytest.raises(ValueError, match="Unknown elementwise entry"):
             signature(entry)
     with pytest.raises(ValueError, match="Unknown elementwise entry"):
@@ -79,6 +94,11 @@ def test_entries_are_every_real_pinned_vector_instantiation():
         ("vv_ArcTan2float16", {"binary32_atan2_profile"}),
         ("v_Logfloat16float16", {"binary32_log_profile"}),
         ("v_Log2float16float16", set()),
+        ("v_Logcomplex64complex64", {"binary32_log_profile", "binary32_atan2_profile"}),
+        ("v_ArcCoscomplex64complex64", {"binary32_atan2_profile"}),
+        ("v_ArcTancomplex64complex64", set()),
+        ("vv_Multiplycomplex64", set()),
+        ("vv_Powercomplex64", set()),
     ],
 )
 def test_profiles_follow_the_kernel_proofs(entry, profiles):
@@ -142,20 +162,34 @@ class FakeCache:
                 else "uint32"
             )
             member = {"in": "in_", "out": "out_"}.get(name, name)
+            layout = (
+                dict(element_storage.COMPLEX_LAYOUT)
+                if dtype == "complex64"
+                else {
+                    "elementType": physical,
+                    "elementStrideBytes": element_storage.PHYSICAL_SIZES[physical],
+                }
+            )
             bindings.append(
                 {
                     "name": name + "Binding",
-                    "scalarLayout": {
-                        "elementType": physical,
-                        "elementStrideBytes": element_storage.PHYSICAL_SIZES[physical],
-                        "memberName": prefix + member,
-                    },
+                    "scalarLayout": {**layout, "memberName": prefix + member},
                 }
             )
         return {"bindings": bindings, "artifact": {"id": entry}}, Path("/packages")
 
 
-def run(monkeypatch, tmp_path, target, entry, operands, *, fault=None, donate=False):
+def run(
+    monkeypatch,
+    tmp_path,
+    target,
+    entry,
+    operands,
+    *,
+    fault=None,
+    donate=False,
+    compute=None,
+):
     kernel, operation, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
     array, memory, threads = native_buffers(entry, operands, donate=donate)
@@ -177,7 +211,7 @@ def run(monkeypatch, tmp_path, target, entry, operands, *, fault=None, donate=Fa
         initial = element_storage.unpack(
             destination, target, request["inputs"][output + "Binding"]["values"]
         )
-        result = elementwise_evidence.expected_words(
+        result = (compute or elementwise_evidence.expected_words)(
             kernel, operation, source, destination, values
         )
         result += initial[threads:]
@@ -240,6 +274,108 @@ def test_narrow_vectors_dispatch_through_reflected_carriers(
             {"a": [1], "b": [2]},
             fault="guard",
         )
+
+
+def complex_words(values, dtype=np.complex64):
+    """MLX's complex64 storage words: real bits low, imaginary bits high."""
+    return np.asarray(values, dtype=dtype).view(np.uint64).tolist()
+
+
+def numpy_complex(kernel, operation, source, destination, values):
+    """The float32 pair arithmetic of a complex fake; the audit never recomputes it."""
+    arrays = {
+        name: np.asarray(words, dtype=np.uint64).view(np.complex64)
+        for name, words in values.items()
+    }
+    if operation == "Multiply":
+        return complex_words(arrays["a"] * arrays["b"])
+    if operation == "Equal":
+        return (arrays["a"] == arrays["b"]).astype(int).tolist()
+    if operation == "Real":
+        return arrays["in"].real.view(np.uint32).tolist()
+    assert operation == "Conjugate"
+    return complex_words(np.conj(arrays["in"]))
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_complex_vectors_dispatch_through_packed_float_pairs(
+    monkeypatch, tmp_path, target
+):
+    a, b = [1 + 2j, -0.5 + 0j, 3 - 4j], [2 - 1j, 4 + 4j, 3 - 4j]
+    words, event, host = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "vv_Multiplycomplex64",
+        {"a": complex_words(a), "b": complex_words(b)},
+        compute=numpy_complex,
+    )
+    assert host.dispatch_count == 1
+    assert words == complex_words(np.complex64(a) * np.complex64(b))
+    upload = event["inputs"]["aBinding"]
+    assert upload["dtype"] == "float32" and upload["shape"] == [6]
+    assert upload["values"][:2] == np.float32([1, 2]).view(np.uint32).tolist()
+    # Floating and complex results are checked by package and native identity.
+    assert elementwise_evidence.audit_event(event, native=False) == 3
+    words, _, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "vv_Equalcomplex64",
+        {"a": complex_words(a), "b": complex_words(b)},
+        compute=numpy_complex,
+    )
+    assert words == [0, 0, 1]
+    words, _, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Realcomplex64float32",
+        {"in": complex_words(a)},
+        compute=numpy_complex,
+    )
+    assert words == np.float32([1, -0.5, 3]).view(np.uint32).tolist()
+    words, _, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "v_Conjugatecomplex64complex64",
+        {"in": complex_words(a)},
+        compute=numpy_complex,
+        donate=True,
+    )
+    assert words == complex_words(np.conj(np.complex64(a)))
+    with pytest.raises(RuntimeError, match="guard"):
+        run(
+            monkeypatch,
+            tmp_path,
+            target,
+            "vv_Multiplycomplex64",
+            {"a": complex_words(a), "b": complex_words(b)},
+            compute=numpy_complex,
+            fault="guard",
+        )
+
+
+def test_complex_reflection_must_be_the_packed_float_pair():
+    value = element_storage.packet("complex64", "opengl", [0x3F800000])
+    layout = dict(element_storage.COMPLEX_LAYOUT)
+    matches = element_storage.reflected_layout_matches
+    assert matches(layout, value, "complex64")
+    # A struct binding never carries a real packet, nor a complex one as scalars.
+    assert not matches(layout, element_storage.packet("float32", "opengl", [0]))
+    assert not matches(layout, value)
+    assert not matches(
+        {"elementType": "float32", "elementStrideBytes": 4}, value, "complex64"
+    )
+    for key, changed in (
+        ("componentCount", 4),
+        ("elementStrideBytes", 16),
+        ("physicalType", "float2"),
+        ("structMembers", [*layout["structMembers"]][::-1]),
+    ):
+        assert not matches({**layout, key: changed}, value, "complex64")
+    assert not matches(layout, {**value, "shape": [3]}, "complex64")
 
 
 def test_donated_outputs_and_audit_rejections(monkeypatch, tmp_path):
@@ -461,6 +597,8 @@ def test_float_events_check_package_and_native_identity(monkeypatch, tmp_path):
         },
     }
     assert not elementwise_evidence.recomputable("vv_Equalfloat16")
+    assert not elementwise_evidence.recomputable("vv_Addcomplex64")
+    assert not elementwise_evidence.recomputable("v_Realcomplex64float32")
     assert elementwise_evidence.audit_event(event, cache) == 2
     assert seen == ["vv_Equalfloat16"]
     (package / "artifact.glsl").write_bytes(b"change")
@@ -535,7 +673,7 @@ def test_warm_translates_every_entry_in_parallel_batches(monkeypatch, tmp_path, 
     )
     assert sorted(requested) == sorted(elementwise_packages.ENTRIES)
     record = json.loads(summary.read_text())
-    assert record["entries"] == 375 and record["target"] == "opengl"
+    assert record["entries"] == 415 and record["target"] == "opengl"
     assert record["artifacts"]["vv_Addint8"] == "vv_Addint8"[::-1]
 
 

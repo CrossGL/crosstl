@@ -7,13 +7,19 @@ the host was first proven on; every other real instantiation, such as the
 16-bit floats' transcendentals or the narrow integers' arithmetic, is
 translated once from the pinned source and cached by ``lazy_kernel_cache``.
 
-The tables below mirror the pinned instantiation macros exactly, without
-complex64 (which has no portable storage) and without the FP8 conversions
-(``ConvertFP8`` has no host port). The per-operation float profiles are the
-ones the complete binary and unary kernel proofs pin to reproduce Metal.
+The tables below mirror the pinned instantiation macros exactly, including
+the explicit ``complex64`` instantiations (``complex64_t`` storage is a packed
+float32 pair on every target) and without the FP8 conversions (``ConvertFP8``
+has no host port). The per-operation float profiles are the ones the complete
+binary and unary kernel proofs pin to reproduce Metal, including the atan2
+profile of the complex logarithms and inverse sines and cosines.
 """
 
-from demos.integrations.mlx.portable_host.element_storage import DTYPES, FLOATING
+from demos.integrations.mlx.portable_host.element_storage import (
+    COMPLEX,
+    DTYPES,
+    FLOATING,
+)
 from demos.integrations.mlx.portable_host.lazy_kernel_cache import (
     KernelRecipe,
     LazyKernelCache,
@@ -53,12 +59,41 @@ UNARY_FLOAT = (
     "Tanh",
     "Round",
 )
+# The explicit instantiate_unary_base_same(op, complex64, complex64_t) list.
+UNARY_COMPLEX = (
+    "Abs",
+    "ArcCos",
+    "ArcSin",
+    "ArcTan",
+    "Conjugate",
+    "Cos",
+    "Cosh",
+    "Exp",
+    "Log",
+    "Log1p",
+    "Log2",
+    "Log10",
+    "Negative",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Square",
+    "Sqrt",
+    "Rsqrt",
+    "Tan",
+    "Tanh",
+    "Round",
+)
 UNARY_TYPES = {
     **{operation: DTYPES for operation in UNARY_TYPED},
     **{operation: FLOATS for operation in UNARY_FLOAT},
     "BitwiseInvert": INTEGERS,
     "LogicalNot": ("bool_",),
 }
+for _operation in UNARY_COMPLEX:
+    UNARY_TYPES[_operation] = (*UNARY_TYPES.get(_operation, ()), COMPLEX)
+# instantiate_unary_base(Real|Imag, complex64, float32, complex64_t, float)
+UNARY_PARTS = ("Real", "Imag")
 # instantiate_binary_types / _types_bool / _float / _integer and the explicit
 # NaNEqual, logical and Boolean bitwise instantiations.
 BINARY_TYPED = (
@@ -73,10 +108,10 @@ BINARY_TYPED = (
 )
 COMPARISONS = ("Equal", "Greater", "GreaterEqual", "Less", "LessEqual", "NotEqual")
 BINARY_TYPES = {
-    **{operation: DTYPES for operation in (*BINARY_TYPED, *COMPARISONS)},
-    "LogAddExp": FLOATS,
+    **{operation: (*DTYPES, COMPLEX) for operation in (*BINARY_TYPED, *COMPARISONS)},
+    "LogAddExp": (*FLOATS, COMPLEX),
     "ArcTan2": FLOATS,
-    "NaNEqual": FLOATS,
+    "NaNEqual": (*FLOATS, COMPLEX),
     "LogicalOr": ("bool_",),
     "LogicalAnd": ("bool_",),
     **{
@@ -92,6 +127,10 @@ ENTRIES = {
         f"{UNARY}{operation}{dtype}{dtype}": (UNARY, operation, dtype, dtype)
         for operation, dtypes in UNARY_TYPES.items()
         for dtype in dtypes
+    },
+    **{
+        f"{UNARY}{operation}{COMPLEX}float32": (UNARY, operation, COMPLEX, "float32")
+        for operation in UNARY_PARTS
     },
     **{
         f"{BINARY}{operation}{dtype}": (
@@ -110,6 +149,8 @@ PROFILES = (
     ("binary32_rsqrt_profile", "flush-subnormals"),
 )
 BINARY32 = frozenset({"float32", "bfloat16"})
+# Complex operations whose polar forms the unary proofs pin with atan2.
+COMPLEX_ATAN2 = frozenset({"Log", "Log2", "Log10", "ArcSin", "ArcCos"})
 
 
 def signature(entry):
@@ -124,8 +165,10 @@ def operation_profiles(kernel, operation, dtype):
     """The pinned Metal float profiles one operation and input type need."""
     profiles = []
     if kernel == UNARY:
-        if operation == "Log" and dtype in FLOATING:
+        if operation == "Log" and (dtype in FLOATING or dtype == COMPLEX):
             profiles.append(("binary32_log_profile", "flush-subnormals"))
+        if dtype == COMPLEX and operation in COMPLEX_ATAN2:
+            profiles.append(("binary32_atan2_profile", "flush-subnormals"))
         return tuple(profiles)
     if operation == "ArcTan2":
         profiles.append(("binary32_atan2_profile", "flush-subnormals"))

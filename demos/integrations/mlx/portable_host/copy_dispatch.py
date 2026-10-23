@@ -1,9 +1,9 @@
 """Dispatch checked casts and general copies through lazily translated kernels.
 
 The native host passes ``v_copy`` conversions of contiguous vectors and
-``ggn2_dynamic_copy`` copies between strided layouts for every real dtype,
-including the narrow integers and the 16-bit float pairs that no prebuilt
-family covers. Every buffer is checked against its kernel's source contract
+``ggn2_dynamic_copy`` copies between strided layouts for every GPU dtype,
+including the narrow integers, the 16-bit float pairs and ``complex64`` that
+no prebuilt family covers. Every buffer is checked against its kernel's source contract
 before upload, the destination carries a trailing guard, elements a copy does
 not write must keep their uploaded words, and the readback is decoded exactly
 into MLX's logical storage.
@@ -110,6 +110,7 @@ def validate(entry, buffers, threads, execution):
 def _bind(entry, descriptor, supplied, uploads):
     """Map reflected bindings to the source parameters and their packets."""
     prefix = entry + "_"
+    _, source, destination = signature(entry)
     inputs, outputs, observed, matched = {}, {}, [], {}
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
@@ -134,7 +135,9 @@ def _bind(entry, descriptor, supplied, uploads):
                     ).contents
                 ),
             }
-        if not reflected_layout_matches(scalar, value):
+        logical = {"src": source, "dst": destination}.get(name)
+        logical = logical or supplied[name].dtype.decode("ascii")
+        if not reflected_layout_matches(scalar, value, logical):
             raise ValueError("Reflected copy storage differs from the native buffer")
         inputs[binding["name"]] = value
         if name == "dst":
@@ -193,9 +196,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
     ):
         raise RuntimeError("Native copy output layout differs")
     words = output.get("values")
-    if not isinstance(words, list) or len(words) != dst.count + GUARD_COUNT:
+    if not isinstance(words, list):
         raise RuntimeError("Native copy output extent differs")
     words = unpack(destination, target, words)
+    if len(words) != dst.count + GUARD_COUNT:
+        raise RuntimeError("Native copy output extent differs")
     if words[dst.count :] != tail:
         raise RuntimeError("Native copy changed its output guard")
     words = words[: dst.count]
