@@ -21,6 +21,7 @@ from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
+from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -51,6 +52,7 @@ from .intrinsic_named_functions import (
 )
 from .lower import Lowerer, RuleInexpressibleError
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
+from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
@@ -93,6 +95,7 @@ __all__ = [
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
     "CudaWarpIntrinsicUnsupportedError",
+    "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
@@ -178,12 +181,14 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.array_parameters`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
-    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), and
+    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
+    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
+    Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
     Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
@@ -205,6 +210,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
     lower_subpass_inputs(program, report.target)
+    strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     canonicalize_builtin_values(program, report.target)
@@ -226,6 +232,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_per_vertex_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
+    refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)

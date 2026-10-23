@@ -151,6 +151,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
+      - name: Rewrite test modules
+        # Otherwise each xdist worker rewrites the asserts of every test module itself.
+        # The other legs run one module, which the workers rewrite in parallel anyway.
+        if: startsWith(matrix.component, 'all') || startsWith(matrix.component, 'general')
+        shell: bash
+        run: |
+          component="${{ matrix.component }}"
+          if [[ "$component" == general* ]]; then
+            python -m tools.pytest_warm tests/test_translator --ignore=tests/test_translator/test_codegen
+          else
+            python -m tools.pytest_warm tests/test_translator
+          fi
+
       - name: Run translator tests
         id: run_translator_tests
         shell: bash

@@ -104,11 +104,15 @@ class HLSLTexelAccessMixin:
             narrowing = {1: ".x", 2: ".xy", 3: ".xyz"}[count]
             rendered_value = self.maybe_parenthesize(value, rendered_value) + narrowing
             value_type = None
-        if count > 1 and self.numeric_type_family(
-            value_type
-        ) != self.numeric_type_family(scalar):
+        if count > 1 and (
+            value_width == 1
+            or self.numeric_type_family(value_type) != self.numeric_type_family(scalar)
+        ):
+            # HLSL promotes a scalar to every component of the element.
             rendered_value = f"{vector_type[:-1]}{count}({rendered_value})"
-        padding = ", ".join([zero] * (4 - count))
+        one = {"vec4": "1.0", "ivec4": "1", "uvec4": "1u"}[vector_type]
+        # The components the element lacks take the texel fill (0, 0, 1).
+        padding = ", ".join([zero, zero, one][count - 1 :])
         return f"{vector_type}({rendered_value}, {padding})"
 
     def expression_is_side_effect_free(self, expr):

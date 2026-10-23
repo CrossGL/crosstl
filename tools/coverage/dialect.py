@@ -6,7 +6,14 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
-from .model import NARROW_SCALARS, PACKED_BYTES, STRING, WIDE_INTEGERS, Type
+from .model import (
+    NARROW_SCALARS,
+    PACKED_BYTES,
+    POINTER_SIZED,
+    STRING,
+    WIDE_INTEGERS,
+    Type,
+)
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
@@ -49,10 +56,11 @@ class Dialect:
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
-    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS and PACKED_BYTES.
+    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, PACKED_BYTES and POINTER_SIZED.
     wide_integers = False
     narrow_scalars = False
     packed_bytes = False
+    pointer_sized = False
     # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
     string = ""
     # How the dialect spells an unsigned one, for ``constant``.
@@ -73,6 +81,8 @@ class Dialect:
             raise ProbeError(f"no 16-bit probe for {self.language} yet")
         if kind.scalar in PACKED_BYTES and not self.packed_bytes:
             raise ProbeError(f"{self.language} has no packed 8-bit integer types")
+        if kind.scalar in POINTER_SIZED and not self.pointer_sized:
+            raise ProbeError(f"{self.language} has no pointer-sized integer type")
         if not kind.shape:
             return self.scalar(kind.scalar)
         if len(kind.shape) == 1:

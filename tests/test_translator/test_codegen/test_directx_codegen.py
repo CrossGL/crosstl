@@ -13904,12 +13904,12 @@ def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "RWTexture2D<int> labelImage : register(u0);" in generated_code
-    assert "RWTexture2D<uint> maskImage : register(u1);" in generated_code
-    assert "int4 label2D = ((int4)(labelImage[pixel]));" in generated_code
-    assert "uint4 mask2D = ((uint4)(maskImage[pixel]));" in generated_code
-    assert "labelImage[pixel] = (label2D).x" in generated_code
-    assert "maskImage[pixel] = (mask2D).x" in generated_code
+    assert "RWTexture2D<int4> labelImage : register(u0);" in generated_code
+    assert "RWTexture2D<uint4> maskImage : register(u1);" in generated_code
+    assert "int4 label2D = labelImage[pixel];" in generated_code
+    assert "uint4 mask2D = maskImage[pixel];" in generated_code
+    assert "labelImage[pixel] = label2D;" in generated_code
+    assert "maskImage[pixel] = mask2D;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -13944,9 +13944,9 @@ def test_hlsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
     assert "RWTexture2D<int> readLabel : register(u1);" in generated_code
     assert "RWTexture2D<uint> readMask : register(u2);" in generated_code
     assert "RWTexture2D<uint> writeMask : register(u3);" in generated_code
-    assert "float4 color = ((float4)(readColor[pixel]));" in generated_code
-    assert "int4 label = ((int4)(readLabel[pixel]));" in generated_code
-    assert "uint4 mask = ((uint4)(readMask[pixel]));" in generated_code
+    assert "float4 color = float4(readColor[pixel], 0.0, 0.0, 1.0);" in generated_code
+    assert "int4 label = int4(readLabel[pixel], 0, 0, 1);" in generated_code
+    assert "uint4 mask = uint4(readMask[pixel], 0u, 0u, 1u);" in generated_code
     assert "writeMask[pixel] = (mask).x" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -16807,7 +16807,7 @@ def test_hlsl_global_resource_register_spaces_keep_independent_cursors():
     assert "Texture2D otherSpaceTex : register(t5, space2);" in generated_code
     assert "Texture2D autoSpaceTex : register(t6, space2);" in generated_code
     assert "Texture2D defaultTex : register(t0);" in generated_code
-    assert "RWTexture2D<uint> spaceImage : register(u3, space1);" in generated_code
+    assert "RWTexture2D<uint4> spaceImage : register(u3, space1);" in generated_code
     assert (
         "RWTexture2D<float4> otherSpaceImage : register(u3, space2);" in generated_code
     )
@@ -17859,8 +17859,14 @@ def test_hlsl_rg_image_scalar_and_vector_load_store():
 
     assert "float oldValue = image[pixel].x;" in generated_code
     assert "uint oldValue = image[pixel].x;" in generated_code
-    assert "image[pixel] = float2((oldValue + value), 0.0);" in generated_code
-    assert "image[pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "image[pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert (
+        "image[pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = image[pixel];" in generated_code
     assert "uint2 oldValue = image[pixel];" in generated_code
     assert "image[pixel] = (oldValue + value);" in generated_code
@@ -31717,10 +31723,11 @@ def test_directx_integer_image_dimension_atomics():
     generated_code = HLSLCodeGen().generate(ast)
 
     assert "RWTexture3D<uint> volumeCounters : register(u0);" in generated_code
-    assert "RWTexture3D<int> signedVolumeCounters : register(u1);" in generated_code
+    assert "RWTexture3D<int4> signedVolumeCounters : register(u1);" in generated_code
     assert "RWTexture2DArray<int> layerCounters : register(u2);" in generated_code
     assert (
-        "RWTexture2DArray<uint> unsignedLayerCounters : register(u3);" in generated_code
+        "RWTexture2DArray<uint4> unsignedLayerCounters : register(u3);"
+        in generated_code
     )
     assert (
         "uint imageAtomicAdd_uimage3D(RWTexture3D<uint> image, int3 coord, uint value)"
@@ -31797,15 +31804,24 @@ def test_directx_integer_image_scalar_load_store():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<uint> counters : register(u0);" in generated_code
-    assert "RWTexture3D<int> signedVolume : register(u1);" in generated_code
-    assert "RWTexture2DArray<uint> layerCounters : register(u2);" in generated_code
-    assert "uint oldValue = image[pixel];" in generated_code
-    assert "image[pixel] = (oldValue + value);" in generated_code
-    assert "int oldValue = image[voxel];" in generated_code
-    assert "image[voxel] = (oldValue + value);" in generated_code
-    assert "uint oldValue = image[pixelLayer];" in generated_code
-    assert "image[pixelLayer] = (oldValue + value);" in generated_code
+    assert "RWTexture2D<uint4> counters : register(u0);" in generated_code
+    assert "RWTexture3D<int4> signedVolume : register(u1);" in generated_code
+    assert "RWTexture2DArray<uint4> layerCounters : register(u2);" in generated_code
+    assert "uint oldValue = image[pixel].x;" in generated_code
+    assert (
+        "image[pixel] = uint4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert "int oldValue = image[voxel].x;" in generated_code
+    assert (
+        "image[voxel] = int4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
+    assert "uint oldValue = image[pixelLayer].x;" in generated_code
+    assert (
+        "image[pixelLayer] = uint4((oldValue + value), (oldValue + value), (oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -32109,7 +32125,7 @@ def test_directx_default_float4_image_allows_three_component_load_store():
         in generated_code
     )
     assert "float3 oldValue = image[pixel].xyz;" in generated_code
-    assert "image[pixel] = float4(value, 0.0);" in generated_code
+    assert "image[pixel] = float4(value, 1.0);" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 
@@ -32385,11 +32401,17 @@ def test_directx_rg_image_arrays_respect_scalar_and_vector_context():
         in generated_code
     )
     assert "float oldValue = images[1][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[1][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[1][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[1][pixel];" in generated_code
     assert "float oldValue = images[1][pixel];" not in generated_code
     assert "uint oldValue = images[1][pixel];" not in generated_code
@@ -32469,11 +32491,17 @@ def test_directx_inferred_rg_image_arrays_respect_scalar_context():
         in generated_code
     )
     assert "float oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[1][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[2][pixel];" in generated_code
     assert "RWTexture2D<float2> rgFloatImages[] : register(u0);" not in generated_code
     assert "RWTexture2D<float2> afterImages : register(u3);" not in generated_code
@@ -32573,11 +32601,17 @@ def test_directx_transitive_rg_image_arrays_share_call_site_size():
         in generated_code
     )
     assert "float oldValue = images[3][pixel].x;" in generated_code
-    assert "images[1][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[1][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "images[0][pixel] = (oldValue + value);" in generated_code
     assert "uint oldValue = images[3][pixel].x;" in generated_code
-    assert "images[1][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[1][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint2 oldValue = images[2][pixel];" in generated_code
     assert "float2 vectorFloatDeep(RWTexture2D<float2> images[3]" not in generated_code
     assert "uint2 vectorUnsignedDeep(RWTexture2D<uint2> images[3]" not in generated_code
@@ -33244,9 +33278,15 @@ def test_directx_shadowed_rg_image_array_constant_keeps_scalar_context():
     )
     assert "int LAYER = 0;" in generated_code
     assert "float oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = float2((oldValue + value), 0.0);" in generated_code
+    assert (
+        "images[0][pixel] = float2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "uint oldValue = images[LAYER][pixel].x;" in generated_code
-    assert "images[0][pixel] = uint2((oldValue + value), 0u);" in generated_code
+    assert (
+        "images[0][pixel] = uint2((oldValue + value), (oldValue + value));"
+        in generated_code
+    )
     assert "RWTexture2D<float2> rgFloatImages[4] : register(u0);" not in generated_code
     assert "RWTexture2D<float2> afterImages : register(u4);" not in generated_code
     assert "float oldValue = images[LAYER][pixel];" not in generated_code
@@ -40593,12 +40633,12 @@ def test_directx_storage_image_size_queries_use_get_dimensions_helpers():
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
-    assert "RWTexture2D<uint> uintImage : register(u3);" in generated_code
-    assert "RWTexture3D<int> intVolume : register(u4);" in generated_code
+    assert "RWTexture2D<uint4> uintImage : register(u3);" in generated_code
+    assert "RWTexture3D<int4> intVolume : register(u4);" in generated_code
     assert "int2 imageSize(RWTexture2D<float4> image)" in generated_code
-    assert "int2 imageSize(RWTexture2D<uint> image)" in generated_code
+    assert "int2 imageSize(RWTexture2D<uint4> image)" in generated_code
     assert "int3 imageSize(RWTexture3D<float4> image)" in generated_code
-    assert "int3 imageSize(RWTexture3D<int> image)" in generated_code
+    assert "int3 imageSize(RWTexture3D<int4> image)" in generated_code
     assert "int3 imageSize(RWTexture2DArray<float4> image)" in generated_code
     assert "image.GetDimensions(width, height);" in generated_code
     assert "image.GetDimensions(width, height, depth);" in generated_code
@@ -40670,8 +40710,8 @@ def test_directx_storage_image_levels_and_lod_queries_emit_diagnostics():
     assert "texture query: textureQueryLevels on RWTexture2D<float4>" in refusal
     assert "texture query: textureQueryLevels on RWTexture3D<float4>" in refusal
     assert "texture query: textureQueryLevels on RWTexture2DArray<float4>" in refusal
-    assert "texture query: textureQueryLevels on RWTexture2D<uint>" in refusal
-    assert "texture query: textureQueryLevels on RWTexture3D<int>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture2D<uint4>" in refusal
+    assert "texture query: textureQueryLevels on RWTexture3D<int4>" in refusal
     assert "texture query: textureQueryLod on RWTexture2D<float4>" in refusal
     assert "texture query: textureQueryLod on RWTexture3D<float4>" in refusal
     assert "textureQueryLevels(" not in generated_code
@@ -41485,8 +41525,8 @@ def test_directx_storage_image_samples_queries_emit_diagnostics():
     assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
     assert "RWTexture3D<float4> volumeImage : register(u1);" in generated_code
     assert "RWTexture2DArray<float4> layerImage : register(u2);" in generated_code
-    assert "RWTexture2D<uint> uintImage : register(u3);" in generated_code
-    assert "RWTexture3D<int> intVolume : register(u4);" in generated_code
+    assert "RWTexture2D<uint4> uintImage : register(u3);" in generated_code
+    assert "RWTexture3D<int4> intVolume : register(u4);" in generated_code
     assert diagnostic in refusal
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code

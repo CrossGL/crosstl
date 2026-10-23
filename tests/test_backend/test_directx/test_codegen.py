@@ -4221,7 +4221,7 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     assert "uint v = imageLoad(counters, uvec2(tid.x, 0)).x;" in output
     assert (
         "imageStore(counters, uvec2(tid.x, 0), "
-        "uvec4(imageLoad(counters, uvec2(tid.x, 0)).x + 1u, 0u, 0u, 0u));"
+        "uvec4(imageLoad(counters, uvec2(tid.x, 0)).x + 1u, 0u, 0u, 1u));"
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
@@ -4271,7 +4271,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
 
     assert (
-        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
+        "globallycoherent RWTexture2D<uint4> counters : register(u4, space2);"
         in regenerated_hlsl
     )
     assert "RWTexture2D<float4> outImage : register(u5, space2);" in regenerated_hlsl
@@ -5554,7 +5554,7 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
-    assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
+    assert "Texture2DMSArray<uint4> counters : register(t1);" in hlsl
     assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
     assert "uint count = counters.Load(pixelLayer, sampleIndex).x;" in hlsl
     assert "RWTexture2DMS" not in hlsl

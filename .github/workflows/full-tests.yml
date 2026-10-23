@@ -2,6 +2,8 @@ name: Complete Test Suite
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  POWERSHELL_TELEMETRY_OPTOUT: "1"
+  POWERSHELL_UPDATECHECK: "Off"
 
 on:
   push:
@@ -24,13 +26,14 @@ jobs:
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # One runner took 33 to 66 minutes for the whole suite. tools/pytest_shard.py
-    # splits it by test id, so each shard runs about a third of it.
+    # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
+    # minutes each, the longest job of a merge-queue run; six bring a shard close
+    # to the other gating workflows. Each shard still collects the whole suite.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout repository
@@ -47,6 +50,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
+
+      - name: Rewrite test modules
+        # Otherwise each xdist worker rewrites the asserts of all 800 test modules itself.
+        run: python -m tools.pytest_warm tests demos/integrations
+
+      - name: Start PowerShell once
+        # The first pwsh start on a runner writes its JIT profile and module cache. The MLX
+        # tests that run pwsh allow 15 s, and a cold start under xdist load has exceeded it.
+        run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
       - name: Run complete test suite
         run: |
@@ -99,19 +111,7 @@ jobs:
 
       - name: Install optional shader validators
         if: runner.os == 'Linux'
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install GLSL validator (macOS)
         if: runner.os == 'macOS'
@@ -372,13 +372,15 @@ jobs:
         shell: bash
         env:
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
           CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           python -m pytest -q \
             tests/test_backend/test_directx/test_hlsl_value_array_parameters.py \
-            tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py
+            tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
+            tests/test_translator/test_structured_buffer_counters.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'
@@ -463,19 +465,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install GLSL and SPIR-V tools
-        run: |
-          mapfile -t runner_apt_sources < <(
-            grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-          )
-
-          if ((${#runner_apt_sources[@]})); then
-            printf 'Removing optional hosted-runner apt sources before apt update:\n'
-            printf '  %s\n' "${runner_apt_sources[@]}"
-            sudo rm -f "${runner_apt_sources[@]}"
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
+        uses: ./.github/actions/install-shader-validators
 
       - name: Install DirectX Shader Compiler
         uses: ./.github/actions/install-linux-dxc

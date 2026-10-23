@@ -1248,8 +1248,10 @@ def test_metal_compare_exchange_takes_the_address_of_the_expected_value():
 def test_metal_ballots_are_read_as_their_vote_integer():
     ballot = feature("simd_ballot", Type.other("simd_vote"), Type("bool"))
     source = probes.build(ballot, "metal").source
-    assert "device ulong* outp" in source
+    # The 64-bit mask is stored as a 32-bit buffer element, as every 64-bit result is.
+    assert "device uint* outp" in source
     assert "ulong r = static_cast<simd_vote::vote_t>(simd_ballot(a0));" in source
+    assert "outp[i] = uint(r);" in source
     mask = feature("quad_active_threads_mask", Type.other("quad_vote"))
     source = probes.build(mask, "metal").source
     assert (
