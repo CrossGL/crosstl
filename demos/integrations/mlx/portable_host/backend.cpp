@@ -1975,10 +1975,18 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   // Extrema select an input element, so 16-bit float results need no rounding.
   const bool half_extrema = (in.dtype() == bfloat16 || in.dtype() == float16) &&
       (reduce_type_ == Min || reduce_type_ == Max);
-  const char* dtype = half_extrema ? (in.dtype() == bfloat16 ? "bfloat16" : "float16")
-                                   : storage_type(in.dtype());
   const bool boolean = in.dtype() == bool_;
   const bool logical = reduce_type_ == And || reduce_type_ == Or;
+  // Sums and products of 16-bit floats, and every numeric reduction of the
+  // 8-byte types, accumulate in their element type, as remap_reduce_types
+  // does; they run lazily translated whole-array passes.
+  const bool eight_byte = in.dtype() == int64 || in.dtype() == uint64 || in.dtype() == complex64;
+  const bool wide = eight_byte ? !logical
+      : (in.dtype() == bfloat16 || in.dtype() == float16) &&
+          (reduce_type_ == Sum || reduce_type_ == Prod);
+  const char* dtype = half_extrema ? (in.dtype() == bfloat16 ? "bfloat16" : "float16")
+      : wide ? cast_type(in.dtype())
+             : storage_type(in.dtype());
   const char* operation = nullptr;
   switch (reduce_type_) {
     case And: operation = "and"; break;
@@ -1992,10 +2000,12 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     dispatch_empty_reduce(out, operation);
     return;
   }
-  if (!dtype || in.dtype() == int64 || in.dtype() == uint64 || in.dtype() != out.dtype() ||
+  if (!dtype || (!wide && (in.dtype() == int64 || in.dtype() == uint64)) ||
+      in.dtype() != out.dtype() ||
       (boolean ? (reduce_type_ == Sum || reduce_type_ == Prod) : logical)) {
     throw std::invalid_argument(
-        "CrossTL reductions require matching float32/int32/uint32 numeric arrays or Boolean all/any.");
+        "CrossTL reductions require matching float32/int32/uint32 numeric arrays, "
+        "int64/uint64/complex64 or 16-bit float sums and products, or Boolean all/any.");
   }
   auto plan = get_reduction_plan(in, axes_);
   // Column passes bound their own views; every other plan that is not a
@@ -2010,9 +2020,15 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     in = dense_input(in);
     plan = get_reduction_plan(in, axes_);
   }
-  if (half_extrema && plan.type != ContiguousAllReduce &&
-      !((plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) &&
-        plan.shape.back() <= 64)) {
+  const bool small_rows =
+      (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) &&
+      plan.shape.back() <= 64;
+  if (wide && plan.type != ContiguousAllReduce && !small_rows) {
+    throw std::invalid_argument(
+        "CrossTL int64, uint64, complex64 and 16-bit float sum reductions require "
+        "whole-array or small-row plans.");
+  }
+  if (half_extrema && plan.type != ContiguousAllReduce && !small_rows) {
     throw std::invalid_argument(
         "CrossTL 16-bit float extrema require whole-array or small-row reduction packages.");
   }

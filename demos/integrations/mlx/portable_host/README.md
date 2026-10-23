@@ -1680,6 +1680,33 @@ Non-Metal subnormal bfloat reductions remain rejected under
 [#2000](https://github.com/CrossGL/crosstl/issues/2000). These checks do not establish
 all narrow reduction operations or a complete upstream test-suite pass.
 
+### Wide Whole-Array and Small-Row Reductions
+
+Sums and products of int64, uint64, float16, bfloat16 and complex64, and
+minima and maxima of int64, uint64 and complex64, run the unchanged
+`reduce.metal` `all_reduce` entries. As `remap_reduce_types` in the pinned
+`reduce.cpp` does, each accumulates in its element type, so 16-bit float and
+complex sums round every addition in that type and are never promoted to
+float32. `wide_reduction_packages` translates each entry on first use for its
+exact launch with `reduction_cache`'s checked `in_size` and `row_size`
+metadata; the host keeps upstream's one- or two-pass plan, chosen from logical
+bytes, and moves MLX's exact storage words through `element_storage`.
+`wide_reduction_evidence` recomputes every 64-bit integer pass exactly, with
+sums and products wrapping modulo 2^64 and rows past the input keeping the
+operation's identity. float16, bfloat16 and complex64 passes are checked by
+package and native identity, and their values by the upstream tests'
+comparisons with the CPU. Off Metal, subnormal bfloat16 inputs stay refused
+under [#2000](https://github.com/CrossGL/crosstl/issues/2000).
+
+Row plans of these types whose rows hold at most 64 elements run the same
+types' `row_reduce_small` entries, which `small_row_packages` translates on
+first use for each launch's exact thread grid. On Direct3D and OpenGL each
+launch runs as its dispatch regions, as for the other small rows.
+`wide_row_dispatch` moves exact storage words with a guarded output, and
+`wide_row_evidence` checks every dispatch against its cached packages and
+recomputes 64-bit integer rows from their inputs. Longer rows and column plans
+of these types remain explicit unsupported operations.
+
 ## Random Generation
 
 The optional random package family connects `RandomBits::eval_gpu` to the
@@ -1771,7 +1798,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 83 more unchanged `test_ops` tests on all three
+A dedicated job then runs 86 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1808,8 +1835,9 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_real_imag`, `test_sign` and `test_trig_ops`; `test_clip`,
 `test_concatenate`, `test_meshgrid`, `test_nan_to_num`, `test_pad`,
 `test_pad_reflect_symmetric`, `test_slice_update_reversed` and `test_take`,
-which reach lazy selections of every GPU dtype; and `test_round`, which also
-reaches lazy aranges.
+which reach lazy selections of every GPU dtype; `test_round`, which also
+reaches lazy aranges; and `test_std`, `test_var` and `test_vecdot`, which reach
+wide whole-array and small-row reductions.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
@@ -1831,7 +1859,7 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 9,596 translated kernels, 24 of them indexing kernels and
+native run dispatches 9,705 translated kernels, 24 of them indexing kernels and
 6 steel GEMM kernels; the whole verification takes about 23 minutes on a
 loaded machine.
 

@@ -11,6 +11,9 @@ ITEM_SIZES = {
     "bool_": 1,
     "bfloat16": 2,
     "float16": 2,
+    "int64": 8,
+    "uint64": 8,
+    "complex64": 8,
 }
 # REDUCE_N_READS in the pinned kernels/defines.h.
 N_READS = 4

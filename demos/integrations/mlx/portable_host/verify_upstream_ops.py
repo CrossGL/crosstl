@@ -43,6 +43,10 @@ from demos.integrations.mlx.portable_host import (
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
+    wide_reduction_evidence,
+    wide_reduction_packages,
+    wide_row_dispatch,
+    wide_row_evidence,
 )
 from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
 from demos.integrations.mlx.portable_host.copy_packages import (
@@ -73,6 +77,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 )
 from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.small_row_packages import SmallRowPackageCache
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -170,6 +175,11 @@ UPSTREAM_TESTS = tuple(
         "test_take",
         # This also reaches lazily translated aranges.
         "test_round",
+        # These reach lazily translated wide whole-array and small-row
+        # reductions.
+        "test_std",
+        "test_var",
+        "test_vecdot",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -417,6 +427,34 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Derives the cached package again and checks the native modules;
         # integer results are recomputed from their scalars.
         arange_evidence.audit_event(event, aranges)
+        lazy_checked.add(i)
+        owners[i] += 1
+    wide = wide_reduction_packages.cache(
+        args.mlx_root, args.packages / wide_reduction_packages.CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in wide_reduction_packages.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op wide reduction targets another backend")
+        # Derives the cached package again and checks the native modules;
+        # integer passes are recomputed from their inputs.
+        wide_reduction_evidence.audit_event(event, wide)
+        lazy_checked.add(i)
+        owners[i] += 1
+    wide_rows = SmallRowPackageCache(
+        args.mlx_root, args.packages / "small-rows", target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in wide_row_dispatch.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op wide row reduction targets another backend")
+        # Derives the cached packages again and checks the native modules or
+        # regions; integer rows are recomputed from their inputs.
+        wide_row_evidence.audit_event(
+            event, wide_rows, Path(args.output_dir) / "native/native-modules"
+        )
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

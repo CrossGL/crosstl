@@ -45,6 +45,7 @@ from demos.integrations.mlx.portable_host.gemv_packages import (
 from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.small_row_packages import (
+    ALL_SMALL_ROW_ENTRIES,
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
@@ -139,7 +140,7 @@ def audit_regions(event, packages, modules):
     """Each Direct3D or OpenGL region names its package and native module."""
     regions = event["details"]["regions"]
     require(
-        event["entry"] in SMALL_ROW_ENTRIES and len(regions) == len(packages),
+        event["entry"] in ALL_SMALL_ROW_ENTRIES and len(regions) == len(packages),
         "Lazy dispatch region coverage differs",
     )
     for region, (descriptor, directory) in zip(regions, packages):

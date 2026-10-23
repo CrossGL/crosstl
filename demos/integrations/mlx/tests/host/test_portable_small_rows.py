@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    region_dispatch,
     row_reduction_layout,
     runtime,
     small_row_packages,
@@ -318,7 +319,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
         runtime, "build_native_loader_dispatch_request", prepare_request
     )
     monkeypatch.setattr(
-        runtime, "prepare_native_loader_dispatch_regions", prepare_regions
+        region_dispatch, "prepare_native_loader_dispatch_regions", prepare_regions
     )
     if fault == "metadata":
         memory["row_size"][0] = 65

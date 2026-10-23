@@ -4,7 +4,9 @@ import ctypes
 import math
 
 from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
-from demos.integrations.mlx.portable_host.small_row_packages import SMALL_ROW_ENTRIES
+from demos.integrations.mlx.portable_host.small_row_packages import (
+    ALL_SMALL_ROW_ENTRIES,
+)
 
 SIMPLE = {"in": None, "out": None, "reduction_size": "uint64", "out_size": "int64"}
 LOOPED = {
@@ -43,7 +45,7 @@ def width(row_size):
 
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
-    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    entries = {**ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
@@ -100,11 +102,11 @@ def validate_metadata(
     entry, metadata, logical_size, input_count, output_count, execution
 ):
     """Validate a detached row layout before cache lookup or source translation."""
-    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    entries = {**ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if not isinstance(entry, str) or entry not in entries:
         raise ValueError("Unknown row reduction entry")
     spec = signature(entry)
-    small = entry in SMALL_ROW_ENTRIES
+    small = entry in ALL_SMALL_ROW_ENTRIES
     if (
         not isinstance(metadata, dict)
         or set(metadata) != {name for name, dtype in spec.items() if dtype is not None}

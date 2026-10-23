@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import json
 import math
 import shutil
 import sys
 from pathlib import Path
 
-from crosstl.project import (
-    build_native_loader_dispatch_request,
-    prepare_native_loader_dispatch_regions,
-)
+from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.metal_runtime import MetalComputeRuntime
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
@@ -25,7 +21,6 @@ from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
-    RuntimeExecutorResult,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
@@ -57,10 +52,14 @@ from demos.integrations.mlx.portable_host import (
     quantization_layout,
     random_dispatch,
     reduction_layout,
+    region_dispatch,
     row_reduction_layout,
     scan_dispatch,
     scan_layout,
     slice_update_layout,
+    wide_reduction_dispatch,
+    wide_reduction_packages,
+    wide_row_dispatch,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -476,6 +475,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # So do whole-array reductions of the 8-byte and 16-bit float types.
+        self.wide_reductions = (
+            wide_reduction_packages.cache(
+                mlx_root, self.directory / wide_reduction_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -625,6 +632,11 @@ class HostRuntime:
                 return 1
             if name in arange_packages.ENTRIES and self.aranges is not None:
                 return 1
+            if (
+                name in wide_reduction_packages.ENTRIES
+                and self.wide_reductions is not None
+            ):
+                return 1
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
@@ -745,7 +757,22 @@ class HostRuntime:
             and self.aranges is not None
         )
 
+    def lazy_wide_reduction(self, entry):
+        """Whether ``entry`` runs from the wide whole-array reduction cache."""
+        return (
+            entry in wide_reduction_packages.ENTRIES
+            and self.wide_reductions is not None
+        )
+
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if self.lazy_wide_reduction(entry):
+            return wide_reduction_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in wide_row_dispatch.ENTRIES:
+            return wide_row_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if self.lazy_arange(entry):
             return arange_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
@@ -1311,47 +1338,9 @@ class HostRuntime:
         if matched != set(supplied):
             raise ValueError("Reflected bindings do not cover the operation")
         if small_row and self.target != "metal":
-            adapter = self.executor.runtime_adapter
-            with prepare_native_loader_dispatch_regions(
-                region_packages,
-                inputs,
-                outputs,
-                thread_grid_size=execution["threadGridSize"],
-                source_workgroup_size=execution["workgroupSize"],
-                adapter=adapter,
-            ) as requests:
-                records = []
-                for (region_descriptor, root), request in zip(
-                    region_packages, requests
-                ):
-                    module_bytes = request.module_path.read_bytes()
-                    module_hash = hashlib.sha256(module_bytes).hexdigest()
-                    module = (
-                        self.trace.parent
-                        / "native-modules"
-                        / (module_hash + request.module_path.suffix)
-                    )
-                    module.parent.mkdir(parents=True, exist_ok=True)
-                    module.write_bytes(module_bytes)
-                    records.append(
-                        {
-                            "artifact": region_descriptor["artifact"],
-                            "packageRoot": str(root),
-                            "provenance": region_descriptor["provenance"],
-                            "moduleHash": module_hash,
-                            "moduleFile": str(module),
-                            "workgroupCount": list(request.dispatch.workgroup_count),
-                            "workgroupSize": list(request.dispatch.workgroup_size),
-                        }
-                    )
-                native_outputs = adapter.runtime.dispatch_sequence(None, None, requests)
-                result = RuntimeExecutorResult(
-                    outputs=native_outputs,
-                    details={
-                        "runtime": adapter.runtime.name,
-                        "regions": records,
-                    },
-                )
+            result = region_dispatch.run_regions(
+                self, region_packages, inputs, outputs, execution
+            )
         else:
             request = build_native_loader_dispatch_request(
                 descriptor,
