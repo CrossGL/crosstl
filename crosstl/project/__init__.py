@@ -27,6 +27,7 @@ from .dispatch_planning import (
     DispatchArtifactPlanError,
     plan_dispatch_artifacts,
 )
+from .doctor import toolchain_doctor_report
 from .host_reflection import (
     REFLECTION_AMBIGUOUS_BINDING,
     REFLECTION_EMPTY,
@@ -138,7 +139,6 @@ from .pipeline import (
     plan_runtime_host_loader_consumption,
     plan_runtime_integration,
     scan_project,
-    toolchain_doctor_report,
     translate_project,
     validate_project_report,
 )

@@ -30010,36 +30010,17 @@ def _tool_status(target: str) -> dict[str, Any]:
     }
 
 
-def toolchain_doctor_report() -> dict[str, Any]:
-    """One row per backend: tools looked for, resolved path, and version line."""
-    rows: list[dict[str, Any]] = []
-    for target in sorted(TOOLCHAIN_BY_BACKEND):
-        status = _tool_status(target)
-        version_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
-        version = None
-        if version_command and status["status"] == "available":
-            try:
-                completed = subprocess.run(
-                    list(version_command),
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-                first_line = (completed.stdout or completed.stderr or "").splitlines()
-                version = first_line[0].strip() if first_line else None
-            except (OSError, subprocess.SubprocessError):
-                version = None
-        rows.append(
-            {
-                "target": target,
-                "status": status["status"],
-                "tools": status["tools"],
-                "versionCommand": list(version_command) if version_command else None,
-                "version": version,
-            }
-        )
-    return {"tools": rows}
+def _toolchain_unavailable_message(toolchain: Mapping[str, Any]) -> str:
+    """Name every tool an unavailable validation toolchain is missing from ``PATH``."""
+    missing_tools = [
+        str(tool["name"])
+        for tool in toolchain.get("tools", ())
+        if isinstance(tool, Mapping) and tool.get("name") and not tool.get("available")
+    ]
+    if not missing_tools:
+        return f"No validation toolchain is available for target {toolchain['target']}"
+    verb = "is" if len(missing_tools) == 1 else "are"
+    return f"{', '.join(missing_tools)} {verb} not on PATH"
 
 
 def _status_counts(
@@ -31526,21 +31507,11 @@ def _validate_artifacts(
 
     for toolchain in toolchains:
         if toolchain["status"] == "unavailable":
-            missing_tools = [
-                tool["name"]
-                for tool in toolchain.get("tools", ())
-                if isinstance(tool, Mapping) and not tool.get("available")
-            ]
-            missing_label = (
-                f"{missing_tools[0]} is not on PATH"
-                if missing_tools
-                else f"No validation toolchain is available for target {toolchain['target']}"
-            )
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
-                    message=missing_label,
+                    message=_toolchain_unavailable_message(toolchain),
                     location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],
