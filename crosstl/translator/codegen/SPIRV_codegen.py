@@ -120,6 +120,7 @@ from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_entry_bindings import reserve_entry_buffer_bindings
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -143,6 +144,10 @@ from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
+from .spirv_mesh_builtins import (
+    glsl_mesh_builtin_output_infos,
+    is_glsl_mesh_builtin_output_declaration,
+)
 from .spirv_per_vertex_builtins import (
     lower_per_vertex_builtin_arrays,
     per_vertex_builtin_info,
@@ -173,6 +178,11 @@ from .spirv_stage_distances import (
     entry_point_distance_variable,
     load_entry_point_distance,
     store_entry_point_distance,
+)
+from .spirv_struct_varyings import (
+    flatten_struct_varying,
+    load_flattened_struct_varying,
+    store_flattened_struct_varying,
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
@@ -9304,6 +9314,8 @@ class VulkanSPIRVCodeGen(
         normalized = semantic_map.get(str(semantic), str(semantic))
         if role == "vertices" and normalized == "gl_Position":
             return "Position"
+        if role == "vertices" and normalized == "gl_PointSize":
+            return "PointSize"
         if role == "primitives":
             return {
                 "gl_PrimitiveID": "PrimitiveId",
@@ -9520,6 +9532,12 @@ class VulkanSPIRVCodeGen(
             return True
 
         element_type = info["element_type"]
+        if element_type is None:
+            self.refuse_lowering(
+                f"SPIR-V mesh {info['name']} elements can only be written "
+                "member by member"
+            )
+            return True
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
             self.refuse_lowering(
@@ -14601,15 +14619,29 @@ class VulkanSPIRVCodeGen(
                 ):
                     components.append(self.register_undefined_value(member_type))
                     continue
+                interface_name = self.entry_point_interface_name(
+                    execution_model,
+                    "input",
+                    getattr(param, "name", "param"),
+                    member_name,
+                )
+                fields = flatten_struct_varying(
+                    self,
+                    execution_model,
+                    "Input",
+                    interface_name,
+                    member_type,
+                    member_node,
+                )
+                if fields is not None:
+                    components.append(
+                        load_flattened_struct_varying(self, member_type, fields)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
-                    self.entry_point_interface_name(
-                        execution_model,
-                        "input",
-                        getattr(param, "name", "param"),
-                        member_name,
-                    ),
+                    interface_name,
                     member_type,
                     member_node,
                     member_name=member_name,
@@ -14641,6 +14673,7 @@ class VulkanSPIRVCodeGen(
         if members:
             outputs = []
             distance_outputs = []
+            struct_outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
             distances = entry_point_distance_layout(self, members, metadata)
             member_location = 0
@@ -14663,15 +14696,27 @@ class VulkanSPIRVCodeGen(
                         (member_index, array, member_type, distance)
                     )
                     continue
+                interface_name = self.entry_point_interface_name(
+                    execution_model,
+                    "output",
+                    getattr(function_node, "name", "main"),
+                    member_name,
+                )
+                fields = flatten_struct_varying(
+                    self,
+                    execution_model,
+                    "Output",
+                    interface_name,
+                    member_type,
+                    member_node,
+                )
+                if fields is not None:
+                    struct_outputs.append((member_index, member_type, fields))
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Output",
-                    self.entry_point_interface_name(
-                        execution_model,
-                        "output",
-                        getattr(function_node, "name", "main"),
-                        member_name,
-                    ),
+                    interface_name,
                     member_type,
                     member_node,
                     member_name=member_name,
@@ -14683,6 +14728,7 @@ class VulkanSPIRVCodeGen(
                 "type": return_type,
                 "outputs": outputs,
                 "distances": distance_outputs,
+                "struct_fields": struct_outputs,
             }
 
         variable = self.register_entry_point_interface_variable(
@@ -14968,6 +15014,9 @@ class VulkanSPIRVCodeGen(
         for member_index, target, member_type, slot in outputs.get("distances", ()):
             member_value = self.composite_extract(value, member_type, member_index)
             store_entry_point_distance(self, target, slot, member_value, member_type)
+        for member_index, member_type, fields in outputs.get("struct_fields", ()):
+            member_value = self.composite_extract(value, member_type, member_index)
+            store_flattened_struct_varying(self, member_value, fields)
         self.create_return()
         return True
 
@@ -18143,8 +18192,13 @@ class VulkanSPIRVCodeGen(
         return None
 
     def register_declared_resource_metadata(
-        self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        type_id: SpirvId,
+        decorate: bool = True,
     ):
+        """Record a resource's metadata; ``decorate`` adds its memory decorations, which need a variable."""
         metadata = self.resource_metadata_for_declared_type(type_id)
         if metadata is None or metadata.get("kind") not in {
             "sampled_image",
@@ -18157,7 +18211,7 @@ class VulkanSPIRVCodeGen(
 
         metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
         self.resource_type_metadata[var_id.id] = metadata
-        if metadata.get("kind") == "storage_image":
+        if decorate and metadata.get("kind") == "storage_image":
             self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
@@ -18918,6 +18972,8 @@ class VulkanSPIRVCodeGen(
             function_node, "parameters", getattr(function_node, "params", [])
         )
         parameters = list(parameters or [])
+        if is_entry_point:
+            reserve_entry_buffer_bindings(self, parameters)
         skipped_parameter_indices = (
             set()
             if is_entry_point
@@ -18951,6 +19007,8 @@ class VulkanSPIRVCodeGen(
         if mesh_parameter_execution_model is None and has_mesh_output_parameters:
             mesh_parameter_execution_model = "MeshEXT"
         mesh_output_parameter_indices = set()
+        if is_entry_point and mesh_parameter_execution_model == "MeshEXT":
+            mesh_output_parameters.update(glsl_mesh_builtin_output_infos(self))
 
         for source_param_index, param in enumerate(parameters):
             param_type_source = getattr(
@@ -19083,7 +19141,11 @@ class VulkanSPIRVCodeGen(
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
                 self.variable_value_types[param_id.id] = param_value_type
-            self.register_declared_resource_metadata(param, param_id, param_value_type)
+            # A helper's image parameter is a value, not a memory object declaration, so it takes no
+            # NonWritable or NonReadable decoration (SPIR-V 1.6 section 3.20); the caller's variable has them.
+            self.register_declared_resource_metadata(
+                param, param_id, param_value_type, decorate=False
+            )
 
         self.begin_block()
 
@@ -28923,7 +28985,12 @@ class VulkanSPIRVCodeGen(
         name = getattr(value, "name", None)
         if name in self.enum_variant_values:
             return self.enum_variant_values[name]
-        return None
+        # A case label is an integral constant expression (GLSL 4.60 6.2, HLSL and
+        # MSL follow C++), so named constants and their arithmetic fold to literals.
+        folded = evaluate_literal_int_expression(
+            value, self.active_literal_int_constants()
+        )
+        return None if folded is None else int(folded)
 
     def process_while(self, node: WhileNode):
         """Process a CrossGL while loop."""
@@ -31943,6 +32010,8 @@ class VulkanSPIRVCodeGen(
                 )
                 try:
                     for var in getattr(stage, "local_variables", []):
+                        if is_glsl_mesh_builtin_output_declaration(self, var):
+                            continue
                         if not self.global_variable_exists_for_current_stage(var.name):
                             self.process_global_variable_declaration(var)
                 finally:

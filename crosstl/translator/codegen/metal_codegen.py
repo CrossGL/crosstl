@@ -24294,15 +24294,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         sampler_names = {
             sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
         } | self.current_sampler_parameters
-        return self.metal_referenced_value_type(
-            shared_texture_argument_diagnostic_type(
-                arg,
-                self.texture_resource_type,
-                self.expression_name,
-                self.expression_result_type,
-                sampler_names,
-            )
+        argument_type = shared_texture_argument_diagnostic_type(
+            arg,
+            self.texture_resource_type,
+            self.expression_name,
+            self.expression_result_type,
+            sampler_names,
         )
+        # A reference argument such as `constant float &bias` names its referent's value.
+        if argument_type is None:
+            return None
+        return self.reference_referent_type_name(argument_type) or argument_type
 
     @staticmethod
     def metal_referenced_value_type(vtype):
