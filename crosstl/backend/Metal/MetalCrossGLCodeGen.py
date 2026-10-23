@@ -44,6 +44,11 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .dependent_builtins import (
+    NOT_DEPENDENT,
+    dependent_builtin_result_type,
+    unbound_template_type_names,
+)
 from .enumerator_values import enumerator_values
 from .MetalAst import *
 from .MetalLexer import *
@@ -18115,6 +18120,17 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        dependent = dependent_builtin_result_type(
+            result_kind,
+            argument_types,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+        )
+        if dependent is not NOT_DEPENDENT:
+            # An uninstantiated template resolves the overload per instantiation.
+            return dependent
         diagnostic_argument_types = [
             argument_type or "<unknown>" for argument_type in argument_types
         ]

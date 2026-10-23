@@ -4299,7 +4299,7 @@ def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
     output = generate_crossgl(code)
 
     assert (
-        "void CoherentStore(@ globallycoherent "
+        "void CoherentStore(@ globallycoherent @ buffer_layout(hlsl_structured) "
         "RWStructuredBuffer<Payload> data, uint index)" in output
     )
     assert "data[index].value = 1u;" in output
