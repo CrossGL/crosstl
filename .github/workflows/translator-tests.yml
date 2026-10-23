@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -24,9 +24,25 @@ jobs:
     name: Select Python versions
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      actions: read
     outputs:
       versions: ${{ steps.select.outputs.versions }}
+      tested: ${{ steps.queue.outputs.tested }}
     steps:
+      - name: Check whether the merge queue tested this commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The merge queue moves main to the commit its merge group tested, so a
+          # push to main would repeat a run that already passed on that commit.
+          # When the lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
+          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - name: Select Python versions
         id: select
         env:
@@ -44,6 +60,7 @@ jobs:
 
   test:
     needs: python-versions
+    if: needs.python-versions.outputs.tested != 'true'
     runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
     timeout-minutes: 45
     env:

@@ -24,8 +24,9 @@ touches Metal or Direct3D.
   MLX native, parity, corpus and host tier runs in the queue only when the
   group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
   to `main`. A pull request merges only when this run passes.
-- **Main and nightly.** Pushes to `main` repeat the full Python sweep and
-  publish coverage. The MLX tier, conformance, the corpus and coverage also run
+- **Main and nightly.** Pushes to `main` publish coverage. The translator,
+  backend, complete and examples workflows skip a push whose commit already
+  passed the merge queue, and run in full for any other commit. The MLX tier, conformance, the corpus and coverage also run
   nightly, and fuzzing runs weekly.
 
 A maintainer can request the merge-queue tier on a pull request before
@@ -103,9 +104,10 @@ cache their downloads. Every job has a timeout, and every workflow declares
 least-privilege permissions.
 
 A new push cancels the superseded pull-request runs of the test workflows.
-Pushes to `main` queue behind the run already in progress, and a newer push
-replaces the one still waiting, so a burst of merges runs the sweep once for
-the newest commit; the merge queue has already tested each of them. The
+Coverage and the porting demo queue pushes to `main` behind the run in
+progress, and a newer push replaces the one still waiting, so a burst of merges
+measures and publishes only the newest commit. The other workflows never
+cancel a run on `main`, because a cancelled run turns the status badge red. The
 MLX workflow lets each leg finish, so a long Metal run does not hold up the
 next revision's DirectX or OpenGL legs; cancel superseded MLX runs by hand.
 Suites that take many minutes on macOS or Windows belong in the merge-queue,
