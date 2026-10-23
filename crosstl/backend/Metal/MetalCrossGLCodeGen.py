@@ -44,6 +44,11 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .dependent_builtins import (
+    NOT_DEPENDENT,
+    dependent_builtin_result_type,
+    unbound_template_type_names,
+)
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
@@ -53,6 +58,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .simd_header_types import SIMD_HEADER_TYPES
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
@@ -1077,6 +1083,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
+        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
+        *SIMD_HEADER_TYPES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1756,11 +1764,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "simd_uint3": "uvec3",
             "simd_uint4": "uvec4",
             # simd.h aliases commonly found in shared Metal headers
-            "vector_float2": "vec2",
-            "vector_float3": "vec3",
-            "vector_float4": "vec4",
-            "matrix_float3x3": "mat3",
-            "matrix_float4x4": "mat4",
+            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -18118,6 +18122,17 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        dependent = dependent_builtin_result_type(
+            result_kind,
+            argument_types,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+        )
+        if dependent is not NOT_DEPENDENT:
+            # An uninstantiated template resolves the overload per instantiation.
+            return dependent
         diagnostic_argument_types = [
             argument_type or "<unknown>" for argument_type in argument_types
         ]

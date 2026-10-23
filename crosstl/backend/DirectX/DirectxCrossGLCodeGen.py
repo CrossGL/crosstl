@@ -2029,6 +2029,9 @@ class HLSLToCrossGLConverter(
         )
         if matrix_layout_attributes:
             prefixes.append(matrix_layout_attributes)
+        # A buffer parameter reads the words of the buffer passed to it, so it carries the same layout.
+        if self.is_structured_buffer_resource_type(getattr(parameter, "vtype", None)):
+            prefixes.append(f"@ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})")
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
