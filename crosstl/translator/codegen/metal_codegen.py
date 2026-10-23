@@ -21510,6 +21510,20 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 func_name, index
             ):
                 continue
+            if (
+                isinstance(arg, ArrayLiteralNode)
+                and split_array_type_suffix(self.type_name_string(param_type) or "")[1]
+            ):
+                # A C array parameter is a pointer, and no Metal expression
+                # yields the address of an array literal.
+                args.append(
+                    self.refuse_lowering(
+                        f"array literal argument to '{func_name}': Metal has no array literal "
+                        "expression for an array parameter; a materialized array temporary is "
+                        "required"
+                    )
+                )
+                continue
             native_type = self.metal_native_narrow_bitcast_storage_type(param_type)
             parameters = self.function_parameter_nodes.get(func_name, [])
             qualifiers = (
