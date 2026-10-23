@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Callable, Optional, Union
 
 from ..ast import (
@@ -544,7 +545,27 @@ def _fold_float_math(name: str, kind: str, values: list[float]):
             return None
         return rounded(_UNARY_MATH[name](value))
     if len(values) == 1 and name in _ROUNDING:
-        return float(_ROUNDING[name](values[0]))
+        # A zero result keeps the operand's sign: ceil(-0.5) is -0.0.
+        return math.copysign(float(_ROUNDING[name](values[0])), values[0])
+    if len(values) == 1 and name in {"round", "roundEven"}:
+        (value,) = values
+        if name == "round" and value - math.floor(value) == 0.5:
+            # GLSL rounds a fraction of exactly 0.5 in a direction the
+            # implementation chooses.
+            return None
+        # Python rounds ties to even, as roundEven does.
+        return math.copysign(float(round(value)), value)
+    if name == "mod" and len(values) == 2:
+        x, y = values
+        if y == 0.0:
+            return None
+        # GLSL defines mod(x, y) as x - y * floor(x / y).
+        return rounded(x - rounded(y * math.floor(rounded(x / y))))
+    if name == "fmod" and len(values) == 2:
+        # The C remainder is exact, so it needs no rounding.
+        return None if values[1] == 0.0 else math.fmod(values[0], values[1])
+    if name == "fma" and len(values) == 3:
+        return fused_multiply_add(kind, *values)
     if name == "fract" and len(values) == 1:
         return rounded(values[0] - math.floor(values[0]))
     if name == "saturate" and len(values) == 1:
@@ -573,10 +594,116 @@ def _fold_float_math(name: str, kind: str, values: list[float]):
     return None
 
 
+_BINARY_FORMATS = {"float": (24, -126, 127), "double": (53, -1022, 1023)}
+
+
+def round_fraction(value: Fraction, kind: str) -> float:
+    """Round exact rational *value* once to the nearest *kind* value, ties to even."""
+    precision, minimum_exponent, maximum_exponent = _BINARY_FORMATS[kind]
+    if value == 0:
+        return 0.0
+    sign = -1.0 if value < 0 else 1.0
+    magnitude = abs(value)
+    exponent = magnitude.numerator.bit_length() - magnitude.denominator.bit_length()
+    if Fraction(2) ** exponent > magnitude:
+        exponent -= 1
+    if Fraction(2) ** (exponent + 1) <= magnitude:
+        exponent += 1
+    quantum = Fraction(2) ** (max(exponent, minimum_exponent) - precision + 1)
+    steps, remainder = divmod(magnitude, quantum)
+    if remainder * 2 > quantum or (remainder * 2 == quantum and steps % 2):
+        steps += 1
+    result = steps * quantum
+    if result >= Fraction(2) ** (maximum_exponent + 1):
+        return sign * math.inf
+    return sign * float(result)
+
+
+def fused_multiply_add(kind: str, a: float, b: float, c: float) -> float:
+    """Return ``a * b + c`` rounded once, as a fused multiply-add computes it."""
+    exact = Fraction(a) * Fraction(b) + Fraction(c)
+    if exact != 0:
+        return round_fraction(exact, kind)
+    product_negative = math.copysign(1.0, a) * math.copysign(1.0, b) < 0
+    if (a == 0.0 or b == 0.0) and c == 0.0:
+        # IEEE 754: the sum of two zeros is -0 only when both are -0.
+        if product_negative and math.copysign(1.0, c) < 0:
+            return -0.0
+    return 0.0
+
+
+_SMALLEST_NORMAL = {"float": 2.0**-126, "double": 2.0**-1022}
+
+
+def _fold_ldexp(
+    mantissa: ScalarConstant, exponent: ScalarConstant
+) -> ScalarConstant | None:
+    if exponent.kind not in INTEGER_KINDS or mantissa.kind == "bool":
+        return None
+    kind = mantissa.kind if mantissa.kind in FLOAT_KINDS else "float"
+    mantissa = convert_scalar_constant(mantissa, kind)
+    if mantissa is None or not math.isfinite(mantissa.value):
+        return None
+    if mantissa.value == 0.0:
+        return mantissa
+    if not -1200 <= exponent.value <= 1200:
+        return None
+    result = round_fraction(
+        Fraction(mantissa.value) * Fraction(2) ** exponent.value, kind
+    )
+    # GLSL leaves overflow undefined, and a subnormal result may be flushed.
+    if not math.isfinite(result) or abs(result) < _SMALLEST_NORMAL[kind]:
+        return None
+    return ScalarConstant(kind, result)
+
+
+# Reinterpreting casts: (operand kind or None for "any 32-bit kind", result kind).
+_BIT_CASTS = {
+    "floatBitsToInt": ("float", "int"),
+    "floatBitsToUint": ("float", "uint"),
+    "intBitsToFloat": ("int", "float"),
+    "uintBitsToFloat": ("uint", "float"),
+    "asint": (None, "int"),
+    "asuint": (None, "uint"),
+    "asfloat": (None, "float"),
+}
+
+# The only NaN a float constant literal can spell (0x1.8p+128).
+_CANONICAL_NAN_BITS = 0x7FC00000
+
+
+def _fold_bit_cast(name: str, argument: ScalarConstant) -> ScalarConstant | None:
+    source, target = _BIT_CASTS[name]
+    if source is None:
+        source = argument.kind
+    if source == "float":
+        if argument.kind not in ("float", "int", "uint"):
+            return None
+    elif source not in ("int", "uint") or argument.kind not in ("int", "uint"):
+        return None
+    argument = convert_scalar_constant(argument, source)
+    if source == "float":
+        if math.isnan(argument.value):
+            return None
+        bits = struct.unpack("<I", struct.pack("<f", argument.value))[0]
+    else:
+        bits = argument.value & 0xFFFFFFFF
+    if target == "float":
+        value = struct.unpack("<f", struct.pack("<I", bits))[0]
+        if math.isnan(value) and bits != _CANONICAL_NAN_BITS:
+            return None
+        return ScalarConstant("float", value)
+    return ScalarConstant(target, _wrap_integer(target, bits))
+
+
 def fold_math_builtin(
     name: str, arguments: list[ScalarConstant]
 ) -> ScalarConstant | None:
     """Fold a scalar call to a CrossGL math built-in, or return ``None``."""
+    if name in _BIT_CASTS and len(arguments) == 1:
+        return _fold_bit_cast(name, arguments[0])
+    if name == "ldexp" and len(arguments) == 2:
+        return _fold_ldexp(*arguments)
     integer = all(argument.kind in INTEGER_KINDS for argument in arguments)
     if integer and name in {"abs", "min", "max", "clamp", "sign"}:
         kind = arguments[0].kind
@@ -630,6 +757,8 @@ __all__ = (
     "common_kind",
     "convert_scalar_constant",
     "fold_math_builtin",
+    "fused_multiply_add",
+    "round_fraction",
     "round_to_binary32",
     "shortest_binary32_text",
 )
