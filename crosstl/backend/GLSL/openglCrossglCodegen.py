@@ -1908,7 +1908,7 @@ class GLSLToCrossGLConverter:
     )
 
     def private_global_prefix(self, var):
-        """``static `` for a global without a storage qualifier, which GLSL makes private to each invocation.
+        """``static`` for a global without a storage qualifier, which GLSL makes private to each invocation.
 
         GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
         is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
