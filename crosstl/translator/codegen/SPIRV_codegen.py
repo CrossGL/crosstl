@@ -120,6 +120,7 @@ from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
+from .spirv_entry_bindings import reserve_entry_buffer_bindings
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -144,9 +145,8 @@ from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
 from .spirv_mesh_builtins import (
-    mesh_builtin_member_builtin,
-    mesh_builtin_output_info,
-    mesh_index_builtin_variable,
+    glsl_mesh_builtin_output_infos,
+    is_glsl_mesh_builtin_output_declaration,
 )
 from .spirv_per_vertex_builtins import (
     lower_per_vertex_builtin_arrays,
@@ -9307,10 +9307,6 @@ class VulkanSPIRVCodeGen(
         """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
         if semantic is None:
             return None
-        extra_builtin = mesh_builtin_member_builtin(role, semantic)
-        if extra_builtin is not None:
-            return extra_builtin
-
         semantic_map = {
             "SV_Position": "gl_Position",
             "POSITION": "POSITION",
@@ -9324,12 +9320,15 @@ class VulkanSPIRVCodeGen(
         normalized = semantic_map.get(str(semantic), str(semantic))
         if role == "vertices" and normalized == "gl_Position":
             return "Position"
+        if role == "vertices" and normalized == "gl_PointSize":
+            return "PointSize"
         if role == "primitives":
             return {
                 "gl_PrimitiveID": "PrimitiveId",
                 "gl_Layer": "Layer",
                 "gl_ViewportIndex": "ViewportIndex",
                 "gl_CullPrimitiveEXT": "CullPrimitiveEXT",
+                "gl_PrimitiveShadingRateEXT": "PrimitiveShadingRateKHR",
             }.get(normalized)
         return None
 
@@ -9535,18 +9534,17 @@ class VulkanSPIRVCodeGen(
                 )
             return True
 
-        element_type = info["element_type"]
-        if element_type is None:
-            # GL_EXT_mesh_shader built-in blocks are written member by member.
-            self.refuse_lowering(
-                f"SPIR-V mesh output {info['name']} elements are assigned member by member"
-            )
-            return True
-
         value = self.process_expression(value_expr)
         if value is None:
             return True
 
+        element_type = info["element_type"]
+        if element_type is None:
+            self.refuse_lowering(
+                f"SPIR-V mesh {info['name']} elements can only be written "
+                "member by member"
+            )
+            return True
         value = self.convert_value_to_type(value, element_type)
         if not self.value_has_type(value, element_type):
             self.refuse_lowering(
@@ -9975,8 +9973,6 @@ class VulkanSPIRVCodeGen(
         array_expr = getattr(node, "array", getattr(node, "array_expr", None))
         name = self.expression_name(array_expr)
         info = self.current_mesh_output_parameters.get(name)
-        if info is None:
-            info = mesh_builtin_output_info(self, name)
         if info is None:
             return None
         index_expr = getattr(node, "index", getattr(node, "index_expr", None))
@@ -18203,8 +18199,13 @@ class VulkanSPIRVCodeGen(
         return None
 
     def register_declared_resource_metadata(
-        self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        type_id: SpirvId,
+        decorate: bool = True,
     ):
+        """Record a resource's metadata; ``decorate`` adds its memory decorations, which need a variable."""
         metadata = self.resource_metadata_for_declared_type(type_id)
         if metadata is None or metadata.get("kind") not in {
             "sampled_image",
@@ -18217,7 +18218,7 @@ class VulkanSPIRVCodeGen(
 
         metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
         self.resource_type_metadata[var_id.id] = metadata
-        if metadata.get("kind") == "storage_image":
+        if decorate and metadata.get("kind") == "storage_image":
             self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
@@ -18978,6 +18979,8 @@ class VulkanSPIRVCodeGen(
             function_node, "parameters", getattr(function_node, "params", [])
         )
         parameters = list(parameters or [])
+        if is_entry_point:
+            reserve_entry_buffer_bindings(self, parameters)
         skipped_parameter_indices = (
             set()
             if is_entry_point
@@ -19011,6 +19014,8 @@ class VulkanSPIRVCodeGen(
         if mesh_parameter_execution_model is None and has_mesh_output_parameters:
             mesh_parameter_execution_model = "MeshEXT"
         mesh_output_parameter_indices = set()
+        if is_entry_point and mesh_parameter_execution_model == "MeshEXT":
+            mesh_output_parameters.update(glsl_mesh_builtin_output_infos(self))
 
         for source_param_index, param in enumerate(parameters):
             param_type_source = getattr(
@@ -19143,7 +19148,11 @@ class VulkanSPIRVCodeGen(
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
                 self.variable_value_types[param_id.id] = param_value_type
-            self.register_declared_resource_metadata(param, param_id, param_value_type)
+            # A helper's image parameter is a value, not a memory object declaration, so it takes no
+            # NonWritable or NonReadable decoration (SPIR-V 1.6 section 3.20); the caller's variable has them.
+            self.register_declared_resource_metadata(
+                param, param_id, param_value_type, decorate=False
+            )
 
         self.begin_block()
 
@@ -20354,9 +20363,6 @@ class VulkanSPIRVCodeGen(
         semantic = self.spirv_interface_semantic_alias(
             str(semantic), self.current_execution_model, storage_class
         )
-        index_output = mesh_index_builtin_variable(self, semantic, storage_class)
-        if index_output is not None:
-            return index_output
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
         if builtin is None:
             return None
@@ -28998,11 +29004,12 @@ class VulkanSPIRVCodeGen(
         name = getattr(value, "name", None)
         if name in self.enum_variant_values:
             return self.enum_variant_values[name]
-        # Case labels may name integer constants (HLSL/GLSL `const uint X = 1;`)
-        # or fold constant arithmetic; OpSwitch needs the folded literal.
-        return evaluate_literal_int_expression(
+        # A case label is an integral constant expression (GLSL 4.60 6.2, HLSL and
+        # MSL follow C++), so named constants and their arithmetic fold to literals.
+        folded = evaluate_literal_int_expression(
             value, self.active_literal_int_constants()
         )
+        return None if folded is None else int(folded)
 
     def process_while(self, node: WhileNode):
         """Process a CrossGL while loop."""
@@ -32038,6 +32045,8 @@ class VulkanSPIRVCodeGen(
                 )
                 try:
                     for var in getattr(stage, "local_variables", []):
+                        if is_glsl_mesh_builtin_output_declaration(self, var):
+                            continue
                         if not self.global_variable_exists_for_current_stage(var.name):
                             self.process_global_variable_declaration(var)
                 finally:
