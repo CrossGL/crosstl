@@ -15,6 +15,7 @@ from .lowering_refusals import LoweringRefused
 
 __all__ = [
     "OpenGLLoweringRefused",
+    "input_attachment_refusal_reason",
     "WebGLLoweringRefused",
     "patch_parameter_refusal_reason",
     "stageless_entry_refusal_reason",
@@ -83,3 +84,20 @@ def patch_parameter_refusal_reason(parameter_name, type_name):
         f"tessellation patch parameter '{parameter_name}' of type '{type_name}' has no GLSL stage variable "
         "form: GLSL reads control points through gl_in[] and per-vertex input arrays"
     )
+
+
+def input_attachment_refusal_reason(node):
+    """Return why an input attachment has no OpenGL form, or ``None`` for other globals.
+
+    ``subpassInput`` and ``subpassLoad`` exist only in Vulkan GLSL (GL_KHR_vulkan_glsl section 4.1.7); OpenGL and
+    OpenGL ES have no render-pass input attachments. Emitting the binding as a sampler compiles to a call with no
+    matching overload, so the construct is refused instead; SPIR-V output keeps it as an input attachment.
+    """
+    for attribute in getattr(node, "attributes", None) or []:
+        if str(getattr(attribute, "name", "")).lower() == "input_attachment_index":
+            name = getattr(node, "name", None) or "<unnamed>"
+            return (
+                f"input attachment '{name}': OpenGL has no subpass inputs (subpassInput exists only in Vulkan "
+                "GLSL, GL_KHR_vulkan_glsl); translate to SPIR-V for Vulkan"
+            )
+    return None

@@ -225,6 +225,7 @@ from .glsl_interface_block_io import (
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
+    input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
@@ -240,6 +241,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
     flattened_stage_output_assignment,
@@ -8986,6 +8988,10 @@ class GLSLCodeGen(
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        for node in all_global_vars:
+            input_attachment_reason = input_attachment_refusal_reason(node)
+            if input_attachment_reason is not None:
+                self.refuse_lowering(input_attachment_reason)
         specialization_global_ids = {
             id(node) for node in self.glsl_global_specialization_constants
         }
@@ -21054,6 +21060,8 @@ class GLSLCodeGen(
         for declaration in self.stage_builtin_parameter_local_alias_declarations(
             func, shader_type
         ):
+            code += f"    {declaration}\n"
+        for declaration in stage_input_struct_value_declarations(self, func):
             code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
             code += self.generate_glsl_hlsl_cbuffer_loads(1)
