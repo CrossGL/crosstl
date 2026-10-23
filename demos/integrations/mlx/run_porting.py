@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -522,6 +523,17 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_SOFTMAX_SOURCE,
     MLX_TERNARY_SOURCE,
 )
+# Frontier sources the SPIR-V emitter refuses, fail-closed, with the diagnostic code each must raise.
+# Before #2256 these produced SPIR-V that dropped the construct, so they were never translated correctly.
+MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {
+    MLX_BINARY_TWO_SOURCE: (
+        "project.translate.vulkan-half-float-unsupported",
+        "https://github.com/CrossGL/crosstl/issues/2284",
+    ),
+}
+# LayerNorm also needs the SPIR-V lowering tracked in
+# https://github.com/CrossGL/crosstl/issues/2283, but its kernels take the host's
+# threadgroup size, so Vulkan refuses it first as a dynamic-workgroup source.
 MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_LAYER_NORM_SOURCE,
@@ -529,6 +541,21 @@ MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_RMS_NORM_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
+)
+# Vulkan fixes the workgroup size in the shader, as DirectX and OpenGL do (#2601).
+# A multi-entry artifact whose kernels take the host's threadgroup size therefore
+# refuses there too, instead of emitting LocalSize 1 1 1 for every entry.
+MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    and source not in MLX_VULKAN_FRONTIER_REFUSALS
+)
+MLX_VULKAN_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source not in MLX_VULKAN_FRONTIER_REFUSALS
+    and source not in MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
 MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
     source
@@ -1038,9 +1065,6 @@ GEMV_OPENGL_SUBGROUP_WIDTH_ENFORCEMENT = {
 }
 FFT_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FFT_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
-FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
-FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 99
-FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = 22
 FFT_INDEX_RANGE_ASSERTIONS = tuple(
     {
         "source": MLX_FFT_SOURCE,
@@ -1054,23 +1078,6 @@ FFT_INDEX_RANGE_ASSERTIONS = tuple(
         "batch_idx + index + next_in",
         "batch_idx + index + next_out",
     )
-)
-# OpenGL lowers storage-pointer offsets to signed int logical-offset locals, so
-# its FFT access expressions must fit [0, 2^31 - 1]; the unsigned DirectX bound
-# is rejected as index-range-out-of-target-range.
-FFT_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
-    {**assertion, "maximum": (1 << 31) - 1} for assertion in FFT_INDEX_RANGE_ASSERTIONS
-)
-FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS = tuple(
-    {
-        "source": MLX_FFT_SOURCE,
-        "entry_point": f"*mem_{extent}_*",
-        "function": "*",
-        "parameter": "*",
-        "minimum": 0,
-        "maximum": extent - 1,
-    }
-    for extent in (256, 512, 1024, 2048, 4096)
 )
 FFT_DIRECTX_ENTRY_POINT = "fft_mem_256_float2_float2"
 FFT_DIRECTX_WORKGROUP_SIZE = (1, 1, 64)
@@ -1120,6 +1127,40 @@ FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS = (
         "maximum": 255,
     },
 )
+# OpenGL fixes local_size in the shader, so the FFT replay selects the same
+# fft_mem_256_float2_float2 entry, host workgroup size and function constants as
+# DirectX: MLX dispatches that kernel in (1, 1, 64) groups for a power-of-two
+# 256-point transform with four elements per thread.
+FFT_OPENGL_ENTRY_POINT = FFT_DIRECTX_ENTRY_POINT
+FFT_OPENGL_WORKGROUP_SIZE = FFT_DIRECTX_WORKGROUP_SIZE
+FFT_OPENGL_SPECIALIZATION_CONSTANTS = FFT_DIRECTX_SPECIALIZATION_CONSTANTS
+FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS = FFT_DIRECTX_WORKGROUP_ACCESS_ASSERTIONS
+FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 300
+FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT
+FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = (
+    FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT
+)
+FFT_OPENGL_HELPER_INDEX_RANGES_ISSUE = "https://github.com/CrossGL/crosstl/issues/2178"
+# OpenGL lowers storage-pointer offsets to signed int logical-offset locals, so
+# its FFT access expressions must fit [0, 2^31 - 1]; the unsigned DirectX bound
+# is rejected as index-range-out-of-target-range. With a fixed workgroup size the
+# shared_in pointer and the device pointers become resource references whose
+# generated load/store helpers index `reference.offset + index`. Those helpers
+# do not inherit the source bounds yet (#2178), so the same preconditions are
+# restated there: the 256-element shared_in extent and the signed device range.
+FFT_OPENGL_INDEX_RANGE_ASSERTIONS = tuple(
+    {**assertion, "maximum": (1 << 31) - 1} for assertion in FFT_INDEX_RANGE_ASSERTIONS
+) + tuple(
+    {
+        "source": MLX_FFT_SOURCE,
+        "function": f"crosstl_{storage}_{operation}_vec2",
+        "expression": "reference.offset + index",
+        "minimum": 0,
+        "maximum": maximum,
+    }
+    for storage, maximum in (("workgroup", 255), ("resource", (1 << 31) - 1))
+    for operation in ("load", "store")
+)
 OPENGL_QUANTIZED_INDEX_TYPE_RESOLVED_ISSUE = (
     "https://github.com/CrossGL/crosstl/issues/1515"
 )
@@ -1149,9 +1190,22 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     "artifact_count": 1,
     "translation_diagnostic_count": 0,
     "required_capabilities": [],
+    "execution_contract": {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [64, 1, 1],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+            "source": "mlx/backend/metal/quantized.cpp",
+            "function": "quantize_dequantize",
+            "workgroup_expression": "MTL::Size(thread_group_size, 1, 1)",
+            "thread_group_size": "min(maxTotalThreadsPerThreadgroup, nthreads)",
+        },
+    },
     "generated_hlsl": {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "size_bytes": 5704,
+        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
+        "size_bytes": 5721,
     },
     "materialization": {
         "reachable_specialization_count": 5,
@@ -1171,7 +1225,7 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
     },
     "compiler_validation": {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": True,
         "status": "passed",
@@ -1274,8 +1328,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "size_bytes": 17865,
+        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
+        "size_bytes": 17917,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -7097,6 +7151,59 @@ def _translate_directx_frontier(
     }
 
 
+def _require_vulkan_frontier_refusals(
+    mlx_root: Path,
+    *,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> list[dict[str, str]]:
+    """Each refused Vulkan frontier source must fail closed with its tracked diagnostic code."""
+    sources = tuple(MLX_VULKAN_FRONTIER_REFUSALS)
+    _result, payload, _config_path, _report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="vulkan-frontier-refusals",
+        target="vulkan",
+        sources=sources,
+        output_dir=work_dir / "out-vulkan-frontier-refusals",
+        check=False,
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+    )
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        "Vulkan frontier refusal records are incomplete",
+    )
+    statuses = {
+        artifact.get("source"): artifact.get("status")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+    }
+    codes_by_source: dict[str, set[str]] = {source: set() for source in sources}
+    for diagnostic in payload.get("diagnostics") or []:
+        if not isinstance(diagnostic, Mapping) or diagnostic.get("severity") != "error":
+            continue
+        location = diagnostic.get("location")
+        source = location.get("file") if isinstance(location, Mapping) else None
+        if source in codes_by_source:
+            codes_by_source[source].add(str(diagnostic.get("code")))
+    refusals = []
+    for source, (code, issue) in MLX_VULKAN_FRONTIER_REFUSALS.items():
+        _require(
+            statuses.get(source) == "failed" and code in codes_by_source[source],
+            f"Vulkan frontier source {source} no longer fails with {code}; "
+            f"if {issue} is fixed, move it back into the clean frontier",
+        )
+        refusals.append({"source": source, "code": code, "issue": issue})
+    return refusals
+
+
 def _translate_vulkan_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -7117,7 +7224,7 @@ def _translate_vulkan_frontier(
         python=python,
         command_name="vulkan-frontier",
         target="vulkan",
-        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        sources=MLX_VULKAN_FRONTIER_SOURCES,
         output_dir=output_dir,
         validate=True,
         specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
@@ -7127,10 +7234,14 @@ def _translate_vulkan_frontier(
         output_dir,
         payload,
         target="vulkan",
-        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        sources=MLX_VULKAN_FRONTIER_SOURCES,
     )
-    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
-        mlx_root, payload
+    # The local-alias regression needs a translated Vulkan attention artifact; it
+    # applies again once the attention source leaves the dynamic-workgroup set.
+    regression_evidence = (
+        [_scaled_attention_local_alias_evidence(mlx_root, payload)]
+        if MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in MLX_VULKAN_FRONTIER_SOURCES
+        else []
     )
 
     vulkan_runs: list[Mapping[str, Any]] = []
@@ -7146,7 +7257,7 @@ def _translate_vulkan_frontier(
                 python=python,
                 command_name="validate-vulkan-frontier-toolchain",
                 target="vulkan",
-                sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+                sources=MLX_VULKAN_FRONTIER_SOURCES,
                 output_dir=toolchain_output_dir,
                 run_toolchains=True,
                 specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
@@ -7157,7 +7268,7 @@ def _translate_vulkan_frontier(
             toolchain_output_dir,
             toolchain_payload,
             target="vulkan",
-            sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+            sources=MLX_VULKAN_FRONTIER_SOURCES,
         )
         validation = toolchain_payload.get("validation")
         runs = (
@@ -7181,22 +7292,68 @@ def _translate_vulkan_frontier(
                 "Vulkan toolchain did not validate every configured source artifact",
             )
 
+    refusals = _require_vulkan_frontier_refusals(
+        mlx_root,
+        work_dir=work_dir,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+    )
+
+    blocked_output_dir = work_dir / "out-vulkan-workgroup-frontier"
+    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+        _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="vulkan-workgroup-frontier",
+            target="vulkan",
+            sources=MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            output_dir=blocked_output_dir,
+            validate=True,
+            check=False,
+            specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+        )
+    )
+    _require(
+        blocked_result.returncode == 1,
+        "Vulkan dynamic-workgroup frontier must fail with exit code 1",
+    )
+    _require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        blocked_output_dir,
+        blocked_payload,
+        target="vulkan",
+        sources=MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=True,
+    )
+
     return {
         "name": "vulkan-frontier",
         "status": "passed",
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
-        "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "translatedArtifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "sources": list(MLX_VULKAN_FRONTIER_SOURCES),
+        "unitCount": len(MLX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_VULKAN_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_VULKAN_FRONTIER_SOURCES),
         "target": "vulkan",
         "toolchainRuns": len(vulkan_runs),
         "vulkanToolchainRequired": require_toolchain,
         "vulkanValidationStatus": "validated" if vulkan_runs else "not-run",
         "semanticReadinessStatus": "not-established",
-        "regressionEvidence": [scaled_attention_alias_evidence],
+        "regressionEvidence": regression_evidence,
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
+        "trackedRefusals": refusals,
+        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
+        "workgroupBlockedSources": list(MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedEntryPointCount": sum(
+            MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            for source in MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        ),
         "runtimeParityClaimed": False,
     }
 
@@ -7652,6 +7809,138 @@ def _check_opengl_frontier(
     }
 
 
+def _check_generated_pin(
+    subject: str,
+    *,
+    sha256: str,
+    size_bytes: int,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> bool:
+    """Check a reviewed generated-artifact pin under ``CROSSTL_MLX_PIN_MODE``.
+
+    Strict mode fails on drift. Report mode prints one ``MLX-PIN-DRIFT`` line per
+    drifted value, which is enough to refresh the pin, and lets the check go on.
+    """
+
+    matches = True
+    for field, actual, expected in (
+        ("generatedHash", sha256, expected_sha256),
+        ("generatedSizeBytes", size_bytes, expected_size_bytes),
+    ):
+        if actual == expected:
+            continue
+        matches = False
+        message = (
+            f"{subject}: pinned {field} changed from {expected!r} to {actual!r}; "
+            "review the new artifact and update the pin"
+        )
+        _require(_pin_mode() == "report", message)
+        record = {"subject": subject, "field": field}
+        record.update(expected=expected, actual=actual)
+        print("MLX-PIN-DRIFT " + json.dumps(record, sort_keys=True), file=sys.stderr)
+    return matches
+
+
+def _pin_mode() -> str:
+    mode = os.environ.get("CROSSTL_MLX_PIN_MODE", "").strip() or "strict"
+    _require(
+        mode in {"strict", "report"},
+        f"CROSSTL_MLX_PIN_MODE must be strict or report, not {mode!r}",
+    )
+    return mode
+
+
+def _require_fft_entry_scoped_artifact(
+    artifact: Any,
+    *,
+    target: str,
+    label: str,
+    source_entry_point: str,
+    target_entry_point: str,
+    workgroup_size: Sequence[int],
+    function_constant_count: int,
+    deferred_constants: bool,
+) -> None:
+    """Require one entry-scoped FFT artifact with its host workgroup contract.
+
+    DirectX folds the configured function constants into the module. OpenGL
+    keeps them as SPIR-V specialization constants that the host must specialize
+    to the configured values, which the report records as concrete values.
+    """
+
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    entry = artifact.get("entryPoint") if isinstance(artifact, Mapping) else None
+    execution = artifact.get("execution") if isinstance(artifact, Mapping) else None
+    execution_entries = (
+        execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    )
+    rules_path = f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"]'
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_FFT_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == target
+        and artifact.get("status") == "translated"
+        and artifact.get("provenance") == {
+            "intermediate": "crossgl",
+            "pipeline": "entry-scoped-translate",
+        }
+        and artifact.get("sourceHash") == {
+            "algorithm": "sha256",
+            "value": MLX_FFT_SHA256,
+        }
+        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES
+        and isinstance(artifact_path, str)
+        and entry == {
+            "source": source_entry_point,
+            "stage": "compute",
+            "target": target_entry_point,
+        },
+        f"{label} FFT translated artifact contract changed",
+    )
+    _require(
+        isinstance(execution, Mapping)
+        and execution.get("sourceEntryPoints") == [source_entry_point]
+        and execution.get("provenance") == {
+            "kind": "materialized-template-entry-rules",
+            "path": rules_path,
+        }
+        and isinstance(execution_entries, list)
+        and len(execution_entries) == 1
+        and isinstance(execution_entries[0], Mapping)
+        and execution_entries[0].get("sourceEntryPoint") == source_entry_point
+        and execution_entries[0].get("materializedEntryPoint") == source_entry_point
+        and execution_entries[0].get("targetEntryPoint") == target_entry_point
+        and execution_entries[0].get("workgroupSize") == list(workgroup_size)
+        and execution_entries[0].get("rule") == {
+            "components": [str(value) for value in workgroup_size],
+            "entryPattern": source_entry_point,
+            "path": f"{rules_path}.{source_entry_point}",
+            "sourcePattern": MLX_FFT_SOURCE,
+        },
+        f"{label} FFT execution contract changed",
+    )
+    specialization_constants = artifact.get("specializationConstants", [])
+    constants_by_id = {
+        record.get("id"): record
+        for record in specialization_constants
+        if isinstance(record, Mapping)
+    }
+    _require(
+        len(specialization_constants) == function_constant_count
+        and set(constants_by_id) == set(FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS)
+        and all(
+            constants_by_id[constant_id].get("concreteValue") == expected_value
+            and constants_by_id[constant_id].get("deferred") is deferred_constants
+            for constant_id, expected_value in (
+                FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS.items()
+            )
+        ),
+        f"{label} FFT function-constant materialization changed",
+    )
+
+
 def _check_fft_directx_toolchain(
     mlx_root: Path,
     work_dir: Path,
@@ -7777,79 +8066,15 @@ def _check_fft_directx_toolchain(
     )
     artifact = artifacts[0]
     artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
-    entry = artifact.get("entryPoint") if isinstance(artifact, Mapping) else None
-    execution = artifact.get("execution") if isinstance(artifact, Mapping) else None
-    execution_entries = (
-        execution.get("entryPoints") if isinstance(execution, Mapping) else None
-    )
-    expected_rule_path = (
-        f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"].'
-        f"{FFT_DIRECTX_ENTRY_POINT}"
-    )
-    _require(
-        isinstance(artifact, Mapping)
-        and artifact.get("source") == MLX_FFT_SOURCE
-        and artifact.get("sourceBackend") == "metal"
-        and artifact.get("target") == "directx"
-        and artifact.get("status") == "translated"
-        and artifact.get("provenance") == {
-            "intermediate": "crossgl",
-            "pipeline": "entry-scoped-translate",
-        }
-        and artifact.get("sourceHash") == {
-            "algorithm": "sha256",
-            "value": MLX_FFT_SHA256,
-        }
-        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES
-        and isinstance(artifact_path, str)
-        and entry == {
-            "source": FFT_DIRECTX_ENTRY_POINT,
-            "stage": "compute",
-            "target": "CSMain",
-        },
-        "DirectX FFT translated artifact contract changed",
-    )
-    _require(
-        isinstance(execution, Mapping)
-        and execution.get("sourceEntryPoints") == [FFT_DIRECTX_ENTRY_POINT]
-        and execution.get("provenance") == {
-            "kind": "materialized-template-entry-rules",
-            "path": f'project.entry_workgroup_size_rules["{MLX_FFT_SOURCE}"]',
-        }
-        and isinstance(execution_entries, list)
-        and len(execution_entries) == 1
-        and execution_entries[0].get("sourceEntryPoint") == FFT_DIRECTX_ENTRY_POINT
-        and execution_entries[0].get("materializedEntryPoint")
-        == FFT_DIRECTX_ENTRY_POINT
-        and execution_entries[0].get("targetEntryPoint") == "CSMain"
-        and execution_entries[0].get("workgroupSize")
-        == list(FFT_DIRECTX_WORKGROUP_SIZE)
-        and execution_entries[0].get("rule") == {
-            "components": [str(value) for value in FFT_DIRECTX_WORKGROUP_SIZE],
-            "entryPattern": FFT_DIRECTX_ENTRY_POINT,
-            "path": expected_rule_path,
-            "sourcePattern": MLX_FFT_SOURCE,
-        },
-        "DirectX FFT execution contract changed",
-    )
-
-    specialization_constants = artifact.get("specializationConstants", [])
-    constants_by_id = {
-        record.get("id"): record
-        for record in specialization_constants
-        if isinstance(record, Mapping)
-    }
-    _require(
-        len(specialization_constants) == FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT
-        and set(constants_by_id) == set(FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS)
-        and all(
-            constants_by_id[constant_id].get("concreteValue") == expected_value
-            and constants_by_id[constant_id].get("deferred") is False
-            for constant_id, expected_value in (
-                FFT_DIRECTX_REACHABLE_SPECIALIZATION_CONSTANTS.items()
-            )
-        ),
-        "DirectX FFT function-constant materialization changed",
+    _require_fft_entry_scoped_artifact(
+        artifact,
+        target="directx",
+        label="DirectX",
+        source_entry_point=FFT_DIRECTX_ENTRY_POINT,
+        target_entry_point="CSMain",
+        workgroup_size=FFT_DIRECTX_WORKGROUP_SIZE,
+        function_constant_count=FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        deferred_constants=False,
     )
     materialization = artifact.get("templateMaterialization", {})
     _require(
@@ -7877,10 +8102,15 @@ def _check_fft_directx_toolchain(
             "algorithm": "sha256",
             "value": generated_hash,
         }
-        and artifact.get("generatedSizeBytes") == generated_size
-        and generated_hash == FFT_DIRECTX_GENERATED_SHA256
-        and generated_size == FFT_DIRECTX_GENERATED_SIZE_BYTES,
-        "DirectX FFT generated artifact identity changed",
+        and artifact.get("generatedSizeBytes") == generated_size,
+        "DirectX FFT artifact hash or size does not match the emitted file",
+    )
+    _check_generated_pin(
+        "DirectX FFT generated artifact",
+        sha256=generated_hash,
+        size_bytes=generated_size,
+        expected_sha256=FFT_DIRECTX_GENERATED_SHA256,
+        expected_size_bytes=FFT_DIRECTX_GENERATED_SIZE_BYTES,
     )
     generated = generated_path.read_text(encoding="utf-8")
     _require(
@@ -8009,9 +8239,14 @@ def _check_fft_opengl_toolchain(
         include=MLX_FFT_SOURCE,
         targets=("opengl",),
         output_dir=_relpath(output_dir, mlx_root),
+        specialization_constants=FFT_OPENGL_SPECIALIZATION_CONSTANTS,
         metal_source_options={
             "max_template_specializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        },
+        entry_points={MLX_FFT_SOURCE: FFT_OPENGL_ENTRY_POINT},
+        entry_workgroup_size_rules={
+            MLX_FFT_SOURCE: {FFT_OPENGL_ENTRY_POINT: FFT_OPENGL_WORKGROUP_SIZE}
         },
         index_range_assertions=FFT_OPENGL_INDEX_RANGE_ASSERTIONS,
         workgroup_access_assertions=FFT_OPENGL_WORKGROUP_ACCESS_ASSERTIONS,
@@ -8112,32 +8347,17 @@ def _check_fft_opengl_toolchain(
     )
     artifact = artifacts[0]
     artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
-    _require(
-        isinstance(artifact, Mapping)
-        and artifact.get("source") == MLX_FFT_SOURCE
-        and artifact.get("sourceBackend") == "metal"
-        and artifact.get("target") == "opengl"
-        and artifact.get("status") == "translated"
-        and artifact.get("provenance") == {
-            "intermediate": "crossgl",
-            "pipeline": "single-file-translate",
-        }
-        and isinstance(artifact_path, str),
-        "OpenGL FFT translated artifact contract changed",
+    _require_fft_entry_scoped_artifact(
+        artifact,
+        target="opengl",
+        label="OpenGL",
+        source_entry_point=FFT_OPENGL_ENTRY_POINT,
+        target_entry_point="main",
+        workgroup_size=FFT_OPENGL_WORKGROUP_SIZE,
+        function_constant_count=FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        deferred_constants=True,
     )
-    _require(
-        artifact.get("sourceHash") == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
-        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
-        "OpenGL FFT source identity changed at the pinned MLX commit",
-    )
-    specialization_constants = artifact.get("specializationConstants", [])
     materialization = artifact.get("templateMaterialization", {})
-    _require(
-        isinstance(specialization_constants, list)
-        and len(specialization_constants)
-        == FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
-        "OpenGL FFT function-constant inventory changed",
-    )
     _require(
         isinstance(materialization, Mapping)
         and materialization.get("status") == "materialized"
@@ -8172,12 +8392,25 @@ def _check_fft_opengl_toolchain(
         and generated.count("void main()") == 1,
         "OpenGL FFT artifact is not one standalone compute shader",
     )
+    local_size = ", ".join(
+        f"local_size_{axis} = {value}"
+        for axis, value in zip("xyz", FFT_OPENGL_WORKGROUP_SIZE)
+    )
+    _require(
+        generated.count(f"layout({local_size}) in;") == 1
+        and re.search(
+            r"\bshared\s+vec2\s+crosstl_workgroup_shared_in\[256\];", generated
+        )
+        is not None,
+        "OpenGL FFT artifact lost its host workgroup size or shared_in extent",
+    )
     _require(
         re.search(r"(?<![A-Za-z0-9_])post_in\s*\(", generated) is None,
         "OpenGL FFT artifact retained an unresolved member-helper call",
     )
+    # Pointer specialization appends the resource signature to helper names.
     radix_bodies = re.findall(
-        r"(?m)^void radix_butterfly_2_radix2\([^;{]*\)\s*\{",
+        r"(?m)^void radix_butterfly_2_radix2(?:_\w+)?\([^;{]*\)\s*\{",
         generated,
     )
     _require(
@@ -8253,6 +8486,8 @@ def _check_fft_opengl_toolchain(
         "source": MLX_FFT_SOURCE,
         "sourceHash": MLX_FFT_SHA256,
         "target": "opengl",
+        "entryPoint": FFT_OPENGL_ENTRY_POINT,
+        "workgroupSize": list(FFT_OPENGL_WORKGROUP_SIZE),
         "artifactStatus": "translated",
         "artifactEmitted": True,
         "generatedHash": generated_hash,
@@ -8268,7 +8503,7 @@ def _check_fft_opengl_toolchain(
         "indexRangeAssertions": list(FFT_OPENGL_INDEX_RANGE_ASSERTIONS),
         "workgroupAccessAssertions": expected_workgroup_assertions,
         "toolchainRequired": require_toolchain,
-        "trackedIssues": [],
+        "trackedIssues": [FFT_OPENGL_HELPER_INDEX_RANGES_ISSUE],
         "maxTemplateSpecializations": FFT_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": FFT_MAX_TEMPLATE_MATERIALIZATION_WORK,
         "runtimeIntegrationIncluded": False,
@@ -9458,6 +9693,9 @@ def _check_gemv_vulkan_toolchain(
         include=MLX_GEMV_SOURCE,
         targets=("vulkan",),
         output_dir=_relpath(work_dir / "out-gemv-vulkan", mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
@@ -10999,8 +11237,10 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "directxWorkgroupBlockedFrontierSources": list(
                 MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
             ),
-            "vulkanTranslatedFrontierSources": list(
-                MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+            "vulkanTranslatedFrontierSources": list(MLX_VULKAN_FRONTIER_SOURCES),
+            "vulkanRefusedFrontierSources": list(MLX_VULKAN_FRONTIER_REFUSALS),
+            "vulkanWorkgroupBlockedFrontierSources": list(
+                MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
             ),
             "openglTranslatedFrontierSources": list(
                 MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES

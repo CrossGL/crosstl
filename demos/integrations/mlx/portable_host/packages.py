@@ -248,16 +248,26 @@ OPENGL_COPY_INDEX_ASSERTIONS = (
 )
 
 
-def _opengl_copy_index_assertions(target, sources):
-    if target != "opengl" or COPY_SOURCE not in sources:
+# OpenGL lowers slice_update_op_impl's int64 ``out += output_offset`` rebase to
+# a signed ``int`` logical offset. backend.cpp's dispatch_slice_update bounds
+# out.size() by max_slice_update_elements, and slice_update_layout.validate
+# rejects launches unless 0 <= output_offset and every destination element
+# (output_offset plus the strided extents) lies in [0, out.count), which is at
+# most MAX_INDEX, so the rebase precondition is host-enforced.
+OPENGL_SLICE_UPDATE_INDEX_ASSERTIONS = ("output_offset", "out_ + out_idx")
+
+
+def _opengl_index_assertions(target, assertions):
+    if target != "opengl":
         return ""
     return "".join(
         "[[project.index_range_assertions]]\n"
-        f'source = "{COPY_SOURCE}"\n'
+        f'source = "{source}"\n'
         f'expression = "{expression}"\n'
         "minimum = 0\n"
         "maximum = 2147483647\n"
-        for expression in OPENGL_COPY_INDEX_ASSERTIONS
+        for source, expressions in assertions
+        for expression in expressions
     )
 
 
@@ -346,8 +356,9 @@ def build_packages(root, output, target, *, family="base"):
     with tempfile.TemporaryDirectory(prefix=".portable-host-", dir=root) as directory:
         work = Path(directory)
         source_roots = ["mlx/backend/metal/kernels"]
+        slice_source = None
         if family == "slice-update":
-            source = f"{work.name}/slice-update.metal"
+            source = slice_source = f"{work.name}/slice-update.metal"
             (root / source).write_text(SLICE_UPDATE_SOURCE, encoding="utf-8")
             source_roots = [work.name]
             sources = {source: entries}
@@ -369,7 +380,17 @@ def build_packages(root, output, target, *, family="base"):
             + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n'
             + 'binary32_sqrt_profile = "flush-subnormals"\n'
             + 'binary32_rsqrt_profile = "flush-subnormals"\n'
-            + _opengl_copy_index_assertions(target, sources),
+            + _opengl_index_assertions(
+                target,
+                [
+                    (source, expressions)
+                    for source, expressions in (
+                        (COPY_SOURCE, OPENGL_COPY_INDEX_ASSERTIONS),
+                        (slice_source, OPENGL_SLICE_UPDATE_INDEX_ASSERTIONS),
+                    )
+                    if source in sources
+                ],
+            ),
             encoding="utf-8",
         )
         try:

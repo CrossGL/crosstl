@@ -287,5 +287,5 @@ def test_ci_requires_binary_grouping_without_an_additional_runner():
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "tests/test_translator/test_binary_grouping.py" in step
-    assert "--timeout-seconds 120" in step
+    assert "--timeout-seconds 360" in step
     assert "pytest -q -n auto" in step

@@ -368,6 +368,10 @@ def test_block_toolchains_require_exact_sources_and_nonempty_modules(
     record = json.loads((output / "entry.json").read_text())
     assert record["status"] == ("failed" if fault else "passed")
     assert record["steps"][0]["stdout"] == "output"
+    # The compiler reads a short copy of the verified bytes, never the
+    # deeply nested package path.
+    assert str(output / "entry") in calls[0] and str(source) not in calls[0]
+    assert (output / "entry").read_text() == "void main() {}"
     if target == "metal":
         assert "-Werror" in calls[0] and "-fno-fast-math" in calls[0]
     elif target == "directx":
