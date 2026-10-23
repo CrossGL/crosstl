@@ -35237,6 +35237,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16int",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "float",
             "double",
             "half",
@@ -38446,10 +38447,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
+        # A fragment output's location is its render target index.
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            location_index = self.hlsl_location_attribute_index(member)
+            if not member_name or location_index is None:
+                continue
+            semantic = (
+                "SV_TARGET" if location_index == 0 else f"SV_TARGET{location_index}"
+            )
+            self.hlsl_reserve_semantic_range(
+                used_ranges, struct_node.name, member_name, semantic, 1
+            )
+            defaults[member_name] = semantic
+
         next_target = 0
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
-            if not member_name:
+            if not member_name or member_name in defaults:
                 continue
             if self.hlsl_struct_member_declared_semantic(member) is not None:
                 continue
