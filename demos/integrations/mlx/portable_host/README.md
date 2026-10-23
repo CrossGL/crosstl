@@ -1678,34 +1678,48 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-The same job then runs 22 more unchanged `test_ops` tests on the families it
-has already translated:
+A dedicated job then runs 41 more unchanged `test_ops` tests on all three
+platforms:
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
   --mlx-root mlx-upstream --packages host-packages --random random-packages \
   --bitwise bitwise-packages --selection selection-packages \
-  --absolute absolute-packages --reductions init-packages \
-  --reductions random-reductions --output-dir upstream-op-evidence
+  --absolute absolute-packages --integer64 integer64-packages \
+  --reductions init-packages --reductions all-reductions \
+  --output-dir upstream-op-evidence
 ```
 
-They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
-`test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
-`test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
-`test_triu`, `test_as_strided`, `test_view`, `test_depends`, `test_eye`,
-`test_diag`, `test_diagonal` and `test_divmod`. Each runs once on the MLX CPU and once
-through the translated host, in separate processes, and every native run must
-dispatch. Every dispatch must belong to exactly one of the base, random,
-bitwise, selection, absolute-value or reduction indexes and pass that
-family's artifact and native-identity checks, or be a gather, scatter or
-DivMod kernel specialized from the pinned sources, whose result is recomputed
-from its retained inputs and whose native modules are checked. A test that
-reaches scans or the 64-bit and 16-bit package families therefore fails
-instead of running an unchecked package. A separate process
-checks that a missing comparison package is refused before dispatch. On Metal
-the native run dispatches 1,818 translated kernels, 12 of them indexing
-kernels and 37 DivMod kernels (25 kernel and dtype pairs, translated on first
-use; the cold native run takes about four minutes).
+`all-reductions` is an on-demand whole-array reduction index
+(`reduction_packages --family all --on-demand`), so only the variants the
+tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
+`test_logical_and`, `test_logical_or`, `test_full_ones_zeros`,
+`test_atleast_1d`/`2d`/`3d`, `test_tile`, `test_repeat`, `test_roll`,
+`test_roll_errors`, `test_tri`, `test_tril`, `test_triu`, `test_as_strided`,
+`test_view`, `test_depends`, `test_eye`, `test_diag`, `test_diagonal`,
+`test_divmod`, `test_all`, `test_cummax_cummin_nan`, `test_empty_matmuls`,
+`test_irregular_alignments`, `test_scan_invalid_axis`,
+`test_scan_strided_bool`, `test_slice_with_negative_stride`,
+`test_take_along_axis`, `test_unary_ops_from_non_array`, `test_add`,
+`test_any`, `test_bitwise_grad`, `test_count_nonzero`,
+`test_irregular_binary_ops`, `test_linspace`, `test_linspace_endpoint`,
+`test_mean`, `test_min_and_max` and `test_prod`. Each runs once on the MLX
+CPU and once through the translated host, in separate processes, and every
+native run must dispatch. Every dispatch must belong to exactly one of the
+base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
+indexes and pass that family's artifact and native-identity checks, or be a
+lazily translated kernel. Gather, scatter and DivMod kernels specialized from
+the pinned sources are recomputed from their retained inputs and their native
+modules are checked. Scans and small row and column reductions must name the
+package their cache derives again from the recorded entry, launch and
+metadata (and, for scans and Direct3D or OpenGL dispatch regions, retained
+native modules). A test that reaches the 16-bit package families, or row and
+column reductions with a static index, therefore fails instead of running an
+unchecked package. Only the recomputed dispatches keep their long values in
+the trace; the others keep a length and SHA-256. A separate process checks
+that a missing comparison package is refused before dispatch. On Metal the
+native run dispatches 5,328 translated kernels, 16 of them indexing kernels;
+the whole verification takes about seven minutes.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share

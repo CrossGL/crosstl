@@ -1,0 +1,172 @@
+import hashlib
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from demos.integrations.mlx.portable_host import lazy_package_evidence as lazy
+from demos.integrations.mlx.portable_host import trace_records
+from demos.integrations.mlx.portable_host.runtime import HostRuntime
+
+
+def package(tmp_path, name, data=b"kernel source"):
+    root = tmp_path / name
+    (root / "artifacts").mkdir(parents=True)
+    (root / "artifacts/kernel.metal").write_bytes(data)
+    artifact = {
+        "packagePath": "artifacts/kernel.metal",
+        "hash": {"algorithm": "sha256", "value": hashlib.sha256(data).hexdigest()},
+        "sizeBytes": len(data),
+    }
+    return {"artifact": artifact, "provenance": {}}, root
+
+
+class Packages:
+    def __init__(self, packages, target="metal"):
+        self.target = target
+        self.items = packages
+        self.requests = []
+
+    def packages(self, event):
+        self.requests.append(event["entry"])
+        return self.items
+
+
+def event(entry, descriptor, **extra):
+    return {
+        "entry": entry,
+        "target": "metal",
+        "dispatchVersion": 3,
+        "artifact": descriptor["artifact"],
+        "workgroupCount": [1, 1, 1],
+        "workgroupSize": [32, 1, 1],
+        "details": {},
+        **extra,
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry", "family"),
+    [
+        ("contig_scan_inclusive_sum_int32_int32", "scan"),
+        ("strided_scan_reverse_exclusive_max_float32_float32", "scan"),
+        ("row_reduce_small_1_reduce_sumint32", "small-row"),
+        ("col_reduce_small_1_reduce_orbool_", "small-column"),
+        ("row_reduce_looped_1_32_32_reduce_sumint32", None),
+        ("all_reduce_sumint32", None),
+        ("vv_Addint64", None),
+        (None, None),
+    ],
+)
+def test_lazy_families_cover_only_cached_translations(entry, family):
+    assert lazy.family(entry) == family
+
+
+def test_small_reductions_keep_the_callers_native_check(tmp_path):
+    descriptor, root = package(tmp_path, "row")
+    packages = Packages([(descriptor, root)])
+    record = event("row_reduce_small_1_reduce_sumint32", descriptor)
+    assert lazy.audit_event(record, packages, tmp_path) is False
+    assert packages.requests == [record["entry"]]
+
+
+@pytest.mark.parametrize("fault", ["artifact", "source", "target", "root", "version"])
+def test_lazy_dispatch_must_name_its_unchanged_cached_package(tmp_path, fault):
+    descriptor, root = package(tmp_path, "column")
+    record = event("col_reduce_small_1_reduce_sumint32", descriptor)
+    if fault == "artifact":
+        record["artifact"] = {**descriptor["artifact"], "sizeBytes": 1}
+    elif fault == "source":
+        (root / "artifacts/kernel.metal").write_bytes(b"changed source")
+    elif fault == "target":
+        record["target"] = "opengl"
+    elif fault == "root":
+        record["packageRoot"] = str(tmp_path)
+    else:
+        record["dispatchVersion"] = 2
+    with pytest.raises(ValueError):
+        lazy.audit_event(record, Packages([(descriptor, root)]), tmp_path)
+
+
+def test_scans_require_their_package_root_and_native_execution(tmp_path, monkeypatch):
+    descriptor, root = package(tmp_path, "scan")
+    entry = "contig_scan_inclusive_sum_int32_int32"
+    request = {
+        "target": "metal",
+        "entryPoint": entry,
+        "dispatch": {"workgroupCount": [1, 1, 1], "workgroupSize": [32, 1, 1]},
+    }
+    record = event(entry, descriptor, packageRoot=str(root))
+    record["details"] = {"request": request}
+    audited = []
+    monkeypatch.setattr(lazy, "audit_native_execution", audited.append)
+    assert lazy.audit_event(record, Packages([(descriptor, root)]), tmp_path) is True
+    assert audited == [record]
+    for fault in ("root", "launch"):
+        broken = json.loads(json.dumps(record))
+        if fault == "root":
+            del broken["packageRoot"]
+        else:
+            broken["details"]["request"]["dispatch"]["workgroupSize"] = [64, 1, 1]
+        with pytest.raises(ValueError):
+            lazy.audit_event(broken, Packages([(descriptor, root)]), tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["none", "count", "module", "outside", "root"])
+def test_small_row_regions_name_each_package_and_module(tmp_path, fault):
+    modules = tmp_path / "native-modules"
+    modules.mkdir()
+    items, regions = [], []
+    for index in range(2):
+        descriptor, root = package(tmp_path, f"region{index}", f"r{index}".encode())
+        geometry = {"workgroupCount": [index + 1, 1, 1], "workgroupSize": [32, 1, 1]}
+        descriptor["provenance"] = {"dispatchRegion": geometry}
+        module = modules / f"{index}.glsl"
+        module.write_bytes(b"module %d" % index)
+        items.append((descriptor, root))
+        regions.append(
+            {
+                "artifact": descriptor["artifact"],
+                "provenance": descriptor["provenance"],
+                "packageRoot": str(root),
+                "moduleFile": str(module),
+                "moduleHash": hashlib.sha256(module.read_bytes()).hexdigest(),
+                **geometry,
+            }
+        )
+    record = event("row_reduce_small_1_reduce_sumint32", items[0][0])
+    record["details"] = {"regions": regions}
+    if fault == "count":
+        regions.pop()
+    elif fault == "module":
+        regions[1]["moduleHash"] = "0" * 64
+    elif fault == "outside":
+        outside = tmp_path / "outside.glsl"
+        outside.write_bytes(b"module 1")
+        regions[1]["moduleFile"] = str(outside)
+    elif fault == "root":
+        regions[0]["packageRoot"] = str(tmp_path)
+    if fault == "none":
+        assert lazy.audit_event(record, Packages(items), modules) is True
+    else:
+        with pytest.raises(ValueError):
+            lazy.audit_event(record, Packages(items), modules)
+
+
+def test_prefix_retention_compacts_only_the_other_entries(tmp_path):
+    host = SimpleNamespace(trace=tmp_path / "trace.jsonl", trace_values=("gather",))
+    values = list(range(trace_records.COMPACT_TRACE_LIMIT + 1))
+    trace_records.write_trace(host, {"entry": "gatherint32int32_2_1_int", "v": values})
+    trace_records.write_trace(host, {"entry": "vv_Addint64", "v": values})
+    kept, compacted = (json.loads(line) for line in host.trace.read_text().splitlines())
+    assert kept["v"] == values
+    assert compacted["v"]["compactedValues"]["length"] == len(values)
+    assert trace_records.retains_values(SimpleNamespace(trace_values=True), None)
+    assert not trace_records.retains_values(SimpleNamespace(trace_values=False), "x")
+    assert not trace_records.retains_values(host, None)
+
+
+@pytest.mark.parametrize("value", [(), ("",), ["gather"], ("gather", 1), "gather"])
+def test_runtime_refuses_malformed_trace_retention(tmp_path, value):
+    with pytest.raises(ValueError, match="Trace value retention"):
+        HostRuntime(tmp_path, tmp_path / "trace.jsonl", trace_values=value)

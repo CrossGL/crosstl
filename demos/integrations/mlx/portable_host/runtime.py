@@ -341,10 +341,17 @@ class HostRuntime:
     ):
         if type(retain_native_modules) is not bool:
             raise ValueError("Native module retention must be a Boolean")
-        if type(trace_values) is not bool:
-            raise ValueError("Trace value retention must be a Boolean")
+        if type(trace_values) is not bool and not (
+            type(trace_values) is tuple
+            and trace_values
+            and all(type(prefix) is str and prefix for prefix in trace_values)
+        ):
+            raise ValueError(
+                "Trace value retention must be a Boolean or entry prefixes"
+            )
         self.retain_native_modules = retain_native_modules
-        # False keeps each long scalar array as its length and SHA-256 only.
+        # False keeps each long scalar array as its length and SHA-256 only;
+        # a tuple keeps the values of the entries that start with its prefixes.
         self.trace_values = trace_values
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()

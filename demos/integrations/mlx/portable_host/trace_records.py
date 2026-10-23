@@ -50,9 +50,21 @@ def compact_trace_values(value):
     return value
 
 
+def retains_values(host, entry):
+    """Whether ``host`` keeps the long values of ``entry``'s records.
+
+    ``host.trace_values`` is a Boolean for every entry, or a tuple of entry
+    prefixes whose records keep their values while all others are compacted.
+    """
+    retained = getattr(host, "trace_values", True)
+    if type(retained) is tuple:
+        return isinstance(entry, str) and entry.startswith(retained)
+    return bool(retained)
+
+
 def write_trace(host, event):
-    """Append ``event``; compact it when the host does not retain trace values."""
-    if not getattr(host, "trace_values", True):
+    """Append ``event``; compact it when the host does not retain its values."""
+    if not retains_values(host, event.get("entry")):
         event = compact_trace_values(event)
     with host.trace.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event) + "\n")

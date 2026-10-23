@@ -1,18 +1,20 @@
-"""Run unchanged upstream op tests on the small-row job's package families.
+"""Run unchanged upstream op tests on the translated host's package families.
 
 Each test runs unmodified from the pinned ``python/tests`` tree, once on the
 MLX CPU and once through the translated host. The native run installs the
-base host packages with the families the small-row job already translates:
-random bits, Boolean and integer bitwise operations, selection, absolute
-values, reduction initialization and the checked Boolean and float32
-conjunctions. General gather and scatter kernels are specialized from the
-pinned MLX sources at dispatch time, and each of their dispatches is
+base host packages with the families the dedicated CI job translates: random
+bits, Boolean and integer bitwise operations, selection, absolute values,
+the 64-bit integer family, reduction initialization and on-demand
+whole-array reductions. General gather and scatter kernels are specialized
+from the pinned MLX sources at dispatch time, and each of their dispatches is
 recomputed from its retained inputs and native modules. DivMod's
 ``binary_two`` kernels are specialized the same way, and every DivMod dispatch
-is recomputed from its retained operands. Every other dispatch
+is recomputed from its retained operands. Scans and small row and column
+reductions are also translated on first use; each of their dispatches must
+name the package its cache derives again from the event. Every other dispatch
 must come from one of those indexes, so a test that reaches another family
-(scans, the 64-bit or 16-bit package families) fails the trace instead of
-passing on an unchecked package.
+(for example the 16-bit families) fails the trace instead of passing on an
+unchecked package.
 """
 
 import argparse
@@ -26,6 +28,7 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import (
     divmod_evidence,
     gather_evidence,
+    lazy_package_evidence,
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
@@ -74,16 +77,54 @@ UPSTREAM_TESTS = tuple(
         "test_diag",
         "test_diagonal",
         "test_divmod",
+        # Base families only.
+        "test_all",
+        "test_cummax_cummin_nan",
+        "test_empty_matmuls",
+        "test_irregular_alignments",
+        "test_scan_invalid_axis",
+        "test_scan_strided_bool",
+        "test_slice_with_negative_stride",
+        "test_take_along_axis",
+        "test_unary_ops_from_non_array",
+        # These also reach the 64-bit integer family.
+        "test_add",
+        "test_any",
+        "test_bitwise_grad",
+        "test_count_nonzero",
+        "test_irregular_binary_ops",
+        "test_linspace",
+        "test_linspace_endpoint",
+        "test_mean",
+        "test_min_and_max",
+        "test_prod",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
 INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")
 # Entry-keyed package families; reductions are keyed by width and entry.
-FAMILIES = ("packages", "random", "bitwise", "selection", "absolute")
+FAMILIES = (
+    "packages",
+    "random",
+    "bitwise",
+    "selection",
+    "absolute",
+    "integer64",
+)
+# Families loaded from a translated index; the random family has its own loader.
+INDEXED_FAMILIES = FAMILIES[2:]
 REQUIRED_REDUCTIONS = frozenset(("w32/all_reduce_andbool_", "w256/all_reduce_andbool_"))
 NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
-# The CI step bounds the three workers and the audit at 1,680 seconds.
-TIMEOUTS = {"cpu": 120, "native": 1440, "missing": 60}
+# Dispatches whose trace records keep their long values for the audits.
+RETAINED_VALUES = (
+    *ENTRIES,
+    *INDEXING_PREFIXES,
+    *DIVMOD_PREFIXES,
+    "all_reduce_",
+    "init_reduce_",
+)
+# The CI step bounds the three workers and the audit at 3,600 seconds.
+TIMEOUTS = {"cpu": 300, "native": 3000, "missing": 60}
 
 
 def write_json(path, value):
@@ -100,8 +141,12 @@ def install(args, output):
         bitwise=args.bitwise,
         selection=args.selection,
         absolute=args.absolute,
+        integer64=args.integer64,
         reductions=list(args.reductions),
         mlx_root=args.mlx_root,
+        # The audits recompute these dispatches from their values; the other
+        # families are checked by artifact and native identity only.
+        trace_values=RETAINED_VALUES,
     )
     if args.worker == "missing":
         host.descriptors.pop("vv_Equalint32")
@@ -187,7 +232,7 @@ def load_indexes(args):
         "target": target,
         "descriptors": load_random(args.random, target),
     }
-    for name in ("bitwise", "selection", "absolute"):
+    for name in INDEXED_FAMILIES:
         index = json.loads((getattr(args, name) / "index.json").read_text())
         if index.get("target") != target:
             raise ValueError(f"The {name} packages target another backend")
@@ -242,13 +287,24 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Recomputes both outputs and checks the retained native modules.
         divmod_evidence.audit_event(event)
         owners[i] += 1
+    lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
+    modules = Path(args.output_dir) / "native/native-modules"
+    executed = set()
+    for i, event in enumerate(trace):
+        if lazy_package_evidence.family(event["entry"]) is None:
+            continue
+        # Derives the package again and checks scans' retained native modules.
+        if lazy_package_evidence.audit_event(event, lazy, modules):
+            executed.add(i)
+        owners[i] += 1
     verify_native_identity(
         [
             event
-            for event in trace
+            for i, event in enumerate(trace)
             if event["entry"] not in ENTRIES
             and indexing_auditor(event["entry"]) is None
             and not event["entry"].startswith(DIVMOD_PREFIXES)
+            and i not in executed
         ],
         target,
     )
@@ -306,7 +362,7 @@ def run_worker(args, output, mode):
         "--worker",
         mode,
     ]
-    for name in ("mlx_root", "packages", "random", "bitwise", "selection", "absolute"):
+    for name in ("mlx_root", "packages", *FAMILIES[1:]):
         command.extend(
             ("--" + name.replace("_", "-"), str(getattr(args, name).resolve()))
         )
@@ -399,6 +455,7 @@ def parse(argv=None):
         "bitwise",
         "selection",
         "absolute",
+        "integer64",
         "output-dir",
     ):
         parser.add_argument("--" + name, type=Path, required=True)

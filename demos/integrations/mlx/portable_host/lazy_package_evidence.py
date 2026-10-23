@@ -1,0 +1,162 @@
+"""Tie lazily translated scan and small reduction dispatches to their caches.
+
+Scans, small row reductions and small column reductions are translated from
+the pinned sources on first use, so no static index lists their packages. Each
+dispatch is checked by deriving its package again from the same cache, from the
+event's entry, launch and metadata, and by comparing the recorded artifact with
+the unchanged cached source. Scans run through the source-specialized
+executor, so their retained native modules are checked as for indexing
+kernels. Small rows on Direct3D and OpenGL run as dispatch regions, each of
+which must name its cached region package and a retained native module.
+"""
+
+import hashlib
+from pathlib import Path
+
+from demos.integrations.mlx.portable_host import column_small_layout, scan_layout
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    SmallColumnPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_evidence import (
+    audit_native_execution,
+    require,
+)
+from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
+from demos.integrations.mlx.portable_host.small_row_packages import (
+    SMALL_ROW_ENTRIES,
+    SmallRowPackageCache,
+)
+
+FAMILIES = ("scan", "small-row", "small-column")
+GEOMETRY = ("workgroupCount", "workgroupSize")
+
+
+def family(entry):
+    """The lazily translated family of ``entry``, or None."""
+    if not isinstance(entry, str):
+        return None
+    if entry.startswith(scan_layout.ENTRY_PREFIXES):
+        return "scan"
+    if entry in SMALL_ROW_ENTRIES:
+        return "small-row"
+    if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
+        return "small-column"
+    return None
+
+
+class LazyPackages:
+    """The host's lazy caches for one package directory and target."""
+
+    def __init__(self, mlx_root, packages, target):
+        packages = Path(packages)
+        self.target = target
+        self.caches = {
+            "scan": ScanPackageCache(mlx_root, packages / "scans", target),
+            "small-row": SmallRowPackageCache(
+                mlx_root, packages / "small-rows", target
+            ),
+            "small-column": SmallColumnPackageCache(
+                mlx_root, packages / SMALL_COLUMN_CACHE, target
+            ),
+        }
+
+    def packages(self, event):
+        """The ``(descriptor, directory)`` pairs ``event`` must have used."""
+        entry, name = event["entry"], family(event["entry"])
+        cache = self.caches.get(name)
+        require(cache is not None, "Dispatch is not lazily translated")
+        if name == "scan":
+            execution = {key: event[key] for key in GEOMETRY}
+            return [cache.get(entry, event["scanMetadata"], execution)]
+        if name == "small-row":
+            return list(
+                cache.get(
+                    entry,
+                    thread_grid_size=event["threadGridSize"],
+                    workgroup_size=event["workgroupSize"],
+                )
+            )
+        key = column_small_layout.variant(entry, tuple(event["workgroupSize"]))
+        return [cache.get(key)]
+
+
+def require_unchanged(descriptor, directory):
+    artifact = descriptor["artifact"]
+    root = Path(directory).resolve()
+    path = (root / artifact["packagePath"]).resolve()
+    require(path.is_relative_to(root), "Lazy package artifact escapes its package")
+    data = path.read_bytes()
+    require(
+        len(data) == artifact["sizeBytes"]
+        and artifact["hash"] == {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(data).hexdigest(),
+        },
+        "Lazy package artifact changed after translation",
+    )
+
+
+def audit_regions(event, packages, modules):
+    """Each Direct3D or OpenGL region names its package and native module."""
+    regions = event["details"]["regions"]
+    require(
+        event["entry"] in SMALL_ROW_ENTRIES and len(regions) == len(packages),
+        "Lazy dispatch region coverage differs",
+    )
+    for region, (descriptor, directory) in zip(regions, packages):
+        geometry = descriptor["provenance"]["dispatchRegion"]
+        module = Path(region["moduleFile"]).resolve()
+        require(
+            region["artifact"] == descriptor["artifact"]
+            and region["provenance"] == descriptor["provenance"]
+            and Path(region["packageRoot"]).resolve() == Path(directory).resolve()
+            and all(region[key] == geometry[key] for key in GEOMETRY)
+            and module.is_relative_to(modules)
+            and hashlib.sha256(module.read_bytes()).hexdigest() == region["moduleHash"],
+            "Lazy dispatch region identity differs",
+        )
+
+
+def audit_event(event, lazy, modules):
+    """Check one lazily translated dispatch against its cached package.
+
+    Returns True when this check covered the native execution, so the
+    caller's per-dispatch native identity check must not run again; small
+    reductions on a single dispatch keep that check.
+    """
+    name = family(event["entry"])
+    require(event["target"] == lazy.target, "Lazy dispatch targets another backend")
+    packages = lazy.packages(event)
+    require(packages, "Lazy dispatch has no cached package")
+    for descriptor, directory in packages:
+        require_unchanged(descriptor, directory)
+    require(
+        event["artifact"] == packages[0][0]["artifact"]
+        and event["dispatchVersion"] == 3,
+        "Lazy dispatch does not name its cached artifact",
+    )
+    if "regions" in event["details"]:
+        audit_regions(event, packages, Path(modules).resolve())
+        return True
+    require(len(packages) == 1, "Lazy dispatch skipped its regions")
+    require(
+        ("packageRoot" in event or name != "scan")
+        and Path(event.get("packageRoot", packages[0][1])).resolve()
+        == Path(packages[0][1]).resolve(),
+        "Lazy dispatch names another package",
+    )
+    if name != "scan":
+        return False
+    request = event["details"]["request"]
+    require(
+        request["target"] == lazy.target
+        and request["entryPoint"]
+        == {"metal": event["entry"], "opengl": "main", "directx": "CSMain"}[lazy.target]
+        and all(request["dispatch"][key] == event[key] for key in GEOMETRY),
+        "Scan native launch differs",
+    )
+    audit_native_execution(event)
+    return True

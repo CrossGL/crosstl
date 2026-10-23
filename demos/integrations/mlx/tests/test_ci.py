@@ -52,6 +52,7 @@ def test_host_package_downloads_unpack_outside_the_artifact_stream():
             consumers[name] = with_["path"]
     assert consumers == {
         "small-row-reductions": ".mlx-portable-small-rows/base",
+        "upstream-ops-host": ".mlx-portable-upstream-ops/base",
         "half-host": ".mlx-portable-half/base",
         "quantized-host": ".mlx-portable-quantized/base",
         "quantized-upstream-host": ".mlx-portable-quantized/base",
@@ -944,7 +945,7 @@ def test_project_demo_has_no_parent_cancellation_or_serialization():
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = workflow_text.workflow_job_names(workflow)
-    assert len(jobs) == 46
+    assert len(jobs) == 47
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)

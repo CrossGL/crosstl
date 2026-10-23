@@ -2760,26 +2760,194 @@ jobs:
               --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
               --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/random-evidence \
               2>&1 | tee .mlx-portable-small-rows/random-verification.log
-      - name: Execute unchanged upstream op tests on the small-row families
-        env:
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-        run: |
-          set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1680 --label "MLX upstream op verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
-              --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
-              --bitwise .mlx-portable-small-rows/bitwise-packages --selection .mlx-portable-small-rows/selection-packages \
-              --absolute .mlx-portable-small-rows/absolute-packages --reductions .mlx-portable-small-rows/init-packages \
-              --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/upstream-op-evidence \
-              2>&1 | tee .mlx-portable-small-rows/upstream-op-verification.log
       - name: Retain small-row execution evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: mlx-portable-small-rows-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-small-rows
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  upstream-ops-host:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-upstream-ops-host-${{ strategy.job-index }}
+      cancel-in-progress: false
+    if: needs.ci-plan.outputs.heavy == 'true'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      PYTHONUNBUFFERED: "1"
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+      CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
+
+    name: MLX upstream op tests (${{ matrix.target }})
+    needs: [ci-plan, portable-host]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 270
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Initialize upstream op evidence
+        run: mkdir -p .mlx-portable-upstream-ops
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist setuptools wheel cmake ninja nanobind numpy packaging "PyYAML>=6,<7" \
+            2>&1 | tee .mlx-portable-upstream-ops/dependencies.log
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal --version | tee .mlx-portable-upstream-ops/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-upstream-ops/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v9
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-upstream-ops/base
+          merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-upstream-ops/base
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-upstream-ops/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX upstream op host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-upstream-ops/build.log
+      - name: Translate the upstream op package families
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX random packages" -- \
+            python -m demos.integrations.mlx.portable_host.random_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --output-dir .mlx-portable-upstream-ops/random-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/random-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX bitwise translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family bitwise --jobs 4 --output-dir .mlx-portable-upstream-ops/bitwise-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/bitwise-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX selection translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family selection --jobs 4 --output-dir .mlx-portable-upstream-ops/selection-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/selection-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX absolute translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-upstream-ops/absolute-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/absolute-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX integer64 translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
+      - name: Configure the upstream op reductions
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX initialization translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family init --jobs 4 --output-dir .mlx-portable-upstream-ops/init-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/init-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX on-demand reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family all --on-demand --output-dir .mlx-portable-upstream-ops/all-reductions \
+              2>&1 | tee .mlx-portable-upstream-ops/all-reductions.log
+      - name: Execute unchanged upstream op tests
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX upstream op verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
+              --packages .mlx-portable-upstream-ops/base/packages --random .mlx-portable-upstream-ops/random-packages \
+              --bitwise .mlx-portable-upstream-ops/bitwise-packages --selection .mlx-portable-upstream-ops/selection-packages \
+              --absolute .mlx-portable-upstream-ops/absolute-packages --integer64 .mlx-portable-upstream-ops/integer64-packages \
+              --reductions .mlx-portable-upstream-ops/init-packages \
+              --reductions .mlx-portable-upstream-ops/all-reductions --output-dir .mlx-portable-upstream-ops/evidence \
+              2>&1 | tee .mlx-portable-upstream-ops/verification.log
+      - name: Retain upstream op execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mlx-portable-upstream-ops-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-upstream-ops
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -10243,6 +10411,7 @@ jobs:
       - opengl-dispatch-sequence
       - portable-host
       - small-row-reductions
+      - upstream-ops-host
       - half-host
       - quantized-host
       - quantized-upstream-host
