@@ -1438,6 +1438,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "sv_vertex_id": "vertex_id",
             "sv_vertexid": "vertex_id",
             "gl_InstanceID": "instance_id",
+            "gl_InstanceIndex": "instance_id",
             "SV_InstanceID": "instance_id",
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",
@@ -5552,6 +5553,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 self.current_metal_graphics_builtin_parameter_names[
                     "gl_VertexIndex"
                 ] = explicit_stage_builtins["vertex_id"]
+            if explicit_stage_builtins.get("instance_id"):
+                self.current_metal_graphics_builtin_parameter_names[
+                    "gl_InstanceIndex"
+                ] = explicit_stage_builtins["instance_id"]
             reserved_builtin_names = set(reserved_parameter_names)
             reserved_builtin_names.update(
                 self.metal_function_local_variable_names(func)
@@ -6412,7 +6417,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             or name not in self.current_metal_graphics_builtin_parameter_names
         ):
             return None
-        if name == "gl_VertexIndex":
+        if name in ("gl_VertexIndex", "gl_InstanceIndex"):
             return "uint"
         if name == "gl_ViewIndex":
             return "int"
@@ -6730,6 +6735,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_vertex_builtin_parameter_specs(self):
         return [
             ("gl_VertexIndex", "uint", "vertex_id"),
+            # Vulkan's InstanceIndex counts from the base instance, as MSL's instance_id does.
+            ("gl_InstanceIndex", "uint", "instance_id"),
             ("gl_ViewIndex", "uint", "amplification_id"),
         ]
 
@@ -6771,9 +6778,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         ) in self.metal_vertex_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            base_name = {"gl_ViewIndex": "_crossglViewIndex"}.get(
-                builtin_name, "_crossglVertexID"
-            )
+            base_name = {
+                "gl_ViewIndex": "_crossglViewIndex",
+                "gl_InstanceIndex": "_crossglInstanceID",
+            }.get(builtin_name, "_crossglVertexID")
             name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
