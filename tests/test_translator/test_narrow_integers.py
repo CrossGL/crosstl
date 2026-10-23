@@ -283,3 +283,28 @@ def test_thread_references_address_widened_registers(tmp_path, target):
         tmp_path, METAL_KERNEL.format(helpers=helpers, body=body), target, ".metal"
     )
     assert "OpTypeInt 8" not in output
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_initializers_outside_function_bodies_are_legalized(tmp_path, target):
+    """Program constants and static struct member initializers wrap at their narrow width like local ones."""
+    helpers = (
+        "constant uchar bias = uchar(300);\n"
+        "template <typename T> struct Bounds;\n"
+        "template <> struct Bounds<uchar> {\n"
+        "  static constexpr constant uchar wrapped = uchar(260);\n"
+        "};\n"
+    )
+    body = (
+        "    uchar v = uchar(a[i]) + bias + Bounds<uchar>::wrapped;\n    o[i] = int(v);"
+    )
+    output = translate(
+        tmp_path, METAL_KERNEL.format(helpers=helpers, body=body), target, ".metal"
+    )
+    if target == "wgsl":
+        assert "bias: i32 = 44;" in output
+        assert wgsl_line(output, "var v") == (
+            "var v: i32 = (i32((((i32(a[i]) & 255) + bias) + 4)) & 255);"
+        )
+    else:
+        assert "OpTypeInt 8" not in output

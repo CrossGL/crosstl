@@ -32,6 +32,16 @@ from .stage_refusals import StageUnsupportedError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
+def webgl_refusal(reason):
+    """Return the typed refusal for a construct WebGL 2 (GLSL ES 3.00) cannot express.
+
+    GLSL ES 3.00 lacks storage buffers, storage images, atomics and texture gathers (added in GLSL ES 3.10),
+    multisampled and cube-array samplers (3.10 and 3.20), 1D, rectangle and buffer samplers, 64-bit floating
+    point, and clip and cull distances. A program that uses one is refused rather than emitted without it.
+    """
+    return WebGLLoweringRefused((reason,))
+
+
 class WebGLArithmeticConversionError(OpenGLArithmeticConversionError):
     """Raised when source arithmetic has no faithful GLSL ES conversion plan."""
 
@@ -198,7 +208,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
         mapped_type = super().map_type(vtype)
         base_type = mapped_type.split("[", 1)[0].rstrip("*&")
         if base_type in self.UNSUPPORTED_FLOAT64_TYPES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support 64-bit floating-point type "
                 f"'{base_type}'"
             )
@@ -220,7 +230,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
 
     def map_image_base_type_with_format(self, vtype, node=None):
         if self.is_storage_image_type(vtype):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(vtype))})"
@@ -267,17 +277,17 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
 
     def validate_webgl_function_call_support(self, func_name):
         if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image intrinsic "
                 f"'{func_name}'"
             )
         if func_name in self.GLSL_ES_310_TEXTURE_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target requires GLSL ES 3.00 and does not support "
                 f"texture gather intrinsic '{func_name}'"
             )
         if func_name in self.ATOMIC_INTRINSIC_NAMES:
-            raise ValueError(
+            raise webgl_refusal(
                 f"WebGL target does not support atomic operation '{func_name}'"
             )
 
@@ -712,7 +722,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
             )
             if unsupported_builtin is None:
                 continue
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support vertex built-in output "
                 f"'{unsupported_builtin}'"
             )
@@ -762,18 +772,18 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
             node_type = pointer_buffer_type
 
         if self.is_webgl_glsl_buffer_block_node(node):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support GLSL buffer block resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}'"
             )
         if self.is_structured_buffer_type(node_type):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage buffer resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.structured_buffer_type_name(node_type)})"
             )
         if self.is_storage_image_type(node_type):
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support storage image resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({self.type_name_string(self.resource_base_type(node_type))})"
@@ -781,7 +791,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
         sampled_type = self.sampled_image_type(node_type)
         sampled_base_type = self.map_type(self.resource_base_type(sampled_type))
         if sampled_base_type in self.UNSUPPORTED_SAMPLED_RESOURCE_TYPES:
-            raise ValueError(
+            raise webgl_refusal(
                 "WebGL target does not support sampled resource "
                 f"'{self.resource_node_name(node, '<unnamed>')}' "
                 f"({sampled_base_type})"
@@ -803,7 +813,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     def structured_buffer_block_declaration(
         self, vtype, name, binding, array_size=None, node=None
     ):
-        raise ValueError(
+        raise webgl_refusal(
             "WebGL target does not support storage buffer resource "
             f"'{name}' ({self.structured_buffer_type_name(vtype)})"
         )
@@ -811,7 +821,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     def glsl_buffer_block_declaration(
         self, node, vtype, name, binding, array_suffix=""
     ):
-        raise ValueError(
+        raise webgl_refusal(
             f"WebGL target does not support GLSL buffer block resource '{name}'"
         )
 

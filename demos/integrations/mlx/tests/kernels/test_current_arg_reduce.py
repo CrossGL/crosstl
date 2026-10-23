@@ -39,6 +39,7 @@ from crosstl.project.native_runtime_drivers import (
     _validate_directx_register_layout,
 )
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -1392,11 +1393,11 @@ def test_current_mlx_arg_reduce_native_validation(
             "algorithm": "sha256",
             "value": SOURCE_SHA256,
         }
-        assert artifact["generatedHash"] == {
-            "algorithm": "sha256",
-            "value": ARTIFACTS[target][entry]["sha256"],
-        }
-        assert artifact["generatedSizeBytes"] == ARTIFACTS[target][entry]["sizeBytes"]
+        check_generated_artifact(
+            artifact,
+            sha256=ARTIFACTS[target][entry]["sha256"],
+            size_bytes=ARTIFACTS[target][entry]["sizeBytes"],
+        )
         assert artifact["templateMaterialization"]["status"] == "materialized"
         assert artifact["templateMaterialization"]["specializationCount"] == 5
         generated = root / artifact["path"]
