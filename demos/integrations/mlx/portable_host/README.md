@@ -424,7 +424,8 @@ steel GEMM or split-K route.
 `verify_upstream_qvm.py`, `verify_upstream_qmv.py`,
 `verify_upstream_qvm_splitk.py` (`test_qvm_splitk` and
 `test_qvm_splitk_multi_row`), `verify_upstream_qmm_shapes.py`
-(`test_qmm_shapes`, `test_small_matrix` and `test_non_multiples`) and
+(`test_qmm_shapes`, `test_small_matrix`, `test_non_multiples` and
+`test_throw`, whose one unchecked product takes `affine_qmv_fast`) and
 `verify_upstream_qmm.py` (`test_qmm`) run those
 tests unchanged, first on MLX's CPU and then through the translated host, with
 the shared steps in `upstream_runner.py`. Each runner translates every quantized and

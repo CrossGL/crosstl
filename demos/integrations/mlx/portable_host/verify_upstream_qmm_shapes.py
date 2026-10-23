@@ -3,7 +3,10 @@
 ``test_qmm_shapes``, ``test_small_matrix`` and ``test_non_multiples`` multiply
 4-bit, group-64 affine weights by vectors and matrices, transposed and not,
 including unaligned, broadcast and batched weights, and compare each product
-with ``x @ w_hat`` or its transpose. Through the portable host the products
+with ``x @ w_hat`` or its transpose. ``test_throw`` checks QuantizedMatmul's
+operand validation and then evaluates one transposed product without a
+reference, so its weights are quantized but never dequantized. Through the
+portable host the products
 reach every QuantizedMatmul route: ``affine_qmv``, ``affine_qmv_fast`` and
 ``affine_qvm`` below the vector limits, ``affine_qmm_t_splitk`` with its
 partition sum for single transposed matrices, and ``affine_qmm_n`` for
@@ -33,6 +36,7 @@ UPSTREAM_TESTS = (
     "test_quantized.TestQuantized.test_qmm_shapes",
     "test_quantized.TestQuantized.test_small_matrix",
     "test_quantized.TestQuantized.test_non_multiples",
+    "test_quantized.TestQuantized.test_throw",
 )
 # mx.quantize's defaults, which every product here uses.
 GROUP, BITS = 64, 4
@@ -64,6 +68,9 @@ WEIGHTS = (
     ),
     ((99, 256), (((129, 256), True),)),
 )
+# test_throw's one evaluated product, (w shape, x shape, transpose). It is
+# quantized and multiplied but has no reference and no error bound.
+UNCHECKED = (((32, 512), (10, 512), True),)
 REDUCTIONS = ("all_reduce_maxfloat32",)
 TIMEOUTS = {"random": 600, "packages": 3600, "cpu": 600, "native": 3600}
 FAMILIES = ("quantized", "qmm", "gemv", "gemm", "splitk", "small")
@@ -175,20 +182,32 @@ def routes():
         yield quantized, family, route
 
 
+def unchecked_routes():
+    """Each unchecked product's quantized family, entry and partition sum."""
+    for w_shape, x_shape, transpose in UNCHECKED:
+        yield quantized_route(
+            *quantized_operands(w_shape, x_shape, transpose), transpose
+        )
+
+
 def expected_dispatches():
     """The affine, column and matrix-product entries the tests dispatch.
 
     Each weight is quantized and dequantized once, in launches of at most
     65,535 groups. Each product multiplies through QuantizedMatmul's route,
     and its partition sum when it splits ``K``, and forms the reference with
-    Matmul; a split-K reference also launches its accumulation.
+    Matmul; a split-K reference also launches its accumulation. An unchecked
+    product's weights are quantized only, and it launches no reference.
     """
     counts = Counter()
+    quantize = f"affine_quantize_float_gs_{GROUP}_b_{BITS}"
     for w_shape, _ in WEIGHTS:
         for operation in ("quantize", "dequantize"):
             counts[
                 f"affine_{operation}_float_gs_{GROUP}_b_{BITS}"
             ] += quantization_layout.launches(math.prod(w_shape), GROUP)
+    for w_shape, _, _ in UNCHECKED:
+        counts[quantize] += quantization_layout.launches(math.prod(w_shape), GROUP)
     for (_, entry, column, _), family, route in routes():
         counts[entry] += 1
         if column is not None:
@@ -196,7 +215,17 @@ def expected_dispatches():
         counts[route["entry"]] += 1
         if family == "splitk":
             counts[route["accum"]] += 1
+    for _, entry, column, _ in unchecked_routes():
+        counts[entry] += 1
+        if column is not None:
+            counts[column] += 1
     return counts
+
+
+def quantized_routes():
+    """Every checked and unchecked product's quantized route."""
+    yield from (quantized for quantized, _, _ in routes())
+    yield from unchecked_routes()
 
 
 def column_sums():
@@ -205,7 +234,7 @@ def column_sums():
         sorted(
             {
                 column
-                for (_, _, column, variant), _, _ in routes()
+                for _, _, column, variant in quantized_routes()
                 if column and not variant
             }
         )
@@ -215,10 +244,11 @@ def column_sums():
 def package_entries():
     """The entries and small-sum variants to translate ahead, by family."""
     entries = {family: set() for family in FAMILIES}
-    for (quantized, entry, _, variant), family, route in routes():
+    for quantized, entry, _, variant in quantized_routes():
         entries[quantized].add(entry)
         if variant is not None:
             entries["small"].add(variant)
+    for _, family, route in routes():
         entries[family].add(route["entry"])
         if family == "splitk":
             entries[family].add(route["accum"])

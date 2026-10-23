@@ -18,6 +18,7 @@ QMM_N = "affine_qmm_n_float_gs_64_b_4_batch_0"
 QMM_N_BATCHED = "affine_qmm_n_float_gs_64_b_4_batch_1"
 GEMV = "gemv_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0"
 ACCUM = "steel_gemm_splitk_accum_float32_float32"
+QMV_FAST = "affine_qmv_fast_float_gs_64_b_4_batch_0"
 
 
 def trace(target="opengl"):
@@ -32,7 +33,7 @@ def trace(target="opengl"):
     ]
 
 
-def test_products_follow_the_three_upstream_tests():
+def test_products_follow_the_checked_upstream_tests():
     rows = list(upstream.products())
     # test_qmm_shapes 4, test_small_matrix 3 weights by 5, test_non_multiples 9.
     assert len(rows) == 4 + 15 + 9 == 28
@@ -95,6 +96,16 @@ def test_products_take_every_quantized_route():
             assert column is None and variant is None
 
 
+def test_unchecked_product_takes_the_fast_vector_route():
+    # test_throw: 10 rows of K = 512 against 32 transposed outputs stay below
+    # the vector limit, and K and N meet qmv_fast's alignment.
+    assert upstream.UNCHECKED == (((32, 512), (10, 512), True),)
+    assert upstream.quantized_operands((32, 512), (10, 512), True) == (10, 32, 512, 1)
+    assert matmul_layout.vector_limit(512, 32, True) > 10
+    assert list(upstream.unchecked_routes()) == [("quantized", QMV_FAST, None, None)]
+    assert QMV_FAST not in {entry for (_, entry, *_), _, _ in upstream.routes()}
+
+
 def test_reference_operands_are_matmuls_views_of_dequantized_weights():
     # w_hat.T: a transposed view, x folded into its rows.
     assert upstream.reference_operands((32, 256), (2, 1, 7, 256), True) == (
@@ -122,12 +133,15 @@ def test_expected_dispatches_follow_every_upstream_product():
     counts = upstream.expected_dispatches()
     entries = upstream.package_entries()
     # Eight weights quantized and dequantized once each, in one launch; each
-    # product, its reference, two partition sums and the split-K accumulations.
+    # product, its reference, two partition sums and the split-K accumulations;
+    # test_throw's weights quantized once and its one unchecked product.
     quantize = "affine_quantize_float_gs_64_b_4"
-    assert counts[quantize] == counts["affine_dequantize_float_gs_64_b_4"] == 8
+    assert counts[quantize] == 8 + 1
+    assert counts["affine_dequantize_float_gs_64_b_4"] == 8
     accumulations = counts[ACCUM]
-    assert sum(counts.values()) == 2 * 8 + 2 * 28 + 2 + accumulations
+    assert sum(counts.values()) == 2 * 8 + 2 * 28 + 2 + accumulations + 1 + 1
     assert accumulations == 13
+    assert counts[QMV_FAST] == 1 and QMV_FAST in entries["quantized"]
     assert counts[SPLIT] == counts[SMALL] == 2
     assert counts[QMM_N] == 4 and counts[QMM_N_BATCHED] == 2
     assert entries["qmm"] == sorted([SPLIT, QMM_N, QMM_N_BATCHED])
@@ -139,7 +153,7 @@ def test_expected_dispatches_follow_every_upstream_product():
 @pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
 @pytest.mark.parametrize(
     "fault",
-    [None, "missing", "extra", "target", "route", "sum", "maximum"],
+    [None, "missing", "extra", "target", "route", "sum", "unchecked", "maximum"],
 )
 def test_trace_requires_every_translated_product(target, fault):
     items = trace(target)
@@ -159,6 +173,9 @@ def test_trace_requires_every_translated_product(target, fault):
         items[first(SPLIT)]["entry"] = "affine_qmm_t_float_gs_64_b_4_alN_false_batch_0"
     elif fault == "sum":
         items.pop(first(SMALL))
+        count -= 1
+    elif fault == "unchecked":
+        items.pop(first(QMV_FAST))
         count -= 1
     elif fault == "maximum":
         items = [item for item in items if item["entry"] != "all_reduce_maxfloat32"]
