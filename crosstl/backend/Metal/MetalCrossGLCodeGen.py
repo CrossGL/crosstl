@@ -65,6 +65,17 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 
+# MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
+METAL_SPARSE_TEXTURE_METHODS = frozenset(
+    {
+        "sparse_sample",
+        "sparse_sample_compare",
+        "sparse_read",
+        "sparse_gather",
+        "sparse_gather_compare",
+    }
+)
+
 
 class MetalCallableAliasLoweringError(ValueError):
     """Raised when a callable alias survives as a runtime value."""
@@ -12408,6 +12419,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             method = expr.method
+            if method in METAL_SPARSE_TEXTURE_METHODS:
+                # A sparse read returns sparse_color<T>: the texel and whether its tile is resident.
+                return self.refuse_import(
+                    f"sparse texture {method}: CrossGL has no texture read that reports tile residency "
+                    "(the texel and residency pair MSL returns as sparse_color<T>)"
+                )
             resource_size_expr = self.resource_size_method_expression(expr, is_main)
             if resource_size_expr is not None:
                 return resource_size_expr
