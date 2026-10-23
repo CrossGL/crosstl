@@ -1945,6 +1945,65 @@ void Flatten::eval_gpu(const std::vector<array>& inputs, array& out) {
   reshape_view(inputs, out);
 }
 
+// Ports mlx/backend/gpu/primitives.cpp View::eval_gpu; the general copy
+// runs through the translated copy kernels.
+void View::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL view requires one input.");
+  }
+  const auto& in = inputs[0];
+  const auto ibytes = size_of(in.dtype());
+  const auto obytes = size_of(out.dtype());
+  // Upstream's disjunction; row contiguity is tested first so a scalar never
+  // reads the last stride of an empty stride vector.
+  if (in.flags().row_contiguous || ibytes == obytes ||
+      (obytes < ibytes && in.strides().back() == 1)) {
+    auto strides = in.strides();
+    for (int i = 0; i < static_cast<int>(strides.size()) - 1; ++i) {
+      strides[i] *= ibytes;
+      strides[i] /= obytes;
+    }
+    out.copy_shared_buffer(
+        in, strides, in.flags(), in.data_size() * ibytes / obytes);
+    return;
+  }
+  // Upstream copies the input elements densely and reinterprets the result.
+  // Narrow elements that pack into whole 32-bit words (or whole output
+  // elements, when those are narrower) along the contiguous last axis are
+  // copied as those words instead: the bytes are identical, and no 8- or
+  // 16-bit element is loaded as a value, so non-canonical Boolean bytes from
+  // an earlier view survive. A scalar is row contiguous, so ndim >= 1 here.
+  array source = in;
+  const int64_t word = std::min<int64_t>(obytes, 4);
+  if (int64_t(ibytes) < word && in.strides().back() == 1 &&
+      in.offset() % word == 0) {
+    const int64_t ratio = word / int64_t(ibytes);
+    bool grouped = in.shape().back() % ratio == 0;
+    auto strides = in.strides();
+    for (int i = 0; grouped && i < static_cast<int>(strides.size()) - 1; ++i) {
+      grouped = strides[i] % ratio == 0;
+      strides[i] /= ratio;
+    }
+    if (grouped) {
+      auto shape = in.shape();
+      shape.back() /= ratio;
+      source = array(
+          shape, word == int64_t(obytes) ? out.dtype() : uint32, nullptr, {});
+      source.copy_shared_buffer(
+          in, strides, in.flags(), in.data_size() * ibytes / word);
+    }
+  }
+  array tmp(source.shape(), source.dtype(), nullptr, {});
+  dispatch_copy(source, tmp);
+  auto flags = out.flags();
+  flags.contiguous = true;
+  flags.row_contiguous = true;
+  auto max_dim = std::max_element(out.shape().begin(), out.shape().end());
+  flags.col_contiguous = out.size() <= 1 || out.size() == *max_dim;
+  out.copy_shared_buffer(tmp, out.strides(), flags, out.size());
+}
+
 void Contiguous::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 1) {

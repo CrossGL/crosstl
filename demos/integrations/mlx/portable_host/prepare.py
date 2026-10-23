@@ -34,7 +34,7 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
-COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate")
+COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
 CAST_PRIMITIVES = ("AsType",)
 
 

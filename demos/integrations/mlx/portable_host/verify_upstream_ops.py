@@ -62,6 +62,7 @@ UPSTREAM_TESTS = tuple(
         "test_tril",
         "test_triu",
         "test_as_strided",
+        "test_view",
         "test_depends",
         "test_eye",
         "test_diag",

@@ -1646,7 +1646,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-The same job then runs 17 more unchanged `test_ops` tests on the families it
+The same job then runs 21 more unchanged `test_ops` tests on the families it
 has already translated:
 
 ```bash
@@ -1660,15 +1660,26 @@ python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
 They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
 `test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
 `test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
-`test_triu`, `test_as_strided` and `test_depends`. Each runs once on the MLX
-CPU and once through the translated host, in separate processes, and every
-native run must dispatch. Every dispatch must belong to exactly one of the
-base, random, bitwise, selection, absolute-value or reduction indexes and pass
-that family's artifact and native-identity checks, so a test that reaches
-gather, scatter, scans or 64-bit and 16-bit kernels fails instead of running an
-unchecked package. A separate process checks that a missing comparison
-package is refused before dispatch. On Metal the native run dispatches 1,504
-translated kernels.
+`test_triu`, `test_as_strided`, `test_view`, `test_depends`, `test_eye`,
+`test_diag` and `test_diagonal`. Each runs once on the MLX CPU and once
+through the translated host, in separate processes, and every native run must
+dispatch. Every dispatch must belong to exactly one of the base, random,
+bitwise, selection, absolute-value or reduction indexes and pass that
+family's artifact and native-identity checks, or be a gather or scatter kernel
+specialized from the pinned sources, whose result is recomputed from its
+retained inputs. A test that reaches scans or 64-bit and 16-bit kernels
+therefore fails instead of running an unchecked package. A separate process
+checks that a missing comparison package is refused before dispatch. On Metal
+the native run dispatches 1,771 translated kernels, 12 of them indexing
+kernels.
+
+`View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
+size, narrow a contiguous last axis or start from a row-contiguous array share
+the buffer. The remaining views copy densely before the reinterpretation. When
+narrow elements pack into whole 32-bit words (or whole output elements) along
+a contiguous last axis, the copy moves those words, so the bytes match
+upstream's element copy without loading 8- or 16-bit values. Boolean views of
+integer data therefore round-trip even when their bytes are not 0 or 1.
 
 ### Kernel Evidence
 

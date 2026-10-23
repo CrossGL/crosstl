@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 20
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 21
     assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
