@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
@@ -89,6 +90,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "BindingIndexUnresolvedError",
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
@@ -152,7 +154,10 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
+    Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
+    ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
+    :class:`BindingIndexUnresolvedError` (:mod:`.binding_constants`).
+    User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
@@ -205,6 +210,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
     strip_non_uniform_qualifiers(program, report.target)
