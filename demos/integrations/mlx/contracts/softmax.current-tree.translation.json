@@ -70,22 +70,22 @@
       },
       "block_softmax_bfloat16": {
         "32": {
-          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
-          "sizeBytes": 3325
+          "sha256": "d7040afc009611e05e7282f6b460ba8d58824b3daf6958b0b5c8c12d94f825a0",
+          "sizeBytes": 3333
         },
         "288": {
-          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
-          "sizeBytes": 3325
+          "sha256": "d7040afc009611e05e7282f6b460ba8d58824b3daf6958b0b5c8c12d94f825a0",
+          "sizeBytes": 3333
         },
         "1024": {
-          "sha256": "bf4399e79ade337f66b8e5da707bcd99d82e1e15e57d6c46af85503ff6cf7f1b",
-          "sizeBytes": 3325
+          "sha256": "d7040afc009611e05e7282f6b460ba8d58824b3daf6958b0b5c8c12d94f825a0",
+          "sizeBytes": 3333
         }
       },
       "looped_softmax_bfloat16": {
         "1024": {
-          "sha256": "12df3e786ca105037190a4228c20644ad58cf8700d169edf73c2fdeca8a1f193",
-          "sizeBytes": 3514
+          "sha256": "a7132e067df37a9400cc3ce093cde7497fccf8f45d25f2af384adaa083f008b4",
+          "sizeBytes": 3562
         }
       },
       "block_softmax_precise_float16": {

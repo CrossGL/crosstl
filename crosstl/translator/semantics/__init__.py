@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .buffer_strides import materialize_buffer_strides
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
@@ -45,12 +46,14 @@ from .hlsl_stage_interfaces import (
     legalize_hlsl_stage_interfaces,
 )
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
+from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
@@ -171,7 +174,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
-    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), and constant
+    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
+    ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
+    (:mod:`.buffer_strides`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -209,7 +214,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     canonicalize_builtin_values(program, report.target)
+    deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
+    adopt_module_stage_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
@@ -220,6 +227,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
+    materialize_buffer_strides(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
