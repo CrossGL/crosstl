@@ -767,6 +767,7 @@ def test_project_package_exposes_public_api_surface():
         "plan_runtime_integration",
         "publish_native_deferred_compilation_cache",
         "scan_project",
+        "toolchain_doctor_report",
         "translate_project",
         "compile_native_deferred_compilation_request",
         "runtime_execution_request_to_graph",
