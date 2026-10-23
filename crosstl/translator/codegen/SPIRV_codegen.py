@@ -116,6 +116,10 @@ from .pointer_reinterpret import (
 from .relational_builtins import lower_relational_builtins
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_constant_folding import (
+    spirv_evaluated_scalar_initializer,
+    spirv_folded_constant,
+)
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
@@ -1139,6 +1143,9 @@ class VulkanSPIRVCodeGen(
         if type_name == self.BFLOAT16_TYPE_NAME and isinstance(value, float):
             value = self.bfloat16_bits_for_float(value)
         key = (value, type_id.id)
+        if isinstance(value, float) and value == 0.0 and str(value).startswith("-"):
+            # -0.0 == 0.0 in Python, but they are different constants.
+            key = ("-0.0", type_id.id)
         if key in self.constants:
             return self.constants[key]
 
@@ -1601,6 +1608,11 @@ class VulkanSPIRVCodeGen(
 
         constant_id = self.process_constant_expression(value, type_id)
         if constant_id is None:
+            if value is not None:
+                self.refuse_lowering(
+                    f"SPIR-V module-scope constant {name} has an initializer "
+                    "that is not a constant expression"
+                )
             constant_id = self.default_value_for_type(type_id)
         self.emit_named_constant_debug_name(name, constant_id)
         self.named_constants[name] = constant_id
@@ -1626,6 +1638,9 @@ class VulkanSPIRVCodeGen(
         self, expr, type_id: SpirvId
     ) -> Optional[Union[bool, int, float]]:
         """Evaluate a narrow scalar constant expression for module-scope constants."""
+        evaluated = spirv_evaluated_scalar_initializer(self, expr, type_id)
+        if evaluated is not None:
+            return evaluated
         type_name = self.normalize_primitive_name(type_id.type.base_type)
         if type_name == "bool":
             return self.coerce_scalar_constant_value(expr, type_id)
@@ -26923,6 +26938,10 @@ class VulkanSPIRVCodeGen(
 
         if isinstance(expr, LiteralNode):
             return self.process_expression(expr)
+
+        folded = spirv_folded_constant(self, expr, target_type)
+        if folded is not None:
+            return folded
 
         if isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
