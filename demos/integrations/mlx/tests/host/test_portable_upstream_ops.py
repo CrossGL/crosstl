@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 86
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 88
     assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
@@ -329,7 +329,11 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
         ("--" + name.replace("_", "-"), name.replace("_", "-") + "-packages")
         for name in ops.INDEXED_FAMILIES
     ]
-    flags += [("--reductions", "init-packages"), ("--reductions", "all-reductions")]
+    flags += [
+        ("--reductions", "init-packages"),
+        ("--reductions", "all-reductions"),
+        ("--reductions", "row-reductions"),
+    ]
     for flag, directory in flags:
         assert f"{flag} {root}{directory}" in step["run"]
         # Every package directory is translated earlier in the same job.
@@ -340,10 +344,9 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
             or item.get("with", {}).get("path") == root + "base"
         )
         assert producer < names.index(step["name"])
-    assert (
-        "--family all --on-demand"
-        in job["steps"][names.index("Configure the upstream op reductions")]["run"]
-    )
+    configure = job["steps"][names.index("Configure the upstream op reductions")]["run"]
+    assert "--family all --on-demand" in configure
+    assert "--family row --on-demand" in configure
     retain = names.index("Retain upstream op execution evidence")
     assert names.index(step["name"]) < retain
 

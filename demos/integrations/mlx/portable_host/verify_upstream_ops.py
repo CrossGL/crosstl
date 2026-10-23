@@ -5,7 +5,7 @@ MLX CPU and once through the translated host. The native run installs the
 base host packages with the families the dedicated CI job translates: random
 bits, Boolean and integer bitwise operations, selection, absolute values,
 the 64-bit integer family, reduction initialization and on-demand
-whole-array reductions. General gather and scatter kernels are specialized
+whole-array and row reductions. General gather and scatter kernels are specialized
 from the pinned MLX sources at dispatch time, and each of their dispatches is
 recomputed from its retained inputs and native modules. DivMod's
 ``binary_two`` kernels are specialized the same way, and every DivMod dispatch
@@ -43,10 +43,18 @@ from demos.integrations.mlx.portable_host import (
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
+    wide_column_dispatch,
+    wide_column_evidence,
     wide_reduction_evidence,
     wide_reduction_packages,
     wide_row_dispatch,
     wide_row_evidence,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    SmallColumnPackageCache,
 )
 from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
 from demos.integrations.mlx.portable_host.copy_packages import (
@@ -175,11 +183,14 @@ UPSTREAM_TESTS = tuple(
         "test_take",
         # This also reaches lazily translated aranges.
         "test_round",
-        # These reach lazily translated wide whole-array and small-row
-        # reductions.
+        # These reach lazily translated wide whole-array, small-row and
+        # small-column reductions.
         "test_std",
+        "test_trace",
         "test_var",
         "test_vecdot",
+        # This also reaches row_reduce_looped through the on-demand row index.
+        "test_sum",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -455,6 +466,21 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         wide_row_evidence.audit_event(
             event, wide_rows, Path(args.output_dir) / "native/native-modules"
         )
+        lazy_checked.add(i)
+        owners[i] += 1
+    wide_columns = SmallColumnPackageCache(
+        args.mlx_root, args.packages / SMALL_COLUMN_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in wide_column_dispatch.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError(
+                "Upstream op wide column reduction targets another backend"
+            )
+        # Derives the cached package again and checks the native modules;
+        # integer columns are recomputed from their inputs.
+        wide_column_evidence.audit_event(event, wide_columns)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

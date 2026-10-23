@@ -172,14 +172,17 @@ def test_partition_sums_accept_their_16_bit_launches(dtype):
     buffers, count, _ = _buffers(8, 16384)
     with pytest.raises(ValueError, match="buffer layout"):
         column_small_layout.validate(entry, buffers, count, _launch(16384, 8))
-    # Only the partition axis's rank-one sum is translated.
+    # Only the partition axis's rank-one sum runs through the 32-bit word
+    # path; the other 16-bit entries keep exact storage in the wide set.
     for other in (
         f"col_reduce_small_2_reduce_sum{dtype}",
         f"col_reduce_small_1_reduce_max{dtype}",
         f"col_reduce_small_1_reduce_prod{dtype}",
     ):
-        with pytest.raises(ValueError):
-            column_small_layout.signature(other)
+        assert other not in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
+        assert column_small_layout.WIDE_SMALL_COLUMN_ENTRIES[other] == dtype
+    with pytest.raises(ValueError):
+        column_small_layout.signature(f"col_reduce_small_1_reduce_and{dtype}")
 
 
 def _view(shape, strides, rows, columns):

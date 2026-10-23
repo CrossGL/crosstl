@@ -57,6 +57,7 @@ from demos.integrations.mlx.portable_host import (
     scan_dispatch,
     scan_layout,
     slice_update_layout,
+    wide_column_dispatch,
     wide_reduction_dispatch,
     wide_reduction_packages,
     wide_row_dispatch,
@@ -771,6 +772,10 @@ class HostRuntime:
             )
         if entry in wide_row_dispatch.ENTRIES:
             return wide_row_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in wide_column_dispatch.ENTRIES:
+            return wide_column_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_arange(entry):

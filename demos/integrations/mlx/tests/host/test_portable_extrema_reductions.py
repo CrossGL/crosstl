@@ -131,9 +131,9 @@ def test_host_adapter_routes_only_16_bit_extrema():
         "      (reduce_type_ == Min || reduce_type_ == Max);"
     ) in source
     assert (
-        "CrossTL 16-bit float extrema require whole-array or small-row reduction packages."
-        in source
-    )
+        '"CrossTL 16-bit float extrema require whole-array plans, rows of at most 64 "\n'
+        '        "elements or columns of fewer than 32."'
+    ) in source
 
 
 @pytest.mark.parametrize("fmt", FORMATS, ids=lambda fmt: fmt.dtype)

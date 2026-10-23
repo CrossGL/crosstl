@@ -2023,14 +2023,19 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const bool small_rows =
       (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) &&
       plan.shape.back() <= 64;
-  if (wide && plan.type != ContiguousAllReduce && !small_rows) {
+  // strided_reduce_small's plans: fewer than 32 reduced elements per output.
+  const bool small_columns =
+      (plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce) &&
+      !plan.shape.empty() && column_shape_size(plan.shape) < 32;
+  if (wide && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
     throw std::invalid_argument(
         "CrossTL int64, uint64, complex64 and 16-bit float sum reductions require "
-        "whole-array or small-row plans.");
+        "whole-array plans, rows of at most 64 elements or columns of fewer than 32.");
   }
-  if (half_extrema && plan.type != ContiguousAllReduce && !small_rows) {
+  if (half_extrema && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
     throw std::invalid_argument(
-        "CrossTL 16-bit float extrema require whole-array or small-row reduction packages.");
+        "CrossTL 16-bit float extrema require whole-array plans, rows of at most 64 "
+        "elements or columns of fewer than 32.");
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
     dispatch_row_reduce(in, out, plan, axes_, operation, dtype);

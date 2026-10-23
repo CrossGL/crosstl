@@ -1680,7 +1680,7 @@ Non-Metal subnormal bfloat reductions remain rejected under
 [#2000](https://github.com/CrossGL/crosstl/issues/2000). These checks do not establish
 all narrow reduction operations or a complete upstream test-suite pass.
 
-### Wide Whole-Array and Small-Row Reductions
+### Wide Whole-Array, Small-Row and Small-Column Reductions
 
 Sums and products of int64, uint64, float16, bfloat16 and complex64, and
 minima and maxima of int64, uint64 and complex64, run the unchanged
@@ -1704,8 +1704,17 @@ first use for each launch's exact thread grid. On Direct3D and OpenGL each
 launch runs as its dispatch regions, as for the other small rows.
 `wide_row_dispatch` moves exact storage words with a guarded output, and
 `wide_row_evidence` checks every dispatch against its cached packages and
-recomputes 64-bit integer rows from their inputs. Longer rows and column plans
-of these types remain explicit unsupported operations.
+recomputes 64-bit integer rows from their inputs.
+
+Column plans of these types that reduce fewer than 32 elements per output run
+the same types' `col_reduce_small` entries; float16 and bfloat16 sums over one
+axis keep their existing partition-sum packages. `column_small_layout` checks
+each launch's metadata, source span and thread grid against upstream's
+`strided_reduce_small` plan before translation, and every target runs the launch
+as one dispatch. `wide_column_dispatch` moves exact storage words with a guarded
+output, and `wide_column_evidence` derives each dispatch's package again and
+recomputes 64-bit integer columns from their inputs. Longer rows and columns of
+these types remain explicit unsupported operations.
 
 ## Random Generation
 
@@ -1798,7 +1807,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 86 more unchanged `test_ops` tests on all three
+A dedicated job then runs 88 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1807,12 +1816,13 @@ python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
   --bitwise bitwise-packages --selection selection-packages \
   --absolute absolute-packages --integer64 integer64-packages \
   --reductions init-packages --reductions all-reductions \
-  --output-dir upstream-op-evidence
+  --reductions row-reductions --output-dir upstream-op-evidence
 ```
 
-`all-reductions` is an on-demand whole-array reduction index
-(`reduction_packages --family all --on-demand`), so only the variants the
-tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
+`all-reductions` and `row-reductions` are on-demand whole-array and row
+reduction indexes (`reduction_packages --family all --on-demand` and
+`--family row --on-demand`), so only the variants the tests reach are
+translated. The tests are `test_trunc`, `test_erfinv`,
 `test_logical_and`, `test_logical_or`, `test_full_ones_zeros`,
 `test_atleast_1d`/`2d`/`3d`, `test_tile`, `test_repeat`, `test_roll`,
 `test_roll_errors`, `test_tri`, `test_tril`, `test_triu`, `test_as_strided`,
@@ -1836,8 +1846,9 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_concatenate`, `test_meshgrid`, `test_nan_to_num`, `test_pad`,
 `test_pad_reflect_symmetric`, `test_slice_update_reversed` and `test_take`,
 which reach lazy selections of every GPU dtype; `test_round`, which also
-reaches lazy aranges; and `test_std`, `test_var` and `test_vecdot`, which reach
-wide whole-array and small-row reductions.
+reaches lazy aranges; `test_std`, `test_trace`, `test_var` and `test_vecdot`,
+which reach wide whole-array, small-row and small-column reductions; and
+`test_sum`, which also reaches looped float32 rows.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the

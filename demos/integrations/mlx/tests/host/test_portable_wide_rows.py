@@ -438,4 +438,7 @@ def test_runtime_and_host_adapter_route_wide_rows():
     adapter = (
         Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
     )
-    assert "if (wide && plan.type != ContiguousAllReduce && !small_rows) {" in adapter
+    assert (
+        "if (wide && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {"
+        in adapter
+    )
