@@ -62,6 +62,7 @@ def adapted_sources(original, primitives, events):
         "GatherAxis",
         "ScatterAxis",
         "Scatter",
+        "DivMod",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,
@@ -75,7 +76,7 @@ def adapted_sources(original, primitives, events):
             continue
         macro = (
             "NO_GPU_MULTI"
-            if primitive in MULTI_OUTPUT_VIEWS or primitive == "Quantize"
+            if primitive in MULTI_OUTPUT_VIEWS or primitive in {"DivMod", "Quantize"}
             else "NO_GPU"
         )
         primitives = replace_once(

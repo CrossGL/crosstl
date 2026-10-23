@@ -2643,7 +2643,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX small-row host verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 3500 --label "MLX small-row host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --jobs 2 --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
       - name: Translate reduction initialization
@@ -2761,7 +2761,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1260 --label "MLX upstream op verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1680 --label "MLX upstream op verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
               --bitwise .mlx-portable-small-rows/bitwise-packages --selection .mlx-portable-small-rows/selection-packages \

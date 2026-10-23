@@ -977,6 +977,14 @@ void dispatch_empty_reduce(mlx::core::array& out, const char* operation) {
 
 int64_t remainder_operand(const mlx::core::array& value, size_t index) {
   switch (value.dtype()) {
+    case mlx::core::int8:
+      return value.data<int8_t>()[index];
+    case mlx::core::int16:
+      return value.data<int16_t>()[index];
+    case mlx::core::uint8:
+      return value.data<uint8_t>()[index];
+    case mlx::core::uint16:
+      return value.data<uint16_t>()[index];
     case mlx::core::int32:
       return value.data<int32_t>()[index];
     case mlx::core::uint32:
@@ -987,12 +995,14 @@ int64_t remainder_operand(const mlx::core::array& value, size_t index) {
       // Only zero matters for unsigned divisors; keep the value nonnegative.
       return value.data<uint64_t>()[index] != 0;
     default:
-      throw std::invalid_argument("CrossTL integer remainders require 32- or 64-bit integers.");
+      throw std::invalid_argument("CrossTL integer remainders require integer arrays.");
   }
 }
 
 int64_t remainder_minimum(mlx::core::Dtype dtype) {
   return dtype == mlx::core::int64 ? std::numeric_limits<int64_t>::min()
+      : dtype == mlx::core::int16  ? std::numeric_limits<int16_t>::min()
+      : dtype == mlx::core::int8   ? std::numeric_limits<int8_t>::min()
                                    : std::numeric_limits<int32_t>::min();
 }
 
@@ -1083,6 +1093,192 @@ void dispatch_binary(
     }
     first += size;
   }
+}
+
+const char* divmod_type(mlx::core::Dtype dtype) {
+  switch (dtype) {
+    case mlx::core::float16:
+      return "float16";
+    case mlx::core::bfloat16:
+      return "bfloat16";
+    case mlx::core::float32:
+      return "float32";
+    case mlx::core::uint8:
+      return "uint8";
+    case mlx::core::uint16:
+      return "uint16";
+    case mlx::core::uint32:
+      return "uint32";
+    case mlx::core::uint64:
+      return "uint64";
+    case mlx::core::int8:
+      return "int8";
+    case mlx::core::int16:
+      return "int16";
+    case mlx::core::int32:
+      return "int32";
+    case mlx::core::int64:
+      return "int64";
+    default:
+      return nullptr;
+  }
+}
+
+int divmod_launch(
+    const std::string& entry,
+    CrosstlMlxBuffer* buffers,
+    uint32_t count,
+    uint64_t threads,
+    const CrosstlMlxLaunch& launch) {
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, count, threads, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native DivMod failed: ") + error);
+  }
+  return status;
+}
+
+// Ports binary_op_gpu's DivMod kernel choice onto row-contiguous outputs:
+// scalar and dense operands use the ss/sv/vs/vv entries, every other layout
+// the collapsed general g1/g2/g3/gn2 entries with nonnegative strides.
+void dispatch_divmod(
+    const std::vector<mlx::core::array>& inputs,
+    std::vector<mlx::core::array>& outputs) {
+  require_runtime();
+  if (inputs.size() != 2 || outputs.size() != 2 ||
+      inputs[0].dtype() != inputs[1].dtype() ||
+      inputs[0].shape() != inputs[1].shape()) {
+    throw std::invalid_argument("CrossTL DivMod requires two matching operands.");
+  }
+  for (const auto& out : outputs) {
+    if (out.dtype() != inputs[0].dtype() || out.shape() != inputs[0].shape()) {
+      throw std::invalid_argument("CrossTL DivMod outputs must match their operands.");
+    }
+  }
+  const char* dtype = divmod_type(inputs[0].dtype());
+  if (!dtype) {
+    throw std::invalid_argument("CrossTL DivMod requires real integer or floating arrays.");
+  }
+  constexpr uint64_t max_elements = uint64_t(1) << 20;
+  if (outputs[0].size() > max_elements) {
+    throw std::invalid_argument("CrossTL DivMod output exceeds its bounds.");
+  }
+  for (auto& out : outputs) {
+    out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  }
+  auto& c = outputs[0];
+  auto& d = outputs[1];
+  if (c.size() == 0) {
+    return;
+  }
+  // Negative strides would index before the bound storage; copy them densely.
+  auto bounded = [](const mlx::core::array& in) {
+    for (auto stride : in.strides()) {
+      if (stride < 0) {
+        return dense_input(in);
+      }
+    }
+    return in;
+  };
+  auto a = bounded(inputs[0]);
+  auto b = bounded(inputs[1]);
+  if (mlx::core::issubdtype(a.dtype(), mlx::core::integer)) {
+    // Integer division by zero, and MIN / -1, are undefined on every target.
+    const bool is_signed = mlx::core::issubdtype(a.dtype(), mlx::core::signedinteger);
+    for (int64_t i = 0; i < int64_t(c.size()); ++i) {
+      const int64_t divisor =
+          remainder_operand(b, mlx::core::elem_to_loc(i, b.shape(), b.strides()));
+      const int64_t dividend =
+          remainder_operand(a, mlx::core::elem_to_loc(i, a.shape(), a.strides()));
+      if (divisor == 0 ||
+          (is_signed && divisor == -1 && dividend == remainder_minimum(a.dtype()))) {
+        throw std::invalid_argument(
+            "CrossTL DivMod requires nonzero divisors without signed overflow.");
+      }
+    }
+  }
+  auto dense = [](const mlx::core::array& x) {
+    return x.flags().row_contiguous && x.data_size() == x.size();
+  };
+  const bool a_scalar = a.data_size() == 1;
+  const bool b_scalar = b.data_size() == 1;
+  const char* vector_kernel = a_scalar && b_scalar ? "ss"
+      : a_scalar && dense(b)                       ? "sv"
+      : dense(a) && b_scalar                       ? "vs"
+      : dense(a) && dense(b)                       ? "vv"
+                                                   : nullptr;
+  if (vector_kernel) {
+    const std::string entry = std::string(vector_kernel) + "_DivMod" + dtype;
+    require_entry(entry);
+    for (uint64_t first = 0; first < c.size();) {
+      uint32_t size = static_cast<uint32_t>(std::min<uint64_t>(c.size() - first, 65535));
+      const uint64_t a_first = a_scalar ? 0 : first;
+      const uint64_t b_first = b_scalar ? 0 : first;
+      CrosstlMlxBuffer buffers[] = {
+          {"a", dtype, a.data<uint8_t>() + a_first * a.itemsize(), a_scalar ? 1 : size, 0},
+          {"b", dtype, b.data<uint8_t>() + b_first * b.itemsize(), b_scalar ? 1 : size, 0},
+          {"c", dtype, c.data<uint8_t>() + first * c.itemsize(), size, 1},
+          {"d", dtype, d.data<uint8_t>() + first * d.itemsize(), size, 1},
+          {"size", "uint32", &size, 1, 0},
+      };
+      const bool scalar_scalar = std::string(vector_kernel) == "ss";
+      divmod_launch(entry, buffers, scalar_scalar ? 4 : 5, size, elementwise_launch(size));
+      first += size;
+    }
+    return;
+  }
+  auto [shape, strides] =
+      mlx::core::collapse_contiguous_dims(a.shape(), {a.strides(), b.strides(), c.strides()});
+  const size_t ndim = shape.size();
+  if (ndim == 0 || ndim > 64) {
+    throw std::invalid_argument("CrossTL DivMod general layout rank exceeds its bounds.");
+  }
+  uint64_t spans[2] = {1, 1};
+  for (size_t operand = 0; operand < 2; ++operand) {
+    for (size_t axis = 0; axis < ndim; ++axis) {
+      spans[operand] += uint64_t(shape[axis] - 1) * uint64_t(strides[operand][axis]);
+    }
+    if (spans[operand] > max_elements) {
+      throw std::invalid_argument("CrossTL DivMod operand span exceeds its bounds.");
+    }
+  }
+  uint64_t dim0 = shape[ndim - 1];
+  const uint64_t dim1 = ndim > 1 ? shape[ndim - 2] : 1;
+  const uint64_t rest = c.size() / (dim0 * dim1);
+  const std::string kernel = ndim <= 3 ? "g" + std::to_string(ndim) : "gn2";
+  if (ndim > 3) {
+    dim0 = (dim0 + 1) / 2;
+  }
+  if (dim0 > 65535 || dim1 > 65535 || rest > 65535) {
+    throw std::invalid_argument("CrossTL DivMod general grid exceeds its bounds.");
+  }
+  const std::string entry = kernel + "_DivMod" + dtype;
+  require_entry(entry);
+  int32_t rank = static_cast<int32_t>(ndim);
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"a", dtype, a.data<uint8_t>(), spans[0], 0},
+      {"b", dtype, b.data<uint8_t>(), spans[1], 0},
+      {"c", dtype, c.data<uint8_t>(), c.size(), 1},
+      {"d", dtype, d.data<uint8_t>(), d.size(), 1},
+  };
+  if (ndim == 1) {
+    buffers.push_back({"a_stride", "int64", strides[0].data(), 1, 0});
+    buffers.push_back({"b_stride", "int64", strides[1].data(), 1, 0});
+  } else {
+    if (ndim > 3) {
+      buffers.push_back({"shape", "int32", shape.data(), ndim, 0});
+      buffers.push_back({"ndim", "int32", &rank, 1, 0});
+    }
+    buffers.push_back({"a_strides", "int64", strides[0].data(), ndim, 0});
+    buffers.push_back({"b_strides", "int64", strides[1].data(), ndim, 0});
+  }
+  const CrosstlMlxLaunch launch = {
+      {static_cast<uint32_t>(dim0), static_cast<uint32_t>(dim1), static_cast<uint32_t>(rest)},
+      {1, 1, 1}};
+  divmod_launch(
+      entry, buffers.data(), static_cast<uint32_t>(buffers.size()), c.size(), launch);
 }
 } // namespace
 
@@ -2070,6 +2266,10 @@ CROSSTL_BINARY_GPU(Remainder)
 CROSSTL_BINARY_GPU(LogAddExp)
 
 #undef CROSSTL_BINARY_GPU
+
+void DivMod::eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs) {
+  dispatch_divmod(inputs, outputs);
+}
 
 void BitwiseBinary::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_binary(inputs, out, name(), false, true);

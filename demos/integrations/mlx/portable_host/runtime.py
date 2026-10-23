@@ -35,6 +35,7 @@ from demos.integrations.mlx.portable_host import (
     column_reduction_layout,
     column_small_layout,
     copy_layout,
+    divmod_dispatch,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
@@ -62,6 +63,11 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
+)
+from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD_CACHE
+from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
+from demos.integrations.mlx.portable_host.divmod_packages import (
+    signature as divmod_signature,
 )
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
@@ -418,6 +424,11 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.divmods = (
+            DivModPackageCache(mlx_root, self.directory / DIVMOD_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -564,6 +575,12 @@ class HostRuntime:
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
+            if (
+                name.startswith(divmod_dispatch.ENTRY_PREFIXES)
+                and self.divmods is not None
+            ):
+                divmod_signature(name)
+                return 1
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
@@ -654,6 +671,10 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(divmod_dispatch.ENTRY_PREFIXES):
+            return divmod_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(matmul_layout.ENTRY_PREFIXES):
             return matmul_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

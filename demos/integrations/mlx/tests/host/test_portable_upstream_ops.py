@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 21
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 22
     assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
@@ -90,6 +90,11 @@ def audit(monkeypatch, tmp_path):
         ops.random_evidence, "verify_packages", lambda e, root, d, target: None
     )
     monkeypatch.setattr(ops, "variant_keys", lambda index: set(index["descriptors"]))
+    monkeypatch.setattr(
+        ops.divmod_evidence,
+        "audit_event",
+        lambda e: seen.setdefault("divmod_evidence", []).append(e["entry"]),
+    )
     for name in ("gather_evidence", "scatter_axis_evidence", "scatter_evidence"):
         monkeypatch.setattr(
             getattr(ops, name),
@@ -129,6 +134,7 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         event("all_reduce_andbool_", 32),
         event("gatherint32int32_2_1_int"),
         event("scatterfloat32int32_none_2_updc_true_nwork1_int"),
+        event("g3_DivModuint16"),
     ]
     count = ops.audit_trace(
         None, audit.args, trace, "metal", audit.indexes, audit.reductions
@@ -140,6 +146,19 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
     assert audit.seen["scatter_evidence"] == [
         "scatterfloat32int32_none_2_updc_true_nwork1_int"
     ]
+    assert audit.seen["divmod_evidence"] == ["g3_DivModuint16"]
+
+
+def test_upstream_op_divmod_dispatch_must_use_the_package_target(audit):
+    with pytest.raises(ValueError, match="DivMod dispatch targets another backend"):
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("gatherint32int32_2_1_int"), event("vv_DivModint32", 1, "opengl")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+        )
 
 
 @pytest.mark.parametrize(

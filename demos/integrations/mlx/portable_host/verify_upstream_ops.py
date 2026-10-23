@@ -7,10 +7,12 @@ random bits, Boolean and integer bitwise operations, selection, absolute
 values, reduction initialization and the checked Boolean and float32
 conjunctions. General gather and scatter kernels are specialized from the
 pinned MLX sources at dispatch time, and each of their dispatches is
-recomputed from its retained inputs and native modules. Every other dispatch
+recomputed from its retained inputs and native modules. DivMod's
+``binary_two`` kernels are specialized the same way, and every DivMod dispatch
+is recomputed from its retained operands. Every other dispatch
 must come from one of those indexes, so a test that reaches another family
-(scans, 64-bit or 16-bit kernels) fails the trace instead of passing on an
-unchecked package.
+(scans, the 64-bit or 16-bit package families) fails the trace instead of
+passing on an unchecked package.
 """
 
 import argparse
@@ -22,10 +24,14 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    divmod_evidence,
     gather_evidence,
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
+)
+from demos.integrations.mlx.portable_host.divmod_dispatch import (
+    ENTRY_PREFIXES as DIVMOD_PREFIXES,
 )
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.random_packages import (
@@ -67,6 +73,7 @@ UPSTREAM_TESTS = tuple(
         "test_eye",
         "test_diag",
         "test_diagonal",
+        "test_divmod",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -75,8 +82,8 @@ INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")
 FAMILIES = ("packages", "random", "bitwise", "selection", "absolute")
 REQUIRED_REDUCTIONS = frozenset(("w32/all_reduce_andbool_", "w256/all_reduce_andbool_"))
 NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
-# The CI step bounds the three workers and the audit at 1,260 seconds.
-TIMEOUTS = {"cpu": 120, "native": 1020, "missing": 60}
+# The CI step bounds the three workers and the audit at 1,680 seconds.
+TIMEOUTS = {"cpu": 120, "native": 1440, "missing": 60}
 
 
 def write_json(path, value):
@@ -227,12 +234,21 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         auditor(np, event)
         owners[i] += 1
         indexing += 1
+    for i, event in enumerate(trace):
+        if not event["entry"].startswith(DIVMOD_PREFIXES):
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op DivMod dispatch targets another backend")
+        # Recomputes both outputs and checks the retained native modules.
+        divmod_evidence.audit_event(event)
+        owners[i] += 1
     verify_native_identity(
         [
             event
             for event in trace
             if event["entry"] not in ENTRIES
             and indexing_auditor(event["entry"]) is None
+            and not event["entry"].startswith(DIVMOD_PREFIXES)
         ],
         target,
     )

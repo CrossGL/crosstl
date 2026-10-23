@@ -64,7 +64,8 @@ remainder support float32, int32 and uint32; division and LogAddExp support floa
 Integer remainders reject zero divisors and signed `INT_MIN % -1` before dispatch,
 because all three targets leave them undefined. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
-binary entry executes. Casts between float32, int32 and uint32 use six unchanged
+binary entry executes. `DivMod` (see below) instead dispatches the strided
+`binary_two` kernels directly, for every real integer and floating type. Casts between float32, int32 and uint32 use six unchanged
 `v_copy` entries, including automatic promotion before mixed-type arithmetic.
 Six additional casts convert between bool and those three numeric types.
 Strided cast inputs are materialized through translated copies. Optional integer64
@@ -232,6 +233,37 @@ exactly representable; the existing nonfinite and small-array tests remain in
 place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
+
+## DivMod
+
+`DivMod` is MLX's two-output floored quotient and remainder. Its host port
+follows `binary_op_gpu` in `mlx/backend/metal/binary.cpp` for row-contiguous
+outputs: scalar and dense operands use the unchanged `ss_`, `sv_`, `vs_` and
+`vv_` `binary_two.metal` entries, and every other layout collapses its
+contiguous axes and uses `g1_`, `g2_`, `g3_` or `gn2_` with the operands'
+strides, so broadcasts need no copy kernel. Inputs with negative strides are
+first copied densely. The single-element `N = 1` entries are used throughout,
+so no work-per-thread variant is needed. All 88 kernel and dtype pairs (float16,
+bfloat16, float32 and the 8-, 16-, 32- and 64-bit integers) are translated from
+the pinned source on first use and cached under an identity that covers the
+translator, the packaging recipe and the source hash. The floating entries pin
+the same binary32 division, comparison, remainder and additive profiles, and
+the binary16 remainder profile, as the `binary_two` kernel parity tests.
+OpenGL packages assert their element indices in `[0, 2**31 - 1]`; the host
+bounds outputs and operand spans at 2**20 elements and every grid axis at
+65,535.
+
+Integer operands are refused before dispatch when a divisor is zero or a signed
+`MIN / -1` would overflow, because no target defines those results. The
+callback checks every buffer against its kernel's contract (types, extents,
+spans, directions, overlap and launch geometry), uploads narrow integers as
+32-bit words where a target lacks 8- or 16-bit storage, and decodes each
+readback exactly, with a guard after each output. `divmod_evidence` recomputes
+both outputs of a dispatch from its retained operands: integers exactly, and
+floating values with correctly rounded division, MLX's floored `fmod` and
+Metal's binary32-quotient binary16 remainder. The evidence check accepts only
+zero and normal finite values, so a dispatch that reaches subnormals,
+infinities or NaNs fails it rather than passing on an unmodelled flush.
 
 ## Batched Unary Operations
 
@@ -1646,7 +1678,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-The same job then runs 21 more unchanged `test_ops` tests on the families it
+The same job then runs 22 more unchanged `test_ops` tests on the families it
 has already translated:
 
 ```bash
@@ -1661,17 +1693,19 @@ They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
 `test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
 `test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
 `test_triu`, `test_as_strided`, `test_view`, `test_depends`, `test_eye`,
-`test_diag` and `test_diagonal`. Each runs once on the MLX CPU and once
+`test_diag`, `test_diagonal` and `test_divmod`. Each runs once on the MLX CPU and once
 through the translated host, in separate processes, and every native run must
 dispatch. Every dispatch must belong to exactly one of the base, random,
 bitwise, selection, absolute-value or reduction indexes and pass that
-family's artifact and native-identity checks, or be a gather or scatter kernel
-specialized from the pinned sources, whose result is recomputed from its
-retained inputs. A test that reaches scans or 64-bit and 16-bit kernels
-therefore fails instead of running an unchecked package. A separate process
+family's artifact and native-identity checks, or be a gather, scatter or
+DivMod kernel specialized from the pinned sources, whose result is recomputed
+from its retained inputs and whose native modules are checked. A test that
+reaches scans or the 64-bit and 16-bit package families therefore fails
+instead of running an unchecked package. A separate process
 checks that a missing comparison package is refused before dispatch. On Metal
-the native run dispatches 1,771 translated kernels, 12 of them indexing
-kernels.
+the native run dispatches 1,818 translated kernels, 12 of them indexing
+kernels and 37 DivMod kernels (25 kernel and dtype pairs, translated on first
+use; the cold native run takes about four minutes).
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share
