@@ -437,7 +437,10 @@ class _Declarations:
         local_ids = _function_local_ids(ast)
         for node in _iter_nodes(ast):
             name = getattr(node, "name", None)
-            if isinstance(node, _VALUE_DECLARATION_TYPES) and isinstance(name, str):
+            if _is_type_alias(node) and isinstance(name, str):
+                # A type alias names a type: its uses are ``NamedType`` nodes.
+                self.types.add(name)
+            elif isinstance(node, _VALUE_DECLARATION_TYPES) and isinstance(name, str):
                 self.values.add(name)
                 if self._at_program_scope(
                     node, struct_names, cbuffer_members, local_ids
@@ -480,6 +483,10 @@ def hlsl_keyword_declarations(ast):
     """The value names and type names ``ast`` declares that HLSL reserves."""
     declarations = _Declarations(ast)
     return declarations.keyword_values(), declarations.keyword_types()
+
+
+def _is_type_alias(node):
+    return isinstance(node, VariableNode) and getattr(node, "is_type_alias", False)
 
 
 def _program_names(ast):
@@ -533,7 +540,10 @@ class _Renamer:
 
     def rename(self, node):
         name = getattr(node, "name", None)
-        if isinstance(node, _VALUE_DECLARATION_TYPES):
+        if _is_type_alias(node):
+            if name in self.types:
+                node.name = self.types[name]
+        elif isinstance(node, _VALUE_DECLARATION_TYPES):
             if name in self.values:
                 node.name = self.values[name]
         elif isinstance(node, _TYPE_DECLARATION_TYPES):
