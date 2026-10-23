@@ -114,6 +114,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .relational_builtins import lower_relational_builtins
+from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_matrices import constant_matrix_constructor
@@ -656,6 +657,8 @@ class VulkanSPIRVCodeGen(
         self.shared_binding_nodes = set()
         # Descriptor slots of resources bound by HLSL register or vk::binding, by node id.
         self.hlsl_descriptor_slots = {}
+        # Descriptor slots of the current entry point's buffer/texture/sampler parameters, by parameter name.
+        self.entry_descriptor_slots = {}
         # Uniform-block arrays of matrix columns, by array type id, with the matrix type a load rebuilds.
         self.matrix_column_arrays = {}
         self.entry_point_resource_binding_baseline = None
@@ -14401,6 +14404,13 @@ class VulkanSPIRVCodeGen(
         runtime_parameters: List[Tuple[VariableNode, SpirvId, SpirvId]],
         execution_model: Optional[str],
     ):
+        self.entry_descriptor_slots = plan_entry_descriptor_slots(
+            self,
+            [param for param, _param_type, _value_type in runtime_parameters],
+            lambda param: self.is_storage_resource_parameter(param)
+            or self.is_entry_point_descriptor_parameter(param)
+            or self.is_bound_uniform_value_parameter(param, execution_model),
+        )
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
             if self.is_storage_resource_parameter(param):
@@ -14429,6 +14439,7 @@ class VulkanSPIRVCodeGen(
             self.register_declared_resource_metadata(
                 param, local_variable, param_value_type
             )
+        self.entry_descriptor_slots = {}
 
     def resource_parameter_qualifier_names(self, param) -> set:
         return {
@@ -20465,6 +20476,8 @@ class VulkanSPIRVCodeGen(
         self, node: VariableNode, *, allow_binding_reassignment: bool = False
     ) -> Tuple[int, int]:
         hlsl_slot = self.hlsl_descriptor_slots.get(id(node))
+        if hlsl_slot is None:
+            hlsl_slot = self.entry_descriptor_slots.get(getattr(node, "name", None))
         if hlsl_slot is not None:
             self.used_resource_bindings.add(hlsl_slot)
             return hlsl_slot
@@ -20548,10 +20561,16 @@ class VulkanSPIRVCodeGen(
                 node,
                 getattr(node, "name", "resource"),
             )
+        stage_of = {
+            id(node): str(stage_name)
+            for stage_name, stage in (getattr(ast, "stages", None) or {}).items()
+            for node in getattr(stage, "local_variables", []) or []
+        }
         self.hlsl_descriptor_slots = reserve_hlsl_descriptor_slots(
             self,
             self.global_descriptor_binding_nodes(ast),
             skip=lambda node: is_push_constant_block(self, node),
+            scope=lambda node: stage_of.get(id(node)),
         )
 
     def explicit_descriptor_binding(self, node: VariableNode) -> Optional[int]:
