@@ -111,21 +111,15 @@ NEGATIVE_CHECKS = {
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-large-allocation": "exceeds its allocation",
-    "copy-dtype": (
-        "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
-    ),
+    "copy-dtype": "matching real (bool, integer, float16, bfloat16 or float32) arrays",
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
     "binary-dtype": "supported dtype",
     "binary-large-allocation": "exceeds its allocation",
-    "cast-dtype": (
-        "casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
-    ),
+    "cast-dtype": "casts require real (bool, integer, float16, bfloat16 or float32)",
     "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": (
-        "matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool"
-    ),
+    "full-dtype": "matching real (bool, integer, float16, bfloat16 or float32) arrays",
     "full-allocation": "exceeds its allocation",
 }
 REDUCTION_NEGATIVE_CHECKS = {
@@ -190,7 +184,7 @@ def worker(args):
                     stream=mx.gpu,
                 )
             elif args.worker == "copy-dtype":
-                source = mx.array(np.arange(12, dtype=np.int16).reshape(3, 4))
+                source = mx.array(np.arange(12, dtype=np.complex64).reshape(3, 4))
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
             elif args.worker == "copy-large-allocation":
                 source = mx.as_strided(
@@ -208,7 +202,7 @@ def worker(args):
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)
                 value = mx.add(source, source, stream=mx.gpu)
             elif args.worker == "cast-dtype":
-                value = mx.array([1, 2], dtype=mx.int16).astype(mx.float32)
+                value = mx.array([1, 2], dtype=mx.complex64).astype(mx.float32)
             elif args.worker == "cast-large-allocation":
                 source = mx.as_strided(
                     mx.array([1, 2, 3], dtype=mx.int32), (65536,), (1,), 2
@@ -220,7 +214,7 @@ def worker(args):
                 )
                 value = source.astype(mx.float32)
             elif args.worker == "full-dtype":
-                value = mx.full((3, 5), mx.array(1, dtype=mx.int16))
+                value = mx.full((3, 5), mx.array(1, dtype=mx.complex64))
             elif args.worker == "full-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (2,), (-1,))
                 value = mx.full((3, 2), source)

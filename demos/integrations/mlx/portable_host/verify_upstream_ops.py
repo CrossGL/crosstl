@@ -9,7 +9,10 @@ whole-array reductions. General gather and scatter kernels are specialized
 from the pinned MLX sources at dispatch time, and each of their dispatches is
 recomputed from its retained inputs and native modules. DivMod's
 ``binary_two`` kernels are specialized the same way, and every DivMod dispatch
-is recomputed from its retained operands. Scans and small row and column
+is recomputed from its retained operands. Casts and copies that no installed
+family covers (the narrow integers and the 16-bit float pairs) translate from
+``copy.metal`` on first use; each is recomputed from its retained words and
+must name the package its cache derives again. Scans and small row and column
 reductions are also translated on first use; each of their dispatches must
 name the package its cache derives again from the event. Every other dispatch
 must come from one of those indexes, so a test that reaches another family
@@ -26,6 +29,7 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    copy_evidence,
     divmod_evidence,
     gather_evidence,
     lazy_package_evidence,
@@ -33,6 +37,11 @@ from demos.integrations.mlx.portable_host import (
     scatter_axis_evidence,
     scatter_evidence,
 )
+from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
+from demos.integrations.mlx.portable_host.copy_packages import (
+    ENTRIES as LAZY_COPY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
 from demos.integrations.mlx.portable_host.divmod_dispatch import (
     ENTRY_PREFIXES as DIVMOD_PREFIXES,
 )
@@ -98,6 +107,8 @@ UPSTREAM_TESTS = tuple(
         "test_mean",
         "test_min_and_max",
         "test_prod",
+        # This also reaches lazily translated casts.
+        "test_subnormal_bool_cast",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -150,6 +161,11 @@ def install(args, output):
     )
     if args.worker == "missing":
         host.descriptors.pop("vv_Equalint32")
+    # Lazy copies are recomputed from their values; installed copies are not.
+    host.trace_values = (
+        *RETAINED_VALUES,
+        *(entry for entry in LAZY_COPY_ENTRIES if host.lazy_copy(entry)),
+    )
     host.install()
     return host
 
@@ -287,6 +303,18 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Recomputes both outputs and checks the retained native modules.
         divmod_evidence.audit_event(event)
         owners[i] += 1
+    installed = set().union(*(index["descriptors"] for index in indexes.values()))
+    copies = CopyPackageCache(args.mlx_root, args.packages / COPY_CACHE, target)
+    lazy_copies = set()
+    for i, event in enumerate(trace):
+        if event["entry"] not in LAZY_COPY_ENTRIES or event["entry"] in installed:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op copy dispatch targets another backend")
+        # Recomputes the destination and derives the cached package again.
+        copy_evidence.audit_event(event, copies)
+        lazy_copies.add(i)
+        owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
     modules = Path(args.output_dir) / "native/native-modules"
     executed = set()
@@ -305,6 +333,7 @@ def audit_trace(np, args, trace, target, indexes, reductions):
             and indexing_auditor(event["entry"]) is None
             and not event["entry"].startswith(DIVMOD_PREFIXES)
             and i not in executed
+            and i not in lazy_copies
         ],
         target,
     )

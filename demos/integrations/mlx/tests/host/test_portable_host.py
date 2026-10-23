@@ -1729,9 +1729,9 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
 
     installed, arrays = [], []
     message = (
-        "CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays."
+        "CrossTL casts require real (bool, integer, float16, bfloat16 or float32) arrays."
         if mode == "cast-dtype"
-        else "CrossTL copying layouts require matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays."
+        else "CrossTL copying layouts require matching real (bool, integer, float16, bfloat16 or float32) arrays."
     )
     assert message in Path(verify.__file__).with_name("backend.cpp").read_text()
 
@@ -1741,7 +1741,7 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
         return result
 
     def evaluate(value):
-        assert arrays[0].dtype == np.int16
+        assert arrays[0].dtype == np.complex64
         if fault == "message":
             raise ValueError("Unrelated runtime failure")
         if fault != "accepted":
@@ -1749,7 +1749,7 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
 
     module = SimpleNamespace(
         gpu="gpu",
-        int16=np.int16,
+        complex64=np.complex64,
         float32=np.float32,
         metal=SimpleNamespace(is_available=lambda: False),
         is_available=lambda device: bool(installed),

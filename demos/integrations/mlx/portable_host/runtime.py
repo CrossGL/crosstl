@@ -34,6 +34,7 @@ from demos.integrations.mlx.portable_host import (
     bfloat_storage,
     column_reduction_layout,
     column_small_layout,
+    copy_dispatch,
     copy_layout,
     divmod_dispatch,
     fp_matmul_layout,
@@ -64,6 +65,11 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
 )
+from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
+from demos.integrations.mlx.portable_host.copy_packages import (
+    ENTRIES as LAZY_COPY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
 from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD_CACHE
 from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
 from demos.integrations.mlx.portable_host.divmod_packages import (
@@ -436,6 +442,12 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # Casts and copies that no installed family covers translate on first use.
+        self.copies = (
+            CopyPackageCache(mlx_root, self.directory / COPY_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -579,6 +591,8 @@ class HostRuntime:
             name = entry.decode("ascii")
             if name in self.descriptors:
                 return 1
+            if name in LAZY_COPY_ENTRIES and self.copies is not None:
+                return 1
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
@@ -675,7 +689,17 @@ class HostRuntime:
                 ctypes.memmove(error, payload, len(payload))
             return 1
 
+    def lazy_copy(self, entry):
+        """Whether ``entry`` runs from the lazy copy cache, not a package family."""
+        return (
+            entry in LAZY_COPY_ENTRIES
+            and entry not in self.descriptors
+            and self.copies is not None
+        )
+
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if self.lazy_copy(entry):
+            return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(divmod_dispatch.ENTRY_PREFIXES):

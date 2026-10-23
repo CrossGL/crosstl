@@ -104,6 +104,7 @@ void dispatch_arange(
 
 void dispatch_copy(const mlx::core::array& in, mlx::core::array& out);
 const char* storage_type(mlx::core::Dtype dtype);
+const char* cast_type(mlx::core::Dtype dtype);
 
 void dispatch_unary(
     const std::vector<mlx::core::array>& inputs,
@@ -293,14 +294,9 @@ void dispatch_copy_into(
     int64_t dst_offset,
     bool preserve) {
   require_runtime();
-  if (in.dtype() != out.dtype() ||
-      (in.dtype() != mlx::core::float32 && in.dtype() != mlx::core::int32 &&
-       in.dtype() != mlx::core::float16 &&
-       in.dtype() != mlx::core::bfloat16 &&
-       in.dtype() != mlx::core::uint32 && in.dtype() != mlx::core::bool_ &&
-       in.dtype() != mlx::core::int64 && in.dtype() != mlx::core::uint64)) {
+  if (in.dtype() != out.dtype() || !cast_type(in.dtype())) {
     throw std::invalid_argument(
-        "CrossTL copying layouts require matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
+        "CrossTL copying layouts require matching real (bool, integer, float16, bfloat16 or float32) arrays.");
   }
   constexpr int64_t max_index = std::numeric_limits<int32_t>::max();
   if (in.size() > max_index || in.ndim() > 64 ||
@@ -368,12 +364,15 @@ void dispatch_copy_into(
       out.nbytes() > out.buffer_size() - uint64_t(out.offset())) {
     throw std::invalid_argument("CrossTL copy destination exceeds its allocation.");
   }
-  // Copy storage words to preserve NaN payloads, subnormals and signed zero.
-  const bool boolean = in.dtype() == mlx::core::bool_;
-  const bool wide = in.dtype() == mlx::core::int64 || in.dtype() == mlx::core::uint64;
+  // Copy storage words to preserve NaN payloads, subnormals and signed zero;
+  // Booleans and 16-bit floats keep their own kernels, other types copy as
+  // unsigned words of their width (64-bit integers as themselves).
+  const size_t width = in.itemsize();
   const char* dtype = in.dtype() == mlx::core::float16 ? "float16" :
       in.dtype() == mlx::core::bfloat16 ? "bfloat16" :
-      wide ? storage_type(in.dtype()) : boolean ? "bool_" : "uint32";
+      in.dtype() == mlx::core::bool_ ? "bool_" :
+      width == 8 ? storage_type(in.dtype()) :
+      width == 4 ? "uint32" : width == 2 ? "uint16" : "uint8";
   std::vector<CopyRegion> regions;
   append_copy_regions({shape, 0, dst_offset}, src_strides, dst_strides, regions);
   for (size_t index = 0; index < regions.size(); ++index) {
@@ -856,9 +855,36 @@ const char* storage_type(mlx::core::Dtype dtype) {
   return nullptr;
 }
 
+// Every real MLX dtype; complex64 has no translated cast or copy family.
 const char* cast_type(mlx::core::Dtype dtype) {
-  return dtype == mlx::core::float16 ? "float16" :
-      dtype == mlx::core::bfloat16 ? "bfloat16" : storage_type(dtype);
+  switch (dtype) {
+    case mlx::core::bool_:
+      return "bool_";
+    case mlx::core::float16:
+      return "float16";
+    case mlx::core::bfloat16:
+      return "bfloat16";
+    case mlx::core::float32:
+      return "float32";
+    case mlx::core::uint8:
+      return "uint8";
+    case mlx::core::uint16:
+      return "uint16";
+    case mlx::core::uint32:
+      return "uint32";
+    case mlx::core::uint64:
+      return "uint64";
+    case mlx::core::int8:
+      return "int8";
+    case mlx::core::int16:
+      return "int16";
+    case mlx::core::int32:
+      return "int32";
+    case mlx::core::int64:
+      return "int64";
+    default:
+      return nullptr;
+  }
 }
 
 // Converts the first `count` elements of `in`'s data into `out`'s data.
@@ -898,7 +924,7 @@ bool prepare_cast(const std::vector<mlx::core::array>& inputs, mlx::core::array&
     throw std::invalid_argument("CrossTL cast input must match output shape.");
   }
   if (!cast_type(inputs[0].dtype()) || !cast_type(out.dtype())) {
-    throw std::invalid_argument("CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays.");
+    throw std::invalid_argument("CrossTL casts require real (bool, integer, float16, bfloat16 or float32) arrays.");
   }
   if (inputs[0].dtype() == out.dtype()) {
     out.copy_shared_buffer(inputs[0]);
@@ -1095,33 +1121,9 @@ void dispatch_binary(
   }
 }
 
+// binary_two.metal instantiates DivMod for every real type except bool.
 const char* divmod_type(mlx::core::Dtype dtype) {
-  switch (dtype) {
-    case mlx::core::float16:
-      return "float16";
-    case mlx::core::bfloat16:
-      return "bfloat16";
-    case mlx::core::float32:
-      return "float32";
-    case mlx::core::uint8:
-      return "uint8";
-    case mlx::core::uint16:
-      return "uint16";
-    case mlx::core::uint32:
-      return "uint32";
-    case mlx::core::uint64:
-      return "uint64";
-    case mlx::core::int8:
-      return "int8";
-    case mlx::core::int16:
-      return "int16";
-    case mlx::core::int32:
-      return "int32";
-    case mlx::core::int64:
-      return "int64";
-    default:
-      return nullptr;
-  }
+  return dtype == mlx::core::bool_ ? nullptr : cast_type(dtype);
 }
 
 int divmod_launch(

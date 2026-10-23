@@ -234,6 +234,42 @@ place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
 
+## Casts and copies of every real dtype
+
+`AsType` and the copies behind reshapes, transposes and other layout changes
+accept every real MLX dtype: Booleans, the 8-, 16-, 32- and 64-bit integers,
+float16, bfloat16 and float32. Complex arrays are refused before dispatch. A
+cast runs the unchanged `v_copy<source><destination>` entry of `copy.metal`,
+and a general copy runs `ggn2_dynamic_copy` on unsigned storage words of the
+element width (Booleans and the 16-bit floats keep their own kernels), so NaN
+payloads, subnormals and signed zeros survive. When an installed package family
+already provides the entry, it is used. Otherwise `copy_packages` translates
+the entry from the pinned source on first use and caches it under an identity
+that covers the translator, the recipe, the shared `lazy_kernel_cache` module
+and the source hash; DivMod uses the same cache. OpenGL general copies assert
+the same offset bounds as the prebuilt copy family.
+
+`element_storage` carries each logical type in the reflected physical storage:
+Direct3D and OpenGL keep Booleans and the narrow integers they lack in 32-bit
+words, OpenGL keeps 16-bit floats in float32 carriers and Direct3D keeps
+bfloat16 bits in uint16 words. Uploads are exact. A readback that does not hold
+a value of its logical type, such as a widened int8 word outside the int8
+range or a Boolean other than zero or one, is refused instead of wrapped. Every
+destination carries a trailing guard; a fresh destination is filled with guard
+words and a preserved one with its current words, and elements a copy does not
+write must come back unchanged.
+
+`copy_evidence` recomputes each dispatch from its retained words. General
+copies must move exactly the words their strides select. Casts follow `cast_to`
+in the pinned `utils.h`: Booleans test for nonzero storage (subnormals and NaNs
+are true), floating results round to nearest even with gradual underflow, and
+integers wrap modulo their width. Floating values truncate toward zero into
+integers. The audit refuses what no target defines or what the pinned profiles
+leave open: NaN, infinite or out-of-range values converted to integers,
+binary32 subnormals cast to or from bfloat16, and integers that would need two
+roundings to reach a 16-bit float. Each audited dispatch must also name the
+package its cache derives again, and its retained native modules are checked.
+
 ## DivMod
 
 `DivMod` is MLX's two-output floored quotient and remainder. Its host port
@@ -1678,7 +1714,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 41 more unchanged `test_ops` tests on all three
+A dedicated job then runs 42 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1703,14 +1739,16 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_take_along_axis`, `test_unary_ops_from_non_array`, `test_add`,
 `test_any`, `test_bitwise_grad`, `test_count_nonzero`,
 `test_irregular_binary_ops`, `test_linspace`, `test_linspace_endpoint`,
-`test_mean`, `test_min_and_max` and `test_prod`. Each runs once on the MLX
+`test_mean`, `test_min_and_max`, `test_prod` and `test_subnormal_bool_cast`.
+Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
 base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
 indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from
 the pinned sources are recomputed from their retained inputs and their native
-modules are checked. Scans and small row and column reductions must name the
+modules are checked, and so are the casts and copies that no installed family
+covers (see "Casts and copies of every real dtype"). Scans and small row and column reductions must name the
 package their cache derives again from the recorded entry, launch and
 metadata (and, for scans and Direct3D or OpenGL dispatch regions, retained
 native modules). A test that reaches the 16-bit package families, or row and
@@ -1718,8 +1756,9 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 5,328 translated kernels, 16 of them indexing kernels;
-the whole verification takes about seven minutes.
+native run dispatches 5,337 translated kernels, 16 of them indexing kernels and
+6 lazily translated Boolean casts of 16-bit floats; the whole verification
+takes about seven minutes.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share
@@ -2136,7 +2175,7 @@ copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or insufficient backing storage are also rejected, as
 are casts with unsupported types or invalid source spans, including a view
 larger than one dispatch whose backing allocation is too short.
-Full also rejects unsupported int16 storage, excessive output size and a source
+Full also rejects complex64 storage, excessive output size and a source
 view extending before its allocation.
 The native worker has a hard 900-second process-tree deadline; the CPU reference
 and eighteen negative processes each retain a 180-second deadline. All are
