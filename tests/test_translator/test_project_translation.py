@@ -8188,7 +8188,7 @@ def test_translate_project_glsl_alpha_stitch_storage_image_lowers_to_wgsl(
     assert "textureLoad(srcRGB, vec2<i32>(global_invocation_id.xy), 0).xy" in wgsl
     assert (
         "textureStore(dstTexture, vec2<i32>(global_invocation_id.xy), "
-        "vec4<u32>(rgbBlock.xy, alphaBlock.xy));"
+        "vec4<u32>(rgbBlock, alphaBlock));"
     ) in wgsl
     assert "uimage2D" not in wgsl
     assert "imageStore" not in wgsl
