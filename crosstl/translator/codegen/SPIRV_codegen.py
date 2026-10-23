@@ -120,6 +120,10 @@ from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
+from .spirv_entry_locations import (
+    interface_location_state,
+    restore_interface_location_state,
+)
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
     spirv_ldexp_call,
@@ -18817,6 +18821,9 @@ class VulkanSPIRVCodeGen(
             self.restore_resource_binding_state(
                 self.entry_point_resource_binding_baseline
             )
+        entry_interface_locations = (
+            interface_location_state(self) if is_entry_point else None
+        )
         if execution_model_hint is None and is_entry_point and stage is None:
             execution_model_hint = self.spirv_execution_model(
                 self.get_function_qualifier(function_node)
@@ -19133,6 +19140,8 @@ class VulkanSPIRVCodeGen(
         ) = previous_cooperative_matrix_control_state
         if previous_entry_resource_binding_state is not None:
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
+        if entry_interface_locations is not None:
+            restore_interface_location_state(self, entry_interface_locations)
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()
