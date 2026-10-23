@@ -7,6 +7,7 @@ dist/
 *.egg-info/
 
 # Generated locally
+temp_auto_push.bat
 .hypothesis/
 docs/_build/
 examples/output/
@@ -14,6 +15,7 @@ examples/output/
 
 # Editors, operating systems and local worktrees
 .vs/
-.vscode/settings.json
 .DS_Store
 worktrees/
+.gitignore
+branch_structure.json
