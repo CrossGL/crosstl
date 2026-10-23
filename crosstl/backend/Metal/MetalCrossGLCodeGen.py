@@ -2044,20 +2044,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "host_name",
         }
 
+        # [[attribute(n)]] is the vertex input at location n: see map_semantic.
         self.map_semantics = {
-            # Vertex attributes
-            "attribute(0)": "POSITION",
-            "attribute(1)": "NORMAL",
-            "attribute(2)": "TANGENT",
-            "attribute(3)": "BINORMAL",
-            "attribute(4)": "TEXCOORD",
-            "attribute(5)": "TEXCOORD0",
-            "attribute(6)": "TEXCOORD1",
-            "attribute(7)": "TEXCOORD2",
-            "attribute(8)": "TEXCOORD3",
-            "attribute(9)": "COLOR",
-            "attribute(10)": "COLOR0",
-            "attribute(11)": "COLOR1",
             "vertex_id": "gl_VertexID",
             "instance_id": "gl_InstanceID",
             "base_vertex": "gl_BaseVertex",
@@ -22895,6 +22883,9 @@ float {scalar}(float value) {{
                 continue
             elif context_kind == "parameter" and name == "sample_mask":
                 out = "gl_SampleMaskIn"
+            elif name == "attribute" and len(args) == 1:
+                # A vertex attribute index is the input location every target binds by.
+                out = f"location({args[0]})"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
