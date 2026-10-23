@@ -52,7 +52,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--strict",
         action="store_true",
-        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested",
+        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested, "
+        "and with --execute when no runtime runs a language's executable probes",
     )
     merging = commands.add_parser(
         "merge",
@@ -147,6 +148,10 @@ def _run(args: argparse.Namespace) -> int:
         results, used = execution.run(results)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results, used)
+        if args.strict and idle:
+            print(f"error: no runtime executes {', '.join(idle)}", file=sys.stderr)
+            return 2
     data = report.build(results, languages, directions)
     report.write(data, args.output)
     print(report.summary(data))

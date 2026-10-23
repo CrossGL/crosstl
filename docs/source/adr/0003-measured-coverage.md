@@ -62,7 +62,8 @@ OpenCL C probe is emitted as HLSL, the target whose output row covers the most b
 Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one input
 buffer also runs: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs
 through the harness's `run_suite`, and a translation that writes other results is `wrong`. The runtime harness is
-not duplicated. CI executes the Metal rows on the macOS job.
+not duplicated. CI executes the Metal rows on the macOS job and the GLSL and SPIR-V rows on Mesa's llvmpipe and
+lavapipe in the Linux job.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score

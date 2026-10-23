@@ -105,10 +105,11 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      # numpy and moderngl run supported GLSL and SPIR-V compute probes through Core's conformance harness.
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e . numpy==2.5.4 moderngl==5.13.0 glcontext==3.1.0
 
       - name: Install pinned Linux DXC
         uses: ./.github/actions/install-linux-dxc
@@ -117,6 +118,13 @@ jobs:
 
       - name: Install pinned glslang and SPIRV-Tools
         uses: ./.github/actions/install-shader-validators
+
+      # Mesa's llvmpipe (OpenGL 4.5 through EGL) and lavapipe (Vulkan), with the headers the harness's vkrun needs.
+      - name: Install Mesa llvmpipe and lavapipe
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers
+          recommends: "false"
 
       - name: Restore naga
         id: naga
@@ -158,8 +166,9 @@ jobs:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           # The clang whose opencl-c.h tools/coverage/upstream.py pins.
           CROSSTL_COVERAGE_CLANG: clang-18
+          CROSSTL_CONFORMANCE_MESA: host
         run: |
-          python -m tools.coverage run --strict --jobs 4 \
+          python -m tools.coverage run --strict --execute --jobs 4 \
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
             --backend opencl --output coverage-linux.json
 

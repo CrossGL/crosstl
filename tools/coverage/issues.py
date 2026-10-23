@@ -324,7 +324,7 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
     if executed:
         probe = "CrossGL probe" if direction == "output" else "probe"
         what = (
-            f"CrossTL translates the generated {probe} and {tool} accepts the result, but on the GPU it does not "
+            f"CrossTL translates the generated {probe} and {tool} accepts the result, but run, it does not "
             f"compute what the native {chart.name(language)} probe computes."
         )
     count = len(features)

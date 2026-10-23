@@ -21,13 +21,17 @@ from pathlib import Path
 from .model import Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
-SUFFIXES = {"metal": ".metal", "spirv": ".spvasm"}
+SUFFIXES = {"glsl": ".comp", "metal": ".metal", "spirv": ".spvasm"}
 THREADS = 64
 # Output words one thread may write: a 4x4 float matrix is the largest result a probe stores.
 WORDS = 16
 # Input elements one thread may read past its own: three 4x4 matrix arguments.
 SPAN = 48
 _INPUT = re.compile(r"\b(fin|iin|uin)\b")
+# llvmpipe implements OpenGL 4.5, so GLSL written for 4.60 runs as GLSL 4.50. A native probe that needs 4.60 is then
+# rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
+# use what 4.60 adds.
+_GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
@@ -50,6 +54,13 @@ def executable(result: Result) -> bool:
         return False
     buffers = [set(_INPUT.findall(source)) for source in result.sources]
     return len(buffers[0]) == 1 and buffers[0] == buffers[1]
+
+
+def runnable(language: str, source: str) -> str:
+    """``source`` as the runtime for ``language`` compiles it."""
+    if language == "glsl":
+        return _GLSL_460.sub("#version 450 core", source, count=1)
+    return source
 
 
 def inputs(buffer: str):
@@ -108,17 +119,22 @@ def _case(identity: str, path: Path, language: str, data, capture):
 
 
 def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Path):
-    """Run one chunk of results; return ``{index: (native record, translated record, outputs)}``."""
+    """Run one chunk of results; return ``{index: (native record, translated record, outputs, lowered)}``.
+
+    ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares.
+    """
     from tests.conformance import runner
 
-    suffix, cases, outputs = SUFFIXES[language], [], {}
+    suffix, cases, outputs, lowered = SUFFIXES[language], [], {}, set()
     for index, result in chunk:
         [buffer] = set(_INPUT.findall(result.sources[0]))
         data = inputs(buffer)
         for role, source in zip(("native", "translated"), result.sources):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(source)
+            path.write_text(runnable(language, source))
+            if role == "translated" and runnable(language, source) != source:
+                lowered.add(index)
             cases.append(_case(f"{index:05d}-{role}", path, language, data, outputs))
     records = runner.run_suite(
         cases, [language], ["strict"], selection, root, reference=True
@@ -128,15 +144,19 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
         index, role = record["case"].split("-")
         found.setdefault(int(index), {})[role] = record
     return {
-        index: (roles.get("native"), roles.get("translated"), outputs)
+        index: (roles.get("native"), roles.get("translated"), outputs, index in lowered)
         for index, roles in found.items()
     }
 
 
-def _judge(result: Result, native, translated, outputs, index: int) -> Result:
+def _judge(
+    result: Result, native, translated, outputs, lowered: bool, index: int
+) -> Result:
     if not native or not translated or native["outcome"] != "preserved":
         return result
     runtime = native["runtime"]
+    if lowered and translated["outcome"] == "driver-rejected":
+        return result
     if translated["outcome"] in _BROKEN:
         detail = f"on {runtime}, the translation {_BROKEN[translated['outcome']]}"
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
@@ -186,9 +206,15 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                     enumerate(chunks),
                 )
                 for found in done:
-                    for index, (native, translated, outputs) in found.items():
-                        results[index] = _judge(
-                            results[index], native, translated, outputs, index
-                        )
+                    for index, records in found.items():
+                        results[index] = _judge(results[index], *records, index)
             used.add(available[0][0].id)
     return results, sorted(used)
+
+
+def idle(results: list[Result], used: list[str]) -> list[str]:
+    """The languages with :func:`executable` results that none of the runtimes ``used`` runs."""
+    from tests.conformance.runtimes import RUNTIMES
+
+    ran = {RUNTIMES[runtime].target for runtime in used}
+    return sorted({r.feature.language for r in results if executable(r)} - ran)

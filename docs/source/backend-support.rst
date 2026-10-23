@@ -11,9 +11,9 @@ Measured coverage
 
 CI measures that on every push to ``main`` and nightly. Each feature in a
 pinned upstream feature list gets a generated probe, CrossTL translates it, and
-the language's reference compiler or validator checks the result. Metal compute
-probes also run on the GPU, where the translation must compute what the native
-probe computes.
+the language's reference compiler or validator checks the result. Metal, GLSL and
+SPIR-V compute probes also run, on the GPU or on Mesa's software drivers, where
+the translation must compute what the native probe computes.
 `COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
 lists the score and every gap for each language and direction, and each row
 with gaps has an open issue labelled ``coverage``.

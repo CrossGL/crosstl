@@ -68,9 +68,9 @@ python -m tools.coverage tools    # which reference tools are installed
 ```
 
 A language whose reference tool is not installed comes out untested. With
-`--execute`, the Metal and SPIR-V compute probes also run on a local GPU
-runtime through the conformance harness, as the Metal job in CI does; a result
-the native probe does not compute is wrong.
+`--execute`, the Metal, GLSL and SPIR-V compute probes also run on a local GPU
+or Mesa runtime through the conformance harness, as CI does; a result the
+native probe does not compute is wrong.
 
 ## Picking an issue
 

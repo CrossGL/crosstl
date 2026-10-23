@@ -13,9 +13,9 @@ directly and generate every target from one source file.
 ![CrossTL coverage per language and direction](https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg)
 
 CI measures this chart on every push to `main` and nightly. Every feature in a pinned upstream feature list gets a
-generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result. Metal
-compute probes also run on the GPU, where the translation must compute what the native probe computes. The score
-is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result. Metal,
+GLSL and SPIR-V compute probes also run, on the GPU or on Mesa's software drivers, where the translation must
+compute what the native probe computes. The score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 lists every gap behind each bar.
 
 ## Install

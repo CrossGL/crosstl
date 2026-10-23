@@ -74,13 +74,13 @@ def test_results_match_word_for_word_and_nan_matches_nan():
     assert "the native probe writes 0x3f800000" in found
 
 
-def _fake_harness(monkeypatch, translated_outcome, written):
+def _fake_harness(monkeypatch, translated_outcome, written, runtime="metal-apple"):
     """Make run_suite report the native probe as run and the translation as ``translated_outcome``."""
 
     class Provided:
         available = True
 
-    runtime = runtimes.RUNTIMES["metal-apple"]
+    runtime = runtimes.RUNTIMES[runtime]
     monkeypatch.setattr(
         harness,
         "select_runtimes",
@@ -88,9 +88,10 @@ def _fake_harness(monkeypatch, translated_outcome, written):
     )
 
     def run_suite(cases, targets, configs, selection, root, *, reference=False):
-        assert reference and targets == ["metal"] and configs == ["strict"]
+        assert reference and targets == [runtime.target] and configs == ["strict"]
         records = []
         for case in cases:
+            assert "#version 460" not in case.src.read_text()
             role = case.id.split("-")[1]
             outcome = "preserved" if role == "native" else translated_outcome
             words = np.zeros(case.out_count, dtype=np.uint32)
@@ -141,12 +142,41 @@ def test_a_translation_that_computes_otherwise_is_wrong(
     assert execution.found(result.detail) == (expected == "wrong")
 
 
+def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
+    assert execution.runnable("glsl", "#version 460\nvoid main() {}\n") == (
+        "#version 450 core\nvoid main() {}\n"
+    )
+    assert execution.runnable("glsl", "#version 450 core\n") == "#version 450 core\n"
+    assert execution.runnable("metal", NATIVE) == NATIVE
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [("#version 460", "supported"), ("#version 450 core", "wrong")],
+)
+def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
+    monkeypatch, declared, expected
+):
+    _fake_harness(monkeypatch, "driver-rejected", 0, "opengl-llvmpipe")
+    feature = Feature("glsl", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "glsl").source
+    assert native.startswith("#version 460\n")
+    translated = native.replace("#version 460", declared, 1)
+    probe = Result(feature, "input", "supported", sources=(native, translated))
+    [result], used = execution.run([probe])
+    assert used == ["opengl-llvmpipe"]
+    assert result.outcome == expected
+
+
 def test_nothing_runs_without_a_runtime(monkeypatch):
     monkeypatch.setattr(
         harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}
     )
     results = [supported()]
     assert execution.run(results) == (results, [])
+    assert execution.idle(results, []) == ["metal"]
+    assert execution.idle(results, ["metal-apple"]) == []
+    assert execution.idle([Result(SIN, "output", "refused")], []) == []
 
 
 def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
@@ -220,5 +250,5 @@ def test_an_execution_bug_is_reproduced_with_execute():
     }
     body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
     assert "--feature sin --execute" in body
-    assert "on the GPU it does not compute what the native Metal probe computes" in body
+    assert "but run, it does not compute what the native Metal probe computes" in body
     assert not execution.found("probe.metal:3:1: error: no matching function")
