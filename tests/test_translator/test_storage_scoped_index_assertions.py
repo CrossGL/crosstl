@@ -79,7 +79,9 @@ def _translate(tmp_path, workgroup):
         index_range_assertions=[
             {"minimum": 0, **item} for item in (*DEVICE, *workgroup)
         ],
-        source_options={"metal": {"preserve_resource_origins": True}},
+        source_options={
+            "metal": {"preserve_resource_origins": True, "threadgroup_size": 64}
+        },
     )
     payload = translate_project(config, format_output=False).to_json()
     artifacts = sorted((tmp_path / "out").rglob("*.glsl"))
