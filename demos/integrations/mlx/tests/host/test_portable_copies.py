@@ -551,3 +551,15 @@ def test_runtime_prefers_installed_families_over_lazy_copies():
     assert not runtime.HostRuntime.lazy_copy(host, "v_Absint8int8")
     host.copies = None
     assert not runtime.HostRuntime.lazy_copy(host, "v_copyint8float32")
+
+
+def test_strided_complex_copies_move_one_storage_word_per_element():
+    """A complex64 element is one 64-bit word, so its general copy is uint64's."""
+    source = (ROOT / "demos/integrations/mlx/portable_host/backend.cpp").read_text()
+    copy_into = source.split("void dispatch_copy_into(", 1)[1].split(
+        "void dispatch_copy(", 1
+    )[0]
+    assert 'in.dtype() == mlx::core::complex64 ? "uint64" :' in copy_into
+    # storage_type has no complex64 name, so it must not choose the carrier.
+    assert copy_into.index("complex64") < copy_into.index("storage_type(in.dtype())")
+    assert "ggn2_dynamic_copyuint64uint64" in copy_packages.ENTRIES

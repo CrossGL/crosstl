@@ -2916,7 +2916,7 @@ jobs:
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
               2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX lazy vector translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX lazy vector translation" -- \
             python -m demos.integrations.mlx.portable_host.elementwise_warm --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages \
               --jobs ${{ runner.os == 'macOS' && 3 || 4 }} --summary .mlx-portable-upstream-ops/lazy-vectors.json \

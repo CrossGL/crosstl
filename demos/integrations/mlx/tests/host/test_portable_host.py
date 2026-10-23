@@ -1302,8 +1302,15 @@ def test_root_cpu_counterexamples_are_not_generated_references(monkeypatch, prof
 def test_unary_adapter_definitions_match_packages():
     source = (prepare.HERE / "backend.cpp").read_text()
     for operation in packages.UNARY_OPERATIONS:
-        if operation not in {"Log2", "Log10", "Rsqrt"}:
+        if operation not in {"Log2", "Log10", "Rsqrt", "Round"}:
             assert f"CROSSTL_UNARY_GPU({operation})" in source
+    # As upstream's unary.cpp, Round dispatches only inexact arrays and shares
+    # an integer or Boolean input's buffer.
+    round_gpu = source.split("void Round::eval_gpu(", 1)[1].split("\n}\n", 1)[0]
+    assert "issubdtype(inputs[0].dtype(), mlx::core::inexact)" in round_gpu
+    assert round_gpu.index("dispatch_unary(inputs, out, name())") < round_gpu.index(
+        "out.copy_shared_buffer(inputs[0])"
+    )
     assert "set_unary_output_data(in, out)" in source
     unary = source.split("void dispatch_unary(", 1)[1].split(
         "void dispatch_copy_into(", 1

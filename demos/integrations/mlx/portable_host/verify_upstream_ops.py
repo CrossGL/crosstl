@@ -135,6 +135,28 @@ UPSTREAM_TESTS = tuple(
         "test_tensordot",
         "test_unary_ops",
         "test_zeros_ones_empty_like_dtype",
+        # These also reach lazily translated complex64 kernels.
+        "test_array_equal",
+        "test_complex_ops",
+        "test_complex_power",
+        "test_conjugate",
+        "test_diag_zero_size",
+        "test_isfinite",
+        "test_isinf",
+        "test_isnan",
+        "test_isneginf",
+        "test_isposinf",
+        "test_log",
+        "test_log10",
+        "test_log1p",
+        "test_log2",
+        "test_logaddexp",
+        "test_maximum",
+        "test_minimum",
+        "test_outer",
+        "test_real_imag",
+        "test_sign",
+        "test_trig_ops",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.

@@ -1743,7 +1743,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 53 more unchanged `test_ops` tests on all three
+A dedicated job then runs 74 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1771,8 +1771,13 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_mean`, `test_min_and_max`, `test_prod`, `test_subnormal_bool_cast`,
 `test_binary_ops`, `test_bitwise_ops`, `test_divide`, `test_floor_divide`,
 `test_integer_power`, `test_remainder`, `test_scalar_inputs`,
-`test_sigmoid`, `test_tensordot`, `test_unary_ops` and
-`test_zeros_ones_empty_like_dtype`.
+`test_sigmoid`, `test_tensordot`, `test_unary_ops`,
+`test_zeros_ones_empty_like_dtype`, and the complex64 tests `test_array_equal`,
+`test_complex_ops`, `test_complex_power`, `test_conjugate`,
+`test_diag_zero_size`, `test_isfinite`, `test_isinf`, `test_isnan`,
+`test_isneginf`, `test_isposinf`, `test_log`, `test_log10`, `test_log1p`,
+`test_log2`, `test_logaddexp`, `test_maximum`, `test_minimum`, `test_outer`,
+`test_real_imag`, `test_sign` and `test_trig_ops`.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
@@ -1793,8 +1798,8 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 8,006 translated kernels, 16 of them indexing kernels and
-6 steel GEMM kernels; the whole verification takes about 18 minutes on a
+native run dispatches 8,541 translated kernels, 16 of them indexing kernels and
+6 steel GEMM kernels; the whole verification takes about 13 minutes on a
 loaded machine.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element

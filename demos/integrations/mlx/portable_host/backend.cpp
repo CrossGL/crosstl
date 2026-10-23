@@ -353,11 +353,13 @@ void dispatch_copy_into(
   }
   // Copy storage words to preserve NaN payloads, subnormals and signed zero;
   // Booleans and 16-bit floats keep their own kernels, other types copy as
-  // unsigned words of their width (64-bit integers as themselves).
+  // unsigned words of their width (64-bit integers as themselves, complex64
+  // as one uint64 word holding both float32 parts).
   const size_t width = in.itemsize();
   const char* dtype = in.dtype() == mlx::core::float16 ? "float16" :
       in.dtype() == mlx::core::bfloat16 ? "bfloat16" :
       in.dtype() == mlx::core::bool_ ? "bool_" :
+      in.dtype() == mlx::core::complex64 ? "uint64" :
       width == 8 ? storage_type(in.dtype()) :
       width == 4 ? "uint32" : width == 2 ? "uint16" : "uint8";
   std::vector<CopyRegion> regions;
@@ -2245,7 +2247,6 @@ CROSSTL_UNARY_GPU(Square)
 CROSSTL_UNARY_GPU(Sqrt)
 CROSSTL_UNARY_GPU(Tan)
 CROSSTL_UNARY_GPU(Tanh)
-CROSSTL_UNARY_GPU(Round)
 CROSSTL_UNARY_GPU(LogicalNot)
 CROSSTL_UNARY_GPU(BitwiseInvert)
 CROSSTL_UNARY_GPU(Conjugate)
@@ -2254,6 +2255,18 @@ CROSSTL_UNARY_GPU(Imag)
 
 #undef CROSSTL_UNARY_GPU
 
+// As mlx/backend/metal/unary.cpp: rounding an integer or Boolean array is a no-op.
+void Round::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL Round requires one input.");
+  }
+  if (mlx::core::issubdtype(inputs[0].dtype(), mlx::core::inexact)) {
+    dispatch_unary(inputs, out, name());
+  } else {
+    out.copy_shared_buffer(inputs[0]);
+  }
+}
 #define CROSSTL_BINARY_GPU(Primitive)                                    \
   void Primitive::eval_gpu(const std::vector<array>& inputs, array& out) { \
     dispatch_binary(inputs, out, name());                                 \
