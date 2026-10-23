@@ -4500,36 +4500,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if arg_dimensions is None:
             return None
 
-        target_prefix, target_columns, target_rows = target_dimensions
+        _target_prefix, target_columns, target_rows = target_dimensions
         _arg_prefix, arg_columns, arg_rows = arg_dimensions
         if target_columns == arg_columns and target_rows == arg_rows:
             return None
 
+        # A helper takes the matrix by value, so the argument is evaluated once and indexed as a whole.
+        helper = self.metal_matrix_builtins.resize(target_dimensions, arg_dimensions)
         rendered_arg = self.generate_expression_with_expected(args[0], None)
-        columns = []
-        for column in range(target_columns):
-            if column < arg_columns:
-                source_column = f"{rendered_arg}[{column}]"
-                if target_rows == arg_rows:
-                    columns.append(source_column)
-                elif target_rows < arg_rows:
-                    columns.append(
-                        f"{source_column}.{self.vector_swizzle(target_rows)}"
-                    )
-                else:
-                    fill_values = [
-                        "1.0" if row == column else "0.0"
-                        for row in range(arg_rows, target_rows)
-                    ]
-                    columns.append(
-                        f"{target_prefix}{target_rows}({source_column}, {', '.join(fill_values)})"
-                    )
-            else:
-                values = [
-                    "1.0" if row == column else "0.0" for row in range(target_rows)
-                ]
-                columns.append(f"{target_prefix}{target_rows}({', '.join(values)})")
-        return f"{target_type}({', '.join(columns)})"
+        return f"{helper}({rendered_arg})"
 
     def vector_swizzle(self, width):
         return {1: "x", 2: "xy", 3: "xyz", 4: "xyzw"}[width]
