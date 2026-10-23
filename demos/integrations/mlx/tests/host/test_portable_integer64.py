@@ -94,7 +94,7 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
             root, root / "integer64", request.param, family="integer64"
         )
     assert set(index["descriptors"]) == set(packages.INTEGER64_ENTRIES)
-    assert len(index["descriptors"]) == 44 and len(packages.ENTRIES) == 93
+    assert len(index["descriptors"]) == 44 and len(packages.ENTRIES) == 97
     return root / "integer64", index
 
 

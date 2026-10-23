@@ -975,6 +975,27 @@ void dispatch_empty_reduce(mlx::core::array& out, const char* operation) {
   }
 }
 
+int64_t remainder_operand(const mlx::core::array& value, size_t index) {
+  switch (value.dtype()) {
+    case mlx::core::int32:
+      return value.data<int32_t>()[index];
+    case mlx::core::uint32:
+      return value.data<uint32_t>()[index];
+    case mlx::core::int64:
+      return value.data<int64_t>()[index];
+    case mlx::core::uint64:
+      // Only zero matters for unsigned divisors; keep the value nonnegative.
+      return value.data<uint64_t>()[index] != 0;
+    default:
+      throw std::invalid_argument("CrossTL integer remainders require 32- or 64-bit integers.");
+  }
+}
+
+int64_t remainder_minimum(mlx::core::Dtype dtype) {
+  return dtype == mlx::core::int64 ? std::numeric_limits<int64_t>::min()
+                                   : std::numeric_limits<int32_t>::min();
+}
+
 void dispatch_binary(
     const std::vector<mlx::core::array>& inputs,
     mlx::core::array& out,
@@ -1000,6 +1021,10 @@ void dispatch_binary(
       out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
     throw std::invalid_argument("CrossTL division requires float16, bfloat16 or float32 arrays.");
   }
+  if (std::string(operation) == "LogAddExp" && out.dtype() != mlx::core::float32 &&
+      out.dtype() != mlx::core::float16 && out.dtype() != mlx::core::bfloat16) {
+    throw std::invalid_argument("CrossTL LogAddExp requires float16, bfloat16 or float32 arrays.");
+  }
   if ((std::string(operation) == "LogicalAnd" || std::string(operation) == "LogicalOr") &&
       inputs[0].dtype() != mlx::core::bool_) {
     throw std::invalid_argument("CrossTL logical operations require bool arrays.");
@@ -1014,6 +1039,19 @@ void dispatch_binary(
   }
   auto a = dense_input(inputs[0]);
   auto b = dense_input(inputs[1]);
+  if (std::string(operation) == "Remainder" &&
+      mlx::core::issubdtype(b.dtype(), mlx::core::integer)) {
+    // Integer % by zero, and INT_MIN % -1, are undefined in Metal, HLSL and GLSL.
+    for (size_t i = 0; i < b.size(); ++i) {
+      const int64_t divisor = remainder_operand(b, i);
+      const int64_t dividend = remainder_operand(a, i);
+      if (divisor == 0 || (mlx::core::issubdtype(b.dtype(), mlx::core::signedinteger) &&
+                           divisor == -1 && dividend == remainder_minimum(b.dtype()))) {
+        throw std::invalid_argument(
+            "CrossTL integer remainders require nonzero divisors without signed overflow.");
+      }
+    }
+  }
   if (bitwise && (std::string(operation) == "LeftShift" || std::string(operation) == "RightShift")) {
     for (size_t i = 0; i < b.size(); ++i) {
       const int64_t shift = b.dtype() == mlx::core::int32
@@ -1969,6 +2007,8 @@ CROSSTL_BINARY_GPU(Multiply)
 CROSSTL_BINARY_GPU(Minimum)
 CROSSTL_BINARY_GPU(Maximum)
 CROSSTL_BINARY_GPU(Divide)
+CROSSTL_BINARY_GPU(Remainder)
+CROSSTL_BINARY_GPU(LogAddExp)
 
 #undef CROSSTL_BINARY_GPU
 

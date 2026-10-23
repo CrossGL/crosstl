@@ -59,8 +59,10 @@ half packages provide float16 copies and float16/float32 casts as described belo
 broadcast values in these types, including int64 and uint64 with the optional
 packages. Other storage widths are not yet
 supported by this copy path.
-Binary addition, subtraction, multiplication, minimum and maximum support
-float32, int32 and uint32; division supports float32. Broadcasts and non-row-contiguous binary
+Binary addition, subtraction, multiplication, minimum, maximum and MLX's floored
+remainder support float32, int32 and uint32; division and LogAddExp support float32.
+Integer remainders reject zero divisors and signed `INT_MIN % -1` before dispatch,
+because all three targets leave them undefined. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
 binary entry executes. Casts between float32, int32 and uint32 use six unchanged
 `v_copy` entries, including automatic promotion before mixed-type arithmetic.
@@ -215,11 +217,15 @@ python -m demos.integrations.mlx.portable_host.verify_binary_batches \
   --mlx-root mlx-upstream --packages host-packages --output-dir binary-batches
 ```
 
-Its 48 API cases cover every base arithmetic, comparison and logical binary entry
+Its 52 API cases cover every base arithmetic, comparison and logical binary entry
 except NaN-equality, whose large-array API additionally needs the optional reduction packages.
 They include 65,535, 65,536 and 131,075 elements, distinct input offsets, a large
-transpose, a reversed input and row/column broadcasts. The 98 binary batches and
-four materializing copies require exact CPU/reference/native bytes, unchanged
+transpose, a reversed input and row/column broadcasts. Remainder divisors are
+nonzero signed powers of two (uint32: 1 through 997), so every floored result is
+exact on each target. The 106 binary batches and four materializing copies require
+exact CPU/reference/native bytes (LogAddExp: within 1e-6 + 2e-6 |reference|, the
+base workload's float32 bound, because exp and log1p are not correctly rounded, and
+each native batch must carry the retained readback's exact bits), unchanged
 source storage, physical Boolean widths, uploaded inputs, destination guards,
 launch geometry and retained compiled artifacts. Float operands are finite and
 exactly representable; the existing nonfinite and small-array tests remain in
@@ -1006,7 +1012,7 @@ no-GPU backend build definition and adds four explicitly named backend files:
   upload; the logical origin is rebased for negative strides. Shape and stride
   metadata are independently validated at the callback boundary. Contiguous
   destination strides and three-dimensional dispatch follow the source kernel.
-  Six binary primitive hooks select 16 unchanged `vv_` specializations. They
+  Eight binary primitive hooks select 20 unchanged `vv_` specializations. They
   validate input shapes and types, allocate dense output and stage strided inputs
   through translated copies. Neither layout conversion nor arithmetic falls
   back to CPU computation. Binary buffer donation is not implemented.

@@ -903,7 +903,7 @@ def test_binary_dispatch_contract(
 )
 def test_binary_reference_checks_reject_changed_results(fault):
     records = binary_workloads.expected_records()
-    assert len(records) == 134 and len(binary_workloads.dispatches()) == 198
+    assert len(records) == 168 and len(binary_workloads.dispatches()) == 248
     if fault == "missing":
         records.pop()
     elif fault == "identity":
@@ -951,6 +951,79 @@ def test_binary_extrema_preserve_second_operand_zero_sign(operation, index):
     record["values"][index] = -record["values"][index]
     with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
         binary_workloads.validate(records)
+
+
+def test_binary_remainder_follows_the_kernel_floored_definition():
+    import numpy as np
+
+    records = {
+        (row["entry"], row["layout"]): row
+        for row in binary_workloads.expected_records()
+    }
+    assert {"vv_Remainderfloat32", "vv_Remainderint32", "vv_Remainderuint32"} <= {
+        entry for entry, _ in records
+    }
+    assert not any(
+        entry.startswith(("vv_LogAddExpint", "vv_LogAddExpuint", "vv_Divideint"))
+        for entry, _ in records
+    )
+    # Signed results take the divisor's sign, as binary_ops.h corrects fmod.
+    a = np.asarray([-7, 7, -7, 7, -6, 6], dtype=np.int32)
+    b = np.asarray([2, 2, -2, -2, 3, -3], dtype=np.int32)
+    got = binary_workloads.floored_remainder(np, a, b)
+    assert got.dtype == np.int32 and got.tolist() == [1, 1, -1, -1, 0, 0]
+    # An exact float remainder keeps the dividend's zero sign, unlike NumPy.
+    zero = binary_workloads.floored_remainder(
+        np, np.asarray([-1.0], np.float32), np.asarray([0.5], np.float32)
+    )
+    assert zero[0] == 0 and math.copysign(1, zero[0]) == -1
+    assert math.copysign(1, np.remainder(np.float32(-1.0), np.float32(0.5))) == 1
+    vector = records[("vv_Remainderint32", "vector")]
+    assert vector["values"] == [
+        x - y * math.floor(x / y) for x, y in zip(vector["a"], vector["b"])
+    ]
+    nonfinite = records[("vv_Remainderfloat32", "nonfinite")]
+    assert nonfinite["values"] == ["nan"] * 7
+    logaddexp = records[("vv_LogAddExpfloat32", "nonfinite")]
+    assert logaddexp["values"][:3] == [1.0, "+infinity", "nan"]
+    assert logaddexp["values"][3] == pytest.approx(math.log(2))
+    binary_workloads.validate(list(records.values()))
+    logaddexp["values"][4] = 0.0
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(list(records.values()))
+
+
+@pytest.mark.parametrize("entry", ["vv_Remainderfloat32", "vv_Multiplyfloat32"])
+def test_binary_cpu_records_only_relax_the_remainder_zero_sign(entry):
+    records = binary_workloads.expected_records()
+    record = next(
+        row
+        for row in records
+        if row["entry"] == entry
+        and row["layout"] in {"tail", "nonfinite"}
+        and any(
+            value == 0 and math.copysign(1, value) == -1
+            for value in row["values"]
+            if type(value) is float
+        )
+    )
+    index = next(
+        i
+        for i, value in enumerate(record["values"])
+        if type(value) is float and value == 0 and math.copysign(1, value) == -1
+    )
+    record["values"][index] = 0.0
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(records)
+    if entry == "vv_Remainderfloat32":
+        # MLX's CPU scalar and Accelerate paths disagree on this zero's sign.
+        binary_workloads.validate(records, cpu=True)
+    else:
+        with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+            binary_workloads.validate(records, cpu=True)
+    record["values"][index] = 1e-30
+    with pytest.raises(RuntimeError, match="Incorrect float32 binary result"):
+        binary_workloads.validate(records, cpu=True)
 
 
 @pytest.mark.parametrize("fault", [None, "size", "input-count", "dtype", "direction"])
@@ -2033,7 +2106,7 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 19 and evidence["dispatchCount"] == 482 + len(
+        assert len(calls) == 19 and evidence["dispatchCount"] == 532 + len(
             boolean_workloads.dispatches()
         )
         assert len(identities) == 2

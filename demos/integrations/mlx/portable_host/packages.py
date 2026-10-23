@@ -94,12 +94,16 @@ COMPARISON_ENTRIES.update(
 )
 COMPARISON_ENTRIES["vv_NaNEqualfloat32"] = "float32"
 BINARY_SOURCE = "mlx/backend/metal/kernels/binary.metal"
-BINARY_OPERATIONS = ("Add", "Subtract", "Multiply", "Minimum", "Maximum", "Divide")
+# The arithmetic set every storage family (binary16, bfloat16, 64-bit) shares.
+ARITHMETIC_OPERATIONS = ("Add", "Subtract", "Multiply", "Minimum", "Maximum", "Divide")
+# MLX's floored Remainder and the float-only LogAddExp from binary.metal.
+BINARY_OPERATIONS = (*ARITHMETIC_OPERATIONS, "Remainder", "LogAddExp")
+FLOAT_BINARY_OPERATIONS = frozenset({"Divide", "LogAddExp"})
 BINARY_ENTRIES = {
     f"vv_{operation}{dtype}": dtype
     for operation in BINARY_OPERATIONS
     for dtype in ("float32", "int32", "uint32")
-    if operation != "Divide" or dtype == "float32"
+    if operation not in FLOAT_BINARY_OPERATIONS or dtype == "float32"
 }
 BITWISE_OPERATIONS = (
     "BitwiseAnd",
@@ -133,7 +137,7 @@ HALF_CAST_ENTRIES = {
 }
 HALF_ENTRIES = (HALF_COPY_ENTRY, *HALF_CAST_ENTRIES)
 HALF_BINARY_ENTRIES = {
-    f"vv_{operation}float16": "float16" for operation in BINARY_OPERATIONS
+    f"vv_{operation}float16": "float16" for operation in ARITHMETIC_OPERATIONS
 }
 HALF_COMPARISON_ENTRIES = {
     f"vv_{operation}float16": "float16"
@@ -151,7 +155,7 @@ BFLOAT_CAST_ENTRIES = {
     "v_copyfloat32bfloat16": ("float32", "bfloat16"),
 }
 BFLOAT_BINARY_ENTRIES = {
-    f"vv_{operation}bfloat16": "bfloat16" for operation in BINARY_OPERATIONS
+    f"vv_{operation}bfloat16": "bfloat16" for operation in ARITHMETIC_OPERATIONS
 }
 BFLOAT_COMPARISON_ENTRIES = {
     f"vv_{operation}bfloat16": "bfloat16"
@@ -180,7 +184,7 @@ INTEGER64_ABSOLUTE_ENTRIES = {
 }
 INTEGER64_BINARY_ENTRIES = {
     f"vv_{operation}{dtype}": dtype
-    for operation in BINARY_OPERATIONS
+    for operation in ARITHMETIC_OPERATIONS
     for dtype in INTEGER64_TYPES
     if operation != "Divide"
 }
