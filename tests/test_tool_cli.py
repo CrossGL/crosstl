@@ -1,9 +1,12 @@
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 import pytest
+
+import crosstl
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
@@ -349,14 +352,13 @@ def test_pre_commit_config_keeps_repo_wide_formatters():
 
 
 def test_local_temporary_worktrees_are_ignored_by_developer_tooling():
+    # pre-commit only reads tracked files, so .gitignore covers it too.
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    pre_commit = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     pytest_options = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )["tool"]["pytest"]["ini_options"]
 
     assert "worktrees/" in gitignore
-    assert "worktrees/" in pre_commit
     assert "worktrees" in pytest_options["norecursedirs"]
 
 
@@ -391,6 +393,38 @@ def test_public_docs_use_root_package_cli_entrypoint():
     for path, text in docs.items():
         assert "python -m crosstl._crosstl" not in text, path
         assert "python -m crosstl " in text, path
+
+
+def test_readme_quickstart_kernel_translates_to_the_backends_it_names(tmp_path):
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = readme.split("\n## Quickstart\n", 1)[1].split("\n## ", 1)[0]
+    kernel = re.search(r"```glsl\n(.*?)```", quickstart, re.DOTALL).group(1)
+    backends = re.findall(r'saxpy\.cgl"?,? (?:backend="|--backend )(\w+)', quickstart)
+    source = tmp_path / "saxpy.cgl"
+    source.write_text(kernel, encoding="utf-8")
+
+    assert backends
+    for backend in backends:
+        assert crosstl.translate(str(source), backend=backend).strip(), backend
+
+
+def test_readme_language_table_matches_the_registered_backends_and_sources():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    rows = re.findall(
+        r"^\| ([^|]+?) \|\s*`?(\w*)`?\s*\| ([a-z ]+) \| ([a-z ]+) \|$",
+        readme,
+        re.MULTILINE,
+    )
+    outputs = {backend for _, backend, output, _ in rows if output != "not offered"}
+    # A row without a backend name is input only; its source key is the language.
+    inputs = {
+        backend or language.split()[0].lower()
+        for language, backend, _, source in rows
+        if source != "not offered"
+    }
+
+    assert outputs == set(crosstl.supported_backends())
+    assert inputs == set(crosstl.supported_sources()) - {"cgl"}
 
 
 def test_public_api_docs_include_project_api():

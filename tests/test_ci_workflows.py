@@ -168,25 +168,38 @@ def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
             assert "--no-cache-dir" not in commands, (path.name, name)
 
 
-def test_actions_are_referenced_by_release_tag():
-    # Release tags keep workflows readable and let Dependabot propose upgrades.
-    # pypa/gh-action-pypi-publish publishes only its release/v1 branch.
-    release_tag = re.compile(r"^[\w.-]+/[\w.-]+@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$")
+def _steps():
+    """``(file name, step)`` for every step of every workflow and local action."""
     paths = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(
         ACTIONS_DIR.glob("*/action.yml")
     )
     for path in paths:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        steps = [
-            step
-            for job in (document.get("jobs") or {}).values()
-            for step in job.get("steps") or []
-        ]
-        steps += (document.get("runs") or {}).get("steps") or []
-        for step in steps:
-            ref = str(step.get("uses", ""))
-            if ref and not ref.startswith("./"):
-                assert release_tag.match(ref), (path.name, ref)
+        for job in (document.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                yield path.name, step
+        for step in (document.get("runs") or {}).get("steps") or []:
+            yield path.name, step
+
+
+def test_actions_are_referenced_by_release_tag():
+    # Release tags keep workflows readable and let Dependabot propose upgrades.
+    # pypa/gh-action-pypi-publish publishes only its release/v1 branch.
+    release_tag = re.compile(r"^[\w.-]+/[\w.-]+@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$")
+    for name, step in _steps():
+        ref = str(step.get("uses", ""))
+        if ref and not ref.startswith("./"):
+            assert release_tag.match(ref), (name, ref)
+
+
+def test_cache_paths_have_no_parent_directory_segments():
+    # actions/cache restores a path that contains "..", but refuses to save it and
+    # only warns, so such a cache silently never fills.
+    for name, step in _steps():
+        if not str(step.get("uses", "")).startswith("actions/cache"):
+            continue
+        for entry in str((step.get("with") or {}).get("path", "")).split():
+            assert ".." not in entry.split("/"), (name, entry)
 
 
 def _local_action_text(name):

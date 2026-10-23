@@ -22,7 +22,6 @@ on:
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
-      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   pull_request:
     branches:
@@ -42,7 +41,6 @@ on:
       - "tests/test_demo_open_source_porting.py"
       - "tests/test_project_test_runner.py"
       - "tests/test_translator/test_project_translation.py"
-      - "tools/demo_ci_metadata.py"
       - "tools/pytest_failure_summary.py"
   workflow_dispatch:
 
@@ -168,16 +166,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/reports/demo-reports/${{ matrix.os }}
-          demo_test_files=()
-          while IFS= read -r demo_test_file; do
-            demo_test_file="${demo_test_file%$'\r'}"
-            demo_test_files+=("$demo_test_file")
-          done < <(python tools/demo_ci_metadata.py emit-pytest-files)
-          demo_selector="$(python tools/demo_ci_metadata.py emit-pytest-selector)"
-          demo_selector="${demo_selector%$'\r'}"
+          tests=tests/test_translator/test_project_translation.py
           python -m pytest -q -n auto \
-            "${demo_test_files[@]}" \
-            -k "$demo_selector" \
+            "$tests::test_directx_toolchain_smoke_commands_use_monogame_sprite_entries" \
+            "$tests::test_project_directx_smoke_runs_monogame_entries_not_empty_generic_wrapper" \
+            "$tests::test_translate_project_cli_cuda_vector_add_demo_directx_outputs_valid_hlsl" \
             --junitxml build/reports/demo-reports/${{ matrix.os }}/open-source-porting-demo-pytest.xml
 
       - name: Write demo failure summary
