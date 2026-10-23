@@ -15335,12 +15335,36 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             argument_close=arg_close,
         )
 
+    # Keywords that may be followed by a parenthesized expression. In
+    # `return (float)(x)` the parentheses are a cast and its operand, not a
+    # temporary `return(float)` called with `(x)`.
+    _KEYWORDS_BEFORE_EXPRESSIONS = frozenset(
+        {
+            "case",
+            "co_return",
+            "co_yield",
+            "do",
+            "else",
+            "for",
+            "if",
+            "return",
+            "sizeof",
+            "alignof",
+            "switch",
+            "throw",
+            "while",
+        }
+    )
+
     def _temporary_functor_is_candidate(
         self,
         code: str,
         identifier_start: int,
         temporary: _MetalTemporaryFunctorCall,
     ) -> bool:
+        identifier, _consumed = self._read_identifier(code, identifier_start)
+        if identifier in self._KEYWORDS_BEFORE_EXPRESSIONS:
+            return False
         constructor_text = code[
             temporary.constructor_open + 1 : temporary.constructor_close
         ].strip()
