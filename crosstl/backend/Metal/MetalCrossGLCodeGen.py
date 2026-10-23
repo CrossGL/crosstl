@@ -44,6 +44,7 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .matrix_arithmetic_types import matrix_binary_result_type
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1136,12 +1137,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "cos",
         "cosh",
         "cospi",
+        "cross",
         "distance",
         "divide",
         "dot",
         "exp",
         "exp2",
         "fabs",
+        "faceforward",
         "floor",
         "fma",
         "fmax",
@@ -1167,6 +1170,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "rint",
         "round",
         "rsqrt",
+        "saturate",
         "select",
         "sign",
         "signbit",
@@ -1197,6 +1201,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "clamp": ("same", "arithmetic", 3),
         "copysign": ("same", "floating", 2),
         "cos": ("same", "floating", 1),
+        # MSL geometric functions (section 6.6) and saturate (section 6.4).
+        "cross": ("same", "floating_vector", 2),
+        "faceforward": ("same", "floating_vector", 3),
+        "saturate": ("same", "floating", 1),
         "cosh": ("same", "floating", 1),
         "cospi": ("same", "floating", 1),
         "distance": ("element", "floating_vector", 2),
@@ -21789,6 +21797,12 @@ float {scalar}(float value) {{
                 return wide_type["source_type"]
             return None
 
+        matrix_result = self.metal_matrix_binary_expression_type(
+            expr.op, left_type, right_type
+        )
+        if matrix_result is not None:
+            return matrix_result
+
         left_vector = self.metal_small_vector_type_parts(left_type)
         right_vector = self.metal_small_vector_type_parts(right_type)
         if left_vector is not None or right_vector is not None:
@@ -21816,6 +21830,28 @@ float {scalar}(float value) {{
             return self.metal_vector_type_from_element(result_element, vector[1])
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
+
+    def metal_matrix_binary_expression_type(self, operator, left_type, right_type):
+        """The type of a matrix product, sum or scaling (:mod:`.matrix_arithmetic_types`), else ``None``."""
+
+        def operand(metal_type):
+            matrix = self.metal_matrix_type_parts(metal_type)
+            if matrix is not None:
+                element, columns, rows = matrix[:3]
+                if columns is None or rows is None:
+                    return None
+                return "matrix", self.normalized_metal_type(element), columns, rows
+            vector = self.metal_small_vector_type_parts(metal_type)
+            if vector is not None:
+                return "vector", self.normalized_metal_type(vector[0]), vector[1]
+            if self.metal_scalar_arithmetic_type_info(metal_type) is not None:
+                return "scalar", self.normalized_metal_type(metal_type)
+            return None
+
+        left, right = operand(left_type), operand(right_type)
+        if left is None or right is None:
+            return None
+        return matrix_binary_result_type(operator, left, right)
 
     def metal_pointer_arithmetic_operand_type(self, metal_type):
         element = self.split_outer_metal_declarator_array_type(metal_type)
