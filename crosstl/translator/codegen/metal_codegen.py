@@ -530,6 +530,13 @@ class CharTypeMapper:
         return char_type_mapping.get(vtype, vtype)
 
 
+# Entry stages whose threadgroup memory Metal declares inside the entry function, so a
+# program-scope groupshared value used only by such entries becomes an entry local.
+METAL_GROUPSHARED_ENTRY_STAGES = frozenset(
+    {"compute", "task", "amplification", "object", "mesh"}
+)
+
+
 class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctionMixin):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
@@ -6046,6 +6053,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
             function_name = entry_name or f"{stage_keyword}_{func.name}"
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name, func
+            )
             stage_attribute = self.metal_mesh_stage_attribute(
                 shader_type, func, execution_config
             )
@@ -8910,8 +8920,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             for stage_name, func, stage_locals in entries:
                 if not self.node_uses_identifier(getattr(func, "body", []), name):
                     continue
-                if stage_name != "compute" or name in self.metal_entry_local_names(
-                    func, stage_locals
+                if stage_name not in METAL_GROUPSHARED_ENTRY_STAGES or (
+                    name in self.metal_entry_local_names(func, stage_locals)
                 ):
                     blocked_entry_reference = True
                     break
@@ -15603,7 +15613,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
                 arguments[3]
             )
-            return "\n".join([payload_assignment, grid_assignment])
+            # DispatchMesh implies GroupMemoryBarrierWithGroupSync: the payload
+            # the mesh grid reads holds every thread's groupshared writes.
+            return "\n".join(
+                [
+                    "threadgroup_barrier(mem_flags::mem_threadgroup)",
+                    payload_assignment,
+                    grid_assignment,
+                ]
+            )
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
@@ -20125,6 +20143,16 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         declared_types = {}
         for parameter in getattr(func, "parameters", []) or []:
             declared_types[parameter.name] = self.metal_parameter_raw_type(parameter)
+        # Program-scope groupshared values lowered into this entry are its locals.
+        for (
+            node
+        ) in self.metal_lowered_program_scope_groupshared_globals_by_function.get(
+            id(func), []
+        ):
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            name = self.metal_variable_name(node)
+            if name and raw_type is not None:
+                declared_types[name] = self.type_name_string(raw_type)
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
             if not isinstance(node, VariableNode):
                 continue
