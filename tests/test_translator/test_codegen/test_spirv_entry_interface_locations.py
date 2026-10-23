@@ -86,9 +86,11 @@ def test_entry_points_of_one_stage_reuse_their_locations(tmp_path):
         located = [locations[v] for v in variables if v in locations]
         # Within one interface the locations stay distinct per storage class.
         assert located, entry
+    # The formatter may renumber ids, so the interface variables are told apart by their OpName.
+    names = dict(re.findall(r'OpName (%\w+) "(\w+)"', spirv))
     for entry in ("plain", "dimmed"):
-        outputs = [v for v in interfaces[entry] if "output" in v]
-        assert [locations[v] for v in outputs] == [0], (entry, outputs)
+        outputs = [v for v in interfaces[entry] if "output" in names.get(v, v)]
+        assert [locations[v] for v in outputs] == [0], (entry, outputs, names)
     spirv_as, spirv_val = shutil.which("spirv-as"), shutil.which("spirv-val")
     if spirv_as is None or spirv_val is None:
         return
