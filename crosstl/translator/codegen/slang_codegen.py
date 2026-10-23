@@ -50,8 +50,6 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
-from .hlsl_matrix_orientation import HLSLMatrixOrientation
-from .image_access_contracts import numeric_expression_component_count
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -111,6 +109,8 @@ from .glsl_buffer_layout import (
     std430_layout_type_name,
     vector_component_offsets,
 )
+from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .image_access_contracts import numeric_expression_component_count
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
