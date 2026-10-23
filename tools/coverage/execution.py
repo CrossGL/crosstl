@@ -8,7 +8,7 @@ rejects is wrong.
 HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
 reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
 same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
-validation result.
+validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
 
 The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that read one
 input buffer run. The other probes keep their validation result. Integer inputs are small and non-negative, so no
@@ -40,6 +40,10 @@ _INPUT = re.compile(r"\b(fin|iin|uin)\b")
 # rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
 # use what 4.60 adds.
 _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
+# lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
+# rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
+# their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
+_FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
@@ -164,6 +168,8 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
                 continue
         elif texts[1] != result.sources[1]:
             lowered.add(index)
+        if runs_as == "spirv" and any(_FLOAT16.search(text) for text in texts):
+            continue
         for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -225,6 +225,22 @@ def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypat
     assert execution.idle([_hlsl()], ["vulkan-lavapipe"]) == ["hlsl"]
 
 
+@pytest.mark.parametrize("language", ["hlsl", "spirv"])
+def test_a_probe_that_rounds_through_16_bit_floats_keeps_its_validation_result(
+    monkeypatch, language
+):
+    # lavapipe drops a float-to-half-to-float round trip, so such a native probe is no reference.
+    _fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    half = "%half = OpTypeFloat 16\n; reads fin\n"
+    single = "%float = OpTypeFloat 32\n; reads fin\n"
+    feature = Feature(language, "function", "asfloat16", SIN.signature)
+    for source, outcome in ((half, "supported"), (single, "wrong")):
+        monkeypatch.setattr(execution, "as_spirv", lambda language, text: source)
+        probe = Result(feature, "output", "supported", sources=(source, source))
+        assert execution.run([probe])[0][0].outcome == outcome
+
+
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     if not validators.can_lower(language):
