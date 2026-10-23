@@ -20,7 +20,7 @@ a source that keeps exposing new specializations fails closed.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable
 
 # Materialization state that member lowering and struct materialization grow.
 # A retry restores it so that the retry names and emits exactly what one pass
@@ -42,8 +42,8 @@ _HINT_DECLARATION_RE = re.compile(
 
 
 def _late_specializations(
-    preprocessor: Any, code: str, known: Set[str]
-) -> List[Tuple[str, str]]:
+    preprocessor: Any, code: str, known: set[str]
+) -> list[tuple[str, str]]:
     """Return ``(concrete, spelling)`` for new specializations with members."""
     pending = set(preprocessor._materialized_struct_specializations) - known
     if not pending:
@@ -80,7 +80,7 @@ def _copy_container(value: Any) -> Any:
     return value
 
 
-def _snapshot(preprocessor: Any) -> Dict[str, Any]:
+def _snapshot(preprocessor: Any) -> dict[str, Any]:
     return {
         name: _copy_container(getattr(preprocessor, name))
         for name in _RESTORED_STATE
@@ -88,12 +88,12 @@ def _snapshot(preprocessor: Any) -> Dict[str, Any]:
     }
 
 
-def _restore(preprocessor: Any, snapshot: Dict[str, Any]) -> None:
+def _restore(preprocessor: Any, snapshot: dict[str, Any]) -> None:
     for name, value in snapshot.items():
         setattr(preprocessor, name, _copy_container(value))
 
 
-def _with_hints(code: str, spellings: List[str]) -> str:
+def _with_hints(code: str, spellings: list[str]) -> str:
     if not spellings:
         return code
     declarations = "".join(
@@ -130,7 +130,7 @@ def lower_members_with_late_specializations(
     member lowering runs.  ``error_type`` is raised when a retry makes no
     progress or the retries run out.
     """
-    spellings: List[str] = []
+    spellings: list[str] = []
     snapshot = _snapshot(preprocessor)
     for _attempt in range(MAX_LATE_SPECIALIZATION_RETRIES + 1):
         source = _with_hints(code, spellings)

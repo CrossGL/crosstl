@@ -493,10 +493,9 @@ def run_bounded(root, packages, output):
         "--output-dir",
         str(output),
     ]
-    with (
-        output.with_suffix(".stdout").open("w") as stdout,
-        output.with_suffix(".stderr").open("w") as stderr,
-    ):
+    with output.with_suffix(".stdout").open("w") as stdout, output.with_suffix(
+        ".stderr"
+    ).open("w") as stderr:
         process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
     output.with_suffix(".command.json").write_text(
         json.dumps({"command": command, "returncode": process.returncode}, indent=2)

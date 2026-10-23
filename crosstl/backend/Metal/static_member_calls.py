@@ -10,12 +10,12 @@ emit a call to an undeclared ``name``, so the converter raises instead.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from .scoped_member_types import resolve_concrete_scoped_member_type
 
 
-def unresolved_static_member_call_owner(converter: Any, name: Any) -> Optional[tuple]:
+def unresolved_static_member_call_owner(converter: Any, name: Any) -> tuple | None:
     """Return ``(owner, member)`` when ``name`` calls an unbound member of a struct.
 
     ``None`` means that ``name`` is unqualified, that its owner is not a struct the converter emits (a

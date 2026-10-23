@@ -10,7 +10,7 @@ as ``Frag_float_8_8::frag_type`` therefore denotes the type that alias names
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 _SCOPED_MEMBER_RE = re.compile(
     r"(?:typename\s+)?(?P<owner>(?:::)?[A-Za-z_]\w*)"
@@ -18,7 +18,7 @@ _SCOPED_MEMBER_RE = re.compile(
 )
 
 
-def resolve_concrete_scoped_member_type(converter: Any, text: Any) -> Optional[str]:
+def resolve_concrete_scoped_member_type(converter: Any, text: Any) -> str | None:
     """Return the type ``text`` names through a concrete struct, or ``None``.
 
     ``converter`` is the Metal-to-CrossGL code generator.  ``None`` means that

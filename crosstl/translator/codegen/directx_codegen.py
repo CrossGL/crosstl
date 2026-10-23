@@ -24193,7 +24193,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding = self.current_hlsl_resource_pointer_aliases.get(name)
         if (
             binding is None
-            or binding.get("kind") not in {None, "resource-pointer", "workgroup-pointer"}
+            or binding.get("kind")
+            not in {None, "resource-pointer", "workgroup-pointer"}
             or not isinstance(binding.get("offset"), str)
         ):
             return None

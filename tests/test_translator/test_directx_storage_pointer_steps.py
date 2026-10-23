@@ -60,7 +60,9 @@ def test_local_storage_pointer_step_moves_its_offset(tmp_path, step, expected):
 }}
 """,
     )
-    assert re.search(r"int64_t sl_offset = int64_t\(\(?8 \+ \(row \* 8\)\)?\);", generated)
+    assert re.search(
+        r"int64_t sl_offset = int64_t\(\(?8 \+ \(row \* 8\)\)?\);", generated
+    )
     assert f"sl_offset {expected} 1;" in generated
     assert not re.search(r"(\+\+|--)\s*sl\b|\bsl\s*(\+\+|--)", generated)
     assert_directx_compute_validates_if_available(generated, tmp_path)

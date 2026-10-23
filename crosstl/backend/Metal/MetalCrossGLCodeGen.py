@@ -49,8 +49,6 @@ from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
-from .scoped_member_types import resolve_concrete_scoped_member_type
-from .static_member_calls import unresolved_static_member_call_owner
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -59,6 +57,8 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scoped_member_types import resolve_concrete_scoped_member_type
+from .static_member_calls import unresolved_static_member_call_owner
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
