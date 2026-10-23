@@ -8440,7 +8440,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.hlsl_expression_is_repeatable(
                 getattr(expr, "array", getattr(expr, "array_expr", None))
             ) and all(
-                self.hlsl_expression_is_repeatable(item) for item in (indices or [])
+                self.hlsl_expression_is_repeatable(item) for item in indices or []
             )
         return False
 
