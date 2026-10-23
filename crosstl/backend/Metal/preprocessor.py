@@ -1110,6 +1110,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
+        # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
+        # bound) as for the source's own concrete code.
+        processed = self._fold_concrete_type_trait_values(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
