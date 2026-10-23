@@ -65,6 +65,11 @@ METAL_ANGLE_OPERATOR_RE = re.compile(
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
 METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{}\"'/]")
 METAL_COMMENT_LITERAL_RE = re.compile(r"[\"'/]")
+# Keywords that can be followed by two parenthesised groups without naming a
+# type, so `keyword(...)(...)` is never a temporary function object.
+_TEMPORARY_FUNCTOR_EXCLUDED_KEYWORDS = frozenset(
+    {"return", "case", "if", "else", "while", "for", "switch", "do", "sizeof"}
+)
 METAL_SCOPE_DELIMITER_RE = re.compile(r"[{}\"'/]")
 METAL_NAMESPACE_DELIMITER_RE = re.compile(r"namespace|[{}\"'/]")
 METAL_STRING_LITERAL_PATTERN = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
@@ -15329,6 +15334,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         identifier_start: int,
         temporary: _MetalTemporaryFunctorCall,
     ) -> bool:
+        # A statement keyword is not a type: `return (float)(x)` is a cast of a
+        # parenthesised expression and `if (c) (x) = y;` a condition followed
+        # by an expression statement.
+        keyword, _ = self._read_identifier(code, identifier_start)
+        if keyword in _TEMPORARY_FUNCTOR_EXCLUDED_KEYWORDS:
+            return False
         constructor_text = code[
             temporary.constructor_open + 1 : temporary.constructor_close
         ].strip()
