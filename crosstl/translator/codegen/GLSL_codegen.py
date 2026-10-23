@@ -129,6 +129,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
+from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -217,6 +218,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_interface_block_io import (
+    block_declared_stage_io,
+    block_member_location_type,
+    stage_block_member_layout,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
@@ -2065,6 +2071,10 @@ class GLSLCodeGen(
             "subgroupMemoryBarrierImage",
         }
     )
+    # Subgroup barriers that software subgroups lower to the workgroup barrier.
+    GLSL_SOFTWARE_SUBGROUP_BARRIERS = frozenset(
+        {"subgroupExecutionBarrier", "subgroupBarrier"}
+    )
     # Workgroup-scope fences that order the memory of each subgroup fence for the subgroup as well.
     GLSL_SUBGROUP_FENCE_WIDENINGS = {
         "subgroupMemoryBarrier": "groupMemoryBarrier",
@@ -2082,6 +2092,7 @@ class GLSLCodeGen(
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
+            "subgroupBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
@@ -3909,6 +3920,8 @@ class GLSLCodeGen(
             return True
 
         include_target = stripped[len("#include") :].strip()
+        if include_target.startswith("<") and is_apple_sdk_include(include_target):
+            return False
         return not include_target.lower().startswith(("<metal", '"metal'))
 
     def should_emit_glsl_preprocessor_directive(self, directive):
@@ -3923,6 +3936,8 @@ class GLSLCodeGen(
         match = re.match(r'^[<"]([^>"]+)[>"]', content)
         include_name = match.group(1) if match else content.split()[0]
         normalized = include_name.strip().replace("\\", "/").lower()
+        if content.startswith("<") and is_apple_sdk_include(normalized):
+            return False
         return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
@@ -4621,7 +4636,7 @@ class GLSLCodeGen(
             elif isinstance(node, FunctionCallNode):
                 name = self.function_call_name(node)
                 if (
-                    name == "subgroupExecutionBarrier"
+                    name in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
                     and name not in self.function_return_types
                 ):
                     records.append((name, node))
@@ -6039,7 +6054,8 @@ class GLSLCodeGen(
         for node in self.walk_ast(ast):
             if (
                 isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) == "subgroupExecutionBarrier"
+                and self.function_call_name(node)
+                in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             ):
                 execution_barrier_call_nodes.update((id(node), id(node.function)))
         for node in self.walk_ast(ast):
@@ -23027,14 +23043,22 @@ class GLSLCodeGen(
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            block = block_declared_stage_io(self, "out", member, output_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
                 "output",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.member_type_name(member)
+                    if block is None
+                    else block_member_location_type(self, member, block)
+                ),
                 output_name,
             )
+            if block is not None:
+                # Declared by the output interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "out", stage_name="vertex"
             )
@@ -23057,18 +23081,26 @@ class GLSLCodeGen(
 
             layout = self.stage_io_layout_for_node(member)
             member_type = self.member_type_name(member)
+            block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
                 (
-                    self.stage_io_per_vertex_element_type(member_type)
-                    if self.is_pervertex_stage_io(member, "")
-                    else member_type
+                    block_member_location_type(self, member, block)
+                    if block is not None
+                    else (
+                        self.stage_io_per_vertex_element_type(member_type)
+                        if self.is_pervertex_stage_io(member, "")
+                        else member_type
+                    )
                 ),
                 input_name,
             )
+            if block is not None:
+                # Declared by the input interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -25147,6 +25179,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                expression, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(expression, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25173,6 +25210,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                stmt, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(stmt, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25181,6 +25223,33 @@ class GLSLCodeGen(
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_glsl_software_subgroup_barrier_statement(self, expr, indent):
+        """A statement ``subgroupBarrier()`` under software subgroups, or ``None``.
+
+        Software subgroups are slices of the workgroup, so their execution barrier is the workgroup
+        ``barrier()``. ``barrier()`` orders only shared memory (GLSL 4.60 section 8.16), so full
+        ``memoryBarrier()`` fences before and after it also order the buffer and image memory the subgroup
+        barrier covers (GL_KHR_shader_subgroup), releasing earlier writes and acquiring them afterwards.
+        """
+        if (
+            self.software_subgroup_width is None
+            or not isinstance(expr, FunctionCallNode)
+            or self.function_call_name(expr) != "subgroupBarrier"
+            or "subgroupBarrier" in self.function_return_types
+        ):
+            return None
+        arguments = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        control = self.generate_glsl_software_subgroup_operation(
+            "subgroupExecutionBarrier",
+            arguments,
+            source_location=getattr(expr, "source_location", None),
+        )
+        indent_str = "    " * indent
+        return "".join(
+            f"{indent_str}{line};\n"
+            for line in ("memoryBarrier()", control, "memoryBarrier()")
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         if not isinstance(expr, FunctionCallNode):
@@ -42743,7 +42812,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         expected_arity = (
             0
-            if operation == "subgroupExecutionBarrier"
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             else self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
         )
         accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
@@ -42759,6 +42828,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if operation == "subgroupExecutionBarrier":
             return "barrier()"
+        if operation == "subgroupBarrier":
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup barriers over buffer, image and shared memory "
+                "must be statements",
+                operation=operation,
+                reason="subgroup-memory-barrier-unsupported",
+                source_location=source_location,
+            )
         if operation == "WaveShuffleAndFillUp":
             diagnostic = self.glsl_wave_validate_shuffle_and_fill_up(
                 operation, arguments
@@ -57792,7 +57869,7 @@ complex64_t crossgl_complex64_mod_assign(
         instance_suffix = self.glsl_interface_block_instance_suffix(node)
         code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
-            code += self.generate_glsl_interface_block_member_declaration(
+            declaration = self.generate_glsl_interface_block_member_declaration(
                 member,
                 struct_name=node.name,
                 members_are_global=not instance_suffix,
@@ -57800,6 +57877,10 @@ complex64_t crossgl_complex64_mod_assign(
                     source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
                 ),
             )
+            member_layout = stage_block_member_layout(self, node, member)
+            if member_layout:
+                declaration = f"    {member_layout}{declaration[4:]}"
+            code += declaration
         code += f"}}{instance_suffix};\n"
         return code
 

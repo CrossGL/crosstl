@@ -22,6 +22,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     compile_opengl_artifact,
     corpus_workspace,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
@@ -40,7 +41,7 @@ UNARY_OPENGL_CONTRACT_PATH = (
     / "unary.opengl-translation.json"
 )
 UNARY_OPENGL_CONTRACT_SHA256 = (
-    "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233"
+    "23c7515c9e0d4b86f88c8fce228947406843560a9bf03d02cc4c6c9d96344eed"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
@@ -244,7 +245,7 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
             "gn4large": 915,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5316552,
+        "generatedSizeBytesTotal": 5317707,
         "generatedSizeRange": {
             "minimum": {
                 "entryPoint": "v_Absint32int32",
@@ -288,7 +289,7 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5316552
+    assert sum(entry["sizeBytes"] for entry in entries) == 5317707
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3566,
         "v_Absint32int32",
@@ -535,11 +536,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_UNARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "main",

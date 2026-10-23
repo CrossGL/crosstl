@@ -175,9 +175,8 @@ def test_upstream_affine_runner_retains_workers_and_source_checks(
     )
     for mode, command in commands:
         assert (output / f"{mode}.command.json").exists()
-        assert (
-            command[command.index("--timeout-seconds") + 1]
-            == {"random": "600", "cpu": "180", "native": "1800"}[mode]
+        assert command[command.index("--timeout-seconds") + 1] == str(
+            upstream.TIMEOUTS[mode]
         )
         if mode != "random":
             assert (
@@ -206,6 +205,19 @@ def test_upstream_affine_ci_reuses_existing_whole_reduction_jobs():
     )
     assert "${{ matrix.companion_args }}" in execution["run"]
     assert "5400" in execution["run"] and "continue-on-error" not in execution
+    # The whole-array verification bounds the reduction proof plus every
+    # upstream quantization worker, so it must outlast their combined
+    # deadlines with room left for the reduction proof itself.
+    assert all(
+        item["verification_timeout"] >= sum(upstream.TIMEOUTS.values()) + 900
+        for item in cases
+    )
+
+
+def test_upstream_quantization_native_deadline_covers_measured_dispatches():
+    # About 430 native dispatches at up to 5.6 s each, as measured in CI.
+    assert upstream.TIMEOUTS["native"] >= 2 * 430 * 5.6
+    assert upstream.TIMEOUTS["random"] == 600 and upstream.TIMEOUTS["cpu"] == 180
 
 
 def buffers(entry, groups, data=None):

@@ -14,6 +14,9 @@ from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 
 UPSTREAM_TESTS = ("test_quantized.TestQuantized.test_quantize_dequantize",)
+# Worker deadlines in seconds. The native run makes about 430 dispatches; CI
+# measured 5.6 s per DirectX dispatch and 4.4 s per OpenGL dispatch.
+TIMEOUTS = {"random": 600, "cpu": 180, "native": 5400}
 
 
 def write_json(path, value):
@@ -135,7 +138,7 @@ def run(root, packages, reductions, output):
     commands = [
         (
             "random",
-            600,
+            TIMEOUTS["random"],
             [
                 "-m",
                 "demos.integrations.mlx.portable_host.random_packages",
@@ -152,7 +155,7 @@ def run(root, packages, reductions, output):
         commands.append(
             (
                 mode,
-                1800 if mode == "native" else 180,
+                TIMEOUTS[mode],
                 [
                     "-m",
                     __package__ + ".verify_upstream_quantization",
