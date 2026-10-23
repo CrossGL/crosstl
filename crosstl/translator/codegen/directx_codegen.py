@@ -232,6 +232,7 @@ from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
+from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
@@ -31810,7 +31811,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             element_type
         ):
             return mapped_type
-        return None
+        return hlsl_constant_matrix_member_type(
+            self, element_type, getattr(parameter, "name", None) or "constant"
+        )
 
     def hlsl_constant_reference_element_type(self, vtype):
         if isinstance(vtype, ReferenceType):
