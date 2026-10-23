@@ -296,10 +296,9 @@ def run_worker(args, output, mode):
     for path in args.reductions:
         command.extend(("--reductions", str(path.resolve())))
     command.extend(("--output-dir", str(output / mode)))
-    with (
-        (output / f"{mode}.stdout").open("w") as stdout,
-        (output / f"{mode}.stderr").open("w") as stderr,
-    ):
+    with (output / f"{mode}.stdout").open("w") as stdout, (
+        output / f"{mode}.stderr"
+    ).open("w") as stderr:
         process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
     record = {"command": command, "returncode": process.returncode}
     write_json(output / f"{mode}.command.json", record)
