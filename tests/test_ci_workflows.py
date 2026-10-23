@@ -133,15 +133,21 @@ def test_the_coverage_comment_job_runs_no_pull_request_code():
         "full-tests.yml",
         "examples-test.yml",
         "demo.yml",
+        "coverage.yml",
     ],
 )
-def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
+def test_test_workflows_drop_only_superseded_runs(filename):
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
     policy = workflow["concurrency"]
+    # A new pull-request push cancels the older run. Pushes to main share one group,
+    # so a burst of merges runs only the newest pending commit: the merge queue has
+    # already tested each one. Merge-group, scheduled and dispatched runs never wait.
     assert policy == {
         "group": (
             "ci-${{ github.workflow }}-${{ github.event_name }}-"
-            "${{ github.event.pull_request.number || github.run_id }}"
+            "${{ github.event.pull_request.number"
+            " || (github.event_name == 'push' && github.ref)"
+            " || github.run_id }}"
         ),
         "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     }

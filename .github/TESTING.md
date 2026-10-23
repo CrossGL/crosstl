@@ -102,7 +102,10 @@ and the test jobs size `pytest-xdist` to match. Jobs that install with pip
 cache their downloads. Every job has a timeout, and every workflow declares
 least-privilege permissions.
 
-A new push cancels the superseded pull-request runs of the test workflows. The
+A new push cancels the superseded pull-request runs of the test workflows.
+Pushes to `main` queue behind the run already in progress, and a newer push
+replaces the one still waiting, so a burst of merges runs the sweep once for
+the newest commit; the merge queue has already tested each of them. The
 MLX workflow lets each leg finish, so a long Metal run does not hold up the
 next revision's DirectX or OpenGL legs; cancel superseded MLX runs by hand.
 Suites that take many minutes on macOS or Windows belong in the merge-queue,
