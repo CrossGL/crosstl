@@ -1353,7 +1353,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "aa34ec66b8e2b49680e18c1fbd892ce6f2f2c3aa749d261d6c510e703b65c233",
+      "sha256": "23c7515c9e0d4b86f88c8fce228947406843560a9bf03d02cc4c6c9d96344eed",
       "size_bytes": 317694,
       "entry_identity_fields": [
         "entryPoint",
@@ -1484,7 +1484,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 5316552,
+      "generated_size_bytes_total": 5317707,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "v_Absint32int32",
@@ -2754,8 +2754,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "a96dabc394744a80859acfba2ab72a207325984bae0b429fabf431010d2cc579",
-      "size_bytes": 1477021,
+      "sha256": "a52fc59f2c6b1fbb5a361e7524f1809dabef2a383bc5a034a87dff8302f1b789",
+      "size_bytes": 1477027,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2839,7 +2839,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 21039948,
+      "generated_size_bytes_total": 21625476,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "init_reduce_andbool_",
@@ -2847,7 +2847,7 @@
         },
         "maximum": {
           "entryPoint": "col_reduce_looped_large_5_32_32_reduce_mincomplex64",
-          "sizeBytes": 18090
+          "sizeBytes": 18710
         }
       }
     },
@@ -4045,8 +4045,8 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "3c39d68f34a60890fca97c2f705cc4e3f9590f0e38b0c895a2074c54d07b5c06",
-      "size_bytes": 116561,
+      "sha256": "ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c",
+      "size_bytes": 120044,
       "source_remap_mapping_count": 1,
       "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
       "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",
@@ -4164,22 +4164,52 @@
     "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
     "source_size_bytes": 3278,
     "target": "opengl",
+    "entry_point": "fft_mem_256_float2_float2",
+    "workgroup_size": [
+      1,
+      1,
+      64
+    ],
+    "specialization_constants": {
+      "0": false,
+      "1": true,
+      "2": 4,
+      "3": 256,
+      "4": 0,
+      "5": 0,
+      "6": 0,
+      "7": 0,
+      "8": 0,
+      "9": 0,
+      "10": 4,
+      "11": 0,
+      "12": 0,
+      "13": 0,
+      "14": 0,
+      "15": 0,
+      "16": 0,
+      "17": 0,
+      "18": 0,
+      "19": 0,
+      "20": 0,
+      "21": 0
+    },
     "project_translation": {
       "unit_count": 1,
       "artifact_count": 1,
       "translated_count": 1,
       "failed_count": 0,
       "project_diagnostic_count": 0,
-      "index_range_assertion_count": 4,
-      "workgroup_access_assertion_count": 5,
+      "index_range_assertion_count": 8,
+      "workgroup_access_assertion_count": 1,
       "max_template_specializations": 4096,
       "max_template_materialization_work": 2097152
     },
     "materialization": {
       "status": "materialized",
-      "specialization_count": 99,
+      "specialization_count": 24,
       "unsupported_specialization_count": 0,
-      "function_constant_count": 22
+      "function_constant_count": 21
     },
     "portability_preconditions": {
       "index_range_assertions": [
@@ -4206,48 +4236,44 @@
           "expression": "batch_idx + index + next_out",
           "minimum": 0,
           "maximum": 2147483647
-        }
-      ],
-      "workgroup_access_assertions": [
+        },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
-          "entry_point": "*mem_256_*",
-          "function": "*",
-          "parameter": "*",
+          "function": "crosstl_workgroup_load_vec2",
+          "expression": "reference.offset + index",
           "minimum": 0,
           "maximum": 255
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
-          "entry_point": "*mem_512_*",
-          "function": "*",
-          "parameter": "*",
+          "function": "crosstl_workgroup_store_vec2",
+          "expression": "reference.offset + index",
           "minimum": 0,
-          "maximum": 511
+          "maximum": 255
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
-          "entry_point": "*mem_1024_*",
-          "function": "*",
-          "parameter": "*",
+          "function": "crosstl_resource_load_vec2",
+          "expression": "reference.offset + index",
           "minimum": 0,
-          "maximum": 1023
+          "maximum": 2147483647
         },
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
-          "entry_point": "*mem_2048_*",
-          "function": "*",
-          "parameter": "*",
+          "function": "crosstl_resource_store_vec2",
+          "expression": "reference.offset + index",
           "minimum": 0,
-          "maximum": 2047
-        },
+          "maximum": 2147483647
+        }
+      ],
+      "workgroup_access_assertions": [
         {
           "source": "mlx/backend/metal/kernels/fft.metal",
-          "entry_point": "*mem_4096_*",
+          "entry_point": "fft_mem_256_float2_float2",
           "function": "*",
           "parameter": "*",
           "minimum": 0,
-          "maximum": 4095
+          "maximum": 255
         }
       ]
     },
@@ -4259,7 +4285,9 @@
       "validator_target": "SPIR-V 1.3",
       "status": "passed"
     },
-    "tracked_issues": [],
+    "tracked_issues": [
+      "https://github.com/CrossGL/crosstl/issues/2178"
+    ],
     "runtime_integration_included": false,
     "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
@@ -6656,8 +6684,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7",
-        "size_bytes": 10257,
+        "sha256": "d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9",
+        "size_bytes": 10414,
         "subgroup_enforcement": "explicit-32-lane-software-subgroup",
         "specialization_enforcement": "deferred-opengl-spirv-specialization",
         "compiler": "glslangValidator",
@@ -7198,8 +7226,8 @@
       },
       "opengl": {
         "target_entry_point": "main",
-        "sha256": "9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8",
-        "size_bytes": 10245,
+        "sha256": "0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0",
+        "size_bytes": 10402,
         "subgroup_enforcement": "explicit-32-lane-software-subgroup",
         "specialization_enforcement": "deferred-opengl-spirv-specialization",
         "compiler": "glslangValidator",
@@ -8194,9 +8222,26 @@
       "artifact_count": 1,
       "translation_diagnostic_count": 0,
       "required_capabilities": [],
+      "execution_contract": {
+        "status": "source-verified-and-emitted",
+        "workgroup_size": [
+          64,
+          1,
+          1
+        ],
+        "subgroup_width": 32,
+        "subgroup_width_enforcement": "WaveSize(32)",
+        "minimum_shader_model": "6.6",
+        "host_dispatch_provenance": {
+          "source": "mlx/backend/metal/quantized.cpp",
+          "function": "quantize_dequantize",
+          "workgroup_expression": "MTL::Size(thread_group_size, 1, 1)",
+          "thread_group_size": "min(maxTotalThreadsPerThreadgroup, nthreads)"
+        }
+      },
       "generated_hlsl": {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "size_bytes": 5704
+        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
+        "size_bytes": 5721
       },
       "materialization": {
         "reachable_specialization_count": 5,
@@ -8216,7 +8261,7 @@
       },
       "compiler_validation": {
         "compiler": "dxc",
-        "profile": "cs_6_0",
+        "profile": "cs_6_6",
         "compiler_arguments": [],
         "warnings_as_errors": true,
         "status": "passed",
@@ -8323,8 +8368,8 @@
         }
       },
       "generated_hlsl": {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "size_bytes": 17865
+        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
+        "size_bytes": 17917
       },
       "compiler_validation": {
         "compiler": "dxc",

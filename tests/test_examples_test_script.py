@@ -73,9 +73,12 @@ def test_generic_pattern_matching_cli_reports_documented_generic_gaps():
         "cuda": "CUDA codegen cannot emit unresolved generic parameter 'T'",
         "mojo": "generic payload enum specializations must be concrete",
         "slang": "Slang codegen cannot emit unresolved generic parameter 'T'",
-        # SPIR-V has no generics: an unspecialised `T::zero()` is refused rather
-        # than lowered to a default value.
-        "vulkan": "Cannot lower call to 'T::zero' to SPIR-V",
+        # SPIR-V has no generics: the unspecialised generic helper is refused
+        # before any of its `T::zero()` calls could be lowered to a default value.
+        "vulkan": (
+            "SPIR-V codegen does not support generic functions: unspecialized "
+            "generic helper 'vector_operation' with generic parameters (T)"
+        ),
     }
 
     for backend, diagnostic in expected_diagnostics.items():

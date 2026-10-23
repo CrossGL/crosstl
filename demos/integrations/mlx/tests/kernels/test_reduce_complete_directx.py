@@ -39,6 +39,7 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 REQUIRE_REDUCE_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION"
 REDUCE_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX"
@@ -538,11 +539,9 @@ def _translate_and_validate(
         "algorithm": "sha256",
         "value": MLX_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": "CSMain",

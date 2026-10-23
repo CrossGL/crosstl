@@ -23,8 +23,13 @@ the same declarations (GLSL 4.60 section 4.3.9, interface blocks, and section 4.
 The block is laid out by std430, the layout glslang and the Vulkan environment's default use for storage blocks
 (Vulkan 1.3, section 15.6.4); the importer does not yet carry the module's ``Offset`` decorations.
 
-A variable used other than through ``v[0]`` or ``spirvArrayLength``, or whose name a local declaration shadows, is
-left as it is. A ``spirvArrayLength`` call that is not rewritten is refused with
+An array of storage blocks, ``RWStructuredBuffer<Block> v[N]``, is rewritten the same way element by element:
+``v[k][0]`` takes the place of ``v[0]`` and ``spirvArrayLength(v[k], m)`` that of ``spirvArrayLength(v, m)``, and the
+variable keeps its array size (``RWStructuredBuffer<T> v[N]`` or ``Block v[N] @glsl_buffer_block(std430)``, the GLSL
+importer's forms for ``buffer B { ... } v[N]``).
+
+A variable used other than through ``v[0]`` (``v[k][0]`` for an array) or ``spirvArrayLength``, or whose name a local
+declaration shadows, is left as it is. A ``spirvArrayLength`` call that is not rewritten is refused with
 :class:`SpirvArrayLengthUnsupportedError`, since no target defines that name.
 """
 
@@ -122,24 +127,35 @@ def _declared_names(program):
     names = set()
     for function in iter_functions(program):
         names.update(getattr(p, "name", None) for p in function.parameters or [])
-        names.update(n.name for n in _walk(function.body) if isinstance(n, A.VariableNode))
+        names.update(
+            n.name for n in _walk(function.body) if isinstance(n, A.VariableNode)
+        )
     return names
 
 
 class _Block:
     """One SPIR-V storage block variable and every use found of it."""
 
-    def __init__(self, variable, struct, readonly):
+    def __init__(self, variable, struct, readonly, array=None):
         self.variable = variable
         self.struct = struct
         self.readonly = readonly
-        self.instances = []  # the ``v[0]`` nodes
-        self.lengths = []  # the ``spirvArrayLength(v, k)`` calls, with their member index
+        self.array = array  # the ArrayType of an array of blocks, else None
+        self.instances = []  # the ``v[0]`` (``v[k][0]``) nodes
+        self.lengths = (
+            []
+        )  # the ``spirvArrayLength(v, k)`` calls, with their member index
         self.other = False
 
     @property
     def name(self):
         return self.variable.name
+
+    def declared_type(self, element):
+        """``element`` as the variable's type, keeping the array size of an array of blocks."""
+        if self.array is None:
+            return element
+        return A.ArrayType(element, self.array.size)
 
     def flat_member(self):
         members = self.struct.members
@@ -178,6 +194,11 @@ class StorageBlockNormalizer:
         blocks = {}
         for variable in getattr(self.program, "global_variables", None) or []:
             var_type = getattr(variable, "var_type", None)
+            array = None
+            if isinstance(var_type, A.ArrayType) and isinstance(
+                var_type.element_type, A.NamedType
+            ):
+                array, var_type = var_type, var_type.element_type
             if not (
                 isinstance(variable, A.VariableNode)
                 and isinstance(var_type, A.NamedType)
@@ -190,7 +211,7 @@ class StorageBlockNormalizer:
             struct = self.structs.get(var_type.generic_args[0].name)
             if isinstance(struct, A.StructNode) and struct.members:
                 blocks[variable.name] = _Block(
-                    variable, struct, _STRUCTURED[var_type.name]
+                    variable, struct, _STRUCTURED[var_type.name], array
                 )
         return blocks
 
@@ -201,10 +222,20 @@ class StorageBlockNormalizer:
                     self.classify(blocks[node.name], node)
 
     def classify(self, block, identifier):
-        owner, field, _ = self.parents.get(id(identifier), (None, None, None))
+        receiver = identifier
+        if block.array is not None:
+            # ``v[k]``, one block of the array, takes the place of ``v``.
+            receiver = self.parent(identifier)
+            if not (
+                isinstance(receiver, A.ArrayAccessNode)
+                and receiver.array_expr is identifier
+            ):
+                block.other = True
+                return
+        owner = self.parent(receiver)
         if (
             isinstance(owner, A.ArrayAccessNode)
-            and owner.array_expr is identifier
+            and owner.array_expr is receiver
             and _literal_int(owner.index_expr) == 0
         ):
             block.instances.append(owner)
@@ -213,7 +244,7 @@ class StorageBlockNormalizer:
             isinstance(owner, A.FunctionCallNode)
             and call_name(owner) == ARRAY_LENGTH
             and len(owner.arguments) == 2
-            and owner.arguments[0] is identifier
+            and owner.arguments[0] is receiver
         ):
             index = _literal_int(owner.arguments[1])
             if index is not None and 0 <= index < len(block.struct.members):
@@ -230,8 +261,7 @@ class StorageBlockNormalizer:
         for instance in block.instances:
             access = self.parent(instance)
             if not (
-                isinstance(access, A.MemberAccessNode)
-                and access.member == member.name
+                isinstance(access, A.MemberAccessNode) and access.member == member.name
             ):
                 return False
             use = self.parent(access)
@@ -257,29 +287,40 @@ class StorageBlockNormalizer:
     def flatten(self, block, member):
         variable = block.variable
         element = clone(member.member_type.element_type)
-        flat_type = A.NamedType(variable.var_type.name, [element])
+        wrapper = (
+            variable.var_type.element_type if block.array else variable.var_type
+        ).name
+        flat_type = block.declared_type(A.NamedType(wrapper, [element]))
         variable.var_type = variable.vtype = flat_type
         for instance in block.instances:
             access = self.parent(instance)
             use = self.parent(access)
+            receiver = self.receiver(block, instance.array_expr)
             if isinstance(use, A.ArrayAccessNode) and use.array_expr is access:
                 index = use.index_expr
-                element = A.ArrayAccessNode(A.IdentifierNode(block.name), index)
+                element = A.ArrayAccessNode(receiver, index)
                 _replace(self.parents, use, element)
+                self.parents[id(receiver)] = (element, "array_expr", None)
                 self.parents[id(index)] = (element, "index_expr", None)
             else:
-                dimensions = call("buffer_dimensions", [A.IdentifierNode(block.name)])
+                dimensions = call("buffer_dimensions", [receiver])
                 _replace(
                     self.parents, self.length_call(access), call("int", [dimensions])
                 )
         for length, _ in block.lengths:
-            dimensions = call("buffer_dimensions", [A.IdentifierNode(block.name)])
+            receiver = self.receiver(block, length.arguments[0])
+            dimensions = call("buffer_dimensions", [receiver])
             _replace(self.parents, length, call("uint", [dimensions]))
         self.drop_unused_struct(block.struct)
 
+    def receiver(self, block, node):
+        """The buffer ``node`` names: a fresh ``v``, or the ``v[k]`` node itself for an array of blocks."""
+        return node if block.array is not None else A.IdentifierNode(block.name)
+
     def to_buffer_block(self, block):
         variable = block.variable
-        variable.var_type = variable.vtype = A.NamedType(block.struct.name)
+        block_type = block.declared_type(A.NamedType(block.struct.name))
+        variable.var_type = variable.vtype = block_type
         attributes = [
             A.AttributeNode("glsl_buffer_block", [A.IdentifierNode("std430")]),
             *(variable.attributes or []),
@@ -288,12 +329,11 @@ class StorageBlockNormalizer:
             attributes.append(A.AttributeNode("readonly"))
         variable.attributes = attributes
         for instance in block.instances:
-            _replace(self.parents, instance, A.IdentifierNode(block.name))
+            _replace(self.parents, instance, self.receiver(block, instance.array_expr))
         for length, index in block.lengths:
             member = block.struct.members[index].name
-            method = A.MemberAccessNode(
-                A.MemberAccessNode(A.IdentifierNode(block.name), member), "length"
-            )
+            receiver = self.receiver(block, length.arguments[0])
+            method = A.MemberAccessNode(A.MemberAccessNode(receiver, member), "length")
             _replace(
                 self.parents, length, call("uint", [A.FunctionCallNode(method, [])])
             )
@@ -348,7 +388,10 @@ class StorageBlockNormalizer:
     def refuse_remaining_lengths(self):
         for function in iter_functions(self.program):
             for node in _walk(function.body):
-                if isinstance(node, A.FunctionCallNode) and call_name(node) == ARRAY_LENGTH:
+                if (
+                    isinstance(node, A.FunctionCallNode)
+                    and call_name(node) == ARRAY_LENGTH
+                ):
                     raise SpirvArrayLengthUnsupportedError(
                         self.target,
                         f"in '{function.name}' reads a buffer that is not a storage block variable",

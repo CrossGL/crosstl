@@ -18,6 +18,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.test_translator.metal_contract import operator_implementations
 from tools.compile_artifact_bundle import write_bundle_entry
 
@@ -716,11 +717,9 @@ def _translate_binary_metal_artifact(
         "algorithm": "sha256",
         "value": MLX_BINARY_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": workload.sha256,
-    }
-    assert artifact["generatedSizeBytes"] == workload.size_bytes
+    check_generated_artifact(
+        artifact, sha256=workload.sha256, size_bytes=workload.size_bytes
+    )
     assert artifact["entryPoint"] == {
         "source": workload.entry_point,
         "target": workload.entry_point,

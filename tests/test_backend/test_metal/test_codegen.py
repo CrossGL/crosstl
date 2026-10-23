@@ -3755,7 +3755,10 @@ def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path)
         assert f"OpDecorate {resource_id} Binding {binding}" in spirv
     assert spirv.count(" BufferBlock") == 3
     assert spirv.count(" NonWritable") == 2
-    assert "OpTypeArray" in spirv
+    # copy_pair's array parameters are pointers into the caller's buffers
+    # ([dcl.fct]/5), so they declare no module-scope resources of their own.
+    for parameter_name in ("offsets", "scratch"):
+        assert f'"{parameter_name}"' not in spirv
     assert "WARNING" not in spirv
 
     glslang = shutil.which("glslangValidator")
