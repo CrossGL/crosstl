@@ -44,6 +44,11 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .dependent_builtins import (
+    NOT_DEPENDENT,
+    dependent_builtin_result_type,
+    unbound_template_type_names,
+)
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -9963,16 +9968,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         # restricting these to `uint3` wrongly denied them the explicit
         # stage-entry path and collapsed every materialized kernel to an unnamed
         # "main" entry point (invalid SPIR-V: duplicate entry-point names).
-        positional_builtin_types = {"uint", "uint2", "uint3"}
+        positional_builtin_types = {
+            "uint",
+            "uint2",
+            "uint3",
+            "ushort",
+            "ushort2",
+            "ushort3",
+        }
+        index_builtin_types = {"uint", "ushort"}
         expected_types = {
             "thread_position_in_grid": positional_builtin_types,
             "thread_position_in_threadgroup": positional_builtin_types,
             "threadgroup_position_in_grid": positional_builtin_types,
-            "thread_index_in_threadgroup": {"uint"},
+            "thread_index_in_threadgroup": index_builtin_types,
             "threads_per_threadgroup": positional_builtin_types,
             "threadgroups_per_grid": positional_builtin_types,
-            "thread_index_in_simdgroup": {"uint"},
-            "threads_per_simdgroup": {"uint"},
+            "thread_index_in_simdgroup": index_builtin_types,
+            "threads_per_simdgroup": index_builtin_types,
         }
         for param in getattr(func, "params", []) or []:
             semantic = self.compute_builtin_attribute_name(param)
@@ -18110,6 +18123,17 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        dependent = dependent_builtin_result_type(
+            result_kind,
+            argument_types,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+        )
+        if dependent is not NOT_DEPENDENT:
+            # An uninstantiated template resolves the overload per instantiation.
+            return dependent
         diagnostic_argument_types = [
             argument_type or "<unknown>" for argument_type in argument_types
         ]
