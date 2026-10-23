@@ -29,7 +29,7 @@ from demos.integrations.mlx.tests.kernels.test_current_complex_logaddexp import 
     _words,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
-from tools import ci_coverage
+from tests import workflow_text
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_MAGNITUDE"
@@ -189,7 +189,7 @@ def test_complex_magnitude_readbacks_reject_corruption(sentinel, mutation):
 def test_ci_requires_complex_magnitude_source_parity():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
     step = (
-        ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+        workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
         .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
