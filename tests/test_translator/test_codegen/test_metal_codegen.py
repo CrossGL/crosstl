@@ -16361,7 +16361,8 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
     ("member_decl", "metal_semantic", "expected_type"),
     [
         ("vec3 position @ gl_Position", "position", "float4"),
-        ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
+        # A colour attachment may be any numeric scalar or vector (MSL 5.2.3.4), but not a matrix.
+        ("mat2 color @ gl_FragColor", "color\\(0\\)", "float4"),
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
         ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
