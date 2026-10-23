@@ -37,6 +37,10 @@ from .template_constants import unresolved_constant_references
 from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
+# Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
+# major * 100 + minor * 10, and __METAL__. MSL 3.1 is the importer's default language version.
+METAL_PREDEFINED_MACROS = {"__METAL_VERSION__": "310", "__METAL__": "1"}
+
 CLANG_FEATURE_TEST_MACROS = {
     "__has_attribute",
     "__has_builtin",
@@ -1037,6 +1041,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
         )
+        # The Metal compiler always defines these, and shared host/shader headers test them to hide host-only
+        # code (#ifndef __METAL_VERSION__) or choose language features (#if __METAL_VERSION__ >= 230). The
+        # importer reads sources as MSL 3.1 unless the caller defines another version.
+        for name, value in METAL_PREDEFINED_MACROS.items():
+            self.macros.setdefault(name, Macro(name=name, replacement=value))
         for name in CLANG_FEATURE_TEST_MACROS:
             self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
