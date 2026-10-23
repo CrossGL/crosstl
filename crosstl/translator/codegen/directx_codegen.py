@@ -236,6 +236,10 @@ from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlock
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .hlsl_narrow_system_values import (
+    HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
+    hlsl_narrow_compute_system_value_bridge,
+)
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
@@ -13507,6 +13511,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.hlsl_compute_dispatch_thread_id_parameter_bridge(
                         p, param_type, semantic, emitted_param_names
                     )
+                )
+            if dispatch_thread_id_bridge is None and effective_shader_type == "compute":
+                dispatch_thread_id_bridge = hlsl_narrow_compute_system_value_bridge(
+                    self, p, param_type, semantic, emitted_param_names
                 )
             if dispatch_thread_id_bridge is not None:
                 declaration, local_alias = dispatch_thread_id_bridge
@@ -28520,6 +28528,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
                 self.hlsl_compute_group_size_constant(execution_config),
             )
+        if base_type in HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES:
+            # A Metal `ushort` lane index or count: narrow explicitly.
+            intrinsic = f"({base_type})({intrinsic})"
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type
         return f"{base_type} {local_name} = {intrinsic};"
@@ -28566,7 +28577,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_project_compute_vector3_expression(self, expression, target_type):
         normalized_type = str(target_type).strip()
-        match = re.fullmatch(r"(?P<scalar>u?int)(?P<width>[123]?)", normalized_type)
+        match = re.fullmatch(
+            r"(?P<scalar>u?int|min16uint|uint16_t)(?P<width>[123]?)", normalized_type
+        )
         if match is None:
             return expression
         width = int(match.group("width") or "1")
@@ -34118,8 +34131,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_hlsl_compute_system_value_types(self, parameters):
-        self.validate_hlsl_exact_semantic_type(
-            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+        # A 16-bit unsigned parameter is declared with the 32-bit system value
+        # and narrowed in the body (hlsl_narrow_system_values).
+        narrow_scalars = {
+            name
+            for name in HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES
+            if not name[-1].isdigit()
+        }
+        self.validate_hlsl_semantic_type_one_of(
+            parameters,
+            "compute",
+            "SV_GroupIndex",
+            {"uint"} | narrow_scalars,
+            "scalar uint or a 16-bit unsigned scalar",
         )
         for semantic in ("SV_GroupID", "SV_GroupThreadID", "SV_DispatchThreadID"):
             # HLSL accepts a scalar uint for these compute system values as a
@@ -34130,8 +34154,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameters,
                 "compute",
                 semantic,
-                {"uint", "uint2", "uint3"},
-                "scalar uint, uint2, or uint3",
+                {"uint", "uint2", "uint3"} | HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
+                "scalar uint, uint2, or uint3, or a 16-bit unsigned form of one",
             )
 
     def hlsl_ray_stage_types(self):

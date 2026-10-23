@@ -32,6 +32,7 @@ from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
 )
+from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_geometry_streams import (
@@ -191,6 +192,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
+    User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -212,6 +214,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     fold_binding_constants(program)
+    rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
