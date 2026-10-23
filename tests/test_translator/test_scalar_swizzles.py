@@ -124,3 +124,32 @@ def test_vector_swizzles_and_members_are_kept(tmp_path):
     code = _translate(tmp_path, CROSSGL, "cgl", "opengl")
     assert "v.xx" in code
     assert "p.x" in code
+
+
+IDENTITY = """
+shader Identity {
+    compute {
+        buffer vec2 points[];
+
+        @compute @workgroup_size(1, 1, 1)
+        void main() {
+            vec2 p = points[0].xy;
+            vec3 q = vec3(p, 1.0);
+            points[1].xy = q.xyz.xy + p.rg;
+        }
+    }
+}
+"""
+
+
+def test_identity_swizzles_are_dropped():
+    program = Parser(Lexer(IDENTITY).get_tokens()).parse()
+    # points[0].xy, points[1].xy, q.xyz and p.rg name every component in order; q.xyz.xy does not.
+    assert expand_scalar_swizzles(program) == 4
+
+
+def test_identity_swizzle_stores_reach_metal_as_whole_stores(tmp_path):
+    code = _translate(tmp_path, IDENTITY, "cgl", "metal")
+    assert not re.search(r"\.xy\s*=", code)
+    assert ".xyz" not in code
+    assert "q.xy" in code

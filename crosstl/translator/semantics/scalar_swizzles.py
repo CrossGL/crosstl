@@ -6,6 +6,10 @@ WGSL and GLSL ES do not, and the Metal compiler rejected the HLSL importer's ``d
 base type 'float' is not a structure or union". :func:`expand_scalar_swizzles` rewrites every swizzle of a value
 whose type is known to be a scalar into ``vecN(value)`` (``ivecN``, ``uvecN``, ``bvecN``, ``f16vecN`` and so on for
 the other scalar types), or into the value itself for one component. The value is evaluated once either way.
+
+A swizzle that names every component of a vector in order (``v.xy`` of a ``vec2``) is the vector itself and is
+dropped too: generators that lower buffer members to loads and stores (Metal's byte-addressed storage) wrote
+``float2(load0, load1).xy = value``, which is not assignable.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from .scoped_walk import ScopedWalker
 __all__ = ["expand_scalar_swizzles"]
 
 _SCALAR_SWIZZLE = re.compile(r"x{1,4}|r{1,4}")
+_IDENTITY_SWIZZLES = frozenset({"xy", "xyz", "xyzw", "rg", "rgb", "rgba"})
 _VECTOR_PREFIXES = {
     ("f", 32): "vec",
     ("f", 64): "dvec",
@@ -75,7 +80,15 @@ class _ScalarSwizzles(ScopedWalker):
             value, components = node.object_expr, node.member
         else:
             return None
-        if not isinstance(components, str) or not _SCALAR_SWIZZLE.fullmatch(components):
+        if not isinstance(components, str):
+            return None
+        if components in _IDENTITY_SWIZZLES:
+            # ``v.xy`` of a two-component ``v`` is ``v`` itself, as a value and as a store target.
+            value_type = self.scope.infer(value)
+            if value_type is not None and value_type.lanes == len(components) > 1:
+                return value
+            return None
+        if not _SCALAR_SWIZZLE.fullmatch(components):
             return None
         value_type = self.scope.infer(value)
         if value_type is None or value_type.lanes != 1:
