@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -2003,11 +2004,6 @@ class GLSLCodeGen(
         "signbit",
         "metal::signbit",
         "metal_u3a_u3asignbit",
-    }
-    GLSL_STANDARD_IDENTIFIER_CONSTANTS = {
-        # GLSL does not define the C/Metal NAN macro.  Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        "NAN": "uintBitsToFloat(0x7fc00000u)",
     }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
@@ -31300,6 +31296,8 @@ class GLSLCodeGen(
                     )
                 if name and render_standard_math_constant(name, "opengl") is not None:
                     return False, False
+                if name and render_float_limit_constant(name, "opengl") is not None:
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -39249,9 +39247,11 @@ complex64_t crossgl_complex64_mod_assign(
         if target_name != name or self.glsl_identifier_is_resolved(name):
             return target_name
 
-        special_constant = self.GLSL_STANDARD_IDENTIFIER_CONSTANTS.get(name)
-        if special_constant is not None:
-            return special_constant
+        # GLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        limit_constant = render_float_limit_constant(name, "opengl")
+        if limit_constant is not None:
+            return limit_constant
         standard_constant = render_standard_math_constant(name, "opengl")
         return standard_constant if standard_constant is not None else target_name
 

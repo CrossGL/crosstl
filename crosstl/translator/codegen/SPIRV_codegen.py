@@ -183,6 +183,10 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .spirv_standard_constants import (
+    spirv_non_finite_float_literal,
+    spirv_standard_float_constant,
+)
 from .spirv_struct_varyings import (
     flatten_struct_varying,
     load_flattened_struct_varying,
@@ -1153,6 +1157,9 @@ class VulkanSPIRVCodeGen(
     ) -> str:
         """Return a SPIR-V assembly literal valid for the result type."""
         type_name = self.normalize_primitive_name(type_name)
+        non_finite = spirv_non_finite_float_literal(value, type_name)
+        if non_finite is not None:
+            return non_finite
         if not isinstance(value, int) or isinstance(value, bool):
             return str(value)
 
@@ -29403,6 +29410,10 @@ class VulkanSPIRVCodeGen(
                 if builtin_limit is not None:
                     return builtin_limit
 
+                standard_constant = spirv_standard_float_constant(self, expr)
+                if standard_constant is not None:
+                    return standard_constant
+
                 # Create a default float constant for missing variables in examples
                 # This is to make the SPIR-V code valid even if we can't find the variable
                 if expr.replace(".", "", 1).isdigit():  # Check if it's a numeric string
@@ -29478,6 +29489,10 @@ class VulkanSPIRVCodeGen(
                 builtin_limit = self.glsl_builtin_limit_constant(expr.name)
                 if builtin_limit is not None:
                     return builtin_limit
+
+                standard_constant = spirv_standard_float_constant(self, expr.name)
+                if standard_constant is not None:
+                    return standard_constant
 
                 self.refuse_lowering(f"Unknown variable {expr.name}")
                 float_type = self.register_primitive_type("float")

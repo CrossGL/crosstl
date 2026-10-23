@@ -67,6 +67,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -12138,6 +12139,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if name in known_constant_names:
                     return
                 if name and render_standard_math_constant(name, "directx") is not None:
+                    return
+                if name and render_float_limit_constant(name, "directx") is not None:
                     return
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
@@ -28293,13 +28296,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return name
 
     def hlsl_standard_math_constant_expression(self, name):
-        # HLSL does not define the C/Metal NAN macro. Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        literal = (
-            "asfloat(0x7fc00000u)"
-            if name == "NAN"
-            else render_standard_math_constant(name, "directx")
-        )
+        # HLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        literal = render_float_limit_constant(
+            name, "directx"
+        ) or render_standard_math_constant(name, "directx")
         if literal is None:
             return None
 
