@@ -32187,6 +32187,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_hlsl_global_resource_type(self, mapped_type):
         mapped_type = str(mapped_type)
+        # Read array suffixes from the end. A repeated suffix expression
+        # re-segments a long malformed tail before it can reject the name.
+        suffix_end = len(mapped_type)
+        while suffix_end > 0 and mapped_type[suffix_end - 1] == "]":
+            open_bracket = mapped_type.rfind("[", 0, suffix_end)
+            if open_bracket < 0:
+                break
+            inner = mapped_type[open_bracket + 1 : suffix_end - 1]
+            if re.fullmatch(r"\s*(?:\w+\s*)?", inner) is None:
+                break
+            suffix_end = open_bracket
+            while suffix_end > 0 and mapped_type[suffix_end - 1].isspace():
+                suffix_end -= 1
+        sampler_type = mapped_type[:suffix_end]
         return (
             mapped_type.startswith("Texture")
             or self.is_hlsl_feedback_texture_type(mapped_type)
@@ -32197,8 +32211,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_hlsl_constant_buffer_type(mapped_type)
             or self.is_hlsl_texture_buffer_type(mapped_type)
             or self.is_hlsl_readonly_buffer_type(mapped_type)
-            or re.sub(r"(\s*\[\s*\w*\s*\])+$", "", mapped_type)
-            in ["SamplerState", "SamplerComparisonState"]
+            or sampler_type in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
