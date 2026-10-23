@@ -219,6 +219,7 @@ from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
+    input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
@@ -8952,6 +8953,10 @@ class GLSLCodeGen(
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        for node in all_global_vars:
+            input_attachment_reason = input_attachment_refusal_reason(node)
+            if input_attachment_reason is not None:
+                self.refuse_lowering(input_attachment_reason)
         specialization_global_ids = {
             id(node) for node in self.glsl_global_specialization_constants
         }
