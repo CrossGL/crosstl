@@ -49,6 +49,7 @@ from .dependent_builtins import (
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
+from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1200,6 +1201,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "tan",
         "tanh",
         "trunc",
+        "saturate",
+        "cross",
+        "faceforward",
     }
     materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
@@ -1247,6 +1251,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "normalize": ("same", "floating_vector", 1),
         "pow": ("same", "floating", 2),
         "reflect": ("same", "floating_vector", 2),
+        "faceforward": ("same", "floating_vector", 3),
+        "cross": ("same", "floating_vector", 2),
+        "saturate": ("same", "floating", 1),
         "rint": ("same", "floating", 1),
         "round": ("same", "floating", 1),
         "rsqrt": ("same", "floating", 1),
@@ -21826,6 +21833,9 @@ float {scalar}(float value) {{
                 return wide_type["source_type"]
             return None
 
+        matrix_type = self.metal_matrix_arithmetic_type(expr.op, left_type, right_type)
+        if matrix_type is not NOT_MATRIX:
+            return matrix_type
         left_vector = self.metal_small_vector_type_parts(left_type)
         right_vector = self.metal_small_vector_type_parts(right_type)
         if left_vector is not None or right_vector is not None:
@@ -21853,6 +21863,42 @@ float {scalar}(float value) {{
             return self.metal_vector_type_from_element(result_element, vector[1])
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
+
+    def metal_matrix_arithmetic_type(self, op, left_type, right_type):
+        """The type of MSL arithmetic with a matrix operand, or ``NOT_MATRIX`` without one."""
+        left_matrix = self.metal_matrix_type_parts(left_type)
+        right_matrix = self.metal_matrix_type_parts(right_type)
+        if left_matrix is None and right_matrix is None:
+            return NOT_MATRIX
+
+        def operand(matrix, metal_type):
+            if matrix is not None:
+                return matrix[0], (matrix[1], matrix[2]), None
+            vector = self.metal_small_vector_type_parts(metal_type)
+            if vector is not None:
+                return vector[0], None, vector[1]
+            if self.metal_scalar_arithmetic_type_info(metal_type) is not None:
+                return metal_type, None, 0
+            return None, None, None
+
+        left_element, left_shape, left_lanes = operand(left_matrix, left_type)
+        right_element, right_shape, right_lanes = operand(right_matrix, right_type)
+        shape = matrix_arithmetic_shape(
+            op, left_shape, right_shape, left_lanes, right_lanes
+        )
+        if shape is None:
+            return None
+        element = self.resolve_type_alias((left_matrix or right_matrix)[0])
+        other = right_element if left_matrix is not None else left_element
+        scalar_operand = 0 in (left_lanes, right_lanes)
+        # A vector or second matrix must share the matrix's element type; a scalar converts to it.
+        if not scalar_operand and self.normalized_metal_type(
+            self.resolve_type_alias(other)
+        ) != self.normalized_metal_type(element):
+            return None
+        if shape[0] == "vector":
+            return self.metal_vector_type_from_element(element, shape[1])
+        return f"{element}{shape[1]}x{shape[2]}"
 
     def metal_pointer_arithmetic_operand_type(self, metal_type):
         element = self.split_outer_metal_declarator_array_type(metal_type)
