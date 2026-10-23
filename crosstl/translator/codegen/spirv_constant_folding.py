@@ -1,9 +1,9 @@
-"""Fold scalar and vector constant initializers for the SPIR-V generator.
+"""Fold scalar, vector and matrix constant initializers for the SPIR-V generator.
 
 SPIR-V module scope can only hold constant instructions, so a CrossGL
 ``const`` whose initializer is an operator expression, a conversion, a swizzle
 or a math built-in call has to be evaluated during translation. Evaluation uses
-:mod:`vector_constant_folding`, which rounds binary32 values after every
+:mod:`matrix_constant_folding`, which rounds binary32 values after every
 operation and wraps integers, so the constant has the value the shader would
 have computed.
 
@@ -14,11 +14,14 @@ that case.
 
 from __future__ import annotations
 
+import re
+
 from ..ast import (
     ArrayAccessNode,
     BinaryOpNode,
     CastNode,
     FunctionCallNode,
+    MatrixType,
     MemberAccessNode,
     SwizzleNode,
     TernaryOpNode,
@@ -27,6 +30,12 @@ from ..ast import (
 )
 from ..float_limit_constants import float_limit_constant
 from ..standard_constants import standard_math_constant
+from .matrix_constant_folding import (
+    MatrixConstant,
+    MatrixConstantFolder,
+    convert_matrix_constant,
+    make_matrix,
+)
 from .scalar_constant_folding import (
     FLOAT_KINDS,
     SCALAR_KINDS,
@@ -37,10 +46,11 @@ from .scalar_constant_folding import (
 )
 from .vector_constant_folding import (
     VectorConstant,
-    VectorConstantFolder,
     convert_vector_constant,
     make_vector,
 )
+
+_MATRIX_NAME = re.compile(r"(d)?mat([234])(?:x([234]))?")
 
 # Initializers that need evaluation. Bare literals and names keep the
 # generator's existing literal path, so their spelling does not change.
@@ -100,6 +110,37 @@ def spirv_vector_shape(generator, type_value) -> tuple[str, int] | None:
     return None if kind is None or not 2 <= size <= 4 else (kind, size)
 
 
+def spirv_matrix_shape(generator, type_value) -> tuple[str, int, int] | None:
+    """Return ``(kind, columns, rows)`` when *type_value* is a matrix type."""
+    if type_value is None:
+        return None
+    if _is_spirv_type(type_value):
+        info = generator.matrix_type_info_from_type(type_value)
+        if info is None or info[0] is None:
+            return None
+        column_type, columns = info
+        column_shape = spirv_vector_shape(generator, column_type)
+        if column_shape is None or column_shape[0] not in FLOAT_KINDS:
+            return None
+        return column_shape[0], columns, column_shape[1]
+    if isinstance(type_value, MatrixType):
+        kind = spirv_scalar_kind(generator, type_value.element_type)
+        if kind not in FLOAT_KINDS:
+            return None
+        return kind, type_value.cols, type_value.rows
+    name = (
+        type_value if isinstance(type_value, str) else getattr(type_value, "name", None)
+    )
+    if not isinstance(name, str):
+        return None
+    match = _MATRIX_NAME.fullmatch(generator.normalize_hlsl_matrix_type(name))
+    if match is None:
+        return None
+    is_double, columns, rows = match.groups()
+    kind = "double" if is_double else "float"
+    return kind, int(columns), int(rows or columns)
+
+
 def _integer_constant(value: int) -> ScalarConstant:
     for kind, low, high in (
         ("int", -(1 << 31), (1 << 31) - 1),
@@ -121,13 +162,13 @@ def _scalar_value_of(generator, constant_id) -> ScalarConstant | None:
     return ScalarConstant(kind, value)
 
 
-def _vector_value_of(generator, constant_id) -> VectorConstant | None:
-    shape = spirv_vector_shape(generator, generator.value_types.get(constant_id.id))
+def _vector_value_of(generator, constant_id: int) -> VectorConstant | None:
+    shape = spirv_vector_shape(generator, generator.value_types.get(constant_id))
     if shape is None:
         return None
     for table in (generator.vector_constants, generator.composite_constants):
         for (_type_key, component_ids), registered in table.items():
-            if registered.id != constant_id.id:
+            if registered.id != constant_id:
                 continue
             components = []
             for component_id in component_ids:
@@ -137,6 +178,19 @@ def _vector_value_of(generator, constant_id) -> VectorConstant | None:
                 components.append(ScalarConstant(shape[0], value))
             vector = make_vector(components)
             return vector if vector is not None and vector.size == shape[1] else None
+    return None
+
+
+def _matrix_value_of(generator, constant_id: int) -> MatrixConstant | None:
+    shape = spirv_matrix_shape(generator, generator.value_types.get(constant_id))
+    if shape is None:
+        return None
+    for (_type_key, column_ids), registered in generator.composite_constants.items():
+        if registered.id != constant_id:
+            continue
+        columns = [_vector_value_of(generator, column_id) for column_id in column_ids]
+        matrix = make_matrix(columns)
+        return matrix if matrix is not None and matrix.shape == shape else None
     return None
 
 
@@ -150,7 +204,10 @@ def _resolve_name(generator, name: str):
         scalar = _scalar_value_of(generator, constant_id)
         if scalar is not None:
             return scalar
-        return _vector_value_of(generator, constant_id)
+        vector = _vector_value_of(generator, constant_id.id)
+        if vector is not None:
+            return vector
+        return _matrix_value_of(generator, constant_id.id)
     int_value = generator.active_literal_int_constants().get(name)
     if isinstance(int_value, int) and not isinstance(int_value, bool):
         return _integer_constant(int_value)
@@ -166,11 +223,12 @@ def _resolve_name(generator, name: str):
 
 
 def spirv_fold_constant(generator, expr):
-    """Fold *expr* to a scalar or vector constant, or return ``None``."""
-    folder = VectorConstantFolder(
+    """Fold *expr* to a scalar, vector or matrix constant, or return ``None``."""
+    folder = MatrixConstantFolder(
         lambda name: _resolve_name(generator, name),
         lambda type_value: spirv_scalar_kind(generator, type_value),
         lambda type_value: spirv_vector_shape(generator, type_value),
+        lambda type_value: spirv_matrix_shape(generator, type_value),
         fold_builtin=fold_math_builtin,
     )
     return folder.fold(expr)
@@ -206,6 +264,8 @@ def spirv_evaluated_scalar_initializer(generator, expr, type_id):
 
 
 def _register_vector(generator, folded, target_type):
+    if not isinstance(folded, (ScalarConstant, VectorConstant)):
+        return None
     if target_type is None:
         if not isinstance(folded, VectorConstant):
             return None
@@ -230,10 +290,64 @@ def _register_vector(generator, folded, target_type):
     return generator.register_vector_constant(vector_type, components)
 
 
+def _register_matrix(generator, folded, target_type):
+    if not isinstance(folded, MatrixConstant):
+        return None
+    if target_type is None:
+        component_type = generator.register_primitive_type(folded.kind)
+        column_type = generator.register_vector_type(component_type, folded.row_count)
+        matrix_type = generator.register_matrix_type(column_type, folded.column_count)
+    else:
+        kind, columns, rows = spirv_matrix_shape(generator, target_type)
+        if folded.shape[1:] != (columns, rows):
+            return None
+        folded = convert_matrix_constant(folded, kind)
+        if folded is None:
+            return None
+        matrix_type = target_type
+        column_type, _columns = generator.matrix_type_info_from_type(target_type)
+        component_type, _rows = generator.vector_type_info_from_type(column_type)
+    # Components first, then columns, as the matrix constructor path orders them.
+    components = [
+        [
+            generator.register_constant(_python_value(component), component_type)
+            for component in column.components
+        ]
+        for column in folded.columns
+    ]
+    columns = [
+        generator.register_vector_constant(column_type, column) for column in components
+    ]
+    return generator.register_composite_constant(matrix_type, columns)
+
+
+def _defers_to_constructor_path(generator, expr) -> bool:
+    """Whether a matrix constructor is left to the generator's constructor path.
+
+    That path already folds constructors over scalars and vectors; it cannot
+    take a matrix argument, so only those constructors are folded here.
+    """
+    if not isinstance(expr, FunctionCallNode):
+        return False
+    callee = getattr(expr, "function", getattr(expr, "name", None))
+    if spirv_matrix_shape(generator, getattr(callee, "name", callee)) is None:
+        return False
+    return not any(
+        isinstance(spirv_fold_constant(generator, argument), MatrixConstant)
+        for argument in getattr(expr, "args", None) or []
+    )
+
+
 def spirv_folded_constant(generator, expr, target_type) -> object | None:
-    """Return a constant id for a foldable scalar or vector expression, or ``None``."""
+    """Return a constant id for a foldable initializer, or ``None``."""
     if not isinstance(expr, _EVALUATED_NODES):
         return None
+    if _defers_to_constructor_path(generator, expr):
+        return None
+    if target_type is not None and spirv_matrix_shape(generator, target_type):
+        return _register_matrix(
+            generator, spirv_fold_constant(generator, expr), target_type
+        )
     if target_type is not None and spirv_vector_shape(generator, target_type):
         return _register_vector(
             generator, spirv_fold_constant(generator, expr), target_type
@@ -249,6 +363,8 @@ def spirv_folded_constant(generator, expr, target_type) -> object | None:
     folded = spirv_fold_constant(generator, expr)
     if isinstance(folded, VectorConstant):
         return _register_vector(generator, folded, None)
+    if isinstance(folded, MatrixConstant):
+        return _register_matrix(generator, folded, None)
     if folded is None:
         return None
     type_id = generator.register_primitive_type(folded.kind)
@@ -260,6 +376,7 @@ __all__ = (
     "spirv_fold_constant",
     "spirv_fold_scalar",
     "spirv_folded_constant",
+    "spirv_matrix_shape",
     "spirv_scalar_kind",
     "spirv_vector_shape",
 )

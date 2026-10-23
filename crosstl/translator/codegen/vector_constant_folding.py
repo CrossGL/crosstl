@@ -157,13 +157,17 @@ class VectorConstantFolder(ScalarConstantFolder):
     def fold_index(self, node: ArrayAccessNode) -> FoldedConstant | None:
         operand = self.fold(node.array_expr)
         index = self.fold(node.index_expr)
-        if not isinstance(operand, VectorConstant) or not isinstance(
-            index, ScalarConstant
-        ):
+        if operand is None or not isinstance(index, ScalarConstant):
             return None
-        if index.kind not in INTEGER_KINDS or not 0 <= index.value < operand.size:
+        if index.kind not in INTEGER_KINDS:
             return None
-        return operand.components[index.value]
+        return self.index_value(operand, index.value)
+
+    def index_value(self, operand, index: int) -> FoldedConstant | None:
+        """Return element *index* of a folded operand, or ``None`` out of range."""
+        if not isinstance(operand, VectorConstant) or not 0 <= index < operand.size:
+            return None
+        return operand.components[index]
 
     def unary_value(self, operator, operand):
         if not isinstance(operand, VectorConstant):
