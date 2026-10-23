@@ -5,9 +5,12 @@ MLX CPU and once through the translated host. The native run installs the
 base host packages with the families the small-row job already translates:
 random bits, Boolean and integer bitwise operations, selection, absolute
 values, reduction initialization and the checked Boolean and float32
-conjunctions. Every dispatch must come from one of those indexes, so a test
-that reaches another family (gather, scatter, scans, 64-bit or 16-bit
-kernels) fails the trace instead of passing on an unchecked package.
+conjunctions. General gather and scatter kernels are specialized from the
+pinned MLX sources at dispatch time, and each of their dispatches is
+recomputed from its retained inputs and native modules. Every other dispatch
+must come from one of those indexes, so a test that reaches another family
+(scans, 64-bit or 16-bit kernels) fails the trace instead of passing on an
+unchecked package.
 """
 
 import argparse
@@ -18,9 +21,16 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import random_evidence
+from demos.integrations.mlx.portable_host import (
+    gather_evidence,
+    random_evidence,
+    scatter_axis_evidence,
+    scatter_evidence,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
-from demos.integrations.mlx.portable_host.random_packages import ENTRIES
+from demos.integrations.mlx.portable_host.random_packages import (
+    ENTRIES,
+)
 from demos.integrations.mlx.portable_host.random_packages import (
     load_index as load_random,
 )
@@ -53,8 +63,13 @@ UPSTREAM_TESTS = tuple(
         "test_triu",
         "test_as_strided",
         "test_depends",
+        "test_eye",
+        "test_diag",
+        "test_diagonal",
     )
 )
+# Source-specialized indexing kernels by entry prefix, longest prefix first.
+INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")
 # Entry-keyed package families; reductions are keyed by width and entry.
 FAMILIES = ("packages", "random", "bitwise", "selection", "absolute")
 REQUIRED_REDUCTIONS = frozenset(("w32/all_reduce_andbool_", "w256/all_reduce_andbool_"))
@@ -179,6 +194,17 @@ def load_indexes(args):
     return target, indexes, reductions
 
 
+def indexing_auditor(entry):
+    """Return the evidence check for a source-specialized indexing entry."""
+    auditors = {
+        "gather": gather_evidence.audit_event,
+        "scatter_axis": scatter_axis_evidence.audit_event,
+        "scatter": scatter_evidence.audit_event,
+    }
+    prefix = next((item for item in INDEXING_PREFIXES if entry.startswith(item)), None)
+    return auditors.get(prefix)
+
+
 def audit_trace(np, args, trace, target, indexes, reductions):
     """Tie every dispatch to exactly one translated package."""
     random_events = [event for event in trace if event["entry"] in ENTRIES]
@@ -188,10 +214,27 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         random_evidence.verify_packages(
             random_events, args.mlx_root, args.random, target
         )
-    verify_native_identity(
-        [event for event in trace if event["entry"] not in ENTRIES], target
-    )
     owners = [0] * len(trace)
+    indexing = 0
+    for i, event in enumerate(trace):
+        auditor = indexing_auditor(event["entry"])
+        if auditor is None:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op indexing dispatch targets another backend")
+        # Recomputes the result from the retained inputs and native modules.
+        auditor(np, event)
+        owners[i] += 1
+        indexing += 1
+    verify_native_identity(
+        [
+            event
+            for event in trace
+            if event["entry"] not in ENTRIES
+            and indexing_auditor(event["entry"]) is None
+        ],
+        target,
+    )
     for name in FAMILIES:
         if name == "random":
             selected = [i for i, event in enumerate(trace) if event["entry"] in ENTRIES]
@@ -226,6 +269,9 @@ def audit_trace(np, args, trace, target, indexes, reductions):
             owners[i] += 1
     if any(count != 1 for count in owners):
         raise ValueError("Upstream op trace contains an unknown or ambiguous package")
+    if not indexing:
+        raise ValueError("Upstream indexing tests did not reach gather or scatter")
+    return indexing
 
 
 def run_worker(args, output, mode):
@@ -298,7 +344,7 @@ def verify(args):
             trace
         ):
             raise ValueError("Upstream op trace count differs")
-        audit_trace(np, args, trace, target, indexes, reductions)
+        indexing = audit_trace(np, args, trace, target, indexes, reductions)
         rejections = {}
         for mode, error in NEGATIVE_CHECKS.items():
             item = json.loads((output / mode / "rejection.json").read_text())
@@ -316,6 +362,7 @@ def verify(args):
         evidence.update(
             passed=True,
             dispatchCount=len(trace),
+            indexingDispatchCount=indexing,
             upstream=upstream,
             negativeChecks=rejections,
         )

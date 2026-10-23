@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 17
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 20
     assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
@@ -70,8 +70,8 @@ def test_upstream_op_results_cannot_skip_or_replace_tests(native, fault):
             ops.validate_upstream(record, native=native)
 
 
-def event(entry, size=1):
-    return {"entry": entry, "workgroupSize": [size, 1, 1]}
+def event(entry, size=1, target="metal"):
+    return {"entry": entry, "workgroupSize": [size, 1, 1], "target": target}
 
 
 @pytest.fixture
@@ -90,6 +90,12 @@ def audit(monkeypatch, tmp_path):
         ops.random_evidence, "verify_packages", lambda e, root, d, target: None
     )
     monkeypatch.setattr(ops, "variant_keys", lambda index: set(index["descriptors"]))
+    for name in ("gather_evidence", "scatter_axis_evidence", "scatter_evidence"):
+        monkeypatch.setattr(
+            getattr(ops, name),
+            "audit_event",
+            lambda np, e, name=name: seen.setdefault(name, []).append(e["entry"]),
+        )
     args = SimpleNamespace(
         mlx_root=tmp_path,
         random=tmp_path / "random",
@@ -121,16 +127,84 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         event("v_Absfloat32float32"),
         event("init_reduce_andbool_", 32),
         event("all_reduce_andbool_", 32),
+        event("gatherint32int32_2_1_int"),
+        event("scatterfloat32int32_none_2_updc_true_nwork1_int"),
     ]
-    ops.audit_trace(None, audit.args, trace, "metal", audit.indexes, audit.reductions)
+    count = ops.audit_trace(
+        None, audit.args, trace, "metal", audit.indexes, audit.reductions
+    )
+    assert count == 2
     assert audit.seen["packages"] == ["vv_Equalint32"]
     assert audit.seen["red-checked"] == ["all_reduce_andbool_"]
+    assert audit.seen["gather_evidence"] == ["gatherint32int32_2_1_int"]
+    assert audit.seen["scatter_evidence"] == [
+        "scatterfloat32int32_none_2_updc_true_nwork1_int"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "auditor"),
+    [
+        ("gather_axisfloat32int32_true_true_true_int", "gather_evidence"),
+        ("scatter_axisfloat32int32_none_true_true", "scatter_axis_evidence"),
+        ("scatteruint32int64_sum_1_updc_false_nwork4_int", "scatter_evidence"),
+    ],
+)
+def test_upstream_op_indexing_entries_reach_their_evidence_check(audit, entry, auditor):
+    ops.audit_trace(
+        None,
+        audit.args,
+        [event("vv_Equalint32"), event(entry)],
+        "metal",
+        audit.indexes,
+        audit.reductions,
+    )
+    assert audit.seen[auditor] == [entry]
+
+
+def test_upstream_op_trace_requires_an_indexing_dispatch(audit):
+    with pytest.raises(ValueError, match="did not reach gather or scatter"):
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("vv_Equalint32")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+        )
+
+
+def test_upstream_op_indexing_dispatch_must_use_the_package_target(audit):
+    with pytest.raises(ValueError, match="targets another backend"):
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("vv_Equalint32"), event("gatherint32int32_2_1_int", 1, "opengl")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+        )
+
+
+def test_upstream_op_indexing_audit_failures_fail_the_trace(audit, monkeypatch):
+    def reject(np, event):
+        raise ValueError("Gather readback and MLX result disagree")
+
+    monkeypatch.setattr(ops.gather_evidence, "audit_event", reject)
+    with pytest.raises(ValueError, match="readback"):
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("gatherint32int32_2_1_int")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+        )
 
 
 @pytest.mark.parametrize(
     "unknown",
     [
-        event("gatherint32int32_2_1_int"),
         event("contig_scan_inclusive_sum_int32_int32"),
         event("all_reduce_andbool_", 256),
     ],
@@ -140,7 +214,7 @@ def test_upstream_op_trace_rejects_unindexed_families(audit, unknown):
         ops.audit_trace(
             None,
             audit.args,
-            [event("vv_Equalint32"), unknown],
+            [event("vv_Equalint32"), event("gatherint32int32_2_1_int"), unknown],
             "metal",
             audit.indexes,
             audit.reductions,
@@ -153,7 +227,7 @@ def test_upstream_op_trace_rejects_a_package_in_two_families(audit):
         ops.audit_trace(
             None,
             audit.args,
-            [event("vv_Equalint32")],
+            [event("vv_Equalint32"), event("gatherint32int32_2_1_int")],
             "metal",
             audit.indexes,
             audit.reductions,
