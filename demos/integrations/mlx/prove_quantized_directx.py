@@ -30,6 +30,12 @@ MLX_QUANTIZED_ENTRY_POINT = "affine_quantize_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_ENTRY_POINT = "affine_gather_qmv_fast_float_gs_32_b_2"
 MLX_QUANTIZED_GATHER_WORKGROUP_SIZE = (32, 2, 1)
 MLX_QUANTIZED_GATHER_SUBGROUP_WIDTH = 32
+# affine_quantize reduces each quantization group with simd_min/simd_max, so
+# its result depends on the dispatch shape. MLX's quantize_impl launches up to
+# maxTotalThreadsPerThreadgroup threads per group; any multiple of the 32-lane
+# SIMD-group keeps every quantization group inside one SIMD-group.
+MLX_QUANTIZED_WORKGROUP_SIZE = (64, 1, 1)
+MLX_QUANTIZED_SUBGROUP_WIDTH = 32
 
 PINNED_FILE_SHA256 = {
     MLX_QUANTIZED_SOURCE: (
@@ -55,6 +61,8 @@ ENTRY_CONTRACTS = {
         "concreteSpecializationCount": CONCRETE_SPECIALIZATION_COUNT,
         "prunedCandidateCount": PRUNED_CANDIDATE_COUNT,
         "generatedContract": "quantize",
+        "workgroupSize": MLX_QUANTIZED_WORKGROUP_SIZE,
+        "subgroupWidth": MLX_QUANTIZED_SUBGROUP_WIDTH,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
         "specializationName": "affine_gather_qmv_fast",
@@ -69,12 +77,12 @@ ENTRY_CONTRACTS = {
 }
 GENERATED_ARTIFACTS = {
     MLX_QUANTIZED_ENTRY_POINT: {
-        "sha256": "3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0",
-        "sizeBytes": 5704,
+        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
+        "sizeBytes": 5721,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be",
-        "sizeBytes": 17865,
+        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
+        "sizeBytes": 17917,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
@@ -107,6 +115,12 @@ _STATIC_ASSERT_RE = re.compile(r"\bstatic_assert\s*\(")
 _COMPUTE_ENTRY_RE = re.compile(
     r"\[\s*numthreads\s*\([^\]]+\)\s*\]\s*"
     r"(?:\[\s*WaveSize\s*\([^\]]+\)\s*\]\s*)?"
+    r"void\s+CSMain\s*\(",
+    flags=re.MULTILINE,
+)
+_QUANTIZE_EXECUTION_ENTRY_RE = re.compile(
+    r"\[\s*numthreads\s*\(\s*64\s*,\s*1\s*,\s*1\s*\)\s*\]\s*"
+    r"\[\s*WaveSize\s*\(\s*32\s*\)\s*\]\s*"
     r"void\s+CSMain\s*\(",
     flags=re.MULTILINE,
 )
@@ -608,6 +622,10 @@ def _translated_artifact(
 
 def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
     _require(
+        len(_QUANTIZE_EXECUTION_ENTRY_RE.findall(generated)) == 1,
+        "the quantize entry must fix its workgroup and 32-lane wave size",
+    )
+    _require(
         len(_PACKED_OUTPUT_DECLARATION_RE.findall(generated)) == 1,
         "the bits=2 packed output specialization must retain its uint32 type",
     )
@@ -616,6 +634,12 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
         "the bits=2 packed output must retain its source uint8 storage conversion",
     )
     return {
+        "executionContract": {
+            "status": "passed",
+            "workgroupSize": list(MLX_QUANTIZED_WORKGROUP_SIZE),
+            "subgroupWidth": MLX_QUANTIZED_SUBGROUP_WIDTH,
+            "subgroupWidthEnforcement": "WaveSize(32)",
+        },
         "typedResourceStore": {
             "status": "passed",
             "resource": "out_",
@@ -625,7 +649,7 @@ def _validate_quantize_generated_hlsl(generated: str) -> dict[str, Any]:
             "generatedValueType": "uint",
             "conversion": "uint8-mask",
             "generatedStore": PACKED_OUTPUT_STORE,
-        }
+        },
     }
 
 

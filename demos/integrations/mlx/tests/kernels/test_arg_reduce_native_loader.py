@@ -34,6 +34,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -355,11 +356,11 @@ def _translate_artifact(
         "algorithm": "sha256",
         "value": MLX_ARG_REDUCE_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     assert artifact["entryPoint"] == {
         "source": entry,
         "target": "CSMain" if target == "directx" else "main",
