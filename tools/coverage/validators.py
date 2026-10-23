@@ -526,10 +526,42 @@ def can_lower(language: str) -> bool:
     return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
-def first_error(log: str) -> str:
-    """The first line of a tool's log that reports an error, or the log's start when none says so."""
-    errors = [line for line in log.splitlines() if "error" in line.lower()]
-    return (errors[0] if errors else log[:300]).strip()
+# slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the
+# particulars, such as the undefined name, in the label under the quoted source line. Its first error is the header
+# joined with that label, so two probes that fail on different names have different causes.
+LABELLED = frozenset({"slang"})
+_HEADER = re.compile(r"error\[(?P<code>E\d+)\]: (?P<message>.+)")
+_LABEL = re.compile(r"\s*\d*\s*\|\s*\^+\s+(?P<label>\S.*)")
+
+
+def first_error(log: str, language: str = "") -> str:
+    """The first line of a tool's log that reports an error, or the log's start when none says so. For a
+    ``language`` in :data:`LABELLED`, the error's header is joined with the label under its source line.
+    """
+    lines = log.splitlines()
+    for index, line in enumerate(lines):
+        if "error" not in line.lower():
+            continue
+        header = _HEADER.fullmatch(line.strip()) if language in LABELLED else None
+        return _labelled(header, lines[index + 1 :]) if header else line.strip()
+    return log[:300].strip()
+
+
+def _labelled(header: re.Match[str], following: list[str]) -> str:
+    """The error ``header`` with the first label of its own block. A label that only repeats the header adds
+    nothing, and one that starts with the header's words replaces them."""
+    for line in following:
+        if _HEADER.fullmatch(line.strip()):
+            break
+        label = _LABEL.fullmatch(line)
+        if label:
+            text, message = label["label"].strip().rstrip("."), header["message"]
+            if text.lower() == message.lower():
+                break
+            if not text.lower().startswith(message.lower()):
+                text = f"{message}: {text}"
+            return f"error[{header['code']}]: {text}"
+    return header.group(0)
 
 
 def lower(

@@ -121,10 +121,7 @@ def _validated(
     verdict = _verdict(language, source, stage, entry, target)
     if verdict.accepted:
         return verdict
-    errors = [line for line in verdict.log.splitlines() if "error" in line.lower()]
-    return validators.Verdict(
-        False, (errors[0] if errors else verdict.log[:300]).strip()
-    )
+    return validators.Verdict(False, validators.first_error(verdict.log, language))
 
 
 def parse_crossgl(source: str) -> None:
