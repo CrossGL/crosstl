@@ -166,6 +166,10 @@ from .spirv_ray_builtins import (
     transposed_ray_builtin,
 )
 from .spirv_refusals import SpirvRefusals
+from .spirv_scalar_folding import (
+    spirv_evaluated_scalar_initializer,
+    spirv_folded_scalar_constant,
+)
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -1117,6 +1121,9 @@ class VulkanSPIRVCodeGen(
         if type_name == self.BFLOAT16_TYPE_NAME and isinstance(value, float):
             value = self.bfloat16_bits_for_float(value)
         key = (value, type_id.id)
+        if isinstance(value, float) and value == 0.0 and str(value).startswith("-"):
+            # -0.0 == 0.0 in Python, but they are different constants.
+            key = ("-0.0", type_id.id)
         if key in self.constants:
             return self.constants[key]
 
@@ -1579,6 +1586,11 @@ class VulkanSPIRVCodeGen(
 
         constant_id = self.process_constant_expression(value, type_id)
         if constant_id is None:
+            if value is not None:
+                self.refuse_lowering(
+                    f"SPIR-V module-scope constant {name} has an initializer "
+                    "that is not a constant expression"
+                )
             constant_id = self.default_value_for_type(type_id)
         self.emit_named_constant_debug_name(name, constant_id)
         self.named_constants[name] = constant_id
@@ -1604,6 +1616,9 @@ class VulkanSPIRVCodeGen(
         self, expr, type_id: SpirvId
     ) -> Optional[Union[bool, int, float]]:
         """Evaluate a narrow scalar constant expression for module-scope constants."""
+        evaluated = spirv_evaluated_scalar_initializer(self, expr, type_id)
+        if evaluated is not None:
+            return evaluated
         type_name = self.normalize_primitive_name(type_id.type.base_type)
         if type_name == "bool":
             return self.coerce_scalar_constant_value(expr, type_id)
@@ -26804,6 +26819,10 @@ class VulkanSPIRVCodeGen(
                         components.append(self.default_value_for_type(component_type))
 
                     return self.register_vector_constant(vector_type, components)
+
+        folded_scalar = spirv_folded_scalar_constant(self, expr, target_type)
+        if folded_scalar is not None:
+            return folded_scalar
 
         specialization_constant_op = self.process_specialization_constant_operation(
             expr, target_type
