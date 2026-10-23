@@ -217,6 +217,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_interface_block_io import (
+    block_declared_stage_io,
+    block_member_location_type,
+    stage_block_member_layout,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
@@ -23042,14 +23047,22 @@ class GLSLCodeGen(
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            block = block_declared_stage_io(self, "out", member, output_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
                 "output",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.member_type_name(member)
+                    if block is None
+                    else block_member_location_type(self, member, block)
+                ),
                 output_name,
             )
+            if block is not None:
+                # Declared by the output interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "out", stage_name="vertex"
             )
@@ -23072,18 +23085,26 @@ class GLSLCodeGen(
 
             layout = self.stage_io_layout_for_node(member)
             member_type = self.member_type_name(member)
+            block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
                 (
-                    self.stage_io_per_vertex_element_type(member_type)
-                    if self.is_pervertex_stage_io(member, "")
-                    else member_type
+                    block_member_location_type(self, member, block)
+                    if block is not None
+                    else (
+                        self.stage_io_per_vertex_element_type(member_type)
+                        if self.is_pervertex_stage_io(member, "")
+                        else member_type
+                    )
                 ),
                 input_name,
             )
+            if block is not None:
+                # Declared by the input interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -57848,7 +57869,7 @@ complex64_t crossgl_complex64_mod_assign(
         instance_suffix = self.glsl_interface_block_instance_suffix(node)
         code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
-            code += self.generate_glsl_interface_block_member_declaration(
+            declaration = self.generate_glsl_interface_block_member_declaration(
                 member,
                 struct_name=node.name,
                 members_are_global=not instance_suffix,
@@ -57856,6 +57877,10 @@ complex64_t crossgl_complex64_mod_assign(
                     source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
                 ),
             )
+            member_layout = stage_block_member_layout(self, node, member)
+            if member_layout:
+                declaration = f"    {member_layout}{declaration[4:]}"
+            code += declaration
         code += f"}}{instance_suffix};\n"
         return code
 
