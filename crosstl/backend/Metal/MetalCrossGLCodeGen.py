@@ -58,6 +58,10 @@ from .preprocessor import (
     MetalTemplateSpecializationError,
 )
 from .simd_header_types import SIMD_HEADER_TYPES
+from .texture_method_results import (
+    is_depth_texture_name,
+    texture_method_result_shape,
+)
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
@@ -12451,7 +12455,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     expr.object, expr.args, is_main
                 )
                 if sampled_read is not None:
-                    return sampled_read
+                    return self.metal_depth_texel_component(expr.object, sampled_read)
                 return (
                     f"{descriptor['function']}({obj}, {args})"
                     if args
@@ -12778,13 +12782,17 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     options, sample_args, is_main
                 )
                 if option_call is not None:
-                    return option_call
+                    return self.metal_depth_texel_component(expr.texture, option_call)
 
                 lod_expr = self.unwrap_texture_option_argument(expr.lod, "level")
                 lod = self.generate_expression(lod_expr, is_main)
-                return f"textureLod({', '.join(sample_args + [lod])})"
+                return self.metal_depth_texel_component(
+                    expr.texture, f"textureLod({', '.join(sample_args + [lod])})"
+                )
 
-            return f"texture({', '.join(sample_args)})"
+            return self.metal_depth_texel_component(
+                expr.texture, f"texture({', '.join(sample_args)})"
+            )
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:
@@ -22407,6 +22415,10 @@ float {scalar}(float value) {{
             return self.resolve_type_alias(expr.target_type)
         if isinstance(expr, VectorConstructorNode):
             return self.resolve_type_alias(expr.type_name)
+        if isinstance(expr, TextureSampleNode):
+            return self.metal_texture_method_result_type(expr.texture, "sample")
+        if isinstance(expr, MethodCallNode):
+            return self.metal_texture_method_result_type(expr.object, expr.method)
         if isinstance(expr, FunctionCallNode):
             if str(expr.name) == "sizeof" and len(expr.args) == 1:
                 return "size_t"
@@ -22466,6 +22478,42 @@ float {scalar}(float value) {{
             ) and expr.args:
                 return self.expression_metal_type(expr.args[0])
         return None
+
+    def metal_depth_texel_component(self, texture_expr, call):
+        """Select the depth of a CrossGL texel read on an MSL depth texture.
+
+        ``depthNd<T>::sample`` and ``read`` return the scalar ``T`` (MSL 3.2 section 6.12.7 onwards), while the
+        CrossGL ``texture``/``texelFetch`` family returns ``vec4(depth, 0, 0, 1)`` for every texture, so the
+        import keeps the source type by reading component ``x``.
+        """
+        texture_type = self.expression_metal_type(texture_expr)
+        if not texture_type:
+            return call
+        base_name, _generic_args = self.generic_type_parts(
+            self.resolve_type_alias(texture_type)
+        )
+        if is_depth_texture_name(base_name):
+            return f"{call}.x"
+        return call
+
+    def metal_texture_method_result_type(self, texture_expr, method):
+        """The MSL type of ``texture.method(...)`` when the texture's type fixes it, else ``None``."""
+        texture_type = self.expression_metal_type(texture_expr)
+        if not texture_type:
+            return None
+        base_name, generic_args = self.generic_type_parts(
+            self.resolve_type_alias(texture_type)
+        )
+        if base_name is None:
+            return None
+        shape = texture_method_result_shape(base_name, generic_args, method)
+        if shape is None:
+            return None
+        element_type, width = shape
+        element_type = self.resolve_type_alias(element_type)
+        if width == 1:
+            return element_type
+        return self.metal_vector_type_from_element(element_type, width)
 
     def metal_constructor_result_type(self, name):
         type_name = self.normalized_metal_type(self.resolve_type_alias(str(name)))
