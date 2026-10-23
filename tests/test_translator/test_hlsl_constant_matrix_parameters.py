@@ -92,7 +92,10 @@ def test_vertex_matrix_constants_become_constant_buffers(tmp_path):
 def test_kernel_matrix_constant_becomes_a_constant_buffer(tmp_path):
     hlsl = _translate(tmp_path, KERNEL, threadgroup_size=(64, 1, 1))
     assert re.search(r"cbuffer apply_m_Constants : register\(b0\)", hlsl)
-    assert re.search(r"void CSMain\(uint3 \w+ : SV_DispatchThreadID\)", hlsl), hlsl
+    # The formatter may wrap the entry signature.
+    assert re.search(
+        r"void CSMain\(\s*uint3 \w+\s*:\s*SV_DispatchThreadID\)", hlsl
+    ), hlsl
     _compile(tmp_path, hlsl, "cs_6_0", "CSMain")
 
 
