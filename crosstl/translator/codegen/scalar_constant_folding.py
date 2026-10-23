@@ -373,7 +373,8 @@ class ScalarConstantFolder:
         """Apply binary *operator* to folded operands."""
         if left is None or right is None:
             return None
-        operator = _LOGICAL_SPELLINGS.get(operator, operator)
+        if operator in _LOGICAL_SPELLINGS:
+            operator = _LOGICAL_SPELLINGS[operator]
         if operator in {"&&", "||"}:
             left_bool = convert_scalar_constant(left, "bool").value
             right_bool = convert_scalar_constant(right, "bool").value
