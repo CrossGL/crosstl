@@ -60,6 +60,7 @@ from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .scalar_swizzles import expand_scalar_swizzles
 from .shader_records import (
     ShaderRecordBufferUnsupportedError,
     refuse_shader_record_buffers,
@@ -153,63 +154,65 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
-    and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
-    value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
-    attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
-    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
-    SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
-    (:mod:`.compute_entry_values`). For MSL and
-    HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
-    structures (:mod:`.stage_interface_structs`). A structure an
-    HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
-    For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
-    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
-    becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
-    become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
-    hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
-    SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
-    ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
-    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
-    ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
-    (:mod:`.buffer_strides`), and constant
-    references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
-    storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
-    only in aggregate initializers, other array constructors become initializer lists or named locals
-    (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
-    (:mod:`.array_parameters`). ``a.length()`` of a sized
-    array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
-    (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
-    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
-    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
-    minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
-    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
-    the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
-    Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
-    GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
-    gathers and explicit-level samples do (:mod:`.shadow_samples`).
-    Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
-    targets that sample implicitly only in fragment shaders, and bias, derivative and LOD-query operations there are
-    refused (:mod:`.implicit_lod`).
-    Structs holding samplers,
-    textures or images are flattened into separate resources for SPIR-V, or refused with
-    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
-    one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
-    (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
-    registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
-    cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
-    exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
-    :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
-    The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
+        User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
+        (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
+        ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
+    scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
+        and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
+        value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
+        HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+        attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
+        target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
+        SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
+        (:mod:`.compute_entry_values`). For MSL and
+        HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
+        structures (:mod:`.stage_interface_structs`). A structure an
+        HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
+        For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
+        inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
+        becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
+        become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
+        hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
+        SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
+        ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
+        being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
+        layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
+        ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
+        (:mod:`.buffer_strides`), and constant
+        references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
+        storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
+        only in aggregate initializers, other array constructors become initializer lists or named locals
+        (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
+        (:mod:`.array_parameters`). ``a.length()`` of a sized
+        array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
+        (``sampler(...)`` constructors) is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
+        Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
+        prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
+        minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
+        GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
+        the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+        Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
+        GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
+        gathers and explicit-level samples do (:mod:`.shadow_samples`).
+        Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
+        targets that sample implicitly only in fragment shaders, and bias, derivative and LOD-query operations there are
+        refused (:mod:`.implicit_lod`).
+        Structs holding samplers,
+        textures or images are flattened into separate resources for SPIR-V, or refused with
+        :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
+        one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
+        CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
+        (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
+        registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
+        cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
+        exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
+        :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
+        The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     resolve_intrinsic_named_functions(program)
     canonicalize_texture_swizzles(program)
+    expand_scalar_swizzles(program)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
