@@ -1496,7 +1496,7 @@ class SlangToCrossGLConverter:
         return None
 
     def format_global_variable_qualifiers(self, node, has_initializer=False):
-        allowed_qualifiers = {"extern", "static", "const", "constexpr"}
+        allowed_qualifiers = {"groupshared", "extern", "static", "const", "constexpr"}
         excluded_qualifiers = set()
         if not has_initializer and self.is_plain_uninitialized_const_global(node):
             # CrossGL requires plain top-level const declarations to carry an
@@ -1547,7 +1547,13 @@ class SlangToCrossGLConverter:
             if str(qualifier).lower() in allowed
             and str(qualifier).lower() not in excluded
         ]
-        storage_order = {"extern": 0, "static": 1, "const": 2, "constexpr": 3}
+        storage_order = {
+            "groupshared": 0,
+            "extern": 1,
+            "static": 2,
+            "const": 3,
+            "constexpr": 4,
+        }
         return " ".join(
             qualifier
             for _index, qualifier in sorted(
@@ -2906,7 +2912,8 @@ class SlangToCrossGLConverter:
         offset_index = (
             2
             if len(extra_args) > 2
-            and resource_base not in {
+            and resource_base
+            not in {
                 "TextureCube",
                 "TextureCubeArray",
                 "SamplerCube",
