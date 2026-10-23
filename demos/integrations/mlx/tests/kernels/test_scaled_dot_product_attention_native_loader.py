@@ -42,6 +42,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -73,8 +74,8 @@ MLX_ATTENTION_GENERATED_ARTIFACTS = {
         "sizeBytes": 9116,
     },
     "opengl": {
-        "sha256": "6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268",
-        "sizeBytes": 12412,
+        "sha256": "002b7dcfdcbd65057ded11ded56a348d6f067b63fbd29d3933d20420c9dc614b",
+        "sizeBytes": 13385,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER"
@@ -426,11 +427,9 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         "algorithm": "sha256",
         "value": MLX_ATTENTION_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected["sizeBytes"]
+    check_generated_artifact(
+        artifact, sha256=expected["sha256"], size_bytes=expected["sizeBytes"]
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_ATTENTION_ENTRY,
         "target": "CSMain" if target == "directx" else "main",

@@ -29,24 +29,24 @@
         "sizeBytes": 6535
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "c1bb5954aa983172db6dd80ba82c4ad0f8aebf6dfdf2a553a289224779703d10",
-        "sizeBytes": 3171
+        "sha256": "9597c9313976eb9f0dc10b4b6514b34bf2ef74f2b36e441c5dbed8a41240deab",
+        "sizeBytes": 3184
       },
       "cross_entropy_float16": {
         "sha256": "261c4a77f7dc78b061fe8751d7f3e0d4cd310e469dabf30247db14d070a8405c",
         "sizeBytes": 8095
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "4e295c5ebcad956fd7bb5644bf2187c76c7497c91add0368dbfde9f895a71dbd",
-        "sizeBytes": 5937
+        "sha256": "55f10b1da0e018552f75a59da2a9a5138b83a58cc7eb23022a64fe52e936879e",
+        "sizeBytes": 5950
       },
       "cross_entropy_bfloat16": {
         "sha256": "4ff9b8599fbb929756b11778117e58fd04102136d4cf0ce56275d82908a2e6a6",
         "sizeBytes": 6883
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "a06bb3117f50a418a93500e421f02f15c2ca2b79b2f810a3c7564d8e47995b1f",
-        "sizeBytes": 3955
+        "sha256": "a8d11f4e4b04a570b4c2f3e0401ce151b7f23b9d13dcb2b9cdaaf615b9667d4b",
+        "sizeBytes": 3968
       }
     },
     "opengl": {
@@ -55,24 +55,24 @@
         "sizeBytes": 6459
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "655668a707ca4015f6559140a65e27ae98d5ec1791579075d31ced6255c2d3df",
-        "sizeBytes": 3286
+        "sha256": "66eba93a6add81cb338325d5f7b3d4d03c815c471ee88f1bb71438a91201fb11",
+        "sizeBytes": 3328
       },
       "cross_entropy_float16": {
         "sha256": "c130a4a4397a2526f0cfdbc8f629baddca59c19ed0e0ee3587b732ee09bb5a1f",
         "sizeBytes": 6459
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "3d33f1a2193e131cd733c98977f60dc892791f1dc1e0d6a63a180fcf05be5025",
-        "sizeBytes": 4657
+        "sha256": "77e95203366eb1bce659b014669c2e7f7224d1fc1de9408ddda544a6b763d9e0",
+        "sizeBytes": 4699
       },
       "cross_entropy_bfloat16": {
         "sha256": "5de3fcccee2a8be2c07cce63e66fa87cac9d6295829e7a161a278dcebc077905",
         "sizeBytes": 6466
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "62e8d5e1cdf2efca31d087c525b40a6d1c979adfe76602bef1b9a7d53da81462",
-        "sizeBytes": 3644
+        "sha256": "a3f79d2636764b07e5a3bd7cbff4afe46044dbceab956a1bf3d2788be14d5698",
+        "sizeBytes": 3686
       }
     },
     "metal": {

@@ -201,6 +201,23 @@ def test_slice_update_family_uses_unmodified_template_bodies():
     assert packages.SLICE_UPDATE_SOURCE.count("false, true, false, 1, 0>") == 48
 
 
+def test_opengl_index_assertions_cover_only_requested_sources():
+    rendered = packages._opengl_index_assertions(
+        "opengl",
+        [("work/slice-update.metal", packages.OPENGL_SLICE_UPDATE_INDEX_ASSERTIONS)],
+    )
+    assert rendered.count("[[project.index_range_assertions]]") == 2
+    assert 'expression = "output_offset"' in rendered
+    assert 'expression = "out_ + out_idx"' in rendered
+    assert rendered.count('source = "work/slice-update.metal"') == 2
+    assert "maximum = 2147483647" in rendered and "minimum = 0" in rendered
+    for target in ("metal", "directx"):
+        assert not packages._opengl_index_assertions(
+            target,
+            [("work/slice-update.metal", ("output_offset",))],
+        )
+
+
 @pytest.fixture(scope="module", params=["metal", "directx", "opengl"])
 def translated(tmp_path_factory, request):
     root = tmp_path_factory.mktemp("slice-update-" + request.param)

@@ -24,6 +24,7 @@ from crosstl.project import (
     build_runtime_package,
     translate_project,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
@@ -184,12 +185,10 @@ def _build_runtime_package(
         "intermediate": "crossgl",
         "pipeline": "entry-scoped-translate",
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": MLX_COPY_GENERATED_ARTIFACTS[target]["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == (
-        MLX_COPY_GENERATED_ARTIFACTS[target]["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=MLX_COPY_GENERATED_ARTIFACTS[target]["sha256"],
+        size_bytes=(MLX_COPY_GENERATED_ARTIFACTS[target]["sizeBytes"]),
     )
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"

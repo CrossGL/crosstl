@@ -3547,8 +3547,15 @@ separate.
 A selected DirectX replay of `quantized.metal` now emits one artifact with zero
 translation diagnostics for `affine_quantize_float_gs_32_b_2`. It materializes
 five reachable specializations and three concrete records while pruning 110,861
-unreachable candidates. The generated HLSL is 5,704 bytes with SHA-256
-`3edfd50340f7bee9999f8f0f491544fc177fd2ea3913769d66a12be59c141aa0`.
+unreachable candidates. The kernel reduces each quantization group with
+`simd_min` and `simd_max`, so its result depends on the dispatch shape. The
+pinned `quantize_dequantize` host dispatch in `mlx/backend/metal/quantized.cpp`
+launches `MTL::Size(thread_group_size, 1, 1)` with up to
+`maxTotalThreadsPerThreadgroup` threads, and any multiple of 32 keeps each
+group inside one SIMD-group. The project rules therefore give the entry
+`[numthreads(64, 1, 1)]` and `[WaveSize(32)]`, which requires Shader Model 6.6.
+The generated HLSL is 5,721 bytes with SHA-256
+`d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e`.
 This path verifies the completed template-member and owner-dependent `constexpr`
 work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
 materializations are pruned, this selected float specialization contains no live
@@ -3569,7 +3576,7 @@ The artifact contains
 no remaining `static_assert`. Its ordinary type contract needs no native-16-bit
 profile uplift, while the generated wave intrinsics keep the configured project
 and compiler target scoped to `directx-12`. Official DXC validation with profile
-`cs_6_0`, no `-enable-16bit-types`, and `-WX` passes.
+`cs_6_6`, no `-enable-16bit-types`, and `-WX` passes.
 The locally generated DXIL was nonempty; its byte size is not treated as a
 cross-version compiler invariant. This evidence covers translation and compiler
 acceptance only; it does not claim runtime execution or numerical parity.
@@ -3602,8 +3609,8 @@ The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 17,865 bytes with SHA-256
-`0198db4fecc79d85e6c29e84b7c77d7aa1a06ef0a19b2e31d40a6fee6ccb97be`.
+Shader Model 6.6. The resulting artifact is 17,917 bytes with SHA-256
+`4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
@@ -3807,14 +3814,16 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 116,561-byte GLSL artifact with
+The current FFT source now also emits a 120,044-byte GLSL artifact with
 SHA-256
-`3c39d68f34a60890fca97c2f705cc4e3f9590f0e38b0c895a2074c54d07b5c06`.
+`ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c`.
 Resource-aggregate lowering currently retains one file-level source mapping,
 not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
 the original source path but do not yet identify individual rewritten lines.
 OpenGL keeps the 21 reachable function constants
-as 21 deferred specialization constants and uses the same `[1, 1, 64]`
+as 21 deferred specialization constants, each guarded by
+`#if defined(GL_SPIRV) || defined(VULKAN)` so that a direct GLSL compile
+without specialization stops at `#error`, and uses the same `[1, 1, 64]`
 workgroup contract. A fifth current-source index assertion bounds
 `batch_idx + index + r`. A sixth assertion bounds the resource helper's
 `reference.offset + index` to `[0,255]` for this exact fixture: buffers are
@@ -3850,17 +3859,23 @@ compile with unchanged reflection; Windows numerical execution of the new
 source identities remains required. Earlier Windows results are retained under
 their original artifact hashes and do not certify these revised artifacts.
 
-A dedicated project replay now translates the complete pinned `fft.metal`
-source to one standalone OpenGL compute shader with a 4,096-specialization
-limit and a 2,097,152-item materialization work budget. The report records 99
-unique reachable template specializations, 22 function constants, no unsupported
-materializations, and no project diagnostics. Four unsigned host-index
-assertions and five entry-point-scoped workgroup access assertions make the
-required dispatch preconditions explicit for memory extents from 256 through
-4,096 elements. The Linux proof compiles the emitted GLSL to OpenGL SPIR-V 1.3
-with `glslangValidator` and validates the binary with `spirv-val`. This proves
-artifact construction and native toolchain acceptance; OpenGL runtime dispatch
-and numerical parity with MLX's Metal backend remain outside this check.
+A dedicated project replay now selects `fft_mem_256_float2_float2` from the
+pinned `fft.metal` source and translates it to one standalone OpenGL compute
+shader, as the DirectX replay does. GLSL fixes `local_size` in the shader and
+the kernel uses threadgroup memory and barriers, so the translator refuses a
+host-sized workgroup; the replay supplies the `(1, 1, 64)` entry workgroup-size
+rule and the function constants MLX uses for a power-of-two 256-point
+transform. The report records 24 unique reachable template specializations, 21
+concrete function constants, no unsupported materializations, and no project
+diagnostics. Four signed host-index assertions and one entry-point-scoped
+workgroup access assertion make the dispatch preconditions explicit. The
+generated workgroup and storage load/store helpers do not yet inherit those
+bounds (issue #2178), so four helper-scoped assertions restate the 256-element
+`shared_in` extent and the signed device range. The Linux proof compiles the
+emitted GLSL to OpenGL SPIR-V 1.3 with `glslangValidator` and validates the
+binary with `spirv-val`. This proves artifact construction and native toolchain
+acceptance; OpenGL runtime dispatch and numerical parity with MLX's Metal
+backend remain outside this check.
 
 The pinned `gemv.metal` DirectX compiler frontier verifies source SHA-256
 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f` and
@@ -4353,8 +4368,8 @@ Official DXC 1.9.2602.24 accepts `CSMain` under `cs_6_6`,
 `-enable-16bit-types`, and warnings as errors, producing 9,000 bytes of DXIL.
 Its 32 physical waves receive unique workgroup-synchronized subgroup IDs; no
 lane-varying `SV_GroupIndex / WaveGetLaneCount()` derivation remains. The
-12,412-byte explicit software-subgroup GLSL artifact has SHA-256
-`6362cdedda2d3f0eec553bb60579236157ed38707cb15d7406ecc8feb1098268`.
+13,385-byte explicit software-subgroup GLSL artifact has SHA-256
+`002b7dcfdcbd65057ded11ded56a348d6f067b63fbd29d3933d20420c9dc614b`.
 It partitions 1,024 invocations into 32 logical subgroups and synchronizes the
 source subgroup-ID-strided runtime loop across every workgroup round. Inactive
 subgroups contribute typed collective identities, so all generated barriers
@@ -4819,8 +4834,8 @@ its four divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, compiles as `cs_6_6` with `-enable-16bit-types`, and
 must execute numerically through Direct3D 12 WARP on Windows CI. The generated
-software-subgroup GLSL is 10,245 bytes with SHA-256
-`9bfbaf8bd3e6bfff172ea8461a4f75d011e9310647b33fe933773e576298fac8`.
+software-subgroup GLSL is 10,402 bytes with SHA-256
+`0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0`.
 It retains deferred OpenGL specialization constant `20`, emits eight control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.
@@ -6074,9 +6089,9 @@ The generated HLSL is 10,398 bytes with SHA-256
 its divisors use the correctly rounded `__crossgl_uint_to_float1(axis_size)`.
 It concretizes `has_w=true`, retains `[WaveSize(32)]` and four
 `WaveActiveSum` calls, and compiles as `cs_6_6` with
-`-enable-16bit-types`. The generated software-subgroup GLSL is 10,257 bytes
+`-enable-16bit-types`. The generated software-subgroup GLSL is 10,414 bytes
 with SHA-256
-`ac05c7d026a131807c9f0d4190642c0f8d015cd58ea4db8194ab470fb7c93ab7`.
+`d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9`.
 It retains deferred OpenGL specialization constant `20`, emits six control
 barriers with no hardware-subgroup extension or SPIR-V group-nonuniform
 instruction, and passes `glslangValidator` plus `spirv-val`.

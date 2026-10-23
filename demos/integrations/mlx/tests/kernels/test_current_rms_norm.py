@@ -39,6 +39,7 @@ from demos.integrations.mlx.tests.kernels.test_current_cross_entropy import (
     _quantize,
     _runtime_value,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 from tests.runtime_helpers import _prepare_native_package, _validate_generated_artifact
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
@@ -1286,11 +1287,9 @@ def test_current_mlx_rms_norm_native_parity(
                 "algorithm": "sha256",
                 "value": SOURCE_SHA256,
             }
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": record["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == record["sizeBytes"]
+            check_generated_artifact(
+                artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
+            )
             (execution,) = artifact["execution"]["entryPoints"]
             assert execution["workgroupSize"] == [size, 1, 1]
             generated = root / artifact["path"]
