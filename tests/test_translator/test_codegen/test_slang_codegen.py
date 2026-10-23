@@ -10752,10 +10752,16 @@ def test_matrix_and_non_float_vector_types_emit_slang_names():
     assert "bool3 flags;" in generated_code
     assert "bool2 mask = bool2(true, false);" in generated_code
     assert "float4 transformPosition(float4x4 m, float4 p)" in generated_code
-    assert "float4x4 model = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert (
+        "float4x4 model = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
     assert "float3x2 nonSquare;" in generated_code
     assert "double2 preciseUV = double2(1.0, 2.0);" in generated_code
-    assert "double2x2 precise = transpose(double2x2(1.0, 0.0, 0.0, 1.0));" in generated_code
+    assert (
+        "double2x2 precise = transpose(double2x2(1.0, 0.0, 0.0, 1.0));"
+        in generated_code
+    )
     assert "double3x4 jacobian;" in generated_code
     assert "return mul(m, p);" in generated_code
     assert "dvec2(" not in generated_code
@@ -10793,7 +10799,10 @@ def test_slang_matrix_constructors_match_hlsl_orientation():
 
     assert "float2x2 a = float2x2(2.0, 0.0, 0.0, 2.0);" in generated_code
     assert "float2x2 b = transpose(float2x2(fin[i], 1.0, 2.0, 3.0));" in generated_code
-    assert "float3x4 c = float3x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);" in generated_code
+    assert (
+        "float3x4 c = float3x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);"
+        in generated_code
+    )
     assert "float4x3" not in generated_code
     assert "float2x2(2.0);" not in generated_code
 
@@ -11197,9 +11206,8 @@ def test_slang_sampler_descriptor_arrays_remap_overlapping_target_registers():
         ": register(s7, space0);" in generated_code
     )
     assert (
-        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)" in (
-            generated_code
-        )
+        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)"
+        in (generated_code)
     )
 
 

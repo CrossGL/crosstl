@@ -9358,10 +9358,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                         for arg in node.args
                     ]
                 )
-            if (
-                isinstance(callee, str)
-                and callee not in self.user_function_names
-            ):
+            if isinstance(callee, str) and callee not in self.user_function_names:
                 matrix_constructor = self.hlsl_matrix_orientation.constructor(
                     callee,
                     node.args,
