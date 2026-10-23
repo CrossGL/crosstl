@@ -44,6 +44,7 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .external_functions import refuse_external_function_calls
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -3328,8 +3329,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     def generate(self, ast):
         """Render ``ast`` as a CrossGL program.
 
-        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully.
+        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully, and
+        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
         """
+        refuse_external_function_calls(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):

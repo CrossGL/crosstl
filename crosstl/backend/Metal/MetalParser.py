@@ -441,6 +441,8 @@ class MetalParser:
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
         self.known_function_templates = set()
+        # Names of the function prototypes the parser drops (see external_functions).
+        self.function_prototypes = {}
         self.known_value_template_parameters = set()
         self.declaration_context_stack = []
         self.namespace_aliases = {}
@@ -752,6 +754,7 @@ class MetalParser:
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
         shader.namespace_aliases = dict(self.namespace_aliases)
+        shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
         return shader
 
@@ -3701,6 +3704,7 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             if not preserve_declaration:
+                self.function_prototypes.setdefault(name, len(self.function_prototypes))
                 self.pop_declaration_context()
                 return None
             body = None
