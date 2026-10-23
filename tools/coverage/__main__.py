@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import compare, features, issues, publish, report, runner, validators
+from . import compare, execution, features, issues, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -42,6 +42,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--offline", action="store_true", help="use cached upstream sources only"
+    )
+    run.add_argument(
+        "--execute",
+        action="store_true",
+        help="also run supported compute probes on the conformance harness's runtimes and compare them with the "
+        "native probe",
     )
     run.add_argument(
         "--strict",
@@ -137,6 +143,10 @@ def _run(args: argparse.Namespace) -> int:
                 continue
             jobs += [(feature, direction, language) for feature in feature_list]
     results = runner.run(jobs, args.jobs or None)
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
     data = report.build(results, languages, directions)
     report.write(data, args.output)
     print(report.summary(data))

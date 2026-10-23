@@ -265,6 +265,10 @@ class Result:
     validator: str = ""
     # The semantic feature id (:mod:`.semantic`), filled in for the output direction; empty when there is none.
     semantic: str = ""
+    # The native probe and the translation the validator accepted, which :mod:`.execution` runs; empty otherwise.
+    sources: tuple[str, str] = field(default=(), compare=False, repr=False)
+    # The runtime :mod:`.execution` ran both on, when it did.
+    runtime: str = ""
 
     def __post_init__(self):
         if self.outcome not in OUTCOMES:

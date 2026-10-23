@@ -58,8 +58,11 @@ It translates the probe and validates the result with `glslangValidator` (GLSL),
 compiling to SPIR-V (Slang), the Mojo compiler with MAX's GPU package (Mojo), rustc with the rust-gpu
 backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
 validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
-OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC. Where Core's conformance runtimes can execute a probe, it is
-executed through a hook Core provides; the runtime harness is not duplicated.
+OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
+Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one input
+buffer also runs: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs
+through the harness's `run_suite`, and a translation that writes other results is `wrong`. The runtime harness is
+not duplicated. CI executes the Metal rows on the macOS job.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score

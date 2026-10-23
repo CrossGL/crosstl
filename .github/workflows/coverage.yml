@@ -1,12 +1,13 @@
 name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
-# feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
-# Linux job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga
-# and slangc, and OpenCL C input with the runner image's clang-18 and DXC. Three more Linux jobs measure CUDA, HIP
-# and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust with rust-gpu, and the macOS job measures Metal
-# with xcrun metal. The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly,
-# the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
+# feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
+# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc,
+# and OpenCL C input with the runner image's clang-18 and DXC. Three more Linux jobs measure CUDA, HIP and Mojo with
+# nvcc, hipcc and the Mojo compiler, one measures Rust with rust-gpu, and the macOS job measures Metal with xcrun
+# metal and also runs the Metal compute probes on the GPU through the conformance harness
+# (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and
+# nightly, the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
 # COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from it; main itself never receives
 # generated files. The issues job then reconciles the tracking and bug issues (tools/coverage/issues.py); pull
 # requests only print its plan, and the comment job posts their change against main on the pull request.
@@ -78,7 +79,7 @@ jobs:
           changed="$(git diff --name-only HEAD^1 HEAD)"
           engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
           declare -A paths=(
-            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$'
+            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
             [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
             [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/'
           )
@@ -363,10 +364,10 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e . numpy==2.5.4 pyobjc-framework-Metal==12.2.2
 
       - name: Measure coverage
-        run: python -m tools.coverage run --strict --jobs 3 --backend metal --output coverage-metal.json
+        run: python -m tools.coverage run --strict --execute --jobs 3 --backend metal --output coverage-metal.json
 
       - uses: actions/upload-artifact@v7
         with:

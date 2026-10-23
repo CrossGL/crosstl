@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 
-from . import chart, ir, publish
+from . import chart, execution, ir, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
 from .model import ROUND_TRIPS
 
@@ -320,6 +320,13 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             f"produces code that {tool} rejects."
         )
     first = features[0]
+    executed = execution.found(first.get("detail") or "")
+    if executed:
+        probe = "CrossGL probe" if direction == "output" else "probe"
+        what = (
+            f"CrossTL translates the generated {probe} and {tool} accepts the result, but on the GPU it does not "
+            f"compute what the native {chart.name(language)} probe computes."
+        )
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "
@@ -345,7 +352,8 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
         "Reproduce it with:",
         "",
         "```bash",
-        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}",
+        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}"
+        + (" --execute" if executed else ""),
         "```",
         "",
         f"The coverage workflow closes this issue when no probe fails this way. [COVERAGE.md]({_coverage_url(repository, row)}) "
