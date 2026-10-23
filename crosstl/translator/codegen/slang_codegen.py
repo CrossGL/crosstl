@@ -8214,6 +8214,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         if block_store is not None:
             return block_store
+        column_assignment = self.hlsl_matrix_orientation.column_assignment(
+            node.left, node.right, node.operator, statement_context=True
+        )
+        if column_assignment is not None:
+            return column_assignment
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
@@ -8232,6 +8237,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         if block_store is not None:
             return block_store
+        column_assignment = self.hlsl_matrix_orientation.column_assignment(
+            node.left, node.right, node.operator, statement_context=True
+        )
+        if column_assignment is not None:
+            return self.statement_with_prelude([], f"{column_assignment};")
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
@@ -8400,6 +8410,19 @@ class SlangCodeGen(LoweringRefusalMixin):
             "bool3",
             "bool4",
         }
+
+    def value_component_count(self, vtype):
+        info = self.vector_value_info(vtype)
+        if info is not None:
+            return info["size"]
+        if self.is_matrix_value_type(vtype):
+            dims = self.hlsl_matrix_dimensions(vtype)
+            if dims is not None:
+                return dims[1] * dims[2]
+        mapped = self.type_name_string(self.map_type(vtype))
+        if mapped in {"float", "double", "half", "int", "uint", "bool"}:
+            return 1
+        return None
 
     def expression_component_count(self, expr):
         return numeric_expression_component_count(
@@ -8834,6 +8857,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
                 return self.array_element_type(array_type)
+            pointer_element_type = self.pointer_pointee_type_name(array_type)
+            if pointer_element_type is not None:
+                return pointer_element_type
+            column_type = self.hlsl_matrix_orientation.column_type(array_type)
+            if column_type is not None:
+                return column_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_result_type(expr.object)
@@ -9186,12 +9215,15 @@ class SlangCodeGen(LoweringRefusalMixin):
             block_load = self.generate_glsl_buffer_block_array_load(node)
             if block_load is not None:
                 return block_load
-            array = self.generate_expression(
-                getattr(node, "array", getattr(node, "array_expr", None))
+            array_expr = getattr(node, "array", getattr(node, "array_expr", None))
+            index_expr = getattr(node, "index", getattr(node, "index_expr", None))
+            matrix_access = self.hlsl_matrix_orientation.subscript(
+                array_expr, index_expr
             )
-            index = self.format_array_access_index(
-                getattr(node, "index", getattr(node, "index_expr", None))
-            )
+            if matrix_access is not None:
+                return matrix_access
+            array = self.generate_expression(array_expr)
+            index = self.format_array_access_index(index_expr)
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
             expected_element_type = self.array_literal_element_expected_type(
@@ -14688,8 +14720,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             f"Slang shadow gather compare: {func_name} {reason}", fallback
         )
 
-    def literal_int_value(self, node):
-        return evaluate_literal_int_expression(node, self.literal_int_constants)
+    def literal_int_value(self, node, constants=None):
+        return evaluate_literal_int_expression(
+            node, self.literal_int_constants if constants is None else constants
+        )
 
     def is_array_expression(self, node):
         type_name = self.type_name_string(self.expression_result_type(node))
