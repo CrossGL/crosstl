@@ -69,7 +69,19 @@ GLSL_LOCATION_EXPRESSION = textwrap.dedent("""
 def _translate(tmp_path, source, suffix, backend):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    # Unformatted output: the formatter depends on whether clang-format and SPIRV-Tools are installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def _matches(code, pattern):
+    """Search a regex, or an ``(OpName, decoration)`` pair resolved through the SPIR-V names."""
+    if isinstance(pattern, str):
+        return re.search(pattern, code)
+    name, decoration = pattern
+    ids = re.findall(rf'OpName (%\S+) "{name}"', code)
+    return any(
+        re.search(rf"OpDecorate {re.escape(i)} {decoration}\b", code) for i in ids
+    )
 
 
 def _crossgl_bindings(source):
@@ -110,8 +122,8 @@ def test_crossgl_enumerators_and_constant_expressions_fold():
         (
             "metal",
             [
-                r"&u \[\[buffer\(3\)\]\]",
-                r"\*colors \[\[buffer\(7\)\]\]",
+                r"Uniforms\s*&\s*u \[\[buffer\(3\)\]\]",
+                r"\*\s*colors \[\[buffer\(7\)\]\]",
                 r"base \[\[texture\(2\)\]\]",
                 r"smp \[\[sampler\(2\)\]\]",
             ],
@@ -124,13 +136,13 @@ def test_crossgl_enumerators_and_constant_expressions_fold():
                 r"binding = 2\) uniform sampler2D base",
             ],
         ),
-        ("vulkan", [r"%uUniform Binding 3", r"%colors Binding 7"]),
+        ("vulkan", [("uUniform", "Binding 3"), ("colors", "Binding 7")]),
     ],
 )
 def test_metal_enumerator_bindings_survive(tmp_path, backend, patterns):
     code = _translate(tmp_path, METAL_ENUM_BINDINGS, ".metal", backend)
     for pattern in patterns:
-        assert re.search(pattern, code), (pattern, code)
+        assert _matches(code, pattern), (pattern, code)
 
 
 def test_metal_enumerator_bindings_compile(tmp_path):
@@ -152,14 +164,14 @@ def test_metal_enumerator_bindings_compile(tmp_path):
     ("backend", "pattern"),
     [
         ("opengl", r"layout\(location = 3\) in vec3 position;"),
-        ("vulkan", r"input_position Location 3\b"),
-        ("directx", r"float3 position : TEXCOORD3;"),
+        ("vulkan", ("CrossGL_fragment_input_input_position", "Location 3")),
+        ("directx", r"float3 position\s*: TEXCOORD3;"),
         ("metal", r"float3 position \[\[user\(locn3\)\]\];"),
     ],
 )
 def test_glsl_location_expression_survives(tmp_path, backend, pattern):
     code = _translate(tmp_path, GLSL_LOCATION_EXPRESSION, ".frag", backend)
-    assert re.search(pattern, code), code
+    assert _matches(code, pattern), code
     assert "BinaryOpNode" not in code
 
 
