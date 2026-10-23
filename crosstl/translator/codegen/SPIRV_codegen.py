@@ -117,6 +117,7 @@ from .relational_builtins import lower_relational_builtins
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
@@ -175,6 +176,12 @@ from .spirv_stage_distances import (
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
+from .spirv_uniform_block_arrays import (
+    declare_uniform_block_array,
+    is_uniform_block_array_node,
+    lowered_constant_buffer_nodes,
+    require_non_uniform_block_array_indexing,
+)
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
@@ -2524,6 +2531,7 @@ class VulkanSPIRVCodeGen(
             self.is_non_uniform_value(index) for index in indices
         ):
             self.mark_non_uniform_result(spirv_id)
+            require_non_uniform_block_array_indexing(self, base_id, indices)
         return spirv_id
 
     def access_chain_result_pointer_type(
@@ -20268,6 +20276,8 @@ class VulkanSPIRVCodeGen(
         storage_class = self.infer_global_storage_class(
             node, default_storage_class, var_type_name
         )
+        if is_uniform_block_array_node(node):
+            return declare_uniform_block_array(self, node, var_type)
         if storage_class == "Uniform" and self.uniform_array_requires_block(var_type):
             return self.process_uniform_array_block_declaration(node, var_type)
         if storage_class in {"Uniform", "Private"} and is_push_constant_block(
@@ -20509,6 +20519,7 @@ class VulkanSPIRVCodeGen(
         yield from self.global_resource_nodes(ast)
         yield from self.global_structured_buffer_nodes(ast)
         yield from getattr(ast, "cbuffers", []) or []
+        yield from lowered_constant_buffer_nodes(ast)
 
     def global_structured_buffer_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -29414,6 +29425,12 @@ class VulkanSPIRVCodeGen(
                 return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if (
+                callee_name in DEBUG_PRINTF_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
                 and not self.has_function_reference(callee_name)
             ):
@@ -31247,7 +31264,7 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = [
+        debug_names = list(getattr(self, "debug_strings", ())) + [
             f'OpSourceExtension "{extension}"'
             for extension in sorted(getattr(self, "source_extensions", ()))
         ]
@@ -31448,9 +31465,9 @@ class VulkanSPIRVCodeGen(
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
-                f"array of constant buffers '{name}': the SPIR-V emitter does not declare descriptor arrays "
-                "of uniform blocks yet"
+                f"array of arrays of constant buffers '{name}': a SPIR-V descriptor array has one dimension"
             ),
+            block_arrays=True,
         )
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(

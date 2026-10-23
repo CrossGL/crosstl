@@ -2905,7 +2905,7 @@ def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_parse():
         "NonSemantic.DebugPrintf"
     )
     assert isinstance(call, FunctionCallNode)
-    assert call.name == "debugPrintfEXT"
+    assert call.name == "printf"
     assert call.args[0] == '"unsigned == %u"'
     assert isinstance(call.args[1], VariableNode)
     assert call.args[1].name == "foo"

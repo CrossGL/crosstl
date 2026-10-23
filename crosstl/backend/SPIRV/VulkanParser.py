@@ -4283,7 +4283,7 @@ class VulkanParser:
             "1",
             "DebugPrintf",
         }:
-            return "debugPrintfEXT"
+            return "printf"
         if instruction_set == "GLSL.std.450":
             instruction_name = self.SPIRV_GLSL_STD_450_EXT_INST_IDS.get(
                 str(instruction), instruction
