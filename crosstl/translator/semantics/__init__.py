@@ -17,6 +17,7 @@ from .array_values import ArrayConstructorUnsupportedError, hoist_array_construc
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .buffer_strides import materialize_buffer_strides
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
+from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
@@ -236,6 +237,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
+    refuse_colour_attachment_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
