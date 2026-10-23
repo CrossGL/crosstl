@@ -145,8 +145,9 @@ MAIN_PUSH_GROUP = (
     "filename,group",
     [
         *((name, RUN_GROUP) for name in sorted(QUEUE_TESTED_WORKFLOWS)),
-        # These two have no merge-queue run to reuse, so pushes to main share one
-        # group: a burst of merges measures and publishes only the newest commit.
+        # The demo has no merge-group run, and coverage publishes from its own push
+        # run, so pushes to main share one group: a burst of merges runs them only
+        # for the newest commit.
         ("demo.yml", MAIN_PUSH_GROUP),
         ("coverage.yml", MAIN_PUSH_GROUP),
     ],
