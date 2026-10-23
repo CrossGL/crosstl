@@ -5612,7 +5612,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 reserved_parameter_names.add(name)
                 self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
-        if shader_type == "compute":
+        if shader_type in {"compute", "ray_generation"}:
             existing_param_names = {getattr(p, "name", None) for p in param_list}
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
                 param_list
@@ -6371,6 +6371,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             ("gl_SubgroupSize", "uint", "threads_per_simdgroup"),
             ("gl_SubgroupID", "uint", "simdgroup_index_in_threadgroup"),
             ("gl_NumSubgroups", "uint", "simdgroups_per_threadgroup"),
+            # A ray generation kernel's launch size (semantics.metal_ray_dispatch).
+            ("gl_LaunchSizeEXT", "uint3", "threads_per_grid"),
         ]
 
     def compute_builtin_name_for_metal_attribute(self, attribute):
@@ -6467,6 +6469,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_SubgroupSize": "threads_per_simdgroup",
             "gl_SubgroupID": "simdgroup_index_in_threadgroup",
             "gl_NumSubgroups": "simdgroups_per_threadgroup",
+            "gl_LaunchSizeEXT": "threads_per_grid",
         }.get(builtin_name, attribute)
 
     def required_compute_builtin_parameters(
@@ -6539,6 +6542,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_SubgroupSize",
             "gl_SubgroupID",
             "gl_NumSubgroups",
+            "gl_LaunchSizeEXT",
         }
         used_names = set()
         for node in self.iter_ast_nodes(body):
