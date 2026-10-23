@@ -18686,6 +18686,13 @@ float {scalar}(float value) {{
         if sampled_resource_type:
             return f"{sampled_resource_type}{suffix}"
 
+        if base.startswith("xhalf"):
+            # The xhalf names are a sample convention for half, not MSL types:
+            # a typedef the program declares, such as `typedef float xhalf;`,
+            # decides what they mean.
+            declared = self.resolve_type_alias(base)
+            if declared != base:
+                return f"{self.map_type(declared)}{suffix}"
         mapped = self.type_map.get(base)
         if mapped is not None:
             return f"{mapped}{suffix}"
