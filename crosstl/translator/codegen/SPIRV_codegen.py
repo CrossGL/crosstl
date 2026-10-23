@@ -185,6 +185,11 @@ from .spirv_stage_distances import (
     load_entry_point_distance,
     store_entry_point_distance,
 )
+from .spirv_struct_varyings import (
+    flatten_struct_varying,
+    load_flattened_struct_varying,
+    store_flattened_struct_varying,
+)
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
@@ -14625,15 +14630,29 @@ class VulkanSPIRVCodeGen(
                 ):
                     components.append(self.register_undefined_value(member_type))
                     continue
+                interface_name = self.entry_point_interface_name(
+                    execution_model,
+                    "input",
+                    getattr(param, "name", "param"),
+                    member_name,
+                )
+                fields = flatten_struct_varying(
+                    self,
+                    execution_model,
+                    "Input",
+                    interface_name,
+                    member_type,
+                    member_node,
+                )
+                if fields is not None:
+                    components.append(
+                        load_flattened_struct_varying(self, member_type, fields)
+                    )
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Input",
-                    self.entry_point_interface_name(
-                        execution_model,
-                        "input",
-                        getattr(param, "name", "param"),
-                        member_name,
-                    ),
+                    interface_name,
                     member_type,
                     member_node,
                     member_name=member_name,
@@ -14665,6 +14684,7 @@ class VulkanSPIRVCodeGen(
         if members:
             outputs = []
             distance_outputs = []
+            struct_outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
             distances = entry_point_distance_layout(self, members, metadata)
             member_location = 0
@@ -14687,15 +14707,27 @@ class VulkanSPIRVCodeGen(
                         (member_index, array, member_type, distance)
                     )
                     continue
+                interface_name = self.entry_point_interface_name(
+                    execution_model,
+                    "output",
+                    getattr(function_node, "name", "main"),
+                    member_name,
+                )
+                fields = flatten_struct_varying(
+                    self,
+                    execution_model,
+                    "Output",
+                    interface_name,
+                    member_type,
+                    member_node,
+                )
+                if fields is not None:
+                    struct_outputs.append((member_index, member_type, fields))
+                    continue
                 variable = self.register_entry_point_interface_variable(
                     execution_model,
                     "Output",
-                    self.entry_point_interface_name(
-                        execution_model,
-                        "output",
-                        getattr(function_node, "name", "main"),
-                        member_name,
-                    ),
+                    interface_name,
                     member_type,
                     member_node,
                     member_name=member_name,
@@ -14707,6 +14739,7 @@ class VulkanSPIRVCodeGen(
                 "type": return_type,
                 "outputs": outputs,
                 "distances": distance_outputs,
+                "struct_fields": struct_outputs,
             }
 
         variable = self.register_entry_point_interface_variable(
@@ -14992,6 +15025,9 @@ class VulkanSPIRVCodeGen(
         for member_index, target, member_type, slot in outputs.get("distances", ()):
             member_value = self.composite_extract(value, member_type, member_index)
             store_entry_point_distance(self, target, slot, member_value, member_type)
+        for member_index, member_type, fields in outputs.get("struct_fields", ()):
+            member_value = self.composite_extract(value, member_type, member_index)
+            store_flattened_struct_varying(self, member_value, fields)
         self.create_return()
         return True
 
