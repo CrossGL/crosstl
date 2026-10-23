@@ -168,6 +168,82 @@ def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
     assert result.outcome == expected
 
 
+def _hlsl(translated=None):
+    feature = Feature("hlsl", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "hlsl").source
+    return Result(
+        feature, "output", "supported", sources=(native, translated or native)
+    )
+
+
+@pytest.mark.parametrize(
+    ("translated_outcome", "written", "expected", "detail"),
+    [
+        ("preserved", 0, "supported", ""),
+        (
+            "preserved",
+            1,
+            "wrong",
+            f"on vulkan-lavapipe as SPIR-V from dxc, the translation {execution.DIVERGED}",
+        ),
+        ("harness-error", 0, "supported", ""),
+    ],
+)
+def test_hlsl_slang_and_wgsl_probes_run_as_spirv_on_vulkan(
+    monkeypatch, translated_outcome, written, expected, detail
+):
+    _fake_harness(monkeypatch, translated_outcome, written, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    lowered = []
+
+    def as_spirv(language, source):
+        lowered.append(language)
+        return f"; {language} as SPIR-V\n"
+
+    monkeypatch.setattr(execution, "as_spirv", as_spirv)
+    [result], used = execution.run([_hlsl()])
+    assert lowered == ["hlsl", "hlsl"]
+    assert used == ["vulkan-lavapipe"]
+    assert result.outcome == expected
+    assert result.detail.startswith(detail)
+    assert execution.found(result.detail) == (expected == "wrong")
+    assert execution.idle([result], used) == []
+
+
+def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
+    _fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        execution,
+        "as_spirv",
+        lambda language, source: "" if "CSMain" in source else ";",
+    )
+    probe = _hlsl(_hlsl().sources[0].replace("void main", "void CSMain"))
+    assert execution.run([probe])[0] == [probe]
+    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    assert execution.run([_hlsl()]) == ([_hlsl()], [])
+    assert execution.idle([_hlsl()], ["vulkan-lavapipe"]) == ["hlsl"]
+
+
+@pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
+def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
+    if not validators.can_lower(language):
+        pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
+    from tests.conformance import interface
+
+    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    source = probes.build(feature, language).source
+    path = tmp_path / "probe.spvasm"
+    path.write_text(execution.as_spirv(language, source))
+    found = interface.interface(path, "spirv", 1)
+    assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+    if language == "hlsl":
+        renamed = source.replace("void main", "void CSMain")
+        path.write_text(execution.as_spirv(language, renamed))
+        assert interface.interface(path, "spirv", 1)["entry"] == "CSMain"
+    assert execution.as_spirv(language, "not a shader") == ""
+
+
 def test_nothing_runs_without_a_runtime(monkeypatch):
     monkeypatch.setattr(
         harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}
@@ -218,6 +294,11 @@ def test_supported_metal_compute_results_keep_both_sources(monkeypatch):
         "metal", "function", "sin", SIN.signature, crossgl="sin", stage="fragment"
     )
     assert runner.run_output(fragment, "metal").sources == ()
+    hlsl = _hlsl().feature
+    assert runner.run_output(hlsl, "hlsl").sources == (
+        _hlsl().sources[0],
+        "translated metal",
+    )
 
 
 def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
