@@ -360,6 +360,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
@@ -11424,6 +11425,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     left = f"int({left})"
                 if self.map_type(self.expression_result_type(expr.right)) == "bool":
                     right = f"int({right})"
+            if operator in {"<", ">", "<=", ">=", "==", "!="}:
+                left, right = metal_sign_matched_comparison_operands(
+                    self.map_type(self.expression_result_type(expr.left)),
+                    self.map_type(self.expression_result_type(expr.right)),
+                    left,
+                    right,
+                )
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
