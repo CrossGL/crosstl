@@ -37,7 +37,6 @@ from .OpenglAst import (
 )
 from .shadow_textures import retype_shadow_textures
 from .subgroup_import import import_subgroup_call
-from .uniform_block_arrays import arrayed_uniform_block_declaration
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -344,6 +343,7 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "debugPrintfEXT": "printf",
             "traceRayEXT": "TraceRay",
             "reportIntersectionEXT": "ReportHit",
             "executeCallableEXT": "CallShader",
@@ -667,6 +667,8 @@ class GLSLToCrossGLConverter:
         self.structs_by_name = {}
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
+        self.structured_element_references = set()
+        self.user_function_reference_parameters = {}
         self.converted_ssbo_struct_names = set()
         self.anonymous_ssbo_block_instances = {}
         self.anonymous_ssbo_block_structs = []
@@ -1322,6 +1324,17 @@ class GLSLToCrossGLConverter:
         }
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
+        self.structured_element_references = set()
+        self.user_function_reference_parameters = {
+            (function.name, len(function.params or [])): frozenset(
+                position
+                for position, param in enumerate(function.params or [])
+                if isinstance(param, VariableNode)
+                and {"out", "inout"} & set(self.stage_io_direction(param))
+            )
+            for function in getattr(node, "functions", []) or []
+            if getattr(function, "name", None)
+        }
         self.converted_ssbo_struct_names = set()
         self.anonymous_ssbo_block_instances = {}
         self.anonymous_ssbo_block_structs = []
@@ -2237,7 +2250,19 @@ class GLSLToCrossGLConverter:
         return block_name
 
     def generate_arrayed_descriptor_set_uniform_block(self, var):
-        return arrayed_uniform_block_declaration(self, var)
+        """``uniform B { ... } name[N];`` as ``ConstantBuffer<B> name[N]``: ``N`` uniform buffers, one per element.
+
+        An array of uniform blocks is an array of block instances, each backed by a buffer of its own (GLSL 4.60
+        section 4.3.9), which a Vulkan binding holds as ``N`` descriptors. A ``uniform B name[N]`` would declare one
+        buffer holding an array of ``B``.
+        """
+        block_name = self.uniform_block_name(var)
+        attributes = self.descriptor_set_uniform_block_attribute_suffix(
+            block_name, [var]
+        ) + self.uniform_block_buffer_layout_suffix(block_name, [var])
+        var_type = self.convert_type(block_name)
+        array_suffix = self.array_suffix(var)
+        return f"ConstantBuffer<{var_type}> {var.name}{array_suffix}{attributes};\n"
 
     def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
         layout = self.uniform_block_layout(block_name, uniforms)
@@ -3694,10 +3719,13 @@ class GLSLToCrossGLConverter:
                 return equality
             return f"({left} {operator} {right})"
         elif isinstance(node, UnaryOpNode):
+            if node.op in {"++", "--"}:
+                self.mark_structured_element_reference(node.operand)
             operand = self.generate_expression(node.operand)
             operator = self.operator_map.get(node.op, node.op)
             return f"({operator}{operand})"
         elif isinstance(node, PostfixOpNode):
+            self.mark_structured_element_reference(node.operand)
             operand = self.generate_expression(node.operand)
             return f"({operand}{node.op})"
         elif isinstance(node, AssignmentNode):
@@ -3757,6 +3785,7 @@ class GLSLToCrossGLConverter:
             name = self.generate_member_access(name)
         elif isinstance(name, VariableNode):
             name = name.name
+        self.mark_structured_reference_arguments(name, node.args)
 
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
@@ -3894,6 +3923,7 @@ class GLSLToCrossGLConverter:
         if flattened_member is not None:
             return flattened_member
 
+        self.mark_structured_element_reference(node.object, through_access=False)
         object_name = ""
         if isinstance(node.object, VariableNode):
             # Geometry and tessellation inputs stay module-scope declarations, as
@@ -3951,11 +3981,66 @@ class GLSLToCrossGLConverter:
         structured_access = self.structured_buffer_access_parts(node)
         if structured_access is not None:
             buffer_expr, index_expr = structured_access
+            if id(node) in self.structured_element_references:
+                return f"{buffer_expr}[{index_expr}]"
             return f"buffer_load({buffer_expr}, {index_expr})"
 
+        self.mark_structured_element_reference(node.array, through_access=False)
         array = self.generate_postfix_base_expression(node.array)
         index = self.generate_expression(node.index)
         return f"{array}[{index}]"
+
+    # GLSL 4.60 section 8.11: the first argument of these is the memory they update.
+    ATOMIC_MEMORY_FUNCTIONS = frozenset(
+        {
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
+        }
+    )
+
+    def is_structured_buffer_access(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return False
+        array_expr = node.array
+        if isinstance(array_expr, VariableNode):
+            return array_expr.name in self.structured_buffer_names
+        if isinstance(array_expr, MemberAccessNode):
+            base_name = self.block_instance_name(array_expr.object)
+            return bool(base_name) and (
+                (base_name, array_expr.member)
+                in self.structured_buffer_instance_members
+            )
+        return False
+
+    def mark_structured_element_reference(self, node, *, through_access=True):
+        """Write the structured-buffer element ``node`` names, or is a component of, as ``buffer[index]``.
+
+        A converted storage block's element reads as ``buffer_load(buffer, index)``, a value. Where the
+        element is storage (an assignment target, an increment's operand, an atomic's memory, an ``out`` or
+        ``inout`` argument, the base of a component access), CrossGL's ``buffer[index]`` names it.
+        """
+        while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+            if self.is_structured_buffer_access(node):
+                self.structured_element_references.add(id(node))
+                return
+            if not through_access:
+                return
+            node = node.array if isinstance(node, ArrayAccessNode) else node.object
+
+    def mark_structured_reference_arguments(self, name, args):
+        args = list(args or [])
+        if name in self.ATOMIC_MEMORY_FUNCTIONS and args:
+            self.mark_structured_element_reference(args[0])
+        for position in self.user_function_reference_parameters.get(
+            (name, len(args)), ()
+        ):
+            self.mark_structured_element_reference(args[position])
 
     def generate_postfix_base_expression(self, node):
         expression = self.generate_expression(node)

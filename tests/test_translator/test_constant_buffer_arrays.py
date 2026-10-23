@@ -16,13 +16,6 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.backend.GLSL.uniform_block_arrays import (
-    UniformBlockArrayLayoutUnsupportedError,
-)
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
 
 GLSL_BLOCK_ARRAY = """#version 460
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -107,15 +100,15 @@ def _slot(assembly, name):
     return int(descriptor_set.group(1)), int(binding.group(1))
 
 
-def _parse(source):
-    return Parser(Lexer(source).get_tokens()).parse()
-
-
 def test_glsl_block_arrays_import_as_constant_buffer_arrays(tmp_path):
     crossgl = _translate(tmp_path, "blocks.frag", GLSL_BLOCK_ARRAY, "cgl")
-    assert re.search(r"ConstantBuffer<Weights> weights\[\] @binding\(4\);", crossgl)
     assert re.search(
-        r"ConstantBuffer<Fixed> fixed_blocks\[3\] @set\(1\) @binding\(2\);", crossgl
+        r"ConstantBuffer<Weights> weights\[\] @binding\(4\) @buffer_layout\(std140\);",
+        crossgl,
+    )
+    assert re.search(
+        r"ConstantBuffer<Fixed> fixed_blocks\[3\] @set\(1\) @binding\(2\) @buffer_layout\(std140\);",
+        crossgl,
     )
     assert "uniform Weights" not in crossgl
 
@@ -165,14 +158,6 @@ def test_glsl_block_arrays_become_hlsl_constant_buffer_arrays(tmp_path):
     assert "NonUniformResourceIndex(" in hlsl
 
 
-def test_std430_block_arrays_are_refused(tmp_path):
-    source = GLSL_BLOCK_ARRAY.replace(
-        "layout(binding = 4)", "layout(std430, binding = 4)"
-    )
-    with pytest.raises(UniformBlockArrayLayoutUnsupportedError, match="std430"):
-        _translate(tmp_path, "blocks.frag", source, "cgl")
-
-
 def test_hlsl_constant_buffers_keep_their_registers_in_spirv(tmp_path):
     assembly = _translate(tmp_path, "cb.hlsl", HLSL_CONSTANT_BUFFERS, "vulkan")
     assert _slot(assembly, "single") == (1, 4)
@@ -203,11 +188,10 @@ def test_metal_drops_the_non_uniform_qualifier(tmp_path):
     assert re.search(r"tex\[input\.idx\]\.sample\(", metal)
 
 
-def test_metal_leaves_the_qualifier_for_later_emitters():
-    ast = _parse(CROSSGL_TEXTURE_ARRAY)
-    metal = MetalCodeGen().generate(ast)
+def test_crossgl_non_uniform_index_is_dropped_for_metal_and_kept_for_hlsl(tmp_path):
+    metal = _translate(tmp_path, "tex.cgl", CROSSGL_TEXTURE_ARRAY, "metal")
     assert "NonUniformResourceIndex" not in metal
-    hlsl = HLSLCodeGen().generate(ast)
+    hlsl = _translate(tmp_path, "tex.cgl", CROSSGL_TEXTURE_ARRAY, "directx")
     assert "NonUniformResourceIndex(" in hlsl
 
 

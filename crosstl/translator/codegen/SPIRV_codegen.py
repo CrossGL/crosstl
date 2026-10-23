@@ -51,7 +51,10 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..diagnostics import TranslationDiagnostic
-from ..host_workgroup_size import require_static_workgroup_size
+from ..host_workgroup_size import (
+    function_entry_execution_config,
+    require_static_workgroup_size,
+)
 from ..matrix_shape import (
     crossgl_matrix_shape,
     length_method_object,
@@ -111,14 +114,11 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .relational_builtins import lower_relational_builtins
+from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
-from .spirv_constant_buffer_arrays import (
-    constant_buffer_register_nodes,
-    declare_constant_buffer_array,
-    require_uniform_buffer_array_non_uniform_indexing,
-)
 from .spirv_constant_matrices import constant_matrix_constructor
 from .spirv_dead_types import drop_unused_runtime_array_structs
+from .spirv_debug_printf import DEBUG_PRINTF_FUNCTIONS, spirv_debug_printf_call
 from .spirv_default_uniforms import SpirvDefaultUniformMixin
 from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage_class
 from .spirv_exponent_builtins import (
@@ -129,8 +129,10 @@ from .spirv_exponent_builtins import (
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
+    SHADER_IMAGE_FORMATS,
     atomic_storage_image_format,
     emit_four_component_image_read,
+    image_load_in_context,
     narrow_image_texel,
 )
 from .spirv_inline_requirements import (
@@ -186,6 +188,12 @@ from .spirv_stage_distances import (
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
+from .spirv_uniform_block_arrays import (
+    declare_uniform_block_array,
+    is_uniform_block_array_node,
+    lowered_constant_buffer_nodes,
+    require_non_uniform_block_array_indexing,
+)
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import spirv_semantic_location
 from .texture_lod_clamp import (
@@ -337,6 +345,7 @@ class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
 
 
 class VulkanSPIRVCodeGen(
+    SpirvBfloat16MathMixin,
     SpirvDefaultUniformMixin,
     SpirvFloatSemanticsMixin,
     SpirvLocalReferenceMixin,
@@ -583,6 +592,7 @@ class VulkanSPIRVCodeGen(
         self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
+        self.module_compute_entry_config = None
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -858,6 +868,9 @@ class VulkanSPIRVCodeGen(
             self.require_capability("InputAttachment")
         if dim == "Buffer":
             self.require_capability("ImageBuffer" if sampled == 2 else "SampledBuffer")
+        if image_format not in SHADER_IMAGE_FORMATS:
+            # SPIR-V 3.11: every other Image Format operand needs this capability.
+            self.require_capability("StorageImageExtendedFormats")
 
         id_value = self.get_id()
         self.emit(
@@ -2531,7 +2544,7 @@ class VulkanSPIRVCodeGen(
             self.is_non_uniform_value(index) for index in indices
         ):
             self.mark_non_uniform_result(spirv_id)
-            require_uniform_buffer_array_non_uniform_indexing(self, base_id, indices)
+            require_non_uniform_block_array_indexing(self, base_id, indices)
         return spirv_id
 
     def access_chain_result_pointer_type(
@@ -6578,7 +6591,12 @@ class VulkanSPIRVCodeGen(
                 metadata, "StorageImageReadWithoutFormat"
             )
             return emit_four_component_image_read(
-                self, result_type, image_id, coord_id, image_operands
+                self,
+                result_type,
+                image_id,
+                coord_id,
+                image_operands,
+                metadata.get("component_count"),
             )
 
         if function_name == "imageStore":
@@ -7596,7 +7614,7 @@ class VulkanSPIRVCodeGen(
                 return pointer_arg
 
         if function_name in self.buffer_atomic_function_names() and arg_index == 0:
-            pointer_arg = self.variable_pointer_from_expression(arg)
+            pointer_arg = self.storage_reference_pointer(arg)
             if pointer_arg is not None:
                 return pointer_arg
 
@@ -11847,6 +11865,10 @@ class VulkanSPIRVCodeGen(
         if integer_bit_call is not None:
             return integer_bit_call
 
+        bfloat16_math_call = self.call_bfloat16_math_function(function_name, args)
+        if bfloat16_math_call is not None:
+            return bfloat16_math_call
+
         float_semantics_call = self.call_float_semantics_function(function_name, args)
         if float_semantics_call is not None:
             return float_semantics_call
@@ -11911,6 +11933,26 @@ class VulkanSPIRVCodeGen(
                 function_name,
                 "abs requires floating-point or signed integer "
                 "scalar or vector operand",
+            )
+
+        # C/MSL fabs (C99 7.12.7.2, MSL 6.5) is the floating-point absolute value.
+        if function_name == "fabs" and len(args) == 1:
+            if self._float_shape(args[0]) is not None:
+                return self.call_abs_function(args[0])
+            raise self.builtin_lowering_error(
+                function_name,
+                "fabs requires a floating-point scalar or vector operand",
+            )
+
+        # MSL select(a, b, c) (MSL 6.4) yields c ? b : a per component, like mix(a, b, bvec).
+        if function_name == "select" and len(args) == 3:
+            selected = self.call_bool_mix_function(args)
+            if selected is not None:
+                return selected
+            raise self.builtin_lowering_error(
+                function_name,
+                "select requires matching value operands and a bool condition "
+                "that is scalar or matches their component count",
             )
 
         if function_name == "pow" and len(args) == 2:
@@ -15047,7 +15089,27 @@ class VulkanSPIRVCodeGen(
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):
             return self.type_name_from_value(param_type)
-        return None
+        return self.buffer_array_parameter_pointer_type_name(param, param_type)
+
+    def buffer_array_parameter_pointer_type_name(self, param, param_type):
+        """An array parameter in device or constant memory is a pointer to its element.
+
+        C++ adjusts a parameter of type "array of T" to "pointer to T" ([dcl.fct]/5), and MSL
+        keeps the address space on the pointer (MSL section 4.2), so ``constant int s[3]`` binds
+        the caller's buffer by reference.
+        """
+        if param_type.__class__.__name__ != "ArrayType":
+            return None
+        qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", None) or []}
+        if not qualifiers & {"constant", "device"}:
+            return None
+        element_type = getattr(param_type, "element_type", None)
+        if element_type is None or element_type.__class__.__name__ == "ArrayType":
+            return None
+        element_name = self.type_name_from_value(element_type)
+        if not element_name:
+            return None
+        return self.storage_buffer_resource_type_name(f"{element_name}*")
 
     def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
         if isinstance(expr, TernaryOpNode):
@@ -17358,6 +17420,10 @@ class VulkanSPIRVCodeGen(
 
     def generic_struct_requires_materialization(self, struct_node) -> bool:
         """Return whether a generic struct has no legal placeholder layout."""
+        type_parameters = {
+            str(getattr(parameter, "name", parameter))
+            for parameter in getattr(struct_node, "generic_params", None) or []
+        }
         for member in getattr(struct_node, "members", []) or []:
             if isinstance(member, ArrayNode):
                 if (
@@ -17377,7 +17443,23 @@ class VulkanSPIRVCodeGen(
                 )
             if self.generic_struct_member_type_requires_materialization(member_type):
                 return True
+            # A stored member typed by the struct's own parameter has no layout until instantiation.
+            if not self.is_static_struct_member(
+                member
+            ) and self.type_mentions_type_parameter(member_type, type_parameters):
+                return True
         return False
+
+    def type_mentions_type_parameter(self, type_value, type_parameters) -> bool:
+        """Return whether a member type names one of a generic struct's type parameters."""
+        if type_value is None or not type_parameters:
+            return False
+        if not isinstance(type_value, str):
+            type_value = self.convert_type_node_to_string(type_value)
+        return any(
+            name in type_parameters
+            for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(type_value))
+        )
 
     def generic_struct_member_type_requires_materialization(self, type_value) -> bool:
         if type_value is None:
@@ -20263,14 +20345,13 @@ class VulkanSPIRVCodeGen(
 
         if self.is_structured_buffer_declared_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
-        constant_buffer_array = declare_constant_buffer_array(self, node)
-        if constant_buffer_array is not None:
-            return constant_buffer_array
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
         storage_class = self.infer_global_storage_class(
             node, default_storage_class, var_type_name
         )
+        if is_uniform_block_array_node(node):
+            return declare_uniform_block_array(self, node, var_type)
         if storage_class == "Uniform" and self.uniform_array_requires_block(var_type):
             return self.process_uniform_array_block_declaration(node, var_type)
         if storage_class in {"Uniform", "Private"} and is_push_constant_block(
@@ -20512,7 +20593,7 @@ class VulkanSPIRVCodeGen(
         yield from self.global_resource_nodes(ast)
         yield from self.global_structured_buffer_nodes(ast)
         yield from getattr(ast, "cbuffers", []) or []
-        yield from constant_buffer_register_nodes(self, ast)
+        yield from lowered_constant_buffer_nodes(ast)
 
     def global_structured_buffer_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -21724,7 +21805,10 @@ class VulkanSPIRVCodeGen(
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression_with_precision(expr, precise)
+            value = self.process_expression_with_precision(expr, precise)
+            return image_load_in_context(
+                self, expr, value, self.current_expression_expected_type
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
 
@@ -24938,7 +25022,9 @@ class VulkanSPIRVCodeGen(
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is None:
             return None
-        if metadata.get("_access_path") == "member":
+        # A pointer to one element (or a member of one) is no longer the buffer: a further
+        # subscript selects a component, column or array element of that value.
+        if metadata.get("_access_path") in {"element", "member"}:
             return None
 
         pointee_type = self.variable_value_types.get(buffer_pointer.id)
@@ -26940,7 +27026,12 @@ class VulkanSPIRVCodeGen(
             base_pointer = self.assignable_pointer_from_expression(expr.object)
             if base_pointer is None:
                 return None
-            return self.create_member_access_pointer(base_pointer, expr.member)
+            access = self.create_member_access_pointer(base_pointer, expr.member)
+            if access is None:
+                access = self.vector_component_reference_pointer(
+                    base_pointer, expr.member
+                )
+            return access
         if isinstance(expr, ArrayAccessNode):
             index = self.process_expression(expr.index)
             if index is None:
@@ -27541,12 +27632,132 @@ class VulkanSPIRVCodeGen(
         if component_value is None:
             return True
 
-        vector_value = self.load_from_variable(base_pointer, vector_type)
-        updated_value = self.composite_insert(
-            vector_value, component_value, vector_type, member_index
+        self.store_vector_components(
+            base_pointer,
+            vector_type,
+            None,
+            [(member_index, component_value)],
+            member_type,
         )
-        self.store_to_variable(base_pointer, updated_value)
         return True
+
+    # Storage other invocations can access while this one runs: buffers and workgroup memory (Vulkan 1.3
+    # appendix B, "Memory Model"). A write to part of a vector there must not store the other components.
+    SHARED_VECTOR_STORAGE_CLASSES = frozenset(
+        {
+            "StorageBuffer",
+            "Uniform",
+            "Workgroup",
+            "PhysicalStorageBuffer",
+            "CrossWorkgroup",
+            "TaskPayloadWorkgroupEXT",
+        }
+    )
+
+    def shared_vector_component_pointer(
+        self, base_pointer: SpirvId, member_index: int, member_type: SpirvId
+    ) -> Optional[SpirvId]:
+        """A pointer to one component of a vector in shared storage, or None for invocation-private storage.
+
+        A store through the vector pointer writes every component, so another invocation's write to a
+        different component of the same vector could be lost: the source wrote only some components.
+        glslang and DXC store each component through its own ``OpAccessChain`` (SPIR-V 1.6, ``OpAccessChain``
+        indexes into a vector).
+        """
+        if base_pointer.type.storage_class not in self.SHARED_VECTOR_STORAGE_CLASSES:
+            return None
+        return self.vector_component_pointer(base_pointer, member_index, member_type)
+
+    def vector_component_pointer(
+        self, base_pointer: SpirvId, member_index: int, member_type: SpirvId
+    ) -> SpirvId:
+        storage_class = base_pointer.type.storage_class
+        index = self.register_constant(member_index, self.primitive_types["int"])
+        ptr_type = self.register_pointer_type(member_type, storage_class)
+        access = self.access_chain(base_pointer, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        self.propagate_storage_buffer_access_metadata(base_pointer, access)
+        self.propagate_readonly_builtin_pointer_name(base_pointer, access)
+        self.propagate_readonly_pointer_name(base_pointer, access)
+        return access
+
+    def vector_component_reference_pointer(
+        self, base_pointer: SpirvId, member_name: str
+    ) -> Optional[SpirvId]:
+        """``v.y`` as storage, for an atomic's memory, an increment or an ``inout`` argument.
+
+        A single component of a vector in memory is addressable (SPIR-V 1.6, ``OpAccessChain``; GLSL 4.60
+        section 5.8 and HLSL allow a one-component swizzle as an l-value), so it gets its own pointer.
+        """
+        if not base_pointer.type.storage_class:
+            return None
+        update_info = self.vector_component_update_info(base_pointer, member_name)
+        if update_info is None:
+            return None
+        _, member_index, member_type = update_info
+        return self.vector_component_pointer(base_pointer, member_index, member_type)
+
+    def storage_reference_pointer(self, expr) -> Optional[SpirvId]:
+        """A pointer to the memory ``expr`` names, where that may be one component of a vector."""
+        if not isinstance(expr, MemberAccessNode):
+            return self.variable_pointer_from_expression(expr)
+        base_pointer = self.variable_pointer_from_expression(expr.object)
+        if base_pointer is None:
+            return None
+        access = self.create_member_access_pointer(base_pointer, expr.member)
+        if access is None:
+            access = self.vector_component_reference_pointer(base_pointer, expr.member)
+        return access
+
+    def load_vector_components(
+        self,
+        base_pointer: SpirvId,
+        member_indices: List[int],
+        member_type: SpirvId,
+    ) -> Optional[List[SpirvId]]:
+        """The selected components of a vector in shared storage, each read through its own pointer.
+
+        None for invocation-private storage, where the caller loads the whole vector.
+        """
+        if base_pointer.type.storage_class not in self.SHARED_VECTOR_STORAGE_CLASSES:
+            return None
+        return [
+            self.load_from_variable(
+                self.shared_vector_component_pointer(
+                    base_pointer, member_index, member_type
+                ),
+                member_type,
+            )
+            for member_index in member_indices
+        ]
+
+    def store_vector_components(
+        self,
+        base_pointer: SpirvId,
+        vector_type: SpirvId,
+        vector_value: Optional[SpirvId],
+        updates: List[Tuple[int, SpirvId]],
+        member_type: SpirvId,
+    ) -> None:
+        """Store ``(component index, value)`` updates into the vector ``base_pointer`` points to.
+
+        Shared storage gets one store per component. Private storage gets the vector with the components
+        inserted, starting from ``vector_value`` or, when that is None, a fresh load.
+        """
+        if base_pointer.type.storage_class in self.SHARED_VECTOR_STORAGE_CLASSES:
+            for member_index, component_value in updates:
+                component_pointer = self.shared_vector_component_pointer(
+                    base_pointer, member_index, member_type
+                )
+                self.store_to_variable(component_pointer, component_value)
+            return
+        if vector_value is None:
+            vector_value = self.load_from_variable(base_pointer, vector_type)
+        for member_index, component_value in updates:
+            vector_value = self.composite_insert(
+                vector_value, component_value, vector_type, member_index
+            )
+        self.store_to_variable(base_pointer, vector_value)
 
     def vector_swizzle_update_info(self, base_pointer: SpirvId, member_name: str):
         vector_type = self.variable_value_types.get(base_pointer.id)
@@ -27610,12 +27821,13 @@ class VulkanSPIRVCodeGen(
         if component_values is None:
             return True
 
-        updated_value = self.load_from_variable(base_pointer, vector_type)
-        for member_index, component_value in zip(member_indices, component_values):
-            updated_value = self.composite_insert(
-                updated_value, component_value, vector_type, member_index
-            )
-        self.store_to_variable(base_pointer, updated_value)
+        self.store_vector_components(
+            base_pointer,
+            vector_type,
+            None,
+            list(zip(member_indices, component_values)),
+            member_type,
+        )
         return True
 
     def convert_vector_swizzle_assignment_components(
@@ -27701,10 +27913,19 @@ class VulkanSPIRVCodeGen(
                 return True
 
             rhs_vector = self.composite_construct(swizzle_type, rhs_components)
-            vector_value = self.load_from_variable(base_pointer, vector_type)
-            current_value = self.vector_shuffle(
-                vector_value, swizzle_type, member_indices
+            shared_components = self.load_vector_components(
+                base_pointer, member_indices, member_type
             )
+            if shared_components is not None:
+                vector_value = None
+                current_value = self.composite_construct(
+                    swizzle_type, shared_components
+                )
+            else:
+                vector_value = self.load_from_variable(base_pointer, vector_type)
+                current_value = self.vector_shuffle(
+                    vector_value, swizzle_type, member_indices
+                )
             result = self.binary_operation(
                 spv_operator, swizzle_type, current_value, rhs_vector
             )
@@ -27712,6 +27933,21 @@ class VulkanSPIRVCodeGen(
             if target_is_precise:
                 self.precise_expression_depth -= 1
 
+        if vector_value is None:
+            self.store_vector_components(
+                base_pointer,
+                vector_type,
+                None,
+                [
+                    (
+                        member_index,
+                        self.composite_extract(result, member_type, position),
+                    )
+                    for position, member_index in enumerate(member_indices)
+                ],
+                member_type,
+            )
+            return True
         updated_value = vector_value
         for result_index, member_index in enumerate(member_indices):
             component_value = self.composite_extract(result, member_type, result_index)
@@ -27759,10 +27995,17 @@ class VulkanSPIRVCodeGen(
             self.precise_expression_depth += 1
 
         try:
-            vector_value = self.load_from_variable(base_pointer, vector_type)
-            current_value = self.composite_extract(
-                vector_value, member_type, member_index
+            shared_components = self.load_vector_components(
+                base_pointer, [member_index], member_type
             )
+            if shared_components is not None:
+                vector_value = None
+                current_value = shared_components[0]
+            else:
+                vector_value = self.load_from_variable(base_pointer, vector_type)
+                current_value = self.composite_extract(
+                    vector_value, member_type, member_index
+                )
             rhs_value = self.process_expression(value_expr)
             if rhs_value is None:
                 return True
@@ -27779,6 +28022,11 @@ class VulkanSPIRVCodeGen(
             if target_is_precise:
                 self.precise_expression_depth -= 1
 
+        if vector_value is None:
+            self.store_vector_components(
+                base_pointer, vector_type, None, [(member_index, result)], member_type
+            )
+            return True
         updated_value = self.composite_insert(
             vector_value, result, vector_type, member_index
         )
@@ -28858,7 +29106,7 @@ class VulkanSPIRVCodeGen(
                 self.process_expression(node.operand)
             variable_id, _ = self.cooperative_matrix_element_pointer(node.operand)
         else:
-            variable_id = self.variable_pointer_from_expression(node.operand)
+            variable_id = self.storage_reference_pointer(node.operand)
         if variable_id is None:
             self.refuse_lowering("increment target is not assignable")
             int_type = self.register_primitive_type("int")
@@ -29427,6 +29675,12 @@ class VulkanSPIRVCodeGen(
             }:
                 # HLSL's NonUniformResourceIndex and GLSL's nonuniformEXT both mark a divergent descriptor index.
                 return self.process_non_uniform_function_call(callee_name, expr.args)
+
+            if (
+                callee_name in DEBUG_PRINTF_FUNCTIONS
+                and not self.has_function_reference(callee_name)
+            ):
+                return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
 
             if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
@@ -30704,7 +30958,10 @@ class VulkanSPIRVCodeGen(
 
     def compute_local_size(self, stage) -> Tuple[int, int, int]:
         """Return compute workgroup dimensions from a stage execution config."""
-        config = getattr(stage, "execution_config", {}) or {}
+        if stage is None:
+            config = self.module_compute_entry_config or {}
+        else:
+            config = getattr(stage, "execution_config", {}) or {}
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31275,7 +31532,7 @@ class VulkanSPIRVCodeGen(
         memory_model = []
         entry_points = []
         execution_modes = []
-        debug_names = [
+        debug_names = list(getattr(self, "debug_strings", ())) + [
             f'OpSourceExtension "{extension}"'
             for extension in sorted(getattr(self, "source_extensions", ()))
         ]
@@ -31473,8 +31730,13 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
-        # Arrays of constant buffers stay declared as they are: spirv_constant_buffer_arrays declares them.
-        ast = lower_constant_buffer_resources(ast)
+        ast = lower_constant_buffer_resources(
+            ast,
+            lambda name: self.refuse_lowering(
+                f"array of arrays of constant buffers '{name}': a SPIR-V descriptor array has one dimension"
+            ),
+            block_arrays=True,
+        )
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
@@ -31706,6 +31968,17 @@ class VulkanSPIRVCodeGen(
             else:
                 helper_functions.append(func)
 
+        compute_entry_configs = [
+            function_entry_execution_config(func)
+            for func, qualifier in top_level_entries
+            if qualifier == "compute"
+        ]
+        if compute_entry_configs and all(
+            config == compute_entry_configs[0] for config in compute_entry_configs
+        ):
+            # Built-ins read outside a stage take the size of the module's compute entries.
+            self.module_compute_entry_config = compute_entry_configs[0]
+
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:
                 if qualifier == "tessellation_control":
@@ -31780,7 +32053,11 @@ class VulkanSPIRVCodeGen(
                     "TessellationControl",
                     "TessellationEvaluation",
                 }
-                stage_metadata = func if is_tessellation_entry else None
+                stage_metadata = (
+                    func
+                    if is_tessellation_entry or execution_model == "GLCompute"
+                    else None
+                )
                 entry_points.append(
                     (execution_model, function_id, func.name, stage_metadata)
                 )

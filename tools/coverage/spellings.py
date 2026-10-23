@@ -8,6 +8,9 @@ each feature its CrossGL spelling, and issue reconciliation uses them to recogni
 
 from __future__ import annotations
 
+# The CrossGL spelling of a function that reads a vector's element at an index, which CrossGL writes as ``v[i]``.
+SUBSCRIPT = "[]"
+
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
 # feature list has the new name; any other backend function is probed under its own spelling.
 RENAMES = {
@@ -224,6 +227,14 @@ COUNTERPARTS = {
     "mojo": {
         "frexp": "float frexp(float, out int)",
         "modf": "float modf(float, out float)",
+    },
+    # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
+    # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
+    "rust": {
+        "Float::sin_cos": "void sincos(float, out float, out float)",
+        "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
+        "emit_stream_vertex": "void EmitStreamVertex(const int)",
+        "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },
 }
 # Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a

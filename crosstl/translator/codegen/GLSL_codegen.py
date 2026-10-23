@@ -92,10 +92,12 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
-from ..semantics.non_uniform_indices import non_uniform_indices_spelled
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
+)
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
 )
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from ..source_licenses import source_license_comments
@@ -126,6 +128,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
+from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -214,6 +217,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_interface_block_io import (
+    block_declared_stage_io,
+    block_member_location_type,
+    stage_block_member_layout,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
@@ -279,18 +287,15 @@ from .image_access_contracts import (
     image_atomic_value_kind_mismatch,
     image_format_component_kind,
     image_format_or_default_channel_count,
-    image_format_result_type,
     image_load_result_kind_error,
     image_load_result_kind_mismatch,
     image_load_result_shape_error,
-    image_load_result_shape_mismatch,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
-    image_store_value_shape_mismatch,
     integer_coordinate_dimension_from_type_name,
     is_floating_scalar_type_name,
     is_glsl_float_image_resource,
@@ -353,9 +358,7 @@ from .image_access_contracts import (
     should_validate_image_load_result_shape,
     storage_image_atomic_zero_value,
     storage_image_format_store_constructor,
-    storage_image_load_component_suffix,
     storage_image_store_constructors,
-    storage_image_store_value_expression,
     storage_image_two_component_store_expression,
     storage_image_zero_values,
     supported_image_formats,
@@ -452,6 +455,7 @@ from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
+from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
@@ -476,11 +480,20 @@ from .stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    function_entry_execution_config,
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
+)
+from .storage_image_texels import (
+    is_whole_texel_load,
+    leading_components_suffix,
+    load_context_allowed,
+    store_value_allowed,
+    texel_store_value,
+    texel_vector_type,
 )
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
@@ -2062,6 +2075,10 @@ class GLSLCodeGen(
             "subgroupMemoryBarrierImage",
         }
     )
+    # Subgroup barriers that software subgroups lower to the workgroup barrier.
+    GLSL_SOFTWARE_SUBGROUP_BARRIERS = frozenset(
+        {"subgroupExecutionBarrier", "subgroupBarrier"}
+    )
     # Workgroup-scope fences that order the memory of each subgroup fence for the subgroup as well.
     GLSL_SUBGROUP_FENCE_WIDENINGS = {
         "subgroupMemoryBarrier": "groupMemoryBarrier",
@@ -2079,6 +2096,7 @@ class GLSLCodeGen(
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
+            "subgroupBarrier",
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
@@ -3267,6 +3285,8 @@ class GLSLCodeGen(
         }
 
         self.function_map = {
+            # HLSL's non-uniform resource index is GLSL's GL_EXT_nonuniform_qualifier.
+            "NonUniformResourceIndex": "nonuniformEXT",
             "atan2": "atan",
             "lerp": "mix",
             "frac": "fract",
@@ -3904,6 +3924,8 @@ class GLSLCodeGen(
             return True
 
         include_target = stripped[len("#include") :].strip()
+        if include_target.startswith("<") and is_apple_sdk_include(include_target):
+            return False
         return not include_target.lower().startswith(("<metal", '"metal'))
 
     def should_emit_glsl_preprocessor_directive(self, directive):
@@ -3918,6 +3940,8 @@ class GLSLCodeGen(
         match = re.match(r'^[<"]([^>"]+)[>"]', content)
         include_name = match.group(1) if match else content.split()[0]
         normalized = include_name.strip().replace("\\", "/").lower()
+        if content.startswith("<") and is_apple_sdk_include(normalized):
+            return False
         return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
@@ -4113,10 +4137,10 @@ class GLSLCodeGen(
 
     def uses_nonuniform_ext(self, ast):
         for node in self.walk_ast(ast):
-            if (
-                isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) == "nonuniformEXT"
-            ):
+            if isinstance(node, FunctionCallNode) and self.function_call_name(node) in {
+                "nonuniformEXT",
+                "NonUniformResourceIndex",
+            }:
                 return True
         return False
 
@@ -4616,7 +4640,7 @@ class GLSLCodeGen(
             elif isinstance(node, FunctionCallNode):
                 name = self.function_call_name(node)
                 if (
-                    name == "subgroupExecutionBarrier"
+                    name in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
                     and name not in self.function_return_types
                 ):
                     records.append((name, node))
@@ -6034,7 +6058,8 @@ class GLSLCodeGen(
         for node in self.walk_ast(ast):
             if (
                 isinstance(node, FunctionCallNode)
-                and self.function_call_name(node) == "subgroupExecutionBarrier"
+                and self.function_call_name(node)
+                in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             ):
                 execution_barrier_call_nodes.update((id(node), id(node.function)))
         for node in self.walk_ast(ast):
@@ -8229,15 +8254,14 @@ class GLSLCodeGen(
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
-        with self.opengl_descriptor_set_plan_for(ast), non_uniform_indices_spelled(
-            ast, "nonuniformEXT"
-        ):
+        with self.opengl_descriptor_set_plan_for(ast):
             return self.refusals.run(
                 self.render_program_with_profile_builtins, ast, target_stage
             )
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
+        ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         code = self.render_program_at_required_version(ast, target_stage)
         for reason in unavailable_builtin_reasons(
             code,
@@ -9874,6 +9898,7 @@ class GLSLCodeGen(
                 stage_code += self.generate_function(
                     func,
                     shader_type="compute",
+                    execution_config=function_entry_execution_config(func),
                     entry_name=combined_stage_entry_names.get(id(func)),
                 )
                 code += self.wrap_stage_guard(stage_code, "compute")
@@ -23022,14 +23047,22 @@ class GLSLCodeGen(
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            block = block_declared_stage_io(self, "out", member, output_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
                 "output",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.member_type_name(member)
+                    if block is None
+                    else block_member_location_type(self, member, block)
+                ),
                 output_name,
             )
+            if block is not None:
+                # Declared by the output interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "out", stage_name="vertex"
             )
@@ -23052,18 +23085,26 @@ class GLSLCodeGen(
 
             layout = self.stage_io_layout_for_node(member)
             member_type = self.member_type_name(member)
+            block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
                 (
-                    self.stage_io_per_vertex_element_type(member_type)
-                    if self.is_pervertex_stage_io(member, "")
-                    else member_type
+                    block_member_location_type(self, member, block)
+                    if block is not None
+                    else (
+                        self.stage_io_per_vertex_element_type(member_type)
+                        if self.is_pervertex_stage_io(member, "")
+                        else member_type
+                    )
                 ),
                 input_name,
             )
+            if block is not None:
+                # Declared by the input interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -25142,6 +25183,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                expression, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(expression, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25168,6 +25214,11 @@ class GLSLCodeGen(
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            subgroup_barrier = self.generate_glsl_software_subgroup_barrier_statement(
+                stmt, indent
+            )
+            if subgroup_barrier is not None:
+                return subgroup_barrier
             clip_statement = self.generate_clip_statement(stmt, indent)
             if clip_statement is not None:
                 return clip_statement
@@ -25176,6 +25227,33 @@ class GLSLCodeGen(
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_glsl_software_subgroup_barrier_statement(self, expr, indent):
+        """A statement ``subgroupBarrier()`` under software subgroups, or ``None``.
+
+        Software subgroups are slices of the workgroup, so their execution barrier is the workgroup
+        ``barrier()``. ``barrier()`` orders only shared memory (GLSL 4.60 section 8.16), so full
+        ``memoryBarrier()`` fences before and after it also order the buffer and image memory the subgroup
+        barrier covers (GL_KHR_shader_subgroup), releasing earlier writes and acquiring them afterwards.
+        """
+        if (
+            self.software_subgroup_width is None
+            or not isinstance(expr, FunctionCallNode)
+            or self.function_call_name(expr) != "subgroupBarrier"
+            or "subgroupBarrier" in self.function_return_types
+        ):
+            return None
+        arguments = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        control = self.generate_glsl_software_subgroup_operation(
+            "subgroupExecutionBarrier",
+            arguments,
+            source_location=getattr(expr, "source_location", None),
+        )
+        indent_str = "    " * indent
+        return "".join(
+            f"{indent_str}{line};\n"
+            for line in ("memoryBarrier()", control, "memoryBarrier()")
+        )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         if not isinstance(expr, FunctionCallNode):
@@ -39614,9 +39692,19 @@ complex64_t crossgl_complex64_mod_assign(
                 indexed_aggregate = self.glsl_indexed_aggregate_literal_expression(expr)
                 if indexed_aggregate is not None:
                     return indexed_aggregate
-                array = self.generate_expression(expr.array)
+                if is_whole_texel_load(expr.array, self.function_call_name):
+                    # The subscript selects a component of the whole texel.
+                    array = self.generate_expression_with_expected(expr.array, None)
+                else:
+                    array = self.generate_expression(expr.array)
                 array = self.glsl_precise_selected_value(expr.array, array)
                 index = self.glsl_resource_array_index_expression(expr)
+                instance_member = self.glsl_structured_buffer_array_element_member(
+                    expr.array
+                )
+                if instance_member is not None:
+                    # One buffer of an array of storage blocks holds its elements in a member.
+                    return f"{array}.{instance_member}[{index}]"
                 return f"{array}[{index}]"
             else:
                 return str(expr)
@@ -42724,7 +42812,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         expected_arity = (
             0
-            if operation == "subgroupExecutionBarrier"
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_BARRIERS
             else self.GLSL_WAVE_INTRINSIC_ARITIES[operation]
         )
         accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
@@ -42740,6 +42828,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
         if operation == "subgroupExecutionBarrier":
             return "barrier()"
+        if operation == "subgroupBarrier":
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup barriers over buffer, image and shared memory "
+                "must be statements",
+                operation=operation,
+                reason="subgroup-memory-barrier-unsupported",
+                source_location=source_location,
+            )
         if operation == "WaveShuffleAndFillUp":
             diagnostic = self.glsl_wave_validate_shuffle_and_fill_up(
                 operation, arguments
@@ -43443,6 +43539,22 @@ complex64_t crossgl_complex64_mod_assign(
         if normalized_type and normalized_type.endswith("*"):
             return normalized_type[:-1].rstrip()
         return None
+
+    def glsl_structured_buffer_array_element_member(self, buffer_expr):
+        """The block member holding the elements of ``buffer_expr``, one buffer of a declared buffer array.
+
+        An array of structured buffers is declared as an array of blocks (``buffer B { T data[]; } b[N];``), so
+        element ``i`` of ``b[k]`` is ``b[k].data[i]``. ``None`` for any other operand.
+        """
+        if not isinstance(buffer_expr, ArrayAccessNode):
+            return None
+        base = getattr(buffer_expr, "array", None)
+        if not isinstance(base, (IdentifierNode, VariableNode)):
+            return None
+        name = self.expression_name(base)
+        if name in self.local_variable_types:
+            return None
+        return self.structured_buffer_instance_members.get(name)
 
     def structured_buffer_access_expression(self, buffer_arg, element_index):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
@@ -48587,17 +48699,8 @@ complex64_t crossgl_complex64_mod_assign(
         return storage_image_zero_values()
 
     def image_load_component_suffix(self, texture_type, image_format):
-        return storage_image_load_component_suffix(
-            image_format,
-            expected_scalar=self.is_scalar_value_type(
-                self.current_expression_expected_type
-            ),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                texture_type, image_format
-            )
-            and self.expected_component_count() != 4,
-            float_resource=self.is_float_image_resource(texture_type),
-        )
+        # imageLoad yields four components; a narrower context takes the leading ones.
+        return leading_components_suffix(self.expected_component_count())
 
     def image_format_store_constructor(self, image_format):
         return storage_image_format_store_constructor(
@@ -48645,23 +48748,18 @@ complex64_t crossgl_complex64_mod_assign(
     def image_store_value_expression(
         self, texture_type, image_format, value, value_type=None
     ):
-        if self.allows_native_glsl_image_four_component_value(
-            self.image_store_channel_count(texture_type, image_format),
-            self.value_component_count(value_type),
-        ):
+        component_kind = (
+            image_format_component_kind(image_format)
+            if image_format
+            else self.glsl_storage_image_component_kind(texture_type)
+        )
+        constructor = texel_vector_type(
+            component_kind, {"float": "vec", "int": "ivec", "uint": "uvec"}
+        )
+        if constructor is None:
             return value
-        return storage_image_store_value_expression(
-            image_format,
-            value,
-            self.is_scalar_value_type(value_type),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                texture_type, image_format
-            ),
-            float_resource=self.is_float_image_resource(texture_type),
-            integer_constructor=self.integer_image_store_constructor(texture_type),
-            float_constructor="vec4",
-            constructors_by_kind=self.image_store_constructors_by_kind(),
-            zero_values_by_kind=self.image_store_zero_values_by_kind(),
+        return texel_store_value(
+            constructor, component_kind, value, self.value_component_count(value_type)
         )
 
     def glsl_storage_image_component_kind(self, texture_type):
@@ -48691,19 +48789,13 @@ complex64_t crossgl_complex64_mod_assign(
     def image_load_result_type(self, image_arg):
         image_format = self.image_resource_format(image_arg)
         if image_format:
-            return image_format_result_type(
-                image_format,
-                vector_prefixes={"float": "vec", "int": "ivec", "uint": "uvec"},
-            )
-        image_type = self.texture_argument_resource_type(image_arg)
-        component_kind = self.glsl_storage_image_component_kind(image_type)
-        if component_kind == "float":
-            return "vec4"
-        if component_kind == "int":
-            return "ivec4"
-        if component_kind == "uint":
-            return "uvec4"
-        return None
+            component_kind = image_format_component_kind(image_format)
+        else:
+            image_type = self.texture_argument_resource_type(image_arg)
+            component_kind = self.glsl_storage_image_component_kind(image_type)
+        return texel_vector_type(
+            component_kind, {"float": "vec", "int": "ivec", "uint": "uvec"}
+        )
 
     def image_load_component_kind(self, texture_type, image_format):
         if image_format:
@@ -48717,12 +48809,6 @@ complex64_t crossgl_complex64_mod_assign(
                 self.glsl_storage_image_component_kind(texture_type)
             ),
         )
-
-    def allows_native_glsl_image_four_component_value(
-        self, image_channels, value_channels
-    ):
-        """Return true when scalar image formats use GLSL's native gvec4 value."""
-        return value_channels == 4 and image_channels == 1
 
     def expected_component_kind(self):
         return numeric_component_kind_from_type(
@@ -48776,16 +48862,7 @@ complex64_t crossgl_complex64_mod_assign(
     def validate_image_store_value_shape(self, texture_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(texture_type, image_format)
         value_channels = self.expression_component_count(value_arg)
-        if self.allows_native_glsl_image_four_component_value(
-            expected_channels,
-            value_channels,
-        ):
-            return
-        value_channels = image_store_value_shape_mismatch(
-            expected_channels,
-            value_channels,
-        )
-        if value_channels is None:
+        if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(texture_type)
         raise ValueError(
@@ -48849,16 +48926,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(texture_type, image_format)
-        if self.allows_native_glsl_image_four_component_value(
-            loaded_channels,
-            expected_channels,
-        ):
-            return
-        expected_channels = image_load_result_shape_mismatch(
-            loaded_channels,
-            expected_channels,
-        )
-        if expected_channels is None:
+        if load_context_allowed(loaded_channels, expected_channels):
             return
         raise ValueError(
             image_load_result_shape_error(
@@ -48941,9 +49009,6 @@ complex64_t crossgl_complex64_mod_assign(
                 load_expr = f"imageLoad({image_name}, {coord})"
             image_format = self.image_resource_format(args[0])
             self.validate_image_load_result_type(texture_type, image_format)
-            if self.glsl_unknown_format_image(args[0]):
-                # The source selects the components of its element type itself.
-                return load_expr
             return f"{load_expr}{self.image_load_component_suffix(texture_type, image_format)}"
 
         if func_name == "imageStore" and len(args) >= 3:
@@ -49289,12 +49354,24 @@ complex64_t crossgl_complex64_mod_assign(
         }
 
     def collect_resource_array_size_hints(self, ast):
+        texture_globals = self.collect_unsized_sampled_texture_globals(ast)
+        texture_parameters = self.collect_unsized_sampled_texture_parameters(ast)
+        buffer_globals = self.collect_unsized_structured_buffer_globals(ast)
+        functions = self.collect_functions(ast)
+        dynamic_sizes = DynamicIndexSizes(
+            global_arrays=set(texture_globals) | set(buffer_globals),
+            shared_globals=texture_globals,
+            function_arrays=texture_parameters,
+            functions=functions,
+            constants=self.visible_literal_int_constants,
+            target="opengl",
+        )
         global_hints, function_hints = collect_resource_array_size_hints(
-            global_arrays=self.collect_unsized_sampled_texture_globals(ast),
-            function_arrays=self.collect_unsized_sampled_texture_parameters(ast),
+            global_arrays=texture_globals,
+            function_arrays=texture_parameters,
             fixed_global_array_sizes=self.collect_fixed_resource_global_sizes(ast),
             fixed_function_array_sizes=self.collect_fixed_resource_parameter_sizes(ast),
-            functions=self.collect_functions(ast),
+            functions=functions,
             walk_nodes=self.walk_ast,
             expression_name=self.expression_name,
             literal_int_value=self.literal_int_value,
@@ -49303,10 +49380,16 @@ complex64_t crossgl_complex64_mod_assign(
             initial_size=0,
             format_size=lambda size: str(size) if size > 1 else "",
             initial_literal_int_constants=self.initial_literal_int_constants,
+            required_sizes=dynamic_sizes,
         )
         global_hints.update(
             self.collect_structured_buffer_global_array_size_hints(ast, function_hints)
         )
+        buffer_sizes = dynamic_sizes.result()
+        for name in sorted(set(buffer_globals) & set(buffer_sizes)):
+            hint = str(global_hints.get(name) or "")
+            if buffer_sizes[name] > (int(hint) if hint.isdigit() else 0):
+                global_hints[name] = str(buffer_sizes[name])
         return global_hints, function_hints
 
     def glsl_private_pointer_propagated_parameter_intervals(
@@ -55261,7 +55344,7 @@ complex64_t crossgl_complex64_mod_assign(
             if self.is_layout_bound_struct_uniform(node, node_type):
                 continue
             if self.is_constant_buffer_type(node_type):
-                # ConstantBuffer<T> (or an array of them) holds T as block contents, not as a T value.
+                # A ConstantBuffer<T> declares a uniform block of T's members, not a T value.
                 continue
             record_type(node_type)
 
@@ -57786,7 +57869,7 @@ complex64_t crossgl_complex64_mod_assign(
         instance_suffix = self.glsl_interface_block_instance_suffix(node)
         code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
-            code += self.generate_glsl_interface_block_member_declaration(
+            declaration = self.generate_glsl_interface_block_member_declaration(
                 member,
                 struct_name=node.name,
                 members_are_global=not instance_suffix,
@@ -57794,6 +57877,10 @@ complex64_t crossgl_complex64_mod_assign(
                     source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
                 ),
             )
+            member_layout = stage_block_member_layout(self, node, member)
+            if member_layout:
+                declaration = f"    {member_layout}{declaration[4:]}"
+            code += declaration
         code += f"}}{instance_suffix};\n"
         return code
 

@@ -1029,9 +1029,10 @@ class VulkanToCrossGLConverter:
                         code += f"        {self.map_type(field_type)} {field_name};\n"
                     code += "    };\n\n"
                     self.emitted_storage_buffer_type_names.add(block_name)
+                instance_suffix = getattr(node, "instance_array_suffix", "")
                 code += (
                     f"    {buffer_type}<{block_name}> {variable_name}"
-                    f"{attributes};\n\n"
+                    f"{instance_suffix}{attributes};\n\n"
                 )
                 self.reserve_global_declaration_name(variable_name)
         elif layout_type == "shader_record":

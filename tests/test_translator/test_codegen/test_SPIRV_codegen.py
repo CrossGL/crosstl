@@ -3051,14 +3051,12 @@ class TestVulkanSPIRVCodeGen:
     def test_helper_fixed_array_parameter_called_with_buffer_pointer_matches_types(
         self, tmp_path
     ):
-        # A helper that takes a fixed-size array parameter (int64_t strides[2])
-        # lowers its parameter to a Function-storage pointer to an array
-        # (OpTypePointer Function <array>). When the matching caller argument is a
-        # buffer pointer (constant const int64_t*), it lowers to a Uniform block
-        # struct wrapping a runtime array. The argument must be materialized into a
-        # Function-local array copy so its type matches the parameter type; otherwise
-        # the OpFunctionCall argument and parameter types diverge and spirv-val
-        # rejects the module.
+        # A helper parameter declared as an array in constant memory
+        # (constant const int64_t strides[2]) is a pointer to its element: C++
+        # adjusts "array of T" to "pointer to T" ([dcl.fct]/5) and MSL keeps the
+        # address space on that pointer. The helper therefore reads the caller's
+        # buffer by reference instead of a Function-local array copy, and every
+        # call that remains must pass arguments of the declared parameter types.
         source_code = """
         #include <metal_stdlib>
         using namespace metal;
@@ -3096,24 +3094,26 @@ class TestVulkanSPIRVCodeGen:
             source_backend="metal",
         )
 
-        # The helper's fixed-size array parameter must survive as a Function-storage
-        # pointer to an array of 64-bit ints, taken by an OpFunctionParameter (i.e.
-        # the helper was emitted as a real function, not inlined).
+        # No Function-local copy of the strides exists: there is no array of 64-bit
+        # ints, and each stride is loaded through a Uniform-storage pointer to one
+        # 64-bit element of the caller's buffer.
         long_type = re.search(r"(%\d+) = OpTypeInt 64 1\b", spv_code)
         assert long_type is not None
-        array_type = re.search(
-            rf"(%\d+) = OpTypeArray {re.escape(long_type.group(1))} %\d+", spv_code
+        long_id = re.escape(long_type.group(1))
+        assert not re.search(rf"= OpTypeArray {long_id} %\d+", spv_code)
+        uniform_long_ptr = re.search(
+            rf"(%\d+) = OpTypePointer Uniform {long_id}\b", spv_code
         )
-        assert array_type is not None
-        function_array_ptr = re.search(
-            rf"(%\d+) = OpTypePointer Function {re.escape(array_type.group(1))}\b",
+        assert uniform_long_ptr is not None
+        stride_loads = re.findall(
+            rf"(%\d+) = OpAccessChain {re.escape(uniform_long_ptr.group(1))} %\d+",
             spv_code,
         )
-        assert function_array_ptr is not None
-        assert re.search(
-            rf"%\d+ = OpFunctionParameter {re.escape(function_array_ptr.group(1))}\b",
-            spv_code,
-        )
+        assert len(stride_loads) >= 2
+        for pointer in stride_loads:
+            assert re.search(
+                rf"= OpLoad {long_id} {re.escape(pointer)}\b", spv_code
+            ), pointer
 
         # The call argument type matches the parameter type, and the module is valid.
         assert_spirv_function_calls_use_declared_parameter_types(spv_code)
@@ -20346,10 +20346,9 @@ class TestVulkanSPIRVCodeGen:
         assert (
             "imageAtomicAdd requires a 2-component integer coordinate " "for uimage2D"
         ) in spv_code_refused
-        assert (
-            "imageStore value operand does not match v4float "
-            "storage image texel type"
-        ) in spv_code_refused
+        # A three-component value for a four-channel format takes the alpha
+        # fill (GLSL 4.60 section 8.12), so only the wrong kinds are refused.
+        assert "does not match v4float" not in spv_code_refused
         assert (
             "imageStore value operand does not match uint " "storage image texel type"
         ) in spv_code_refused

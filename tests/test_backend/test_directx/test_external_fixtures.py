@@ -1287,7 +1287,7 @@ EXTERNAL_FIXTURES = [
             "samplerBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
             "return texelFetch(buf, 0).x;",
             "imageBuffer buf = ResourceDescriptorHeap[NonUniformResourceIndex(ID)];",
-            "imageStore(buf, 0, vec4(f, 0.0, 0.0, 0.0));",
+            "imageStore(buf, 0, vec4(f, 0.0, 0.0, 1.0));",
             "@ numthreads(8, 8, 1)",
             "void main(uvec2 ID @ gl_GlobalInvocationID)",
         ),
@@ -1528,7 +1528,7 @@ EXTERNAL_FIXTURES = [
             "uimage2D AutomaticExposureSpdAtomicCounter;",
             "groupshared uint spdCounter;",
             "spdCounter = imageAtomicAdd(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), 1u);",
-            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), uvec4(0, 0u, 0u, 0u));",
+            "imageStore(AutomaticExposureSpdAtomicCounter, ivec2(0, 0), uvec4(0, 0u, 0u, 1u));",
             "@ numthreads(64, 1, 1)",
         ),
     ),
@@ -1679,7 +1679,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ register(u1)",
             "image2D output;",
-            "imageStore(output, did, vec4(FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1, 0.0, 0.0, 0.0));",
+            "imageStore(output, did, vec4(FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1, 0.0, 0.0, 1.0));",
         ),
     ),
     ExternalFixture(

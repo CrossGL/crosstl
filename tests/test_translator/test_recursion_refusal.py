@@ -138,6 +138,58 @@ def test_overloads_with_equal_lanes_resolve_by_argument_type():
     assert graph.find_cycle() is None
 
 
+AGGREGATE_OVERLOADS = {
+    "cooperative-matrix": (
+        "CooperativeMatrix<float, 8, 8>",
+        "CooperativeMatrix<float, 8, 8> m;",
+    ),
+    "matrix": ("mat2", "mat2 m = mat2(v.x, v.y, v.y, v.x);"),
+    "structure": ("Pair", "Pair m; m.a = v.x; m.b = v.y;"),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(AGGREGATE_OVERLOADS))
+def test_aggregate_arguments_select_the_overload_their_declared_type_names(kind):
+    """A ``vec2`` overload forwarding to its aggregate overload is not a cycle.
+
+    The aggregate local has no value type, so value-type inference alone accepts both overloads.
+    """
+    aggregate, local = AGGREGATE_OVERLOADS[kind]
+    ast = parse_cgl(
+        compute_cgl(
+            "struct Pair { float a; float b; }\n"
+            f"float pick({aggregate} m) {{ return 1.0; }}\n"
+            f"float pick(vec2 v) {{ {local} return pick(m); }}\n"
+            "float helper(float x) { return pick(vec2(x, 1.0)); }",
+        )
+    )
+    graph = CallGraph(ast)
+    by_kind = {
+        (
+            "vec2" if "VectorType" in repr(function.parameters[0].param_type) else kind
+        ): index
+        for index, function in enumerate(graph.functions)
+        if function.name == "pick"
+    }
+    assert sorted(graph.edges[by_kind["vec2"]]) == [by_kind[kind]]
+    assert graph.find_cycle() is None
+    for target in TARGETS:
+        validate_recursion_free(ast, target)
+
+
+def test_aggregate_self_calls_remain_cycles():
+    ast = parse_cgl(
+        compute_cgl(
+            "float pick(mat2 m) { return 2.0 * pick(m); }\n"
+            "float pick(vec2 v) { return v.x; }\n"
+            "float helper(float x) { mat2 m = mat2(x); return pick(m); }",
+        )
+    )
+    with pytest.raises(RecursionUnsupportedError) as raised:
+        validate_recursion_free(ast, "metal")
+    assert raised.value.cycle == ("pick", "pick")
+
+
 def test_ambiguous_overloads_keep_every_candidate():
     ast = parse_cgl(
         compute_cgl(

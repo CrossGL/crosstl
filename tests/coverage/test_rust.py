@@ -34,6 +34,17 @@ pub fn any<V: Vector<bool, N>, const N: usize>(vector: V) -> bool {
 
 pub unsafe fn emit_stream_vertex<const STREAM: i64>() {}
 
+pub unsafe fn vector_extract_dynamic<T: Scalar, const N: usize>(
+    vector: impl Vector<T, N>,
+    index: usize,
+) -> T {
+    T::default()
+}
+
+pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
+    0
+}
+
 pub fn kill() -> ! {
     loop {}
 }
@@ -76,6 +87,7 @@ pub trait Float: Num + Copy + NumCast + PartialOrd + Neg<Output = Self> {
     fn fract(self) -> Self;
     fn powi(self, n: i32) -> Self;
     fn sin_cos(self) -> (Self, Self);
+    fn integer_decode(self) -> (u64, i16, i8);
     fn to_degrees(self) -> Self {
         unimplemented!()
     }
@@ -106,8 +118,38 @@ impl Vec3 {
         self
     }
 
+    pub fn sin_cos(self) -> (Self, Self) {
+        (self, self)
+    }
+
+    pub fn max_position(self) -> usize {
+        0
+    }
+
+    pub fn normalize_and_length(self) -> (Self, f32) {
+        (self, 1.0)
+    }
+
+    pub fn try_normalize(self) -> Option<Self> {
+        None
+    }
+
     fn private_helper(self) -> Self {
         self
+    }
+
+    #[cfg(feature = "i32")]
+    #[inline]
+    #[must_use]
+    pub fn as_ivec3(self) -> crate::IVec3 {
+        crate::IVec3::new(self.x as i32, self.y as i32, self.z as i32)
+    }
+
+    #[cfg(feature = "i16")]
+    #[inline]
+    #[must_use]
+    pub fn as_i16vec3(self) -> crate::I16Vec3 {
+        crate::I16Vec3::new(self.x as i16, self.y as i16, self.z as i16)
     }
 }
 """
@@ -131,11 +173,13 @@ def test_rust_reads_spirv_std_arch_and_expands_its_macros():
         "emit_stream_vertex",
         "kill",
         "memory_barrier",
+        "read_clock_khr",
         "subgroup_ballot",
         "subgroup_f_add",
         "subgroup_inclusive_f_add",
         "subgroup_logical_and",
         "unsigned_max",
+        "vector_extract_dynamic",
     ]
     assert features["unsigned_max"].signature == Signature(
         Type("uint"), (Param(Type("uint")), Param(Type("uint")))
@@ -161,10 +205,18 @@ def test_rust_fills_in_constant_generic_parameters():
         "unsafe atomic_i_add::<_, { Scope::Subgroup as u32 }, { Semantics::NONE.bits() }>"
     )
     assert "ACQUIRE_RELEASE" in features["memory_barrier"].spelling
-    assert features["emit_stream_vertex"].signature is None
-    assert features["emit_stream_vertex"].note == (
-        "no probe value for the constant parameter STREAM"
+    assert features["emit_stream_vertex"].spelling == "unsafe emit_stream_vertex::<0>"
+    _, _, note = rust.signature("f", ("const WIDTH: u32", "", ""))
+    assert note == "no probe value for the constant parameter WIDTH"
+
+
+def test_rust_geometry_stream_is_a_crossgl_argument():
+    stream = parse()["emit_stream_vertex"]
+    assert stream.crossgl == "EmitStreamVertex"
+    assert (
+        "unsafe { emit_stream_vertex::<0>() };" in probes.build(stream, "rust").source
     )
+    assert "EmitStreamVertex(0);" in probes.build(stream, "crossgl").source
 
 
 def test_rust_reads_float_and_vec3_methods():
@@ -179,7 +231,7 @@ def test_rust_reads_float_and_vec3_methods():
     assert features["Float::nan"].signature == Signature(Type("float"), ())
     assert features["Float::ln"].crossgl == "log"
     assert features["Float::powi"].signature.params[1] == Param(Type("int"))
-    assert features["Float::sin_cos"].signature.unsupported == "(Self, Self)"
+    assert features["Float::sin_cos"].signature.unsupported == "(f32, f32)"
     assert features["Float::to_degrees"].group == "float"
     vec3 = Type("float", (3,))
     assert features["Vec3::dot"].signature == Signature(
@@ -190,6 +242,92 @@ def test_rust_reads_float_and_vec3_methods():
     assert features["Vec3::to_array"].signature.unsupported == "[f32; 3]"
     assert features["Vec3::lerp"].crossgl == "mix"
     assert features["Vec3::new"].crossgl == "vec3"
+
+
+def test_rust_leaves_out_glam_methods_spirv_std_does_not_enable():
+    features = parse()
+    # spirv-std builds glam with i32, u32 and f64 vectors only.
+    assert features["Vec3::as_ivec3"].signature == Signature(
+        Type("int", (3,)), (Param(VEC3_TYPE),)
+    )
+    assert "Vec3::as_i16vec3" not in features
+
+
+def test_rust_probes_64_bit_integer_results():
+    clock = parse()["read_clock_khr"]
+    assert clock.signature == Signature(Type("uint64"), ())
+    source = probes.build(clock, "rust").source
+    assert (
+        "let r: u64 = unsafe { read_clock_khr::<{ Scope::Subgroup as u32 }>() };"
+        in source
+    )
+    assert "outp[i] = (r) as u32;" in source
+    assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
+
+
+def test_rust_probes_pointer_sized_integers():
+    features = parse()
+    position = features["Vec3::max_position"]
+    assert position.signature == Signature(Type("usize"), (Param(VEC3_TYPE),))
+    source = probes.build(position, "rust").source
+    assert "let r: usize = a0.max_position();" in source
+    assert "outp[i] = (r) as u32;" in source
+    assert position.crossgl == ""
+    extract = features["vector_extract_dynamic"]
+    source = probes.build(extract, "rust").source
+    assert "let a1: usize = (uin[i + 0]) as usize;" in source
+    assert "let r: f32 = unsafe { vector_extract_dynamic(a0, a1) };" in source
+    # rust-gpu's usize is 32 bits wide, and the Rust importer writes it as CrossGL's uint.
+    crossgl = probes.build(extract, "crossgl").source
+    assert "uint a1 = uint(uin[i + 0u]);" in crossgl
+    assert "float r = a0[a1];" in crossgl
+    with pytest.raises(probes.ProbeError, match="no pointer-sized integer type"):
+        probes.spell(Type("usize"), "glsl")
+
+
+def test_rust_has_no_probe_for_vectors_spirv_std_lacks():
+    with pytest.raises(probes.ProbeError, match="no int16 vectors"):
+        probes.spell(Type("int16", (3,)), "rust")
+    assert probes.spell(Type("int16"), "rust") == "i16"
+
+
+def test_rust_probes_read_the_first_value_of_a_tuple_or_an_option():
+    features = parse()
+    vec3 = probes.build(features["Vec3::sin_cos"], "rust").source
+    assert "let r: Vec3 = a0.sin_cos().0;" in vec3
+    assert "outp[i] = r.extend(0.0);" in vec3
+    decoded = probes.build(features["Float::integer_decode"], "rust").source
+    assert "let r: u64 = a0.integer_decode().0;" in decoded
+    assert "outp[i] = (r) as u32;" in decoded
+    optional = probes.build(features["Vec3::try_normalize"], "rust").source
+    assert "let r: Vec3 = a0.try_normalize().unwrap_or_default();" in optional
+    assert features["Vec3::normalize_and_length"].signature.unsupported == (
+        "(Vec3, f32)"
+    )
+
+
+def test_rust_sin_cos_is_crossgl_sincos_with_output_parameters():
+    features = parse()
+    assert features["Float::sin_cos"].crossgl == "sincos"
+    source = probes.build(features["Float::sin_cos"], "crossgl").source
+    assert "sincos(a0, a1, a2);" in source
+    vec3 = probes.build(features["Vec3::sin_cos"], "crossgl").source
+    assert "vec3 a1;\n" in vec3
+    assert "vec3 a2;\n" in vec3
+
+
+def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
+    features = parse()
+    for name in (
+        "Float::integer_decode",
+        "Vec3::max_position",
+        "Vec3::normalize_and_length",
+        "Vec3::try_normalize",
+    ):
+        assert features[name].crossgl == ""
+        assert features[name].note.startswith("no CrossGL function returns")
+        with pytest.raises(probes.NoSpelling):
+            probes.build(features[name], "crossgl")
 
 
 def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
@@ -247,6 +385,11 @@ SAMPLES = [
     ),
     feature("workgroup_memory_barrier_with_group_sync", VOID),
     feature("Float::nan", Type("float"), spelling="f32::nan"),
+    feature(
+        "read_clock_khr",
+        Type("uint64"),
+        spelling="unsafe read_clock_khr::<{ Scope::Subgroup as u32 }>",
+    ),
 ]
 
 

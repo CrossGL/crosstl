@@ -358,10 +358,11 @@ class HalfLegalizer:
         program, scope = self.program, self.scope
         for constant in getattr(program, "constants", None) or []:
             scope.declare(constant.name, constant.const_type)
-            self._normalize_declaration(constant, "const_type", "value")
+            self._initializer(constant, "const_type", "value")
         self._declare_variables(getattr(program, "global_variables", None) or [])
         for cbuffer in getattr(program, "cbuffers", None) or []:
             scope.declare_cbuffer(cbuffer)
+        self._member_initializers()
         for function in getattr(program, "functions", None) or []:
             if isinstance(function, A.FunctionNode):
                 self.function(function)
@@ -410,7 +411,26 @@ class HalfLegalizer:
         for variable in variables:
             self.scope.declare(variable.name, variable.var_type)
             self.scope.declare_block_members(variable)
-            self._normalize_declaration(variable, "var_type", "initial_value")
+            self._initializer(variable, "var_type", "initial_value")
+
+    def _initializer(self, node, type_field, value_field):
+        """A declaration outside a function body: legalize its initializer, then round it to a half type."""
+        value = getattr(node, value_field, None)
+        if value is not None:
+            replacement = self.visit(value)
+            if replacement is not value:
+                set_child(node, value_field, None, replacement)
+        self._normalize_declaration(node, type_field, value_field)
+
+    def _member_initializers(self):
+        """Struct member initializers (static members included) sit outside every function body."""
+        structs = [
+            node for node in self.program.walk() if isinstance(node, A.StructNode)
+        ]
+        for struct in structs:
+            for member in struct.members or []:
+                if isinstance(member, A.StructMemberNode):
+                    self._initializer(member, "member_type", "default_value")
 
     def refuse(self, what, reason_code, node=None):
         raise HalfFloatUnsupportedError(
@@ -561,7 +581,9 @@ class HalfLegalizer:
         """
         for kind in kinds:
             if kind is None:
-                self.refuse(f"{what} with an operand of unknown type", "unknown-operand", node)
+                self.refuse(
+                    f"{what} with an operand of unknown type", "unknown-operand", node
+                )
             if kind.name == "bool":
                 self.refuse(f"{what} with a bool operand", "bool-operand", node)
         return not any(
@@ -612,7 +634,11 @@ class HalfLegalizer:
             self.refuse(f"the bit cast '{name}' to a half vector", "bitcast", node)
         if _FROM_BITS.fullmatch(name):
             kind = self.kind(arguments[0]) if len(arguments) == 1 else None
-            if kind is None or kind.name not in ("int", "int_literal") or kind.lanes != 1:
+            if (
+                kind is None
+                or kind.name not in ("int", "int_literal")
+                or kind.lanes != 1
+            ):
                 self.refuse(
                     f"the bit cast '{name}' to half from a non-scalar 16-bit integer",
                     "bitcast",
@@ -699,9 +725,7 @@ class HalfLegalizer:
                 parts.append(folded)
                 continue
             if kind is not None and kind.name == "double":
-                self.refuse(
-                    "a double converted to half", "double-rounding", argument
-                )
+                self.refuse("a double converted to half", "double-rounding", argument)
             exact = False
             parts.append(argument)
         vector = call(f"vec{half.lanes}", parts)
@@ -826,13 +850,17 @@ class HalfLegalizer:
             return lvalue
         if isinstance(expr, (A.SwizzleNode, A.MemberAccessNode)):
             base = self.half_value(
-                expr.vector_expr if isinstance(expr, A.SwizzleNode) else expr.object_expr
+                expr.vector_expr
+                if isinstance(expr, A.SwizzleNode)
+                else expr.object_expr
             )
             components = str(
                 expr.components if isinstance(expr, A.SwizzleNode) else expr.member
             )
-            if base is not None and base.lanes > 1 and re.fullmatch(
-                r"[xyzw]{1,4}|[rgba]{1,4}", components
+            if (
+                base is not None
+                and base.lanes > 1
+                and re.fullmatch(r"[xyzw]{1,4}|[rgba]{1,4}", components)
             ):
                 return base.with_lanes(len(components))
             return None
@@ -889,7 +917,10 @@ class HalfLegalizer:
                     isinstance(node, A.FunctionCallNode)
                     and half_from_name(call_name(node))
                 )
-                or (isinstance(node, A.CastNode) and half_of(node.target_type) is not None)
+                or (
+                    isinstance(node, A.CastNode)
+                    and half_of(node.target_type) is not None
+                )
             ):
                 self.refuse(
                     f"a half type in {type(node).__name__} the pass cannot legalize",
