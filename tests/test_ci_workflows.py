@@ -31,6 +31,20 @@ GATING_WORKFLOWS = {
     "lint.yml": "Lint result",
     "demo-project-testing.yml": "MLX validation result",
 }
+# The job that decides whether a push to main repeats a commit the merge queue
+# already tested, per workflow.
+QUEUE_TESTED_WORKFLOWS = {
+    "backend-tests.yml": "python-versions",
+    "translator-tests.yml": "python-versions",
+    "full-tests.yml": "plan",
+    "examples-test.yml": "python-versions",
+}
+RUN_GROUP = "${{ github.event.pull_request.number || github.run_id }}"
+MAIN_PUSH_GROUP = (
+    "${{ github.event.pull_request.number"
+    " || (github.event_name == 'push' && github.ref)"
+    " || github.run_id }}"
+)
 
 
 def _workflows():
@@ -123,22 +137,6 @@ def test_the_coverage_comment_job_runs_no_pull_request_code():
     assert uses == ["actions/download-artifact@v8"]
     script = job["steps"][-1]["run"]
     assert not re.search(r"\b(?:python|pip)\b", script)
-
-
-# The job that decides whether a push to main repeats a commit the merge queue
-# already tested, per workflow.
-QUEUE_TESTED_WORKFLOWS = {
-    "backend-tests.yml": "python-versions",
-    "translator-tests.yml": "python-versions",
-    "full-tests.yml": "plan",
-    "examples-test.yml": "python-versions",
-}
-RUN_GROUP = "${{ github.event.pull_request.number || github.run_id }}"
-MAIN_PUSH_GROUP = (
-    "${{ github.event.pull_request.number"
-    " || (github.event_name == 'push' && github.ref)"
-    " || github.run_id }}"
-)
 
 
 @pytest.mark.parametrize(
