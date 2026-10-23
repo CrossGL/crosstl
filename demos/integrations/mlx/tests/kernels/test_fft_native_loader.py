@@ -42,6 +42,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     record_native_request,
     record_native_result,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -62,9 +63,9 @@ CURRENT_MLX_FFT_GENERATED_SHA256 = (
 )
 CURRENT_MLX_FFT_GENERATED_SIZE_BYTES = 175427
 CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256 = (
-    "3c39d68f34a60890fca97c2f705cc4e3f9590f0e38b0c895a2074c54d07b5c06"
+    "ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c"
 )
-CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 116561
+CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES = 120044
 MLX_FFT_SIZE = 256
 FFT_OUTPUT_GUARDS = [777.25 + index for index in range(8)]
 REQUIRE_PROOF_ENV = "CROSTL_REQUIRE_MLX_FFT_DIRECTX_NATIVE_LOADER"
@@ -414,11 +415,9 @@ def _build_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": generated_sha256,
-    }
-    assert artifact["generatedSizeBytes"] == generated_size_bytes
+    check_generated_artifact(
+        artifact, sha256=generated_sha256, size_bytes=generated_size_bytes
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "concrete",
         "mode": "concrete-crossgl-variant",
@@ -1015,11 +1014,11 @@ def _build_current_opengl_runtime_package(
         "stage": "compute",
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 64]
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
-    }
-    assert artifact["generatedSizeBytes"] == CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES
+    check_generated_artifact(
+        artifact,
+        sha256=CURRENT_MLX_FFT_OPENGL_GENERATED_SHA256,
+        size_bytes=CURRENT_MLX_FFT_OPENGL_GENERATED_SIZE_BYTES,
+    )
     assert artifact["specializationMaterialization"] == {
         "status": "deferred",
         "mode": "deferred",

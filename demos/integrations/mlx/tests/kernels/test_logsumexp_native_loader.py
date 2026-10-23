@@ -30,6 +30,7 @@ from crosstl.project import (
     validate_project_report,
 )
 from crosstl.project.directx_toolchain import dxc_compiler_arguments_for_source
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -330,11 +331,11 @@ def test_pinned_mlx_logsumexp_translates_to_guarded_opengl_artifacts():
             generated_identity = MLX_LOGSUMEXP_GENERATED_ARTIFACTS["opengl"][
                 artifact_id
             ]
-            assert artifact["generatedHash"] == {
-                "algorithm": "sha256",
-                "value": generated_identity["sha256"],
-            }
-            assert artifact["generatedSizeBytes"] == generated_identity["sizeBytes"]
+            check_generated_artifact(
+                artifact,
+                sha256=generated_identity["sha256"],
+                size_bytes=generated_identity["sizeBytes"],
+            )
             assert artifact["entryPoint"] == {
                 "source": MLX_LOGSUMEXP_ENTRY,
                 "target": "main",
@@ -436,11 +437,11 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
     for artifact in report_payload["artifacts"]:
         artifact_id = artifact["dispatchArtifact"]["artifactId"]
         generated_identity = MLX_LOGSUMEXP_GENERATED_ARTIFACTS["directx"][artifact_id]
-        assert artifact["generatedHash"] == {
-            "algorithm": "sha256",
-            "value": generated_identity["sha256"],
-        }
-        assert artifact["generatedSizeBytes"] == generated_identity["sizeBytes"]
+        check_generated_artifact(
+            artifact,
+            sha256=generated_identity["sha256"],
+            size_bytes=generated_identity["sizeBytes"],
+        )
         generated_source = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
         if artifact_id == MLX_LOGSUMEXP_AXIS_32_ARTIFACT:
             assert "__crossgl_physical_subgroup" not in generated_source
@@ -691,12 +692,10 @@ def _translate_software_opengl_artifact(
         "algorithm": "sha256",
         "value": MLX_LOGSUMEXP_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == (
-        MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT["sha256"],
+        size_bytes=(MLX_LOGSUMEXP_SOFTWARE_OPENGL_ARTIFACT["sizeBytes"]),
     )
     assert artifact["entryPoint"] == {
         "source": MLX_LOGSUMEXP_ENTRY,

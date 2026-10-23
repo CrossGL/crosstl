@@ -36,6 +36,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
 )
+from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
 MLX_DOT_SOURCE = "mlx/backend/metal/kernels/dot.metal"
@@ -201,11 +202,11 @@ def _translate_dot_artifact(
         "algorithm": "sha256",
         "value": MLX_DOT_SHA256,
     }
-    assert artifact["generatedHash"] == {
-        "algorithm": "sha256",
-        "value": expected_identity["sha256"],
-    }
-    assert artifact["generatedSizeBytes"] == expected_identity["sizeBytes"]
+    check_generated_artifact(
+        artifact,
+        sha256=expected_identity["sha256"],
+        size_bytes=expected_identity["sizeBytes"],
+    )
     assert artifact["entryPoint"] == {
         "source": MLX_DOT_ENTRY,
         "target": "CSMain" if target == "directx" else "main",
@@ -402,11 +403,11 @@ def test_pinned_mlx_dot_roundtrips_through_metal():
         }
         assert artifact["target"] == "metal"
         assert artifact["status"] == "translated"
-        assert artifact["generatedHash"] == {
-            "algorithm": "sha256",
-            "value": MLX_DOT_METAL_ARTIFACT["sha256"],
-        }
-        assert artifact["generatedSizeBytes"] == MLX_DOT_METAL_ARTIFACT["sizeBytes"]
+        check_generated_artifact(
+            artifact,
+            sha256=MLX_DOT_METAL_ARTIFACT["sha256"],
+            size_bytes=MLX_DOT_METAL_ARTIFACT["sizeBytes"],
+        )
         assert artifact["entryPoint"] == {
             "source": MLX_DOT_ENTRY,
             "target": MLX_DOT_ENTRY,

@@ -52,6 +52,9 @@ _FLOATS = {
     "float32_t",
     "half",
     "float16_t",
+    # CrossGL spells binary16 as ``float16`` and ``f16``.
+    "float16",
+    "f16",
     "bfloat",
     "bfloat16",
     "bfloat16_t",
@@ -61,8 +64,25 @@ _VOTES = {"WaveActiveAnyTrue", "WaveActiveAllTrue"}
 _REDUCTIONS = {"WaveActiveSum", "WaveActiveProduct", "WaveActiveMin", "WaveActiveMax"}
 
 
-def _type_name(value):
-    return value if isinstance(value, str) else getattr(value, "name", None)
+def _type_name(value, aliases=None):
+    """A type's spelling, resolved through ``aliases`` when they are given."""
+    name = value if isinstance(value, str) else getattr(value, "name", None)
+    seen = set()
+    while aliases and name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
+
+
+def _type_aliases(nodes):
+    """Program type aliases, such as ``typedef f16 float16_t;``, by alias name."""
+    aliases = {}
+    for node in nodes:
+        if isinstance(node, VariableNode) and getattr(node, "is_type_alias", False):
+            target = _type_name(node.var_type)
+            if isinstance(target, str) and target != node.name:
+                aliases[node.name] = target
+    return aliases
 
 
 def _statements(body):
@@ -84,13 +104,21 @@ def _operation(node):
     return None
 
 
-def _safe_value(node, names, map_operator, declared_functions, *, speculate=False):
+def _safe_value(
+    node, names, map_operator, declared_functions, *, speculate=False, aliases=None
+):
     def safe(child):
         return _safe_value(
-            child, names, map_operator, declared_functions, speculate=speculate
+            child,
+            names,
+            map_operator,
+            declared_functions,
+            speculate=speculate,
+            aliases=aliases,
         )
 
     def safe_conversion(type_name):
+        type_name = _type_name(type_name, aliases)
         return type_name in _SCALARS and (
             not speculate or type_name in {"bool"} | _FLOATS
         )
@@ -110,7 +138,7 @@ def _safe_value(node, names, map_operator, declared_functions, *, speculate=Fals
         )
     if isinstance(node, FunctionCallNode):
         return (
-            _operation(node) in _SCALARS
+            _type_name(_operation(node), aliases) in _SCALARS
             and _operation(node) not in declared_functions
             and safe_conversion(_operation(node))
             and len(node.arguments) == 1
@@ -139,21 +167,24 @@ def _safe_value(node, names, map_operator, declared_functions, *, speculate=Fals
     return False
 
 
-def _collective_value(node, declared_functions):
+def _collective_value(node, declared_functions, aliases=None):
     """Look through pure floating conversions without removing their rounding."""
     while True:
-        if isinstance(node, CastNode) and _type_name(node.target_type) in _FLOATS:
+        if (
+            isinstance(node, CastNode)
+            and _type_name(node.target_type, aliases) in _FLOATS
+        ):
             node = node.expression
         elif (
             isinstance(node, ConstructorNode)
-            and _type_name(node.constructor_type) in _FLOATS
+            and _type_name(node.constructor_type, aliases) in _FLOATS
             and not node.named_arguments
             and len(node.arguments) == 1
         ):
             node = node.arguments[0]
         elif (
             isinstance(node, FunctionCallNode)
-            and _operation(node) in _FLOATS
+            and _type_name(_operation(node), aliases) in _FLOATS
             and _operation(node) not in declared_functions
             and not getattr(node, "generic_args", None)
             and len(node.arguments) == 1
@@ -163,8 +194,10 @@ def _collective_value(node, declared_functions):
             return node
 
 
-def _guarded_return_plan(function, declared_names, map_operator, declared_functions):
-    if _type_name(function.return_type) not in _SCALARS - {"bool"}:
+def _guarded_return_plan(
+    function, declared_names, map_operator, declared_functions, aliases=None
+):
+    if _type_name(function.return_type, aliases) not in _SCALARS - {"bool"}:
         return None
     parameters = function.parameters or []
     # Unused receiver/resource parameters need not disqualify a pure method.
@@ -172,7 +205,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
     names = {
         parameter.name
         for parameter in parameters
-        if _type_name(parameter.param_type) in _SCALARS
+        if _type_name(parameter.param_type, aliases) in _SCALARS
         and not set(parameter.qualifiers or []) & {"out", "inout", "volatile"}
     }
     names.update({"NAN", "INFINITY"} - declared_names)
@@ -180,7 +213,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
     alias = None
     if statements and isinstance(statements[0], VariableNode):
         alias = statements.pop(0)
-        if _type_name(alias.var_type) != "bool" or alias.name in names:
+        if _type_name(alias.var_type, aliases) != "bool" or alias.name in names:
             return None
     if not statements or not isinstance(statements[0], IfNode):
         return None
@@ -208,7 +241,7 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
         if not isinstance(vote, IdentifierNode) or vote.name != alias.name:
             return None
         vote = alias.initial_value
-    reduction = _collective_value(tail[0].value, declared_functions)
+    reduction = _collective_value(tail[0].value, declared_functions, aliases)
     if _operation(vote) not in _VOTES or _operation(reduction) not in _REDUCTIONS:
         return None
     if _operation(vote) in declared_names or _operation(reduction) in declared_names:
@@ -220,9 +253,12 @@ def _guarded_return_plan(function, declared_names, map_operator, declared_functi
             map_operator,
             declared_functions,
             speculate=call is reduction,
+            aliases=aliases,
         ):
             return None
-    if not _safe_value(early[0].value, names, map_operator, declared_functions):
+    if not _safe_value(
+        early[0].value, names, map_operator, declared_functions, aliases=aliases
+    ):
         return None
     return alias, condition, tail[0].value, early[0].value
 
@@ -243,13 +279,14 @@ def converge_subgroup_guarded_returns(ast, walk_ast, map_operator):
         if not isinstance(node, IdentifierNode)
         and isinstance(getattr(node, "name", None), str)
     }
+    aliases = _type_aliases(nodes)
     plans = [
         (node, plan)
         for node in nodes
         if isinstance(node, FunctionNode)
         and (
             plan := _guarded_return_plan(
-                node, declared_names, map_operator, declared_functions
+                node, declared_names, map_operator, declared_functions, aliases
             )
         )
         is not None
