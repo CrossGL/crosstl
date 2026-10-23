@@ -653,9 +653,10 @@ def test_codegen_attribute_mapping():
     }
     """
     result = convert(code)
-    assert re.search(r"@\s*POSITION", result)
-    assert re.search(r"@\s*NORMAL", result)
-    assert re.search(r"@\s*TEXCOORD0", result)
+    assert re.search(r"position\s*@\s*location\(0\)", result)
+    assert re.search(r"normal\s*@\s*location\(1\)", result)
+    assert re.search(r"uv\s*@\s*location\(5\)", result)
+    assert not re.search(r"@\s*(POSITION|NORMAL|TEXCOORD)", result)
     assert re.search(r"gl_Position", result)
     assert re.search(r"gl_FragColor", result)
     assert re.search(r"gl_VertexID", result)
