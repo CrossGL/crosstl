@@ -5,6 +5,7 @@ Metal. CrossGL keeps them as identifiers. The HLSL and GLSL generators emitted a
 undeclared identifiers in the output, and the SPIR-V generator refused all of them (and ``M_PI_F``).
 """
 
+import re
 import shutil
 import struct
 import subprocess
@@ -156,7 +157,8 @@ def test_declared_names_shadow_the_limits(tmp_path, backend):
     code = _translate(tmp_path, SHADOWING_SOURCE, "cgl", backend)
     assert "3.40282346638528859811704183484516925e+38f" not in code
     if backend == "vulkan":
-        assert "OpConstant %float 2" in code
+        # Formatted output names the type %float; raw output keeps numeric ids.
+        assert re.search(r"= OpConstant %\w+ 2(\.0)?$", code, re.M)
     else:
         assert "FLT_MAX = 2.0" in code
 
