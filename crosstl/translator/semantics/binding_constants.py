@@ -23,6 +23,11 @@ constant, a name the program does not define, a non-integer value or a negative 
 :class:`BindingIndexUnresolvedError`, because no target can bind it as written. Arguments that are already literals,
 and the ``space1`` and ``set1`` register spellings, are left to the generators.
 
+``[[function_constant(index)]]`` on a program-scope constant declares a Metal function constant with that index (MSL
+3.2 §5.8.1), and the samples name the index with an enumerator as well. The same attribute on an argument or a
+structure member names a Boolean function constant that makes it conditional, so only the declaration form is
+folded; ``constant_id``, the Vulkan spelling, is treated the same way.
+
 WGSL output is the one exception for a name the program does not declare. WGSL has no preprocessor, and the
 ``@group`` and ``@binding`` attributes take any const-expression (WGSL, "Resource Interface"), so a host that numbers
 its bind groups declares those constants in the module text it compiles. Such an index is kept as written, and the
@@ -41,8 +46,12 @@ __all__ = [
     "BindingIndexUnresolvedError",
     "HOST_DECLARED_INDEX_TARGETS",
     "INDEX_ATTRIBUTES",
+    "SPECIALIZATION_INDEX_ATTRIBUTES",
     "fold_binding_constants",
 ]
+
+# Attributes whose argument is an index only on a constant's declaration; elsewhere it names a constant.
+SPECIALIZATION_INDEX_ATTRIBUTES = frozenset({"constant_id", "function_constant"})
 
 # Targets whose output keeps an index that names an undeclared constant, for the host to declare.
 HOST_DECLARED_INDEX_TARGETS = frozenset({"wgsl"})
@@ -349,11 +358,21 @@ def fold_binding_constants(program, target) -> int:
     target = str(target or "")
     table = None
     changed = 0
+    declarations = {
+        id(node)
+        for node in (getattr(program, "constants", None) or []) + (
+            getattr(program, "global_variables", None) or []
+        )
+    }
     for node in _walk(program):
         for attribute in getattr(node, "attributes", None) or []:
             if not isinstance(attribute, A.AttributeNode):
                 continue
-            if str(getattr(attribute, "name", "")).lower() not in INDEX_ATTRIBUTES:
+            name = str(getattr(attribute, "name", "")).lower()
+            if name in SPECIALIZATION_INDEX_ATTRIBUTES:
+                if id(node) not in declarations:
+                    continue
+            elif name not in INDEX_ATTRIBUTES:
                 continue
             if not any(_refers_to_names(a) for a in attribute.arguments or []):
                 continue

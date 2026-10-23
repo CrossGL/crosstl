@@ -260,3 +260,78 @@ def test_wgsl_still_refuses_a_declared_constant_it_cannot_fold(tmp_path):
     source = WGSL_HOST_GROUP.replace("const int SLOT = 3;", "const float SLOT = 3.0;")
     with pytest.raises(BindingIndexUnresolvedError, match="SLOT is not an integer"):
         _translate(tmp_path, source, ".cgl", "wgsl")
+
+
+METAL_FUNCTION_CONSTANTS = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+    typedef enum FunctionConstantIndex {
+        FunctionConstantBaseColor = 4,
+        FunctionConstantNormal
+    } FunctionConstantIndex;
+    constant bool hasBase [[function_constant(FunctionConstantBaseColor)]];
+    constant bool hasNormal [[function_constant(FunctionConstantNormal)]];
+    constant bool hasAny = hasBase || hasNormal;
+    struct V { float4 p [[position]]; float2 uv; };
+    fragment float4 shade(V in [[stage_in]],
+                          texture2d<float> base [[texture(0), function_constant(hasBase)]],
+                          sampler s [[sampler(0)]]) {
+        float4 c = float4(1.0);
+        if (hasBase) { c = base.sample(s, in.uv); }
+        if (hasAny) { c.a = 0.5; }
+        return c;
+    }
+    """)
+
+
+@pytest.mark.parametrize(
+    ("backend", "patterns"),
+    [
+        (
+            "metal",
+            [
+                r"constant bool hasBase \[\[function_constant\(4\)\]\];",
+                r"constant bool hasNormal \[\[function_constant\(5\)\]\];",
+                r"base \[\[texture\(0\)\]\] \[\[function_constant\(hasBase\)\]\]",
+            ],
+        ),
+        (
+            "opengl",
+            [
+                r"layout\(constant_id = 4\) const bool hasBase",
+                r"layout\(constant_id = 5\) const bool hasNormal",
+            ],
+        ),
+        ("vulkan", [("hasBase", "SpecId 4"), ("hasNormal", "SpecId 5")]),
+    ],
+)
+def test_function_constant_indices_fold_and_conditions_stay(
+    tmp_path, backend, patterns
+):
+    code = _translate(tmp_path, METAL_FUNCTION_CONSTANTS, ".metal", backend)
+    for pattern in patterns:
+        assert _matches(code, pattern), (pattern, code)
+
+
+def test_function_constant_indices_compile_as_metal(tmp_path):
+    if not shutil.which("xcrun"):
+        pytest.skip("the Metal toolchain is not installed")
+    code = _translate(tmp_path, METAL_FUNCTION_CONSTANTS, ".metal", "metal")
+    (tmp_path / "a.metal").write_text(code, encoding="utf-8")
+    result = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "metal", "-c", "a.metal", "-o", "a.air"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_function_constant_index_naming_a_specialization_constant_is_refused(tmp_path):
+    source = METAL_FUNCTION_CONSTANTS.replace(
+        "[[function_constant(FunctionConstantNormal)]]",
+        "[[function_constant(hasBase)]]",
+    )
+    with pytest.raises(BindingIndexUnresolvedError, match="hasBase"):
+        _translate(tmp_path, source, ".metal", "metal")
