@@ -34,7 +34,7 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
-__all__ = ("ENTRIES", "dispatch", "operands", "validate")
+__all__ = ("ENTRIES", "bind", "dispatch", "operands", "validate")
 # backend.cpp splits unary and binary vectors into launches of 65535 groups.
 MAX_VECTOR = 65535
 
@@ -124,14 +124,15 @@ def validate(entry, buffers, threads, execution):
     }
 
 
-def _bind(entry, descriptor, supplied, uploads):
-    """Map reflected bindings to the source parameters and their packets."""
+def bind(entry, descriptor, supplied, uploads, output, types):
+    """Map reflected bindings to the source parameters and their packets.
+
+    ``types`` names each parameter's logical element type; ``size`` is the
+    vectors' ``uint32`` element count.
+    """
     # Direct3D prefixes constants with the entry; "in" and "out" are keywords.
     prefix = entry.rstrip("_") + "_"
     inputs, outputs, observed, matched = {}, {}, [], {}
-    kernel, _, _, destination = signature(entry)
-    _, output = operands(kernel)
-    types = operand_types(entry)
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
             continue
@@ -201,7 +202,9 @@ def dispatch(host, entry, buffers, count, threads, launch):
         output: packet(destination, target, initial + tail),
     }
     descriptor, directory = host.elementwise.get(entry)
-    inputs, outputs, observed, matched = _bind(entry, descriptor, supplied, uploads)
+    inputs, outputs, observed, matched = bind(
+        entry, descriptor, supplied, uploads, output, types
+    )
     request = build_native_loader_dispatch_request(
         descriptor,
         directory,

@@ -81,8 +81,9 @@ void dispatch_arange(
   T step;
   if constexpr (std::is_integral_v<T>) {
     using Unsigned = std::make_unsigned_t<T>;
-    step = std::bit_cast<T>(
-        static_cast<Unsigned>(next) - static_cast<Unsigned>(start));
+    // Narrow operands promote to int; the difference wraps to the width.
+    step = std::bit_cast<T>(static_cast<Unsigned>(
+        static_cast<Unsigned>(next) - static_cast<Unsigned>(start)));
   } else {
     step = next - start;
   }
@@ -2402,8 +2403,11 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (!inputs.empty()) {
     throw std::invalid_argument("Arange does not accept input arrays.");
   }
-  if (out.dtype() != float32 && out.dtype() != int32 && out.dtype() != uint32 &&
-      out.dtype() != int64 && out.dtype() != uint64) {
+  // arange.metal instantiates every real dtype but Boolean; the base family
+  // installs float32 and the 32- and 64-bit integers, and the runtime
+  // translates the others on first use.
+  const char* dtype = cast_type(out.dtype());
+  if (!dtype || out.dtype() == bool_ || out.dtype() == complex64) {
     throw std::invalid_argument("CrossTL Arange does not support this dtype.");
   }
   if (out.size() > 65535) {
@@ -2414,16 +2418,30 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (out.size() == 0) {
     return;
   }
-  if (out.dtype() == float32) {
-    dispatch_arange<float>(out, start_, step_, "arangefloat32", "float32");
-  } else if (out.dtype() == int32) {
-    dispatch_arange<int32_t>(out, start_, step_, "arangeint32", "int32");
-  } else if (out.dtype() == uint32) {
-    dispatch_arange<uint32_t>(out, start_, step_, "arangeuint32", "uint32");
-  } else if (out.dtype() == int64) {
-    dispatch_arange<int64_t>(out, start_, step_, "arangeint64", "int64");
-  } else {
-    dispatch_arange<uint64_t>(out, start_, step_, "arangeuint64", "uint64");
+  const std::string entry = std::string("arange") + dtype;
+  switch (out.dtype()) {
+    case float32:
+      return dispatch_arange<float>(out, start_, step_, entry.c_str(), dtype);
+    case float16:
+      return dispatch_arange<float16_t>(out, start_, step_, entry.c_str(), dtype);
+    case bfloat16:
+      return dispatch_arange<bfloat16_t>(out, start_, step_, entry.c_str(), dtype);
+    case uint8:
+      return dispatch_arange<uint8_t>(out, start_, step_, entry.c_str(), dtype);
+    case uint16:
+      return dispatch_arange<uint16_t>(out, start_, step_, entry.c_str(), dtype);
+    case uint32:
+      return dispatch_arange<uint32_t>(out, start_, step_, entry.c_str(), dtype);
+    case uint64:
+      return dispatch_arange<uint64_t>(out, start_, step_, entry.c_str(), dtype);
+    case int8:
+      return dispatch_arange<int8_t>(out, start_, step_, entry.c_str(), dtype);
+    case int16:
+      return dispatch_arange<int16_t>(out, start_, step_, entry.c_str(), dtype);
+    case int32:
+      return dispatch_arange<int32_t>(out, start_, step_, entry.c_str(), dtype);
+    default:
+      return dispatch_arange<int64_t>(out, start_, step_, entry.c_str(), dtype);
   }
 }
 

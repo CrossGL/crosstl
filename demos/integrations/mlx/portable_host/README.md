@@ -9,8 +9,9 @@ upstream tests are not replaced.
 
 ## Scope
 
-The current adapter implements `Arange` for `float32`, `int32`, `uint32`, `int64`
-and `uint64`, plus 30 float32 unary operations from the pinned `unary.metal`:
+The current adapter implements `Arange` for every dtype the pinned
+`arange.metal` instantiates (see "Aranges of every GPU dtype"), plus 30 float32
+unary operations from the pinned `unary.metal`:
 absolute value, negation, sign, square, square root, reciprocal square root,
 floor, ceil, round, exponential, expm1, logarithms, log1p, sigmoid, erf, inverse
 erf, trigonometric functions and their hyperbolic and inverse forms. The exact
@@ -310,6 +311,21 @@ second operand where the condition is true and the third elsewhere. Floating
 and complex dispatches are checked by package and native identity like the
 prebuilt float families, and their values by the upstream tests' own
 comparisons with the CPU.
+
+## Aranges of every GPU dtype
+
+`Arange` runs the unchanged `arange<type>` entry of `arange.metal` for every
+dtype it instantiates: the 8-, 16-, 32- and 64-bit integers, float16, bfloat16
+and float32. The base family installs float32 and the 32- and 64-bit
+integers; `arange_packages` translates the six others from the pinned source
+on first use through `lazy_kernel_cache`, with the base family's float
+profiles. The host converts `start` and `start + step` to the output type as
+upstream does, so integer parameters wrap modulo the storage width, and passes
+both as one-element constants with one output element per invocation, at most
+65,535 in all. `arange_evidence` recomputes every integer dispatch exactly:
+`start + index * step` promotes narrow operands to 32 bits and wraps modulo the
+width. float16 and bfloat16 dispatches are checked by package and native
+identity, and their values by the upstream tests' comparisons with the CPU.
 
 ## DivMod
 
@@ -1755,7 +1771,7 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 74 more unchanged `test_ops` tests on all three
+A dedicated job then runs 83 more unchanged `test_ops` tests on all three
 platforms:
 
 ```bash
@@ -1789,7 +1805,11 @@ tests reach are translated. The tests are `test_trunc`, `test_erfinv`,
 `test_diag_zero_size`, `test_isfinite`, `test_isinf`, `test_isnan`,
 `test_isneginf`, `test_isposinf`, `test_log`, `test_log10`, `test_log1p`,
 `test_log2`, `test_logaddexp`, `test_maximum`, `test_minimum`, `test_outer`,
-`test_real_imag`, `test_sign` and `test_trig_ops`.
+`test_real_imag`, `test_sign` and `test_trig_ops`; `test_clip`,
+`test_concatenate`, `test_meshgrid`, `test_nan_to_num`, `test_pad`,
+`test_pad_reflect_symmetric`, `test_slice_update_reversed` and `test_take`,
+which reach lazy selections of every GPU dtype; and `test_round`, which also
+reaches lazy aranges.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
@@ -1797,10 +1817,11 @@ base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
 indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from
 the pinned sources are recomputed from their retained inputs and their native
-modules are checked, and so are the casts, copies and integer or Boolean
-unary, binary and selection vectors that no installed family covers (see "Casts and
-copies of every GPU dtype" and "Unary, binary and selection vectors of every GPU
-dtype"). Lazy floating and complex vectors must name the package their cache derives
+modules are checked, and so are the casts, copies, integer or Boolean
+unary, binary and selection vectors and integer aranges that no installed family
+covers (see "Casts and copies of every GPU dtype", "Unary, binary and selection
+vectors of every GPU dtype" and "Aranges of every GPU dtype"). Lazy floating and
+complex vectors and 16-bit float aranges must name the package their cache derives
 again and pass the native-identity checks. Scans, small row and column
 reductions, GEMV, steel GEMM and split-K GEMM kernels must name the package
 their cache derives again from the recorded entry, launch and metadata (and,
@@ -1810,8 +1831,8 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 8,541 translated kernels, 16 of them indexing kernels and
-6 steel GEMM kernels; the whole verification takes about 13 minutes on a
+native run dispatches 9,596 translated kernels, 24 of them indexing kernels and
+6 steel GEMM kernels; the whole verification takes about 23 minutes on a
 loaded machine.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element

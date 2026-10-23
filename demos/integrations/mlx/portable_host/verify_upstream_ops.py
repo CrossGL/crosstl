@@ -33,6 +33,8 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    arange_evidence,
+    arange_packages,
     copy_evidence,
     divmod_evidence,
     elementwise_evidence,
@@ -157,6 +159,17 @@ UPSTREAM_TESTS = tuple(
         "test_real_imag",
         "test_sign",
         "test_trig_ops",
+        # These reach lazily translated selections of every GPU dtype.
+        "test_clip",
+        "test_concatenate",
+        "test_meshgrid",
+        "test_nan_to_num",
+        "test_pad",
+        "test_pad_reflect_symmetric",
+        "test_slice_update_reversed",
+        "test_take",
+        # This also reaches lazily translated aranges.
+        "test_round",
     )
 )
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -221,6 +234,11 @@ def install(args, output):
             entry
             for entry in LAZY_ELEMENTWISE_ENTRIES
             if host.lazy_elementwise(entry) and elementwise_evidence.recomputable(entry)
+        ),
+        *(
+            entry
+            for entry in arange_packages.ENTRIES
+            if host.lazy_arange(entry) and arange_evidence.recomputable(entry)
         ),
     )
     host.install()
@@ -386,6 +404,19 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Derives the cached package again and checks the native modules;
         # integer and Boolean results are recomputed from their operands.
         elementwise_evidence.audit_event(event, elementwise)
+        lazy_checked.add(i)
+        owners[i] += 1
+    aranges = arange_packages.cache(
+        args.mlx_root, args.packages / arange_packages.CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in arange_packages.ENTRIES or event["entry"] in installed:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op arange dispatch targets another backend")
+        # Derives the cached package again and checks the native modules;
+        # integer results are recomputed from their scalars.
+        arange_evidence.audit_event(event, aranges)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

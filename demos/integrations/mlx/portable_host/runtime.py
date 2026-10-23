@@ -31,6 +31,8 @@ from crosstl.project.runtime_verification import (
 )
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
+    arange_dispatch,
+    arange_packages,
     bfloat_storage,
     column_reduction_layout,
     column_small_layout,
@@ -466,6 +468,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # So do the aranges of the 8- and 16-bit integers and 16-bit floats.
+        self.aranges = (
+            arange_packages.cache(
+                mlx_root, self.directory / arange_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.descriptors = index["descriptors"]
         if set(self.descriptors) != set(ENTRIES):
             raise ValueError("Packages must contain the exact supported entry set")
@@ -613,6 +623,8 @@ class HostRuntime:
                 return 1
             if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
                 return 1
+            if name in arange_packages.ENTRIES and self.aranges is not None:
+                return 1
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
@@ -725,7 +737,19 @@ class HostRuntime:
             and self.elementwise is not None
         )
 
+    def lazy_arange(self, entry):
+        """Whether ``entry`` runs from the lazy arange cache."""
+        return (
+            entry in arange_packages.ENTRIES
+            and entry not in self.descriptors
+            and self.aranges is not None
+        )
+
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if self.lazy_arange(entry):
+            return arange_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if self.lazy_copy(entry):
             return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_elementwise(entry):
