@@ -177,6 +177,12 @@ from .spirv_ray_builtins import (
 )
 from .spirv_refusals import SpirvRefusals
 from .spirv_separate_textures import separate_texture_type_info
+from .spirv_shading_rate import (
+    require_shading_rate_capability,
+    shading_rate_builtin_info,
+    shading_rate_flag_value,
+    shading_rate_semantic_builtin,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -9296,6 +9302,7 @@ class VulkanSPIRVCodeGen(
         variable = self.create_variable(array_type, "Output", variable_name)
         if builtin:
             self.decorations.append(f"OpDecorate %{variable.id} BuiltIn {builtin}")
+            require_shading_rate_capability(self, builtin)
         else:
             self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
         if role == "primitives":
@@ -9311,7 +9318,6 @@ class VulkanSPIRVCodeGen(
         """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
         if semantic is None:
             return None
-
         semantic_map = {
             "SV_Position": "gl_Position",
             "POSITION": "POSITION",
@@ -9333,6 +9339,7 @@ class VulkanSPIRVCodeGen(
                 "gl_Layer": "Layer",
                 "gl_ViewportIndex": "ViewportIndex",
                 "gl_CullPrimitiveEXT": "CullPrimitiveEXT",
+                "gl_PrimitiveShadingRateEXT": "PrimitiveShadingRateKHR",
             }.get(normalized)
         return None
 
@@ -19786,6 +19793,8 @@ class VulkanSPIRVCodeGen(
     def glsl_builtin_limit_constant(self, name: str) -> Optional[SpirvId]:
         value = GLSL_BUILTIN_INT_LIMITS.get(name)
         if value is None:
+            value = shading_rate_flag_value(name)
+        if value is None:
             return None
         return self.register_constant(value, self.register_primitive_type("int"))
 
@@ -20899,6 +20908,16 @@ class VulkanSPIRVCodeGen(
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")
             self.decorations.append(f"OpDecorate %{var_id.id} PerVertexKHR")
+        if self.declaration_metadata_names(node) & {
+            "perprimitive",
+            "perprimitiveext",
+            "per_primitive",
+        }:
+            # GL_EXT_mesh_shader `perprimitiveEXT`: one value per mesh primitive, written by the mesh stage and
+            # read flat by the fragment stage (SPV_EXT_mesh_shader, PerPrimitiveEXT decoration).
+            self.require_capability("MeshShadingEXT")
+            self.require_extension("SPV_EXT_mesh_shader")
+            self.decorations.append(f"OpDecorate %{var_id.id} PerPrimitiveEXT")
 
     def has_attribute(self, node, attribute_name: str) -> bool:
         return any(
@@ -30075,6 +30094,11 @@ class VulkanSPIRVCodeGen(
             ),
             "SV_DEPTH": "gl_FragDepth",
             "SV_COVERAGE": "gl_SampleMask",
+            "SV_SHADINGRATE": (
+                "gl_ShadingRateEXT"
+                if self.current_execution_model == "Fragment"
+                else "gl_PrimitiveShadingRateEXT"
+            ),
         }
         return aliases.get(str(name).upper(), name)
 
@@ -30084,6 +30108,7 @@ class VulkanSPIRVCodeGen(
             "SV_DEPTH": "gl_FragDepth",
             "SV_COVERAGE": "gl_SampleMask",
             "SV_STENCILREF": "gl_FragStencilRefEXT",
+            "SV_SHADINGRATE": "gl_PrimitiveShadingRateEXT",
         }
         return aliases.get(str(name).upper(), name)
 
@@ -30120,6 +30145,11 @@ class VulkanSPIRVCodeGen(
             return "gl_FragStencilRefEXT"
         if upper_name == "SV_DEPTH":
             return "gl_FragDepth"
+        shading_rate = shading_rate_semantic_builtin(
+            semantic, execution_model, storage_class
+        )
+        if shading_rate is not None:
+            return shading_rate
         return semantic
 
     def spirv_builtin_cache_name(self, name: str) -> str:
@@ -30134,6 +30164,9 @@ class VulkanSPIRVCodeGen(
         per_vertex = per_vertex_builtin_info(self, name)
         if per_vertex is not None:
             return per_vertex
+        shading_rate = shading_rate_builtin_info(name)
+        if shading_rate is not None:
+            return shading_rate
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -30531,6 +30564,8 @@ class VulkanSPIRVCodeGen(
         self.mark_fragment_stencil_ref_replacing_if_needed(builtin_name, storage_class)
 
     def require_stage_builtin_capabilities(self, builtin_name: str):
+        if require_shading_rate_capability(self, builtin_name):
+            return
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
             self.require_extension("SPV_KHR_fragment_shader_barycentric")

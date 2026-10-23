@@ -43784,6 +43784,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         attr_name = getattr(attr, "name", None)
         if not attr_name or getattr(attr, "arguments", None):
             return False
+        # Vulkan block kinds mark how a ConstantBuffer<T> is fed; they never name an array size.
+        if str(attr_name).lower() in {"push_constant", "shader_record"}:
+            return False
         if (
             is_image_format_attribute(attr)
             or self.is_resource_binding_attribute(attr)
@@ -43916,6 +43919,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_resource_array_hint_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
+            # ConstantBuffer<T> name[] is a runtime-sized array of constant-buffer descriptors (shader model 5.1).
+            or self.is_hlsl_constant_buffer_type(vtype)
             or texel_buffer_base_type(vtype) is not None
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)
