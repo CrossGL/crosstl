@@ -1,9 +1,10 @@
-"""Fold scalar, vector and matrix constant initializers for the SPIR-V generator.
+"""Fold module-scope constant initializers for the SPIR-V generator.
 
 SPIR-V module scope can only hold constant instructions, so a CrossGL
 ``const`` whose initializer is an operator expression, a conversion, a swizzle
 or a math built-in call has to be evaluated during translation. Evaluation uses
-:mod:`matrix_constant_folding`, which rounds binary32 values after every
+:mod:`aggregate_constant_folding` and the scalar, vector and matrix folders
+it builds on, which round binary32 values after every
 operation and wraps integers, so the constant has the value the shader would
 have computed.
 
@@ -30,9 +31,9 @@ from ..ast import (
 )
 from ..float_limit_constants import float_limit_constant
 from ..standard_constants import standard_math_constant
+from .aggregate_constant_folding import AggregateConstant, AggregateConstantFolder
 from .matrix_constant_folding import (
     MatrixConstant,
-    MatrixConstantFolder,
     convert_matrix_constant,
     make_matrix,
 )
@@ -152,9 +153,9 @@ def _integer_constant(value: int) -> ScalarConstant:
     return ScalarConstant("u64", value)
 
 
-def _scalar_value_of(generator, constant_id) -> ScalarConstant | None:
-    value = generator.constant_values_by_id.get(constant_id.id)
-    type_id = generator.value_types.get(constant_id.id)
+def _scalar_value_of(generator, constant_id: int) -> ScalarConstant | None:
+    value = generator.constant_values_by_id.get(constant_id)
+    type_id = generator.value_types.get(constant_id)
     base_type = getattr(getattr(type_id, "type", None), "base_type", None)
     kind = spirv_scalar_kind(generator, base_type)
     if value is None or kind is None:
@@ -194,6 +195,42 @@ def _matrix_value_of(generator, constant_id: int) -> MatrixConstant | None:
     return None
 
 
+def _aggregate_value_of(generator, constant_id: int) -> AggregateConstant | None:
+    """Return the folded array or struct held by composite constant *constant_id*."""
+    for (_type_key, element_ids), registered in generator.composite_constants.items():
+        if registered.id != constant_id:
+            continue
+        elements = []
+        for element_id in element_ids:
+            element = _constant_value_of(generator, element_id)
+            if element is None:
+                return None
+            elements.append(element)
+        value_type = generator.value_types.get(constant_id)
+        base_type = getattr(getattr(value_type, "type", None), "base_type", None)
+        members = generator.current_struct_members.get(base_type)
+        if members is None:
+            return AggregateConstant(tuple(elements))
+        if len(members) != len(elements):
+            return None
+        names = tuple(member_name for _member_type, member_name in members)
+        return AggregateConstant(tuple(elements), names)
+    return None
+
+
+def _constant_value_of(generator, constant_id: int):
+    """Return the folded value of the constant with id *constant_id*, or ``None``."""
+    for lookup in (_scalar_value_of, _vector_value_of, _matrix_value_of):
+        value = lookup(generator, constant_id)
+        if value is not None:
+            return value
+    if spirv_vector_shape(generator, generator.value_types.get(constant_id)):
+        return None
+    if spirv_matrix_shape(generator, generator.value_types.get(constant_id)):
+        return None
+    return _aggregate_value_of(generator, constant_id)
+
+
 def _resolve_name(generator, name: str):
     if generator.current_function_name is not None:
         return None
@@ -201,13 +238,7 @@ def _resolve_name(generator, name: str):
     if constant_id is not None:
         # Specialization constants have no entry in the value tables, so
         # expressions over them keep the OpSpecConstantOp path.
-        scalar = _scalar_value_of(generator, constant_id)
-        if scalar is not None:
-            return scalar
-        vector = _vector_value_of(generator, constant_id.id)
-        if vector is not None:
-            return vector
-        return _matrix_value_of(generator, constant_id.id)
+        return _constant_value_of(generator, constant_id.id)
     int_value = generator.active_literal_int_constants().get(name)
     if isinstance(int_value, int) and not isinstance(int_value, bool):
         return _integer_constant(int_value)
@@ -224,7 +255,7 @@ def _resolve_name(generator, name: str):
 
 def spirv_fold_constant(generator, expr):
     """Fold *expr* to a scalar, vector or matrix constant, or return ``None``."""
-    folder = MatrixConstantFolder(
+    folder = AggregateConstantFolder(
         lambda name: _resolve_name(generator, name),
         lambda type_value: spirv_scalar_kind(generator, type_value),
         lambda type_value: spirv_vector_shape(generator, type_value),
@@ -338,10 +369,41 @@ def _defers_to_constructor_path(generator, expr) -> bool:
     )
 
 
+def _array_constructor_constant(generator, expr):
+    """Return the ``OpConstantComposite`` of a ``T[N](...)`` constructor, or ``None``."""
+    if not isinstance(expr, FunctionCallNode):
+        return None
+    callee = getattr(expr, "function", getattr(expr, "name", None))
+    callee_name = getattr(callee, "name", callee)
+    if not isinstance(callee_name, str):
+        return None
+    array_info = generator.split_outer_array_type(callee_name)
+    if array_info is None:
+        return None
+    element_type_name, size = array_info
+    arguments = list(getattr(expr, "args", None) or [])
+    if size is None:
+        size = len(arguments)
+    if not isinstance(size, int) or size != len(arguments) or size == 0:
+        return None
+    element_type = generator.map_crossgl_type(element_type_name)
+    elements = []
+    for argument in arguments:
+        element = generator.process_constant_expression(argument, element_type)
+        if element is None or not generator.is_constant_instruction(element):
+            return None
+        elements.append(element)
+    array_type = generator.register_array_type(element_type, size)
+    return generator.register_composite_constant(array_type, elements)
+
+
 def spirv_folded_constant(generator, expr, target_type) -> object | None:
     """Return a constant id for a foldable initializer, or ``None``."""
     if not isinstance(expr, _EVALUATED_NODES):
         return None
+    array_constant = _array_constructor_constant(generator, expr)
+    if array_constant is not None:
+        return array_constant
     if _defers_to_constructor_path(generator, expr):
         return None
     if target_type is not None and spirv_matrix_shape(generator, target_type):

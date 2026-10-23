@@ -145,6 +145,10 @@ class VectorConstantFolder(ScalarConstantFolder):
 
     def fold_swizzle(self, operand_expr, member) -> FoldedConstant | None:
         operand = self.fold(operand_expr)
+        return None if operand is None else self.member_value(operand, member)
+
+    def member_value(self, operand, member) -> FoldedConstant | None:
+        """Return the swizzle or member *member* of a folded operand."""
         if not isinstance(operand, VectorConstant):
             return None
         indices = swizzle_indices(member, operand.size)
