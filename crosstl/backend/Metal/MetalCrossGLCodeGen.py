@@ -53,6 +53,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .simd_header_types import SIMD_HEADER_TYPES
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
@@ -1077,6 +1078,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
+        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
+        *SIMD_HEADER_TYPES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1750,11 +1753,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "simd_uint3": "uvec3",
             "simd_uint4": "uvec4",
             # simd.h aliases commonly found in shared Metal headers
-            "vector_float2": "vec2",
-            "vector_float3": "vec3",
-            "vector_float4": "vec4",
-            "matrix_float3x3": "mat3",
-            "matrix_float4x4": "mat4",
+            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
