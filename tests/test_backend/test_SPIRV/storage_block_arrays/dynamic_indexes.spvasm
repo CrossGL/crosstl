@@ -1,0 +1,106 @@
+; An array of SPIR-V blocks, from glslangValidator -V --target-env vulkan1.1 on this GLSL:
+;   #version 450
+;   layout(local_size_x = 64) in;
+;   layout(std430, binding = 0) buffer Block { uint data[]; } bufs[4];
+;   layout(std430, binding = 4) readonly buffer In { float values[]; } ins[2];
+;   void main() {
+;       uint i = gl_GlobalInvocationID.x;
+;       uint k = i & 3u;
+;       atomicAdd(bufs[k].data[0], 1u);
+;       bufs[k].data[i] += uint(ins[i & 1u].values[i]) + uint(bufs[3 - k].data.length());
+;   }
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %4 "main" %11
+               OpExecutionMode %4 LocalSize 64 1 1
+               OpName %4 "main"
+               OpName %8 "i"
+               OpName %11 "gl_GlobalInvocationID"
+               OpName %16 "k"
+               OpName %21 "Block"
+               OpMemberName %21 0 "data"
+               OpName %25 "bufs"
+               OpName %37 "In"
+               OpMemberName %37 0 "values"
+               OpName %41 "ins"
+               OpDecorate %11 BuiltIn GlobalInvocationId
+               OpDecorate %20 ArrayStride 4
+               OpDecorate %21 Block
+               OpMemberDecorate %21 0 Offset 0
+               OpDecorate %25 Binding 0
+               OpDecorate %25 DescriptorSet 0
+               OpDecorate %36 ArrayStride 4
+               OpDecorate %37 Block
+               OpMemberDecorate %37 0 NonWritable
+               OpMemberDecorate %37 0 Offset 0
+               OpDecorate %41 NonWritable
+               OpDecorate %41 Binding 4
+               OpDecorate %41 DescriptorSet 0
+               OpDecorate %62 BuiltIn WorkgroupSize
+          %2 = OpTypeVoid
+          %3 = OpTypeFunction %2
+          %6 = OpTypeInt 32 0
+          %7 = OpTypePointer Function %6
+          %9 = OpTypeVector %6 3
+         %10 = OpTypePointer Input %9
+         %11 = OpVariable %10 Input
+         %12 = OpConstant %6 0
+         %13 = OpTypePointer Input %6
+         %18 = OpConstant %6 3
+         %20 = OpTypeRuntimeArray %6
+         %21 = OpTypeStruct %20
+         %22 = OpConstant %6 4
+         %23 = OpTypeArray %21 %22
+         %24 = OpTypePointer StorageBuffer %23
+         %25 = OpVariable %24 StorageBuffer
+         %27 = OpTypeInt 32 1
+         %28 = OpConstant %27 0
+         %29 = OpTypePointer StorageBuffer %6
+         %31 = OpConstant %6 1
+         %35 = OpTypeFloat 32
+         %36 = OpTypeRuntimeArray %35
+         %37 = OpTypeStruct %36
+         %38 = OpConstant %6 2
+         %39 = OpTypeArray %37 %38
+         %40 = OpTypePointer StorageBuffer %39
+         %41 = OpVariable %40 StorageBuffer
+         %45 = OpTypePointer StorageBuffer %35
+         %51 = OpTypePointer StorageBuffer %21
+         %61 = OpConstant %6 64
+         %62 = OpConstantComposite %9 %61 %31 %31
+          %4 = OpFunction %2 None %3
+          %5 = OpLabel
+          %8 = OpVariable %7 Function
+         %16 = OpVariable %7 Function
+         %14 = OpAccessChain %13 %11 %12
+         %15 = OpLoad %6 %14
+               OpStore %8 %15
+         %17 = OpLoad %6 %8
+         %19 = OpBitwiseAnd %6 %17 %18
+               OpStore %16 %19
+         %26 = OpLoad %6 %16
+         %30 = OpAccessChain %29 %25 %26 %28 %28
+         %32 = OpAtomicIAdd %6 %30 %31 %12 %31
+         %33 = OpLoad %6 %16
+         %34 = OpLoad %6 %8
+         %42 = OpLoad %6 %8
+         %43 = OpBitwiseAnd %6 %42 %31
+         %44 = OpLoad %6 %8
+         %46 = OpAccessChain %45 %41 %43 %28 %44
+         %47 = OpLoad %35 %46
+         %48 = OpConvertFToU %6 %47
+         %49 = OpLoad %6 %16
+         %50 = OpISub %6 %18 %49
+         %52 = OpAccessChain %51 %25 %50
+         %53 = OpArrayLength %6 %52 0
+         %54 = OpBitcast %27 %53
+         %55 = OpBitcast %6 %54
+         %56 = OpIAdd %6 %48 %55
+         %57 = OpAccessChain %29 %25 %33 %28 %34
+         %58 = OpLoad %6 %57
+         %59 = OpIAdd %6 %58 %56
+         %60 = OpAccessChain %29 %25 %33 %28 %34
+               OpStore %60 %59
+               OpReturn
+               OpFunctionEnd

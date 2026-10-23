@@ -3529,7 +3529,7 @@ def test_codegen_subpass_input_globals_reparse_crossgl():
 
     assert "@ input_attachment_index(0)" in output
     assert "@ binding(0)" in output
-    assert "sampler2d in_color_r;" in output
+    assert "subpassInput in_color_r;" in output
     assert "vec4 color_r = subpassLoad(in_color_r);" in output
     assert reparsed.global_variables[0].name == "in_color_r"
     assert reparsed.global_variables[0].attributes[0].name == "input_attachment_index"
@@ -4300,7 +4300,7 @@ def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
     output = generate_crossgl(code)
 
     assert (
-        "void CoherentStore(@ globallycoherent "
+        "void CoherentStore(@ globallycoherent @ buffer_layout(hlsl_structured) "
         "RWStructuredBuffer<Payload> data, uint index)" in output
     )
     assert "data[index].value = 1u;" in output

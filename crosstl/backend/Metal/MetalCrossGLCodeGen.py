@@ -44,6 +44,11 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .dependent_builtins import (
+    NOT_DEPENDENT,
+    dependent_builtin_result_type,
+    unbound_template_type_names,
+)
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -52,12 +57,24 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .simd_header_types import SIMD_HEADER_TYPES
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
     combined_texture_type,
 )
 from .type_layout import metal_type_layout
+
+# MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
+METAL_SPARSE_TEXTURE_METHODS = frozenset(
+    {
+        "sparse_sample",
+        "sparse_sample_compare",
+        "sparse_read",
+        "sparse_gather",
+        "sparse_gather_compare",
+    }
+)
 
 
 class MetalCallableAliasLoweringError(ValueError):
@@ -1076,6 +1093,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
+        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
+        *SIMD_HEADER_TYPES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1749,11 +1768,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "simd_uint3": "uvec3",
             "simd_uint4": "uvec4",
             # simd.h aliases commonly found in shared Metal headers
-            "vector_float2": "vec2",
-            "vector_float3": "vec3",
-            "vector_float4": "vec4",
-            "matrix_float3x3": "mat3",
-            "matrix_float4x4": "mat4",
+            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -9964,16 +9979,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         # restricting these to `uint3` wrongly denied them the explicit
         # stage-entry path and collapsed every materialized kernel to an unnamed
         # "main" entry point (invalid SPIR-V: duplicate entry-point names).
-        positional_builtin_types = {"uint", "uint2", "uint3"}
+        positional_builtin_types = {
+            "uint",
+            "uint2",
+            "uint3",
+            "ushort",
+            "ushort2",
+            "ushort3",
+        }
+        index_builtin_types = {"uint", "ushort"}
         expected_types = {
             "thread_position_in_grid": positional_builtin_types,
             "thread_position_in_threadgroup": positional_builtin_types,
             "threadgroup_position_in_grid": positional_builtin_types,
-            "thread_index_in_threadgroup": {"uint"},
+            "thread_index_in_threadgroup": index_builtin_types,
             "threads_per_threadgroup": positional_builtin_types,
             "threadgroups_per_grid": positional_builtin_types,
-            "thread_index_in_simdgroup": {"uint"},
-            "threads_per_simdgroup": {"uint"},
+            "thread_index_in_simdgroup": index_builtin_types,
+            "threads_per_simdgroup": index_builtin_types,
         }
         for param in getattr(func, "params", []) or []:
             semantic = self.compute_builtin_attribute_name(param)
@@ -12396,6 +12419,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             method = expr.method
+            if method in METAL_SPARSE_TEXTURE_METHODS:
+                # A sparse read returns sparse_color<T>: the texel and whether its tile is resident.
+                return self.refuse_import(
+                    f"sparse texture {method}: CrossGL has no texture read that reports tile residency "
+                    "(the texel and residency pair MSL returns as sparse_color<T>)"
+                )
             resource_size_expr = self.resource_size_method_expression(expr, is_main)
             if resource_size_expr is not None:
                 return resource_size_expr
@@ -18111,6 +18140,17 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        dependent = dependent_builtin_result_type(
+            result_kind,
+            argument_types,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+        )
+        if dependent is not NOT_DEPENDENT:
+            # An uninstantiated template resolves the overload per instantiation.
+            return dependent
         diagnostic_argument_types = [
             argument_type or "<unknown>" for argument_type in argument_types
         ]

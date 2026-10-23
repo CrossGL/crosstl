@@ -290,7 +290,9 @@ class HLSLToCrossGLConverter(
             "TextureCubeArray": "textureCubeArray",
             "Texture2DMS": "texture2DMS",
             "Texture2DMSArray": "texture2DMSArray",
-            "SubpassInput": "sampler2d",
+            # Vulkan input attachments ([[vk::input_attachment_index]]).
+            "SubpassInput": "subpassInput",
+            "SubpassInputMS": "subpassInputMS",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
             # RW Texture Types (for compute shaders)
@@ -2030,6 +2032,9 @@ class HLSLToCrossGLConverter(
         )
         if matrix_layout_attributes:
             prefixes.append(matrix_layout_attributes)
+        # A buffer parameter reads the words of the buffer passed to it, so it carries the same layout.
+        if self.is_structured_buffer_resource_type(getattr(parameter, "vtype", None)):
+            prefixes.append(f"@ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})")
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()

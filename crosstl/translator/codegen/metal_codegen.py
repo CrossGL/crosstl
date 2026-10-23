@@ -372,6 +372,7 @@ from .metal_hlsl_matrix import (
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
@@ -431,6 +432,11 @@ from .texture_lod_clamp import (
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
     "glsl.builtin.gl_FragSizeEXT",
+)
+
+# The value types of an MSL colour attachment output: a scalar or a vector of up to four components.
+METAL_COLOR_ATTACHMENT_TYPE = re.compile(
+    r"(?:float|half|int|uint|short|ushort|char|uchar)[234]?"
 )
 
 
@@ -4284,7 +4290,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if lowering is not None:
                     lowerings.setdefault(struct_name, {})[member.name] = lowering
-        return lowerings
+        return collect_metal_nested_stage_io_member_lowerings(
+            self, structs, stage_io_names, lowerings
+        )
 
     def metal_stage_io_member_lowering(
         self, member, default_member_semantics=None, struct_name=None
@@ -6424,6 +6432,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return "int"
         if name == "gl_FragCoord":
             return "float4"
+        if name == "gl_PointCoord":
+            return "float2"
         return None
 
     def metal_compute_builtin_result_type(self, name):
@@ -6740,6 +6750,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_fragment_builtin_parameter_specs(self):
         return [
             ("gl_FragCoord", "float4", "position"),
+            ("gl_PointCoord", "float2", "point_coord"),
         ]
 
     def explicit_graphics_stage_builtin_parameters(self, parameters, stage_name):
@@ -6814,13 +6825,21 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         ) in self.metal_fragment_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            name = self.unique_metal_generated_name("_crossglFragCoord", reserved_names)
+            # gl_FragCoord -> _crossglFragCoord, gl_PointCoord -> _crossglPointCoord.
+            name = self.unique_metal_generated_name(
+                "_crossgl" + builtin_name[len("gl_") :], reserved_names
+            )
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
         return required_parameters
 
     def used_metal_fragment_builtin_names(self, body):
-        builtin_names = {"gl_FragCoord"}
+        builtin_names = {
+            builtin_name
+            for builtin_name, _type, _attribute in (
+                self.metal_fragment_builtin_parameter_specs()
+            )
+        }
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__
@@ -7225,10 +7244,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            # A half-precision color attachment value is the same four-component
-            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
-            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
-            if actual_type != expected_type and not half_color:
+            # [[color(n)]] takes any scalar or vector of up to four float, half or integer components,
+            # such as float depth [[color(3)]] (MSL 3.2 section 5.2.3.4).
+            color_value = metal_semantic.startswith("color(") and (
+                METAL_COLOR_ATTACHMENT_TYPE.fullmatch(str(actual_type)) is not None
+            )
+            if actual_type != expected_type and not color_value:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -21493,6 +21514,20 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 func_name, index
             ):
                 continue
+            if (
+                isinstance(arg, ArrayLiteralNode)
+                and split_array_type_suffix(self.type_name_string(param_type) or "")[1]
+            ):
+                # A C array parameter is a pointer, and no Metal expression
+                # yields the address of an array literal.
+                args.append(
+                    self.refuse_lowering(
+                        f"array literal argument to '{func_name}': Metal has no array literal "
+                        "expression for an array parameter; a materialized array temporary is "
+                        "required"
+                    )
+                )
+                continue
             native_type = self.metal_native_narrow_bitcast_storage_type(param_type)
             parameters = self.function_parameter_nodes.get(func_name, [])
             qualifiers = (
@@ -24274,13 +24309,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         sampler_names = {
             sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
         } | self.current_sampler_parameters
-        return shared_texture_argument_diagnostic_type(
+        argument_type = shared_texture_argument_diagnostic_type(
             arg,
             self.texture_resource_type,
             self.expression_name,
             self.expression_result_type,
             sampler_names,
         )
+        # A reference argument such as `constant float &bias` names its referent's value.
+        if argument_type is None:
+            return None
+        return self.reference_referent_type_name(argument_type) or argument_type
 
     def validate_compare_argument(self, func_name, args):
         compare_index = texture_compare_argument_index(
