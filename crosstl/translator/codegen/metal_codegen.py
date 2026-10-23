@@ -434,6 +434,11 @@ FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.builtin.gl_FragSizeEXT",
 )
 
+# The value types of an MSL colour attachment output: a scalar or a vector of up to four components.
+METAL_COLOR_ATTACHMENT_TYPE = re.compile(
+    r"(?:float|half|int|uint|short|ushort|char|uchar)[234]?"
+)
+
 
 class UnsupportedMetalFeatureError(ValueError):
     """Raised when Metal has no equivalent target representation."""
@@ -7234,10 +7239,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            # A half-precision color attachment value is the same four-component
-            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
-            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
-            if actual_type != expected_type and not half_color:
+            # [[color(n)]] takes any scalar or vector of up to four float, half or integer components,
+            # such as float depth [[color(3)]] (MSL 3.2 section 5.2.3.4).
+            color_value = metal_semantic.startswith("color(") and (
+                METAL_COLOR_ATTACHMENT_TYPE.fullmatch(str(actual_type)) is not None
+            )
+            if actual_type != expected_type and not color_value:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -24301,13 +24308,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         sampler_names = {
             sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
         } | self.current_sampler_parameters
-        return shared_texture_argument_diagnostic_type(
+        argument_type = shared_texture_argument_diagnostic_type(
             arg,
             self.texture_resource_type,
             self.expression_name,
             self.expression_result_type,
             sampler_names,
         )
+        # A reference argument such as `constant float &bias` names its referent's value.
+        if argument_type is None:
+            return None
+        return self.reference_referent_type_name(argument_type) or argument_type
 
     def validate_compare_argument(self, func_name, args):
         compare_index = texture_compare_argument_index(

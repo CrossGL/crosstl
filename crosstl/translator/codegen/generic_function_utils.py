@@ -25,6 +25,7 @@ from .enum_utils import (
     sanitize_type_name,
     substitute_generic_type_name,
 )
+from .generic_body_types import substitute_body_types
 from .image_access_contracts import (
     IMAGE_ATOMIC_INTRINSIC_NAMES,
     RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES,
@@ -858,6 +859,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
             param.param_type = concrete_type
         if hasattr(param, "vtype"):
             param.vtype = concrete_type
+    substitute_body_types(generator, getattr(clone, "body", None), substitutions)
     clone._generic_source_name = key[0]
     clone._generic_source_function_id = id(func)
     clone._generic_substitutions = dict(substitutions)
