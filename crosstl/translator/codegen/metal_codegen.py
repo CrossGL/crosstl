@@ -360,6 +360,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
@@ -16448,6 +16449,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if resource_attr:
                 return resource_attr
         if self.is_resource_parameter_type(raw_param_type):
+            return ""
+        if is_metal_colour_attachment_input_parameter(self, node, shader_type):
             return ""
         if shader_type in {"vertex", "fragment"}:
             return " [[stage_in]]"
