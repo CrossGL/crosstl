@@ -13891,8 +13891,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             self.scalar_alias_needs_inline(alias)
             for alias in self.scalar_alias_declarations(target_name)
         )
-        if alias_name is not None or (
-            inline_alias and self.crossgl_typedef_source_type(mapped_type) is not None
+        # Metal long and ulong keep 64-bit components, while targets read the
+        # bare spellings as 32-bit aliases. Carry the fixed-width CrossGL type.
+        wide_alias = re.fullmatch(r"u?long[234]?", target_type) is not None
+        if (
+            alias_name is not None
+            or wide_alias
+            or (
+                inline_alias
+                and self.crossgl_typedef_source_type(mapped_type) is not None
+            )
         ):
             return f"as_type<{mapped_type}>"
         return name
