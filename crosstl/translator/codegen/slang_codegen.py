@@ -50,6 +50,8 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .image_access_contracts import numeric_expression_component_count
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -232,6 +234,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.buffer_resource_types = {}
         self.buffer_resource_accesses = {}
         self.helper_functions = {}
+        self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.helper_name_aliases = {}
         self.user_symbol_names = set()
         self.current_function_return_type = None
@@ -387,6 +390,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.buffer_resource_types = {}
             self.buffer_resource_accesses = {}
             self.helper_functions = {}
+            self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
@@ -677,7 +681,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
 
     def emit_helper_functions(self):
-        helpers = ""
+        helpers = self.hlsl_matrix_orientation.helper_code()
         if self.helper_functions:
             helpers += "\n\n".join(self.helper_functions.values()) + "\n\n"
         return helpers
@@ -4648,11 +4652,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             return type_node.name
         if hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
-            if element_type == "float":
-                return matrix_type_spelling(type_node, "float")
             if type(type_node).__name__ == "MatrixType":
-                # Slang keeps the CrossGL column-by-row spelling order.
-                return f"{element_type}{type_node.cols}x{type_node.rows}"
+                # CrossGL matCxR spelling; convert_type maps to Slang/HLSL floatRxC.
+                scalar = "double" if element_type == "double" else "float"
+                return matrix_type_spelling(type_node, scalar)
             return f"{element_type}{type_node.rows}x{type_node.cols}"
         if hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
@@ -8398,6 +8401,73 @@ class SlangCodeGen(LoweringRefusalMixin):
             "bool4",
         }
 
+    def expression_component_count(self, expr):
+        return numeric_expression_component_count(
+            expr,
+            self.expression_result_type,
+            self.type_name_string,
+            self.map_type,
+            self.vector_component_type,
+            scalar_types={
+                "float",
+                "double",
+                "half",
+                "int",
+                "uint",
+                "bool",
+            },
+            excluded_type_markers=("x",),
+        )
+
+    def hlsl_expression_is_repeatable(self, expr):
+        if expr is None:
+            return False
+        if isinstance(expr, (int, float, str)):
+            return True
+        if isinstance(expr, LiteralNode):
+            return True
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(expr, MemberAccessNode):
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "object", getattr(expr, "object_expr", None))
+            )
+        if isinstance(expr, ArrayAccessNode):
+            index = getattr(expr, "index", None)
+            indices = getattr(expr, "indices", None)
+            if indices is None and index is not None:
+                indices = [index]
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            ) and all(
+                self.hlsl_expression_is_repeatable(item) for item in (indices or [])
+            )
+        return False
+
+    def hlsl_matrix_shape(self, vtype):
+        mapped_type = self.map_type(vtype)
+        if not isinstance(mapped_type, str):
+            return None
+        for component_type in ("double", "float", "half", "uint", "int", "bool"):
+            if not mapped_type.startswith(component_type):
+                continue
+            suffix = mapped_type[len(component_type) :]
+            if (
+                len(suffix) == 3
+                and suffix[0] in {"2", "3", "4"}
+                and suffix[1] == "x"
+                and suffix[2] in {"2", "3", "4"}
+            ):
+                return component_type, suffix[0], suffix[2]
+        return None
+
+    def hlsl_matrix_dimensions(self, vtype):
+        matrix_shape = self.hlsl_matrix_shape(vtype)
+        if matrix_shape is None:
+            return None
+        component_type, rows, columns = matrix_shape
+        return component_type, int(rows), int(columns)
+
     def is_matrix_value_type(self, type_name):
         type_name = self.type_name_string(type_name)
         if not type_name:
@@ -9288,6 +9358,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                         for arg in node.args
                     ]
                 )
+            if (
+                isinstance(callee, str)
+                and callee not in self.user_function_names
+            ):
+                matrix_constructor = self.hlsl_matrix_orientation.constructor(
+                    callee,
+                    node.args,
+                    lambda arg: self.generate_expression_with_expected(arg, None),
+                )
+                if matrix_constructor is not None:
+                    return matrix_constructor
             callee = self.convert_type(callee)
             if (
                 callee == "saturate"
@@ -9308,7 +9389,15 @@ class SlangCodeGen(LoweringRefusalMixin):
             enum_constructor = generate_enum_constructor_expression(self, node)
             if enum_constructor is not None:
                 return enum_constructor
-            callee = self.convert_type(self.type_name_string(node.constructor_type))
+            constructor_type = self.type_name_string(node.constructor_type)
+            matrix_constructor = self.hlsl_matrix_orientation.constructor(
+                constructor_type,
+                node.arguments,
+                lambda arg: self.generate_expression_with_expected(arg, None),
+            )
+            if matrix_constructor is not None:
+                return matrix_constructor
+            callee = self.convert_type(constructor_type)
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
             return f"{callee}({args})"
         elif isinstance(node, RayTracingOpNode):
@@ -10625,25 +10714,25 @@ class SlangCodeGen(LoweringRefusalMixin):
             "mat3": "float3x3",
             "mat4": "float4x4",
             "mat2x2": "float2x2",
-            "mat2x3": "float2x3",
-            "mat2x4": "float2x4",
-            "mat3x2": "float3x2",
+            "mat2x3": "float3x2",
+            "mat2x4": "float4x2",
+            "mat3x2": "float2x3",
             "mat3x3": "float3x3",
-            "mat3x4": "float3x4",
-            "mat4x2": "float4x2",
-            "mat4x3": "float4x3",
+            "mat3x4": "float4x3",
+            "mat4x2": "float2x4",
+            "mat4x3": "float3x4",
             "mat4x4": "float4x4",
             "dmat2": "double2x2",
             "dmat3": "double3x3",
             "dmat4": "double4x4",
             "dmat2x2": "double2x2",
-            "dmat2x3": "double2x3",
-            "dmat2x4": "double2x4",
-            "dmat3x2": "double3x2",
+            "dmat2x3": "double3x2",
+            "dmat2x4": "double4x2",
+            "dmat3x2": "double2x3",
             "dmat3x3": "double3x3",
-            "dmat3x4": "double3x4",
-            "dmat4x2": "double4x2",
-            "dmat4x3": "double4x3",
+            "dmat3x4": "double4x3",
+            "dmat4x2": "double2x4",
+            "dmat4x3": "double3x4",
             "dmat4x4": "double4x4",
             "float": "float",
             "int": "int",
