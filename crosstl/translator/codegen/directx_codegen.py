@@ -237,6 +237,7 @@ from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
@@ -38350,6 +38351,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             if member_name in defaults:
                 continue
+            struct_next = assign_struct_varying_semantic(
+                self, struct_node, member, used_ranges, defaults
+            )
+            if struct_next is not None:
+                next_texcoord = struct_next
+                continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
             ):
@@ -38406,6 +38413,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
             if not member_name:
+                continue
+            struct_next = assign_struct_varying_semantic(
+                self, struct_node, member, used_ranges, defaults
+            )
+            if struct_next is not None:
+                next_texcoord = struct_next
                 continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
