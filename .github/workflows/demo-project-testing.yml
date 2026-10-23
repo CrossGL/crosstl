@@ -2491,7 +2491,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
+              --target ${{ matrix.target }} --jobs 4 --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
       - name: Execute upstream tests on the translated backend
         if: >-
           ${{ !cancelled() && steps.host-build.outcome == 'success' &&
@@ -2668,7 +2668,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX bitwise translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family bitwise --output-dir .mlx-portable-small-rows/bitwise-packages \
+              --target "${{ matrix.target }}" --family bitwise --jobs 4 --output-dir .mlx-portable-small-rows/bitwise-packages \
               2>&1 | tee .mlx-portable-small-rows/bitwise-translation.log
       - name: Execute bitwise host operations
         env:
@@ -2705,14 +2705,14 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX selection translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family selection --output-dir .mlx-portable-small-rows/selection-packages \
+              --target "${{ matrix.target }}" --family selection --jobs 4 --output-dir .mlx-portable-small-rows/selection-packages \
               2>&1 | tee .mlx-portable-small-rows/selection-translation.log
       - name: Translate absolute-value host packages
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX absolute-value translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-small-rows/absolute-packages \
+              --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-small-rows/absolute-packages \
               2>&1 | tee .mlx-portable-small-rows/absolute-translation.log
       - name: Execute selection host operations
         env:
@@ -2922,7 +2922,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX half translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family half --output-dir .mlx-portable-half/half-packages \
+              --target "${{ matrix.target }}" --family half --jobs 4 --output-dir .mlx-portable-half/half-packages \
               2>&1 | tee .mlx-portable-half/translation.log
       - name: Execute half host operations
         env:
@@ -2940,7 +2940,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX half arithmetic translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family half-arithmetic --output-dir .mlx-portable-half/arithmetic-packages \
+              --target "${{ matrix.target }}" --family half-arithmetic --jobs 4 --output-dir .mlx-portable-half/arithmetic-packages \
               2>&1 | tee .mlx-portable-half/arithmetic-translation.log
       - name: Translate random prerequisites for half arithmetic
         run: |
@@ -2966,7 +2966,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX bfloat translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family bfloat --output-dir .mlx-portable-half/bfloat-packages \
+              --target "${{ matrix.target }}" --family bfloat --jobs 4 --output-dir .mlx-portable-half/bfloat-packages \
               2>&1 | tee .mlx-portable-half/bfloat-translation.log
       - name: Execute bfloat host operations
         env:
@@ -3572,14 +3572,14 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX integer64 translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family integer64 --output-dir .mlx-portable-integer64/integer64-packages \
+              --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-integer64/integer64-packages \
               2>&1 | tee .mlx-portable-integer64/integer64-translation.log
       - name: Translate integer64 test companions
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX integer absolute translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-integer64/absolute-packages \
+              --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-integer64/absolute-packages \
               2>&1 | tee .mlx-portable-integer64/absolute-translation.log
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX integer64 Boolean reduction translation" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
@@ -3760,7 +3760,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX slice update translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family slice-update --output-dir .mlx-portable-slice-update/slice-update-packages \
+              --target "${{ matrix.target }}" --family slice-update --jobs 4 --output-dir .mlx-portable-slice-update/slice-update-packages \
               2>&1 | tee .mlx-portable-slice-update/slice-update-translation.log
       - name: Execute slice update reductions
         env:

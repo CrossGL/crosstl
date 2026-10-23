@@ -271,10 +271,12 @@ def _opengl_index_assertions(target, assertions):
     )
 
 
-def build_packages(root, output, target, *, family="base"):
+def build_packages(root, output, target, *, family="base", jobs=1):
     root = Path(root).resolve()
     if target not in {"opengl", "directx", "metal"}:
         raise ValueError(f"Unsupported target: {target}")
+    if type(jobs) is not int or jobs < 1:
+        raise ValueError("Package translation jobs must be a positive integer")
     families = {
         "base": ENTRIES,
         "bitwise": BITWISE_PACKAGE_ENTRIES,
@@ -395,7 +397,9 @@ def build_packages(root, output, target, *, family="base"):
         )
         try:
             report = translate_project(
-                load_project_config(root, config), format_output=False
+                load_project_config(root, config),
+                format_output=False,
+                max_workers=jobs,
             )
             report.write_json(work / "report.json")
             payload = report.to_json()
@@ -466,5 +470,12 @@ if __name__ == "__main__":
         ),
         default="base",
     )
+    parser.add_argument("--jobs", type=int, default=1)
     args = parser.parse_args()
-    build_packages(args.mlx_root, args.output_dir, args.target, family=args.family)
+    build_packages(
+        args.mlx_root,
+        args.output_dir,
+        args.target,
+        family=args.family,
+        jobs=args.jobs,
+    )

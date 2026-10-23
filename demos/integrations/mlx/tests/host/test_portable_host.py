@@ -1,6 +1,7 @@
 import ctypes
 import json
 import math
+import re
 import shlex
 import shutil
 import struct
@@ -309,6 +310,41 @@ uint index [[thread_position_in_grid]]) { if (index < size) c[index] = U(a[index
 @pytest.fixture
 def translated_packages(tmp_path, package_templates):
     return Path(shutil.copytree(package_templates, tmp_path / "packages"))
+
+
+def _package_outputs(output):
+    """Return the package index and generated artifacts without the work-dir name."""
+
+    def normalized(text):
+        return re.sub(r"\.portable-host-[A-Za-z0-9_]+", ".portable-host-", text)
+
+    report = json.loads((output / "translation/report.json").read_text())
+    artifacts = sorted(
+        (normalized(artifact["path"]), artifact["generatedHash"])
+        for artifact in report["artifacts"]
+    )
+    return normalized((output / "index.json").read_text()), artifacts
+
+
+def test_parallel_package_translation_matches_serial(
+    package_templates, tmp_path, monkeypatch
+):
+    target = json.loads((package_templates / "index.json").read_text())["target"]
+    monkeypatch.setattr(
+        packages.subprocess,
+        "check_output",
+        lambda command, **kwargs: prepare.COMMIT if "rev-parse" in command else "",
+    )
+    output = tmp_path / "parallel"
+    packages.build_packages(package_templates.parent / "mlx", output, target, jobs=2)
+    assert _package_outputs(output) == _package_outputs(package_templates)
+
+
+@pytest.mark.parametrize("jobs", [0, -1, 1.5, True])
+def test_package_translation_rejects_invalid_job_counts(tmp_path, jobs):
+    with pytest.raises(ValueError, match="jobs must be a positive integer"):
+        packages.build_packages(tmp_path, tmp_path / "out", "opengl", jobs=jobs)
+    assert not (tmp_path / "out").exists()
 
 
 def test_runtime_selects_the_requested_native_adapter(translated_packages, tmp_path):
@@ -2241,6 +2277,7 @@ def test_ci_limits_portable_contracts_without_removing_platform_abi_checks():
             == "${{ !cancelled() && steps.pinned-upstream.outcome == 'success' }}"
         )
         assert "continue-on-error" not in steps[name]
+    assert "--jobs 4" in steps["Translate unchanged upstream kernels"]["run"]
     execution = steps["Execute upstream tests on the translated backend"]
     assert " ".join(execution["if"].split()) == (
         "${{ !cancelled() && steps.host-build.outcome == 'success' && "
