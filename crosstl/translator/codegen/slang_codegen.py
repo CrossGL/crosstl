@@ -7730,8 +7730,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         return {
             "gl_HitKindEXT": ("uint", "HitKind()"),
             "gl_HitTEXT": ("float", "RayTCurrent()"),
-            "gl_InstanceCustomIndexEXT": ("uint", "InstanceIndex()"),
-            "gl_InstanceID": ("uint", "InstanceID()"),
+            # In ray tracing stages gl_InstanceID is the instance's index and
+            # gl_InstanceCustomIndexEXT its application-defined custom index.
+            "gl_InstanceCustomIndexEXT": ("uint", "InstanceID()"),
+            "gl_InstanceID": ("uint", "InstanceIndex()"),
             "gl_LaunchIDEXT": ("uvec3", "DispatchRaysIndex()"),
             "gl_LaunchSizeEXT": ("uvec3", "DispatchRaysDimensions()"),
             "gl_GeometryIndexEXT": ("uint", "GeometryIndex()"),

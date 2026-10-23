@@ -196,17 +196,19 @@ class GLSLToCrossGLConverter:
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
         ),
+        # CrossGL follows HLSL: InstanceIndex is the instance's position in the
+        # top-level structure, InstanceID its application-defined custom index.
         "rayQueryGetIntersectionInstanceIdEXT": (
-            "CandidateInstanceID",
-            "CommittedInstanceID",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
         ),
         "rayQueryGetIntersectionGeometryIndexEXT": (
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
         ),
         "rayQueryGetIntersectionInstanceCustomIndexEXT": (
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
         ),
         "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
             "CandidateInstanceShaderBindingTableRecordOffset",

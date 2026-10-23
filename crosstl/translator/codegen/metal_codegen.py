@@ -892,8 +892,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "CommittedInstanceIndex": "uint",
         "CandidateGeometryIndex": "uint",
         "CommittedGeometryIndex": "uint",
-        "CandidateInstanceCustomIndex": "uint",
-        "CommittedInstanceCustomIndex": "uint",
         "CandidateInstanceShaderBindingTableRecordOffset": "uint",
         "CommittedInstanceShaderBindingTableRecordOffset": "uint",
         "RayFlags": "uint",

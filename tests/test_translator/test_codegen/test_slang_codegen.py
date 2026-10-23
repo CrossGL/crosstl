@@ -6546,8 +6546,10 @@ def test_ray_stage_builtins_lower_to_slang_intrinsics():
     )
     assert "float range = RayTCurrent() - RayTMin() + RayTCurrent();" in generated_code
     assert "uint hitKind = HitKind();" in generated_code
-    assert "uint customInstance = InstanceIndex();" in generated_code
-    assert "uint instance = InstanceID();" in generated_code
+    # gl_InstanceCustomIndexEXT is the application-defined value (DXR
+    # InstanceID); gl_InstanceID in ray stages is the index (InstanceIndex).
+    assert "uint customInstance = InstanceID();" in generated_code
+    assert "uint instance = InstanceIndex();" in generated_code
     assert "uint primitive = PrimitiveIndex();" in generated_code
     assert "uint geometryIndex = GeometryIndex();" in generated_code
     assert "gl_LaunchIDEXT" not in generated_code

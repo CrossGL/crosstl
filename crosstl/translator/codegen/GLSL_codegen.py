@@ -1643,22 +1643,24 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionPrimitiveIndexEXT",
             "true",
         ),
-        "CandidateInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
-        "CommittedInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
+        # HLSL semantics: InstanceID is the application-defined custom index,
+        # InstanceIndex the instance's position in the top-level structure.
+        "CandidateInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "false",
+        ),
+        "CommittedInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
+        "CommittedInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
         "CandidateGeometryIndex": (
             "rayQueryGetIntersectionGeometryIndexEXT",
             "false",
         ),
         "CommittedGeometryIndex": (
             "rayQueryGetIntersectionGeometryIndexEXT",
-            "true",
-        ),
-        "CandidateInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
-            "false",
-        ),
-        "CommittedInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
             "true",
         ),
         "CandidateInstanceShaderBindingTableRecordOffset": (
@@ -1769,8 +1771,8 @@ class GLSLCodeGen(
         "CommittedInstanceID": (0,),
         "CandidateGeometryIndex": (0,),
         "CommittedGeometryIndex": (0,),
-        "CandidateInstanceCustomIndex": (0,),
-        "CommittedInstanceCustomIndex": (0,),
+        "CandidateInstanceIndex": (0,),
+        "CommittedInstanceIndex": (0,),
         "CandidateInstanceShaderBindingTableRecordOffset": (0,),
         "CommittedInstanceShaderBindingTableRecordOffset": (0,),
         "CandidateObjectRayOrigin": (0,),

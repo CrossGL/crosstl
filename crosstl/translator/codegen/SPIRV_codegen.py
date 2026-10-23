@@ -8255,20 +8255,22 @@ class VulkanSPIRVCodeGen(
                 "OpRayQueryGetIntersectionPrimitiveIndexKHR",
                 "uint",
             ),
+            # HLSL semantics: InstanceID is the application-defined custom
+            # index, InstanceIndex the instance's position (InstanceId).
             "CandidateInstanceID": (
-                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
                 "uint",
             ),
             "CommittedInstanceID": (
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+                "uint",
+            ),
+            "CandidateInstanceIndex": (
                 "OpRayQueryGetIntersectionInstanceIdKHR",
                 "uint",
             ),
-            "CandidateInstanceCustomIndex": (
-                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
-                "uint",
-            ),
-            "CommittedInstanceCustomIndex": (
-                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+            "CommittedInstanceIndex": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
                 "uint",
             ),
             "CandidateInstanceShaderBindingTableRecordOffset": (
@@ -8387,8 +8389,8 @@ class VulkanSPIRVCodeGen(
             "CommittedPrimitiveIndex",
             "CandidateInstanceID",
             "CommittedInstanceID",
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
             "CandidateInstanceShaderBindingTableRecordOffset",
             "CommittedInstanceShaderBindingTableRecordOffset",
             "CandidateObjectRayOrigin",

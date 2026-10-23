@@ -24179,7 +24179,7 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
                 uint candidateType = rq.CandidateType();
                 uint committedType = rq.CommittedType();
                 uint primitiveIndex = rq.CandidatePrimitiveIndex();
-                uint instanceId = rq.CommittedInstanceID();
+                uint instanceId = rq.CommittedInstanceIndex();
                 uint geometryIndex = rq.CandidateGeometryIndex();
                 vec3 origin = rq.CommittedObjectRayOrigin();
                 vec3 direction = rq.CandidateObjectRayDirection();
@@ -24413,7 +24413,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 vec3 worldDirection = rq.WorldRayDirection();
                 uint rayFlags = rq.RayFlags();
                 float tMin = rq.RayTMin();
-                uint customIndex = rq.CommittedInstanceCustomIndex();
+                uint customIndex = rq.CommittedInstanceID();
                 uint sbtOffset =
                     rq.CandidateInstanceShaderBindingTableRecordOffset();
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();

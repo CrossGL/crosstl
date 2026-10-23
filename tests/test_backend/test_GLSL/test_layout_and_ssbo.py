@@ -1229,7 +1229,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "bool active = rq.Proceed();" in crossgl
     assert "uint hitType = rq.CommittedType();" in crossgl
     assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl
-    assert "uint committedInstance = rq.CommittedInstanceID();" in crossgl
+    assert "uint committedInstance = rq.CommittedInstanceIndex();" in crossgl
     assert "uint candidateGeometry = rq.CandidateGeometryIndex();" in crossgl
     assert "vec3 committedOrigin = rq.CommittedObjectRayOrigin();" in crossgl
     assert "vec3 candidateDirection = rq.CandidateObjectRayDirection();" in crossgl
@@ -1238,7 +1238,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "vec3 worldDirection = rq.WorldRayDirection();" in crossgl
     assert "uint rayFlags = rq.RayFlags();" in crossgl
     assert "float rayTMin = rq.RayTMin();" in crossgl
-    assert "uint customIndex = rq.CommittedInstanceCustomIndex();" in crossgl
+    assert "uint customIndex = rq.CommittedInstanceID();" in crossgl
     assert (
         "uint sbtOffset = rq.CandidateInstanceShaderBindingTableRecordOffset();"
         in crossgl

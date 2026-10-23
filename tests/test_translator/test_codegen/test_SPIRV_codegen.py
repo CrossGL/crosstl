@@ -12140,8 +12140,8 @@ class TestVulkanSPIRVCodeGen:
                     uint committedType = rq.CommittedType();
                     uint candidatePrimitive = rq.CandidatePrimitiveIndex();
                     uint committedPrimitive = rq.CommittedPrimitiveIndex();
-                    uint candidateInstance = rq.CandidateInstanceID();
-                    uint committedInstance = rq.CommittedInstanceID();
+                    uint candidateInstance = rq.CandidateInstanceIndex();
+                    uint committedInstance = rq.CommittedInstanceIndex();
                     uint candidateGeometry = rq.CandidateGeometryIndex();
                     uint committedGeometry = rq.CommittedGeometryIndex();
                     vec2 candidateBarycentrics = rq.CandidateTriangleBarycentrics();
@@ -12213,8 +12213,8 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin();
                     uint rayFlags = rq.RayFlags();
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex();
-                    uint committedCustomIndex = rq.CommittedInstanceCustomIndex();
+                    uint candidateCustomIndex = rq.CandidateInstanceID();
+                    uint committedCustomIndex = rq.CommittedInstanceID();
                     uint candidateSbt =
                         rq.CandidateInstanceShaderBindingTableRecordOffset();
                     uint committedSbt =
@@ -12240,7 +12240,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "RayTMin yet; using a default" not in spv_code
         assert "RayFlags yet; using a default" not in spv_code
-        assert "CandidateInstanceCustomIndex yet; using a default" not in spv_code
+        assert "CandidateInstanceID yet; using a default" not in spv_code
         assert (
             "CommittedInstanceShaderBindingTableRecordOffset yet; using a default"
             not in spv_code
@@ -12256,7 +12256,7 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin(1);
                     uint rayFlags = rq.RayFlags(1);
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex(1);
+                    uint candidateCustomIndex = rq.CandidateInstanceID(1);
                     uint committedSbt =
                         rq.CommittedInstanceShaderBindingTableRecordOffset(1);
                 }
@@ -12271,7 +12271,7 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code_refused
         assert "SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code_refused
         assert (
-            "SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 " "arguments"
+            "SPIR-V RayQuery.CandidateInstanceID requires 0 " "arguments"
         ) in spv_code_refused
         assert (
             "SPIR-V "
