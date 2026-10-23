@@ -42,6 +42,7 @@ from .identifier_rewrites import (
     replace_unqualified_identifiers,
     unqualified_identifiers,
 )
+from .instantiation_memo import memoized_instantiations
 from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
@@ -23180,6 +23181,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return self._find_project_template_instantiations(code)
 
     def _find_project_template_instantiations(
+        self, code: str
+    ) -> List[_MLXKernelInstantiation]:
+        # Every entry of a translation unit scans the same expanded text.
+        return memoized_instantiations(
+            self,
+            code,
+            self._scan_project_template_instantiations,
+            exact_type=MetalPreprocessor,
+        )
+
+    def _scan_project_template_instantiations(
         self, code: str
     ) -> List[_MLXKernelInstantiation]:
         instantiations: List[_MLXKernelInstantiation] = []
