@@ -198,9 +198,7 @@ class _ConstantTable:
             declared_type = getattr(node, "var_type", None) or getattr(
                 node, "vtype", None
             )
-            value = getattr(node, "initial_value", None) or getattr(
-                node, "value", None
-            )
+            value = getattr(node, "initial_value", None) or getattr(node, "value", None)
         else:
             return
         name = getattr(node, "name", None)

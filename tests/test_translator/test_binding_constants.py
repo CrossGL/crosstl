@@ -205,8 +205,7 @@ def test_unresolvable_index_is_refused(
 
 
 def test_literal_and_register_spellings_are_left_to_the_generators():
-    program = parse(
-        textwrap.dedent("""
+    program = parse(textwrap.dedent("""
             shader main {
                 cbuffer Constants @register(b1) @space(space2) { vec4 tint; };
                 struct S { vec4 p; };
@@ -216,6 +215,5 @@ def test_literal_and_register_spellings_are_left_to_the_generators():
                     }
                 }
             }
-            """)
-    )
+            """))
     assert fold_binding_constants(program, "metal") == 0
