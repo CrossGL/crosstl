@@ -80,6 +80,26 @@ UPSTREAM_TESTS = (
     "test_ops.TestOps.test_logical_xor",
     "test_ops.TestOps.test_isclose",
     "test_ops.TestOps.test_allclose",
+    "test_ops.TestOps.test_reciprocal",
+    "test_ops.TestOps.test_degrees",
+    "test_ops.TestOps.test_radians",
+    "test_ops.TestOps.test_stack",
+    "test_ops.TestOps.test_kron",
+    "test_ops.TestOps.test_stop_gradient",
+    # These evaluate shapes, views and operand validation on the translated
+    # device without launching a kernel.
+    "test_ops.TestOps.test_squeeze_expand",
+    "test_ops.TestOps.test_flatten",
+    "test_ops.TestOps.test_move_swap_axes",
+    "test_ops.TestOps.test_broadcast_arrays",
+    "test_ops.TestOps.test_broadcast_shapes",
+    "test_ops.TestOps.test_issubdtype",
+    "test_ops.TestOps.test_integer_index_protocol",
+    "test_ops.TestOps.test_split_invalid_num_splits",
+    "test_ops.TestOps.test_along_axis_invalid_axis",
+    "test_ops.TestOps.test_cross_invalid_axis",
+    "test_ops.TestOps.test_out_of_bounds_axis_raises_index_error",
+    "test_ops.TestOps.test_squeeze_expand_invalid_axes",
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)

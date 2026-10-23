@@ -2189,7 +2189,10 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         assert required in workflow
     assert "continue-on-error" not in workflow
     assert "opengl-runtime" not in workflow
-    assert len(verify.UPSTREAM_TESTS) == 34
+    assert len(verify.UPSTREAM_TESTS) == 52
+    assert len(set(verify.UPSTREAM_TESTS)) == len(verify.UPSTREAM_TESTS)
+    assert "test_ops.TestOps.test_kron" in verify.UPSTREAM_TESTS
+    assert "test_ops.TestOps.test_reciprocal" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_diff" in verify.UPSTREAM_TESTS
     assert "test_ops.TestOps.test_flip" in verify.UPSTREAM_TESTS
     assert "test_array.TestArray.test_array_type_cast" in verify.UPSTREAM_TESTS
