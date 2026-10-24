@@ -16,6 +16,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .buffer_strides import materialize_buffer_strides
+from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
@@ -203,6 +204,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
+    Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
+    (:mod:`.builtin_input_reads`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -230,6 +233,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    pass_builtin_inputs(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
