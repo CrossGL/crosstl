@@ -598,10 +598,3 @@ def _matrix_values(workflow_text, key):
         assert declared, f"run-time matrix key {key} must declare {name}"
         return _parse_matrix_values(declared.group(1))
     raise AssertionError(f"matrix key not found: {key}")
-
-
-def _load_ci_coverage_module():
-    """Return the workflow-text helpers under the name the MLX tests still import."""
-    from tools import ci_coverage
-
-    return ci_coverage

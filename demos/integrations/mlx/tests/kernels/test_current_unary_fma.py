@@ -22,9 +22,9 @@ from crosstl.project import (
     translate_project,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
-from tools import ci_coverage
 
 SOURCE = "mlx/backend/metal/kernels/unary.metal"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_FMA"
@@ -35,7 +35,7 @@ def test_ci_preserves_partitioned_unary_selection():
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+    job = workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
     groups = {
         "Validate pinned unary arithmetic": {
             "test_current_unary_fma.py": "UNARY_FMA",
@@ -92,7 +92,7 @@ def test_ci_requires_current_unary_execution(job_id):
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = (
-        ci_coverage.workflow_job_text(workflow, job_id)
+        workflow_text.workflow_job_text(workflow, job_id)
         .split("      - name: Validate pinned unary arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
