@@ -4226,8 +4226,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
+            convert_vectors = len(node.arguments) > 1
             args = ", ".join(
-                self.generate_vector_constructor_argument(arg, element_type)
+                self.generate_vector_constructor_argument(
+                    arg, element_type, convert_vectors
+                )
                 for arg in node.arguments
             )
         else:
@@ -4279,14 +4282,17 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             args.append("".join(current).strip())
         return args
 
-    def generate_vector_constructor_argument(self, arg, element_type):
+    def generate_vector_constructor_argument(
+        self, arg, element_type, convert_vectors=True
+    ):
         arg_shape = self.vector_shape(self.expression_type(arg))
         if arg_shape is not None:
             rendered = self.generate_expression(arg)
-            # A WGSL vector constructor converts only whole vectors, so a vector of another component
-            # type is converted before it contributes components.
+            # A WGSL vector constructor converts only a whole vector passed alone, so a vector of
+            # another component type that contributes components among other arguments is
+            # converted first.
             element = self.scalar_type_name(element_type)
-            if element is not None and element != arg_shape[0]:
+            if convert_vectors and element is not None and element != arg_shape[0]:
                 return f"vec{arg_shape[1]}<{element}>({rendered})"
             return rendered
         if self.is_float_vector_abstract_int_argument(arg, element_type):
@@ -4306,8 +4312,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if vector_shape is None:
             return self.generate_call_arguments(function_name, arguments)
         element_type, _size = vector_shape
+        convert_vectors = len(arguments) > 1
         return ", ".join(
-            self.generate_vector_constructor_argument(arg, element_type)
+            self.generate_vector_constructor_argument(
+                arg, element_type, convert_vectors
+            )
             for arg in arguments
         )
 

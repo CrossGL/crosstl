@@ -323,3 +323,24 @@ def test_shift_amounts_and_bitwise_scalars(tmp_path):
     ):
         assert text in flat, (text, wgsl)
     _naga_validates(tmp_path, wgsl)
+
+
+GLSL_VECTOR_CONVERSIONS = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Out { ivec4 values[]; };
+void main() {
+    uvec2 u = gl_GlobalInvocationID.xy;
+    ivec2 whole = ivec2(u);
+    ivec4 parts = ivec4(u, u);
+    values[0] = ivec4(whole, parts.xy);
+}
+"""
+
+
+def test_vector_conversion_wraps_only_component_arguments(tmp_path):
+    wgsl = _translate(tmp_path, GLSL_VECTOR_CONVERSIONS, suffix="glsl")
+    flat = _flat(wgsl)
+    assert "var whole: vec2<i32> = vec2<i32>(u);" in flat, wgsl
+    assert "vec4<i32>(vec2<i32>(u), vec2<i32>(u))" in flat, wgsl
+    assert "vec2<i32>(vec2<i32>(" not in flat, wgsl
+    _naga_validates(tmp_path, wgsl)
