@@ -189,6 +189,12 @@ from .spirv_shading_rate import (
     shading_rate_flag_value,
     shading_rate_semantic_builtin,
 )
+from .spirv_short_circuit import (
+    SHORT_CIRCUIT_OPERATORS,
+    evaluate_loop_condition,
+    lower_short_circuit_logical,
+    lower_short_circuit_ternary,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -28415,12 +28421,9 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_loop_control_expression(node.condition)
-        if condition is None:
-            condition = self.register_constant(True, self.primitive_types["bool"])
-        condition = self.ensure_bool_value(condition)
-
-        self.create_loop_merge(merge_label, continue_label)
+        condition = evaluate_loop_condition(
+            self, node.condition, header_label, merge_label, continue_label
+        )
         self.create_conditional_branch(condition, body_label, merge_label)
 
         self.emit(f"%{body_label.id} = OpLabel")
@@ -29149,12 +29152,9 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_loop_control_expression(node.condition)
-        if condition is None:
-            condition = self.register_constant(True, self.primitive_types["bool"])
-        condition = self.ensure_bool_value(condition)
-
-        self.create_loop_merge(merge_label, continue_label)
+        condition = evaluate_loop_condition(
+            self, node.condition, header_label, merge_label, continue_label
+        )
         self.create_conditional_branch(condition, body_label, merge_label)
 
         self.emit(f"%{body_label.id} = OpLabel")
@@ -29657,6 +29657,10 @@ class VulkanSPIRVCodeGen(
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, BinaryOpNode):
+            if expr.op in SHORT_CIRCUIT_OPERATORS:
+                short_circuit = lower_short_circuit_logical(self, expr)
+                if short_circuit is not None:
+                    return short_circuit
             if expr.op in {"&", "|", "^"}:
                 expected_type = self.bitwise_expression_operand_type(
                     self.infer_expression_result_type(expr.left),
@@ -29716,6 +29720,9 @@ class VulkanSPIRVCodeGen(
             return self.unary_operation(expr.op, operand.type, operand)
 
         elif isinstance(expr, TernaryOpNode):
+            short_circuit = lower_short_circuit_ternary(self, expr)
+            if short_circuit is not None:
+                return short_circuit
             condition = self.process_expression(expr.condition)
             true_value = self.process_expression(expr.true_expr)
             false_value = self.process_expression(expr.false_expr)

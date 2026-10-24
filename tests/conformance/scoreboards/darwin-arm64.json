@@ -1290,6 +1290,76 @@
       "outcome": "preserved",
       "sourceSHA256": "4594642d7e2df42c08d200d5d5301cc8e282401eca7663b529d4a8e6f6ad0564"
     },
+    "g_short_circuit|glsl|glsl|relaxed|reference|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|glsl|relaxed|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|glsl|strict|reference|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|glsl|strict|translated|vulkan1.1|opengl-llvmpipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|hlsl|relaxed|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "compiled-only",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|hlsl|strict|translated|vulkan1.1|compile-only@darwin": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "compiled-only",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|metal|relaxed|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|metal|strict|translated|vulkan1.1|metal-apple": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|relaxed|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|relaxed|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|relaxed|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|strict|translated|vulkan1.1|vulkan-kosmickrisp": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|strict|translated|vulkan1.1|vulkan-lavapipe": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
+    "g_short_circuit|glsl|spirv|strict|translated|vulkan1.1|vulkan-moltenvk": {
+      "inputSHA256": "dd2524438f8b1dd30e55288ec855fdcceb6ee594e97edc50a30e9476cfb3465c",
+      "outcome": "preserved",
+      "sourceSHA256": "21ba99ac73e2afc2094cc84633a1cc5b9749f08160cdc3d1221ca587a4f8aed1"
+    },
     "g_std430_vec3_float|glsl|glsl|relaxed|reference|vulkan1.1|opengl-llvmpipe": {
       "inputSHA256": "04441b72253f49384e853fb46a81657e5e28187f02187a47713eb9cd482f9a17",
       "outcome": "preserved",
@@ -5382,13 +5452,13 @@
     }
   },
   "counts": {
-    "compiled-only": 180,
+    "compiled-only": 182,
     "diverged": 124,
     "driver-rejected": 8,
     "interface-changed": 4,
     "invalid": 12,
     "observed": 40,
-    "preserved": 692,
+    "preserved": 704,
     "refused": 16
   },
   "keys": [

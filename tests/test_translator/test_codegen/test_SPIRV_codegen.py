@@ -23291,20 +23291,20 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpBranchConditional" in spv_code
+        # Only the selected arm's call runs; the merge block joins the two results.
         assert re.search(
-            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
-            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpSelectionMerge (?P<merge>%\d+) None\n"
             r"OpBranchConditional %\d+ (?P<true_label>%\d+) (?P<false_label>%\d+)\n"
             r"(?P=true_label) = OpLabel\n"
-            r"OpStore (?P<result>%\d+) (?P=true_value)\n"
+            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=false_label) = OpLabel\n"
-            r"OpStore (?P=result) (?P=false_value)\n"
+            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=merge) = OpLabel\n"
-            r"(?P<loaded>%\d+) = OpLoad %\d+ (?P=result)\n"
-            r"OpReturnValue (?P=loaded)",
+            r"(?P<selected>%\d+) = OpPhi %\d+ (?P=true_value) (?P=true_label) "
+            r"(?P=false_value) (?P=false_label)\n"
+            r"OpReturnValue (?P=selected)",
             spv_code,
         )
         assert not re.search(r"=\s+OpSelect\b", spv_code)
@@ -25660,37 +25660,26 @@ class TestVulkanSPIRVCodeGen:
         assert not re.search(r"OpConstant %\d+ true", spv_code)
 
         def has_composite_selection_flow():
-            lines = spv_code.splitlines()
-            for index in range(len(lines) - 10):
-                merge = re.match(r"OpSelectionMerge (%\d+) None", lines[index])
-                branch = re.match(
-                    r"OpBranchConditional %\d+ (%\d+) (%\d+)",
-                    lines[index + 1],
+            # Each arm calls its constructor in its own block and the merge block joins the
+            # two struct values, so only the selected payload is built.
+            return (
+                re.search(
+                    r"OpSelectionMerge (?P<merge>%\d+) None\n"
+                    r"OpBranchConditional %\d+ (?P<then>%\d+) (?P<else>%\d+)\n"
+                    r"(?P=then) = OpLabel\n"
+                    r"(?P<first>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=else) = OpLabel\n"
+                    r"(?P<second>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=merge) = OpLabel\n"
+                    r"(?P<selected>%\d+) = OpPhi %\d+ (?P=first) (?P=then) "
+                    r"(?P=second) (?P=else)\n"
+                    r"OpReturnValue (?P=selected)\n",
+                    spv_code,
                 )
-                then_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 3])
-                else_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 6])
-                load = re.match(
-                    r"(%\d+) = OpLoad %\d+ (%\d+)",
-                    lines[index + 9],
-                )
-                if not all([merge, branch, then_store, else_store, load]):
-                    continue
-
-                merge_label = merge.group(1)
-                then_label = branch.group(1)
-                else_label = branch.group(2)
-                selected_value = load.group(1)
-                return (
-                    lines[index + 2] == f"{then_label} = OpLabel"
-                    and lines[index + 4] == f"OpBranch {merge_label}"
-                    and lines[index + 5] == f"{else_label} = OpLabel"
-                    and lines[index + 7] == f"OpBranch {merge_label}"
-                    and lines[index + 8] == f"{merge_label} = OpLabel"
-                    and then_store.group(1) == else_store.group(1)
-                    and load.group(2) == then_store.group(1)
-                    and lines[index + 10] == f"OpReturnValue {selected_value}"
-                )
-            return False
+                is not None
+            )
 
         assert has_composite_selection_flow()
 
@@ -28509,10 +28498,18 @@ class TestVulkanSPIRVCodeGen:
         )
         assert u64_runtime_array is not None
         assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        # Each arm reads only its own buffer, so the unselected index is never dereferenced.
         assert re.search(
-            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            r"OpBranchConditional %\d+ (?P<left>%\d+) (?P<right>%\d+)\n"
+            r"(?P=left) = OpLabel\n(?:[^\n]+\n)*?"
+            r"(?P<left_value>%\d+) = OpLoad [^\n]+\nOpBranch (?P<merge>%\d+)\n"
+            r"(?P=right) = OpLabel\n(?:[^\n]+\n)*?OpBranch (?P=merge)\n"
+            r"(?P=merge) = OpLabel\n"
+            rf"%\d+ = OpPhi {re.escape(u64_type.group(1))} (?P=left_value) (?P=left) "
+            r"%\d+ %\d+\n",
             spv_code,
         )
+        assert not re.search(r"= OpSelect\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
