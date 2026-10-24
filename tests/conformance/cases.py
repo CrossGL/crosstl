@@ -1,6 +1,6 @@
 """Compute hazards with independent source-rule oracles.
 
-Every case is a compute kernel with an input buffer at binding 0 and an output buffer at binding 1, written in one
+Every case is a compute kernel with input buffers at bindings 0 through n-1 and an output at binding n, written in one
 source language (cases/<id>/src.<ext>). The oracle models the SOURCE language's rule under its reference
 configuration; `readings` records, per reading of the source semantics, whether the rule creates an obligation
 (HLSL: reading A = FXC/DXBC rules of D3D11.3; reading B = DXC 1.9 / DXIL; every other language: "spec").
@@ -46,7 +46,7 @@ class Case:
     cls: str
     title: str
     rule: str
-    inputs: np.ndarray
+    inputs: np.ndarray | tuple[np.ndarray, ...] | list[np.ndarray]
     out_dtype: type
     oracle: Callable | None = None  # inputs -> expected output array
     compare: str = "exact"  # exact | bits | ulp:<k> | ulp:<k>+sign
@@ -66,7 +66,22 @@ class Case:
     lang: str = ""
     src: Path | None = None
 
+    @property
+    def input_buffers(self):
+        """Arrays in binding order; keep single-array oracle and check arguments unchanged."""
+        return (
+            (self.inputs,)
+            if isinstance(self.inputs, np.ndarray)
+            else tuple(self.inputs)
+        )
+
     def __post_init__(self):
+        if not self.input_buffers or not all(
+            isinstance(buffer, np.ndarray) for buffer in self.input_buffers
+        ):
+            raise ValueError(
+                "Case inputs must be an array or a non-empty sequence of arrays"
+            )
         if self.src is None:
             d = CASES_DIR / self.id
             srcs = sorted(p for p in d.iterdir() if p.suffix in EXT_LANG)
