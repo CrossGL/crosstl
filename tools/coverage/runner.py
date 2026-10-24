@@ -44,6 +44,10 @@ INPUT_BACKENDS = {
     "slang": "slang",
     "spirv": "vulkan",
 }
+# The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
+# slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
+# floats for InterlockedCompareExchangeFloatBitwise, so those are probed for HLSL instead of being left untested.
+FALLBACK_TARGETS = {"slang": "hlsl"}
 
 
 class Refused(Exception):
@@ -187,21 +191,44 @@ def parse_crossgl(source: str) -> None:
         raise Broken(detail) from error
 
 
-def _native_rejection(feature: Feature, language: str) -> str:
-    """Why the target rejects the feature's own probe, or an empty string when it accepts it or cannot tell."""
+def _native_verdict(
+    feature: Feature, language: str, source: str, entry: str
+) -> tuple[Feature, validators.Verdict]:
+    """The reference compiler's verdict on ``feature``'s native probe ``source``, and the feature as it is probed.
+
+    A probe the compiler rejects for the feature's usual target is retried for the language's
+    :data:`FALLBACK_TARGETS` entry; when that target accepts it, the feature is probed for that target from then on.
+    Otherwise the verdict for the usual target stands.
+    """
+    verdict = _validated(language, source, feature.stage, entry, feature.target)
+    fallback = FALLBACK_TARGETS.get(language, "")
+    if (
+        verdict.accepted
+        or feature.target
+        or not fallback
+        or not validators.available(language, fallback)
+    ):
+        return feature, verdict
+    retried = _validated(language, source, feature.stage, entry, fallback)
+    if retried.accepted:
+        return replace(feature, target=fallback), retried
+    return feature, verdict
+
+
+def _native_rejection(feature: Feature, language: str) -> tuple[Feature, str]:
+    """The feature as it is probed, and why the target rejects its own probe: an empty string when the target accepts
+    the probe or the check cannot run."""
     if language not in probes.DIALECTS or not validators.available(
         language, feature.target
     ):
-        return ""
+        return feature, ""
     try:
         native = probes.build(feature, language)
     except probes.ProbeError:
-        return ""
+        return feature, ""
     _keep(feature, "output", language, "native" + native.suffix, native.source)
-    verdict = _validated(
-        language, native.source, feature.stage, native.entry, feature.target
-    )
-    return "" if verdict.accepted else verdict.log
+    feature, verdict = _native_verdict(feature, language, native.source, native.entry)
+    return feature, "" if verdict.accepted else verdict.log
 
 
 def _runs(feature: Feature, language: str) -> bool:
@@ -223,9 +250,11 @@ def run_output(feature: Feature, language: str) -> Result:
     except probes.ProbeError as error:
         return result("untested", str(error))
     _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
-    rejected = _native_rejection(feature, language)
+    probed, rejected = _native_rejection(feature, language)
     if rejected:
         return result("untested", f"the probe itself is rejected: {rejected}")
+    # The semantic id stays the one :func:`.semantic.lower` found for the usual target.
+    feature = probed
     try:
         parse_crossgl(probe.source)
         translated = translate(
@@ -282,9 +311,7 @@ def run_input(feature: Feature, language: str) -> Result:
             validators.missing(language, feature.target) or validators.TOOLS[language]
         )
         return result("untested", f"{tool} is not installed")
-    native = _validated(
-        language, probe.source, feature.stage, probe.entry, feature.target
-    )
+    feature, native = _native_verdict(feature, language, probe.source, probe.entry)
     if not native.accepted:
         return result("untested", f"the probe itself is rejected: {native.log}")
     backend = INPUT_BACKENDS[language]

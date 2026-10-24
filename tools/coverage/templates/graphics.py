@@ -143,8 +143,10 @@ HLSL = {
     "runtime-array-length": Template(
         "uint count;\nuint stride;\noutp.GetDimensions(count, stride);\noutp[i] = float(count);"
     ),
+    # HLSL fills a matrix from scalars row by row, where CrossGL fills it column by column, so the scalars are listed
+    # by rows to make the matrix CrossGL's mat2(fin[i], 1.0, 2.0, 3.0).
     "matrix-vector-product": Template(
-        "float2x2 m = float2x2(fin[i], 1.0, 2.0, 3.0);\nfloat2 v = mul(m, float2(1.0, fin[i]));\n"
+        "float2x2 m = float2x2(fin[i], 2.0, 1.0, 3.0);\nfloat2 v = mul(m, float2(1.0, fin[i]));\n"
         "outp[i] = v.y;"
     ),
     "half": scalar("half", "fin"),

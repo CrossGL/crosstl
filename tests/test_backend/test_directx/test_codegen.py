@@ -2560,6 +2560,29 @@ def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_packed_8bit_alias_structured_buffer_element_reparse():
+    # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+    # buffer of them is a structured buffer of uint in CrossGL.
+    hlsl = textwrap.dedent("""
+        StructuredBuffer<uint8_t4_packed> pin;
+        RWStructuredBuffer<int8_t4_packed> pout;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            pout[id.x] = pin[id.x];
+            outp[id.x] = pin[id.x];
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "StructuredBuffer<uint> pin;" in output
+    assert "RWStructuredBuffer<uint> pout;" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
     hlsl = textwrap.dedent("""
