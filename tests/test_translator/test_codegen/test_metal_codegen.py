@@ -1029,7 +1029,7 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
-def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -1043,16 +1043,18 @@ def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_metal(
-        crosstl.translate,
+    metal = crosstl.translate(
         str(shader_path),
         backend="metal",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "input attachment declaration: 'sceneColor' uses subpassInput" in refusal
-    assert "input attachment load: subpassLoad requires" in refusal
+    # MSL has no input attachments here: the attachment is bound as a texture and read at the pixel.
+    assert re.search(r"texture2d<float> sceneColor \[\[texture\(0\)\]\]", metal), metal
+    assert re.search(r"float4 (\w+) \[\[position\]\]", metal), metal
+    assert re.search(r"sceneColor\.read\(uint2\(int2\(\w+\.xy\)\), uint\(0\)\)", metal)
+    assert "subpass" not in metal.lower()
 
 
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
@@ -7092,8 +7094,19 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
-    assert "array<constant uint*, 2> buffersLength [[buffer(5)]]" in generated
+    assert (
+        "device int* buffers_0 [[buffer(3)]], device int* buffers_1 [[buffer(4)]]"
+        in generated
+    )
+    assert "array<device int*, 2> buffers = {buffers_0, buffers_1};" in generated
+    assert (
+        "constant uint* buffersLength_0 [[buffer(5)]], constant uint* buffersLength_1 [[buffer(6)]]"
+        in generated
+    )
+    assert (
+        "array<constant uint*, 2> buffersLength = {buffersLength_0, buffersLength_1};"
+        in generated
+    )
     assert "int v = buffers[index][tid.x];" in generated
     assert "len = buffersLength[index][0];" in generated
     assert "buffers[index][tid.x] = v + 1;" in generated
@@ -7121,10 +7134,22 @@ def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> appendValues [[buffer(1)]]" in generated
     assert (
-        "array<device atomic_uint*, 2> appendValuesCounter [[buffer(3)]]" in generated
+        "device int* appendValues_0 [[buffer(1)]], device int* appendValues_1 [[buffer(2)]]"
+        in generated
     )
+    assert (
+        "array<device int*, 2> appendValues = {appendValues_0, appendValues_1};"
+        in generated
+    )
+    assert (
+        "device atomic_uint* appendValuesCounter_0 [[buffer(3)]], "
+        "device atomic_uint* appendValuesCounter_1 [[buffer(4)]]"
+    ) in generated
+    assert (
+        "array<device atomic_uint*, 2> appendValuesCounter = "
+        "{appendValuesCounter_0, appendValuesCounter_1};"
+    ) in generated
     assert (
         "void pushOne(array<device int*, 2> values, array<device atomic_uint*, 2> valuesCounter, uint which, uint value)"
         in generated

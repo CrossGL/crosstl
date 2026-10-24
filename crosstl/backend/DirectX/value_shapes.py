@@ -20,6 +20,7 @@ from ..common_ast import (
     VariableNode,
     VectorConstructorNode,
 )
+from .subpass_inputs import subpass_input_crossgl_type
 
 
 class HLSLValueShapeMixin:
@@ -590,6 +591,9 @@ class HLSLValueShapeMixin:
             feedback_texture_type = self.map_feedback_texture_type(base, generic_type)
             if feedback_texture_type:
                 return feedback_texture_type
+            subpass_input_type = subpass_input_crossgl_type(base, generic_type)
+            if subpass_input_type:
+                return subpass_input_type
             if base in self.structured_buffer_types:
                 mapped_args = ", ".join(
                     self.sanitize_type_name(self.canonical_composite_type(arg))

@@ -188,6 +188,7 @@ from .extended_arithmetic_builtins import (
     emit_hlsl_extended_arithmetic_helpers,
     hlsl_extended_arithmetic_call,
 )
+from .fixed_sampler_contracts import fixed_sampler_records, with_hlsl_fixed_samplers
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -249,12 +250,17 @@ from .hlsl_ray_queries import (
 )
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
+from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
     HLSLTexelBuffers,
     texel_buffer_base_type,
+)
+from .hlsl_texture_residency import (
+    hlsl_texture_residency_call,
+    hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
@@ -505,6 +511,10 @@ from .subgroup_control_flow import (
 from .texture_lod_clamp import (
     hlsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
+)
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
@@ -3412,7 +3422,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
+        fixed_samplers = fixed_sampler_records(ast)
         code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
+        code = with_hlsl_fixed_samplers(code, fixed_samplers, ast)
         if records:
             code = with_metadata_precondition_header(code, records)
         return with_dispatch_region_header(code, region)
@@ -11826,7 +11838,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value, const_type)
+            value_code = hlsl_brace_struct_initializer(self, value, const_type)
+            if value_code is None:
+                value_code = self.generate_constant_expression(value, const_type)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
@@ -35313,6 +35327,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         if self.hlsl_gl_frag_data_semantic(semantic):
             return True
+        if re.fullmatch(r"gl_FragColor\d*", str(semantic)):
+            # A colour attachment (MSL [[color(N)]], HLSL SV_Target<N>) may be a scalar or a narrower vector, as in
+            # float depth [[color(3)]] or float main() : SV_Target; DXC accepts any numeric 1-4 component type.
+            return True
         return str(semantic).upper().startswith("SV_TARGET")
 
     def hlsl_gl_frag_data_semantic(self, semantic):
@@ -35331,6 +35349,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16int",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "float",
             "double",
             "half",
@@ -38552,10 +38571,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
+        # A fragment output's location is its render target index.
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            location_index = self.hlsl_location_attribute_index(member)
+            if not member_name or location_index is None:
+                continue
+            semantic = (
+                "SV_TARGET" if location_index == 0 else f"SV_TARGET{location_index}"
+            )
+            self.hlsl_reserve_semantic_range(
+                used_ranges, struct_node.name, member_name, semantic, 1
+            )
+            defaults[member_name] = semantic
+
         next_target = 0
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
-            if not member_name:
+            if not member_name or member_name in defaults:
                 continue
             if self.hlsl_struct_member_declared_semantic(member) is not None:
                 continue
@@ -50113,11 +50146,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         rendered_args = []
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
-                rendered_args.append(
-                    self.generate_expression_with_expected(
-                        positional_args[index],
-                        field_type,
+                argument = positional_args[index]
+                if isinstance(
+                    argument, ArrayLiteralNode
+                ) and self.hlsl_outer_array_type(field_type):
+                    # The helper call cannot take an array literal; only a
+                    # declaration initializer can use an initializer list.
+                    self.hlsl_aggregate_error(
+                        argument,
+                        expected_type=self.map_type(field_type),
+                        reason="array-argument-unsupported",
+                        detail=(
+                            "HLSL has no fixed-array literal expression for a "
+                            f"{type_name} constructor field outside a declaration "
+                            "initializer"
+                        ),
                     )
+                rendered_args.append(
+                    self.generate_expression_with_expected(argument, field_type)
                 )
                 continue
             if field_name in named_args:
@@ -53974,6 +54020,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return texel_buffer_call
         if is_texture_lod_clamp_operation(func_name):
             return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
+        if func_name == TEXTURE_RESIDENCY_OPERATION:
+            return hlsl_texture_residency_call(self, args, call_node)
+        if func_name == TEXTURE_RESIDENT_OPERATION:
+            return hlsl_texture_resident_call(self, args, call_node)
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:

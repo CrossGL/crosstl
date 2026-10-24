@@ -9,8 +9,10 @@ A ``const sampler`` declared without an initializer is the default state (normal
 nearest filtering, no mipmapping, no comparison). :func:`decode_sampler_state` turns a constructor into a
 :class:`SamplerState`, refusing any argument outside the vocabulary with :class:`SamplerStateArgumentError`.
 
-Only Metal declares such state in shader source. The other targets fix sampler state outside the shader, so
-:func:`legalize_sampler_states` refuses it there with :class:`FixedSamplerStateUnsupportedError` rather than
+Only Metal declares such state in shader source. The other targets fix sampler state outside the shader. For
+Direct3D and Vulkan, whose hosts fix it in the sampler a binding names, :mod:`.fixed_samplers` first turns every
+fixed sampler into such a binding and records its state for the host. For the remaining targets,
+:func:`legalize_sampler_states` refuses the state with :class:`FixedSamplerStateUnsupportedError` rather than
 sampling with whatever sampler the host happens to bind:
 
 * GLSL and GLSL ES have no shader-declared sampler state; filtering, addressing, LOD clamping and comparison are
@@ -18,8 +20,7 @@ sampling with whatever sampler the host happens to bind:
 * SPIR-V's ``OpConstantSampler`` needs the ``LiteralSampler`` capability, which only the OpenCL ``Kernel``
   execution environment allows; Vulkan fixes sampler state through immutable samplers in the descriptor set
   layout (``VkDescriptorSetLayoutBinding::pImmutableSamplers``).
-* Direct3D 12 fixes sampler state through root-signature static samplers (``D3D12_STATIC_SAMPLER_DESC``), and
-  CrossTL does not emit root signatures yet.
+* Direct3D 12 fixes sampler state through root-signature static samplers (``D3D12_STATIC_SAMPLER_DESC``).
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ _TARGET_REASONS = {
     ),
     "directx": (
         "Direct3D 12 fixes sampler state through root-signature static samplers "
-        "(D3D12_STATIC_SAMPLER_DESC), which CrossTL does not emit yet"
+        "(D3D12_STATIC_SAMPLER_DESC)"
     ),
 }
 # Every target spelling a reason applies to, so the lookup needs no alias step.

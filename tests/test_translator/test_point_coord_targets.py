@@ -6,6 +6,7 @@ identifier. Metal fragment functions receive the point coordinate as a
 HLSL has no counterpart and the use is refused.
 """
 
+import re
 import shutil
 import subprocess
 import textwrap
@@ -34,8 +35,10 @@ def _translate(tmp_path, backend):
 
 def test_metal_reads_the_point_coordinate_input(tmp_path):
     code = _translate(tmp_path, "metal")
-    assert "float2 _crossglPointCoord [[point_coord]]" in code
-    assert "gl_PointCoord" not in code
+    # The built-in is passed to the entry point as a [[point_coord]] parameter
+    # (crosstl.translator.semantics.builtin_input_reads).
+    assert re.search(r"float2 \w+ \[\[point_coord\]\]", code), code
+    assert not re.search(r"\bgl_PointCoord\b", code), code
     if shutil.which("xcrun") is None:
         pytest.skip("xcrun is not installed")
     (tmp_path / "particle.metal").write_text(code, encoding="utf-8")
@@ -52,7 +55,9 @@ def test_metal_reads_the_point_coordinate_input(tmp_path):
 
 
 def test_hlsl_refuses_the_point_coordinate(tmp_path):
-    with pytest.raises(ValueError, match="HLSL has no point coordinate input"):
+    with pytest.raises(
+        ValueError, match="HLSL has no system value for the built-in @gl_PointCoord"
+    ):
         _translate(tmp_path, "directx")
 
 

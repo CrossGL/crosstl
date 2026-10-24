@@ -165,6 +165,8 @@ _PACKING = {
     "unpackUnorm4x8": ("float", 4),
     "unpackSnorm4x8": ("float", 4),
 }
+# Texture residency queries (texture_residency.py): an opaque int code, and whether it reports residency.
+_RESIDENCY = {"textureResidency": ("int", 1), "textureResident": ("bool", 1)}
 _TEXTURE_SIZE_FUNCTIONS = frozenset({"textureSize", "imageSize"})
 _TEXTURE_SIZE_WIDTHS = (
     ("Buffer", 1),
@@ -191,8 +193,8 @@ def builtin_call_result_type(name, argument_types, family):
     if not isinstance(name, str):
         return None
     shapes = [type_shape(argument) for argument in argument_types]
-    if name in _PACKING:
-        scalar, width = _PACKING[name]
+    if name in _PACKING or name in _RESIDENCY:
+        scalar, width = _PACKING.get(name) or _RESIDENCY[name]
         return format_type(scalar, width, family)
     if name in _TEXTURE_SIZE_FUNCTIONS:
         return _texture_size_type(argument_types, family)
