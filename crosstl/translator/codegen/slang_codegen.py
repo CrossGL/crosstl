@@ -7724,6 +7724,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "compute":
+            # Slang has no SV_ system value for the dispatch size; it exposes
+            # the number of workgroups through the WorkgroupCount() intrinsic.
+            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 

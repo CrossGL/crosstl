@@ -24086,5 +24086,26 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
     assert "uimage2D" not in generated_code
 
 
+def test_slang_codegen_lowers_compute_num_workgroups_to_workgroup_count():
+    code = """
+    shader NumWorkGroups {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                uvec3 groups = gl_NumWorkGroups;
+                outp[i] = float(gl_NumWorkGroups.x + groups.y);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 groups = WorkgroupCount();" in generated_code
+    assert "float(WorkgroupCount().x + groups.y)" in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()
