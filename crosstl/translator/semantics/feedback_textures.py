@@ -45,7 +45,12 @@ class FeedbackTextureUnsupportedError(TranslationDiagnostic):
 
     def __init__(self, target, type_name, reason, *, source_location=None):
         self.source_location = source_location
-        self.missing_capabilities = (f"{target}.sampler-feedback",)
+        # Direct3D declares feedback textures, so a refusal there is a malformed argument, not a missing capability.
+        self.missing_capabilities = (
+            ()
+            if target in FEEDBACK_TEXTURE_TARGETS
+            else (f"{target}.sampler-feedback",)
+        )
         super().__init__(
             f"sampler feedback texture '{type_name}' cannot be carried to {target}: {reason}",
             target=target,
@@ -60,30 +65,6 @@ def is_sampler_feedback_kind(argument) -> bool:
         and not argument.generic_args
         and argument.name in SAMPLER_FEEDBACK_KINDS
     )
-
-
-def _nodes(node, seen):
-    """Every AST node under ``node``, type nodes included, each once."""
-    if id(node) in seen:
-        return
-    seen.add(id(node))
-    if isinstance(node, A.StageMap):
-        items = [stage for key in node for stage in node.all_for_stage(key)]
-    elif isinstance(node, dict):
-        items = list(node.values())
-    elif isinstance(node, (list, tuple)):
-        items = node
-    elif isinstance(node, A.ASTNode):
-        yield node
-        items = [
-            value
-            for key, value in vars(node).items()
-            if key not in {"parent", "annotations", "source_location"}
-        ]
-    else:
-        return
-    for item in items:
-        yield from _nodes(item, seen)
 
 
 def _refusal_reason(node, target):
@@ -102,7 +83,7 @@ def refuse_feedback_textures(program, target) -> None:
     target = str(target or "").lower()
     if not isinstance(program, A.ShaderNode):
         return
-    for node in _nodes(program, set()):
+    for node in program.walk():
         if not isinstance(node, A.NamedType) or node.name not in FEEDBACK_TEXTURE_TYPES:
             continue
         reason = _refusal_reason(node, target)

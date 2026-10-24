@@ -66,6 +66,7 @@ def test_feedback_textures_are_refused_for_targets_without_them(
     assert (
         raised.value.code == f"project.translate.{target}-sampler-feedback-unsupported"
     )
+    assert raised.value.missing_capabilities == (f"{target}.sampler-feedback",)
 
 
 def test_a_feedback_texture_argument_that_is_not_a_kind_is_refused(tmp_path):
@@ -74,5 +75,7 @@ def test_a_feedback_texture_argument_that_is_not_a_kind_is_refused(tmp_path):
     )
     with pytest.raises(
         FeedbackTextureUnsupportedError, match="SAMPLER_FEEDBACK_MIN_MIP"
-    ):
+    ) as raised:
         crosstl.translate(path, backend="directx")
+    # Direct3D has sampler feedback; the program is wrong, so no capability is reported missing.
+    assert raised.value.missing_capabilities == ()
