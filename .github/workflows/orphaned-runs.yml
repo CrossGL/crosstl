@@ -1,0 +1,59 @@
+name: Orphaned Merge-Group Runs
+
+# When an entry fails or leaves the merge queue, GitHub replaces the merge groups behind it but lets the runs of the
+# old groups finish. This cancels those runs (tools/orphaned_runs.py) so they free their runners; the runs of a
+# group that landed are kept. Pull requests that change the tool list what it would cancel.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  schedule:
+    - cron: '7,27,47 * * * *'
+  pull_request:
+    paths:
+      - .github/workflows/orphaned-runs.yml
+      - tools/orphaned_runs.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orphaned-runs-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  list:
+    name: List orphaned runs
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: List the runs that would be cancelled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m tools.orphaned_runs --repo "$GITHUB_REPOSITORY"
+
+  cancel:
+    name: Cancel orphaned runs
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Cancel the runs of discarded merge groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m tools.orphaned_runs --repo "$GITHUB_REPOSITORY" --apply

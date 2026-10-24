@@ -6,18 +6,53 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Breaking Changes
 
-- CrossTL requires Python 3.11 or later. Python 3.8, 3.9 and 3.10 have reached end of life and are no longer supported.
+- A type name that is neither built in nor declared by the program, as a structure, enumeration, alias, constant block or generic parameter, is refused with a typed error. Every generator used to copy it into the output.
 
 ### Improved
 
-- Every supported Python version, 3.11 through 3.15, is tested.
+- Metal output renames identifiers that MSL reads as keywords, such as `kernel`, `device`, `thread` and `half`, gives `gl_InstanceIndex` an `[[instance_id]]` input, binds a ray generation stage's launch index and size to the kernel grid and spells its ray flags as constants, and passes resources and module-scope groupshared values to mesh and object functions.
+- The Metal importer types matrix arithmetic, the `saturate` family and the results of texture methods, imports depth texture reads as the depth value, and keeps `[[attribute(n)]]` vertex inputs at location `n` on every target instead of renaming them to HLSL semantics.
+- SPIR-V output folds module-scope constant expressions exactly, rounding binary32 results after each operation, instead of emitting instructions that module scope cannot hold. Shading-rate built-ins, per-primitive mesh outputs and arrays of constant buffers are declared with their SPIR-V built-ins and capabilities.
+- `INFINITY`, `NAN`, `FLT_MAX`, `FLT_MIN`, `FLT_EPSILON` and the other standard float limits are written as exact binary32 values on HLSL and GLSL.
+- Arrays of HLSL structured buffers keep HLSL's tight element layout on GLSL, SPIR-V and Metal.
+- GLSL `length()` of a vector or matrix becomes its component or column count on other targets.
+
+### Fixed
+
+- Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
+- HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
+- An early `return;` in a GLSL `main` that writes stage outputs returns those outputs on every target.
+- CUDA output writes CrossGL scalar casts such as `f64(x)` with C type names.
+- A program with several stages of one kind, such as a Metal library with several vertex functions, has every stage rewritten, not only the first.
+- Translating a malformed shader no longer takes time that grows much faster than its length.
 
 ---
 
-## [3.4.0] - 2026-10-07
+## [3.4.0] - 2026-10-23
+
+### Breaking Changes
+
+- CrossTL requires Python 3.11 or later. Python 3.8, 3.9 and 3.10 have reached end of life and are no longer supported.
+- CrossGL syntax can change between releases until CrossGL expresses everything its targets can. In this release, debug prints are `printf(format, values...)` instead of `debugPrintfEXT`, comparison samplers have their own `comparison_sampler` type, and HLSL and Metal textures import as separate textures and samplers.
+- A Metal, CUDA, HIP or OpenCL kernel whose results depend on a threadgroup size that the host picks at dispatch is refused for HLSL, GLSL, SPIR-V and WGSL output, which used to fix the size at 1, 1, 1. Pass the dispatch size as `source_options={"threadgroup_size": (x, y, z)}` or in a project workgroup-size rule.
+- A CrossGL function body that does not parse is refused; it used to become an empty block. An untyped `var` whose type cannot be inferred from its initializer, or that has no initializer, is refused instead of being declared `float`.
+- CrossGL `matCxR` has GLSL's column-by-row meaning on every target, and HLSL `floatRxC` imports as `matCxR`. Comparison operators and `!` are componentwise on vectors, as in HLSL, MSL, WGSL and SPIR-V. Ray payload access qualifiers are `@ray_payload_read(...)` and `@ray_payload_write(...)`.
+- The Metal, OpenGL, WebGL, DirectX, SPIR-V, Slang and Rust generators, and the HLSL and Metal importers, refuse a construct they cannot translate with a typed error that lists every such construct, such as `MetalLoweringRefused` or `SpirvLoweringRefused`. They used to write an `/* unsupported */` or `; WARNING` comment next to a neutral value and return a program that ran differently.
+- SPIR-V output from HLSL takes descriptor sets and bindings from `register(Xn, spaceM)` and `[[vk::binding]]` instead of numbering resources in declaration order, and refuses two resources on one register. OpenGL output gives each descriptor set or register space small per-class binding points instead of `set * 1024`.
 
 ### Added
 
+- A coverage report. CI translates a probe for every feature in each language's pinned upstream feature list, checks the result with that language's reference compiler or validator, and publishes the scores and every gap to [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+- Texel buffers (`Buffer<T>`, `RWBuffer<T>`, `samplerBuffer`, `imageBuffer`) translate between HLSL, GLSL, Metal and SPIR-V.
+- DXR ray-tracing stages lower to Vulkan SPIR-V and GLSL, with hit attributes, ray payloads and callable data. HLSL output marks ray payloads with `[raypayload]` and their access qualifiers.
+- Shader debug prints translate to SPIR-V and Metal.
+- GLSL geometry stages translate to HLSL's stream form.
+- Non-uniform resource indices translate to GLSL, Metal and GLSL ES.
+- HLSL structured-buffer counters (`IncrementCounter` and `DecrementCounter`) work on Metal, GLSL, CUDA and HIP through an explicit counter buffer.
+- Built-in values can be written in their GLSL, HLSL or WGSL spelling in CrossGL and translate to every target.
+- Untyped `var name = expr;` declarations, including in `for` loop initializers and at shader scope, take their type from the initializer.
+- HLSL geometry, hull and domain stages translate to GLSL and SPIR-V. Metal, which has no geometry or tessellation stages, refuses them with a typed error.
+- GLSL subgroup built-ins, including the prefix, clustered and ballot forms, translate to SPIR-V, HLSL and Metal.
 - Source arithmetic profiles for binary32 addition, subtraction, multiplication, division, remainder, precise arctangent and logarithms. DirectX, OpenGL and Metal output get native controls for rounding, subnormals, signed zeros and non-finite values.
 - Thread-grid dispatch regions, fixed partial workgroups, Boolean subgroup votes and software subgroup products. Unsupported collective control flow is reported as an error.
 - Native runtime support for Boolean, binary16, bfloat16, byte and 64-bit integer storage, shared allocation views and immutable DirectX constants.
@@ -27,6 +62,23 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Improved
 
+- Every supported Python version, 3.11 through 3.15, is tested.
+- Unsized HLSL resource arrays get their size on Metal and OpenGL from bounded dynamic indexes as well as constant ones, so translated shaders no longer read past the array.
+- HLSL texture samples return the texture's element type, and storage-image loads and stores use four-component texels as GLSL defines them.
+- CUDA and HIP buffer elements such as `float3` and structs with vector members keep their host layout on every target.
+- SPIR-V modules for mesh, task and ray-tracing stages, which need SPIR-V 1.4, declare storage buffers in the `StorageBuffer` storage class and pass `spirv-val`.
+- GLSL stage inputs and outputs are named so the stages link, and never redeclare a global.
+- Metal import and graphics code generation are faster on large kernels.
+- Buffer layouts carry across targets: HLSL structured, append and consume buffers, Metal packed and natural layouts, and GLSL std140, std430 and scalar blocks keep their offsets. HLSL `row_major`, `packoffset` and `pack_matrix` are honoured, and `GetDimensions` reports the element stride on GLSL, SPIR-V, CUDA and HIP.
+- Texture sampling keeps its meaning across targets, including LOD clamps, implicit LOD outside fragment stages, projected depth comparisons, Metal array layers and explicit sampler pairs.
+- OpenGL output declares the lowest GLSL or GLSL ES `#version` that provides every construct the program uses.
+- Stage interfaces translate more faithfully: GLSL interface blocks keep their member locations, struct-typed varyings are flattened for SPIR-V and split for Metal, a GLSL fragment shader's several outputs become one HLSL or MSL structure, and each SPIR-V entry point has its own interface locations.
+- `SV_ClipDistanceN` and `SV_CullDistanceN` keep their index, and GLSL and SPIR-V pack them into one distance array in DXC's order.
+- Arrays of uniform blocks bind one buffer per element, Metal `constant` matrix parameters bind as HLSL constant buffers, and SPIR-V bindings of Metal resource parameters follow MSL's separate buffer, texture and sampler indices.
+- The SPIR-V importer rebuilds structured control flow, keeps integer signedness, extended arithmetic and `NoContraction`, and imports arrays of storage blocks.
+- The Metal importer handles more real-world sources: `__METAL_VERSION__` and `__METAL__` are predefined, shared headers that use `<simd/simd.h>` types translate without Apple's SDK headers, and kernels with 16-bit thread-index attributes, `unsigned int` template arguments, `::metal::`-qualified SFINAE constraints or type traits in explicit instantiations translate.
+- A function whose recursive calls are all tail calls is translated as a loop instead of being refused.
+- Native Metal dispatches reuse a long-lived worker process instead of starting one per dispatch.
 - Precise Metal square root, logarithm, power and `atan2` keep signed zeros, special values and underflow behaviour under explicit operand profiles.
 - HLSL, GLSL and Metal output keep integer promotions, vector initialization, byte narrowing, binary16 selection, bfloat rounding, atomic destinations and argument evaluation order.
 - Source maps no longer guess line locations. Only artifacts that preserve lines carry line mappings.
@@ -34,6 +86,18 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- The parser no longer hangs on an unterminated shader declaration, and parses `if`, `else` and loop bodies without braces.
+- HLSL output renames GLSL and Metal identifiers that HLSL reads as keywords, such as `line`, `point`, `vector` and `Buffer`.
+- Metal SIMD-group and quad-group functions declared behind `METAL_MAYBE_UNDEF` are recognized.
+- SPIR-V output keeps the source semantics of signed remainder, `fmod`, signed right shifts, mixed-sign arithmetic and NaN tests, copies locals initialised from buffer elements, and passes loose uniforms in a `CrossGLDefaultUniforms` block instead of private variables the host cannot set.
+- HLSL output stores the written components of a GLSL buffer-block vector; it used to assign to a load, which DXC rejects.
+- HLSL output declares vertex, instance, primitive and sample indices as `uint`, as DXIL requires.
+- GLSL output rebuilds a flattened stage-input structure used as a whole value, and guarded multi-stage GLSL declares one `main` per stage.
+- Functions that share a name with a module-scope value are renamed in HLSL, GLSL and MSL output, and constants that read struct constants are declared after the structs.
+- HLSL `SubpassInput` keeps its type through CrossGL, and `gl_PointCoord` reaches Metal as `[[point_coord]]`. OpenGL refuses input attachments and HLSL refuses `gl_PointCoord`.
+- Metal sparse texture reads, colour-attachment inputs on targets without framebuffer reads and array literals passed to Metal array parameters are refused with a typed error instead of producing code that does not compile. WebGL refusals are typed as well.
+- Metal colour-attachment outputs can be any scalar or vector of up to four components, and casts after `return` import correctly.
+- GLSL mesh built-in arrays and named `case` labels translate to SPIR-V.
 - Project metadata requirements apply only to the source entry that declares them.
 - Unreferenced out-of-line Metal call operators no longer block kernel translation.
 - DirectX compilation resolves relative includes through long Windows paths.

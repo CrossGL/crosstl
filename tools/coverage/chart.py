@@ -23,6 +23,7 @@ NAMES = {
     "slang": "Slang",
     "rust": "Rust",
     "mojo": "Mojo",
+    "opencl": "OpenCL C",
     ir.LANGUAGE: "CrossGL IR",
 }
 
