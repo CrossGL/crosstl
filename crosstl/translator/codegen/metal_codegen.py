@@ -2192,6 +2192,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        # Declared types of program-scope constants, so expressions that read
+        # them (such as an array constant copied into an array member) are typed.
+        self.metal_program_scope_constant_types = {
+            node.name: self.type_name_string(
+                getattr(node, "const_type", getattr(node, "vtype", None))
+            )
+            for node in getattr(ast, "constants", []) or []
+            if getattr(node, "name", None)
+        }
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -9987,6 +9996,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.metal_program_scope_value_global_types.get(expr.name)
                 or self.metal_global_resource_value_type(expr.name)
                 or getattr(self, "metal_cbuffer_member_types", {}).get(expr.name)
+                or getattr(self, "metal_program_scope_constant_types", {}).get(
+                    expr.name
+                )
             )
         if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
@@ -10001,6 +10013,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.metal_program_scope_value_global_types.get(name)
                 or self.metal_global_resource_value_type(name)
                 or getattr(self, "metal_cbuffer_member_types", {}).get(name)
+                or getattr(self, "metal_program_scope_constant_types", {}).get(name)
             )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
