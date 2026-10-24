@@ -133,6 +133,88 @@ def test_output_probe_end_to_end():
     ), result.detail
 
 
+# The shape of slangc 2026.9's log for an undefined name: the header names the kind of error, the label the name.
+SLANGC_LOG = """error[E30015]: undefined identifier
+  --> probe.slang:10:15
+   |
+10 | uint2 r = {name}(a0);
+   |           ^^^^^^^^ undefined identifier '{name}'.
+---'
+error[E30019]: type mismatch in expression
+  --> probe.slang:11:5
+   |
+11 | outp[i] = r;
+   |     ^ expected an expression of type 'float', got 'uint2'
+---'"""
+
+
+@pytest.mark.parametrize(
+    ("language", "log", "expected"),
+    [
+        (
+            "slang",
+            SLANGC_LOG.format(name="bitCount"),
+            "error[E30015]: undefined identifier 'bitCount'",
+        ),
+        (
+            "slang",
+            "error[E30011]: left of '=' is not an l-value\n --> probe.slang:9:5\n"
+            "  |\n9 | f(a0) = r;\n  | ^ left of '=' is not an l-value.",
+            "error[E30011]: left of '=' is not an l-value",
+        ),
+        (
+            "slang",
+            SLANGC_LOG.split("---'\n", 1)[1],
+            "error[E30019]: type mismatch in expression: expected an expression of type"
+            " 'float', got 'uint2'",
+        ),
+        (
+            "slang",
+            "error[E30015]: undefined identifier",
+            "error[E30015]: undefined identifier",
+        ),
+        # Other tools' first error line already carries the particulars.
+        ("rust", SLANGC_LOG.format(name="x"), "error[E30015]: undefined identifier"),
+        (
+            "glsl",
+            "note: x\nERROR: 0:4: 'f' : no matching function",
+            "ERROR: 0:4: 'f' : no matching function",
+        ),
+        ("glsl", "nothing to report", "nothing to report"),
+    ],
+)
+def test_first_error_joins_slangc_headers_with_their_label(language, log, expected):
+    assert validators.first_error(log, language) == expected
+
+
+def test_slang_probes_failing_on_different_names_have_different_causes(monkeypatch):
+    from tools.coverage import causes
+
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, *args: validators.Verdict(
+            False, SLANGC_LOG.format(name=source)
+        ),
+    )
+    names = ("bitCount", "findMSB", "gl_NumWorkGroups")
+    details = [runner._validated("slang", name, "compute").log for name in names]
+    features = [
+        {"name": feature, "crossgl": crossgl, "detail": detail}
+        for (feature, crossgl), detail in zip(
+            [
+                ("countbits", "bitCount"),
+                ("firstbithigh", "findMSB"),
+                ("num-workgroups", None),
+            ],
+            details,
+        )
+    ]
+    found = [causes.cause(feature, "slang") for feature in features]
+    assert found[0] == found[1] == "error[E30015]: undefined identifier '<feature>'"
+    assert found[2] == "error[E30015]: undefined identifier 'gl_NumWorkGroups'"
+
+
 def test_a_run_validates_each_distinct_source_once(monkeypatch):
     calls = []
 

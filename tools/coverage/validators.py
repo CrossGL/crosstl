@@ -30,6 +30,7 @@ TOOLS = {
     "hlsl": "dxc",
     "metal": "metal",
     "mojo": "mojo",
+    "opencl": "clang",
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
@@ -43,6 +44,7 @@ SUFFIX = {
     "hlsl": ".hlsl",
     "metal": ".metal",
     "mojo": ".mojo",
+    "opencl": ".cl",
     "rust": ".rs",
     "slang": ".slang",
     "spirv": ".spvasm",
@@ -104,6 +106,10 @@ METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
 # feature list names, and for C++17.
 CUDA_ARCH = "sm_80"
+# OpenCL C 3.0 for SPIR: Clang's SPIR targets support every optional feature and Khronos extension, so a probe needs
+# no -cl-ext flags. Only half needs the probe to enable cl_khr_fp16 with a pragma.
+OPENCL_STANDARD = "CL3.0"
+OPENCL_TARGET = "spir64"
 # Slang probes compile to SPIR-V, the target whose validator (SPIRV-Tools, built into slangc) checks the result.
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
@@ -191,6 +197,8 @@ def missing(language: str, target: str = "") -> str:
     needed = {
         "spirv": ("spirv-as", "spirv-val"),
         "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
+        # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
+        "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
     return next((tool for tool in needed if not command(tool)), "")
 
@@ -404,6 +412,22 @@ def validate(
                 ],
                 scratch,
             )
+        if language == "opencl":
+            return _run(
+                [
+                    *command("clang"),
+                    "-x",
+                    "cl",
+                    f"-cl-std={OPENCL_STANDARD}",
+                    "-target",
+                    OPENCL_TARGET,
+                    "-Xclang",
+                    "-finclude-default-header",
+                    "-fsyntax-only",
+                    name,
+                ],
+                scratch,
+            )
         if language == "mojo":
             # The Mojo compiler type-checks every function it parses, called or not; emitting LLVM IR needs no main.
             return _run(
@@ -420,7 +444,8 @@ def validate(
                 scratch,
             )
         if language == "rust":
-            return _run([*command("rust-gpu"), name, "--out-dir", "."], scratch)
+            compiler = rustgpu.command(rustgpu.target(stage))
+            return _run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
             # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
             # For a source target the output must follow the entry point it holds.
@@ -526,10 +551,42 @@ def can_lower(language: str) -> bool:
     return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
-def first_error(log: str) -> str:
-    """The first line of a tool's log that reports an error, or the log's start when none says so."""
-    errors = [line for line in log.splitlines() if "error" in line.lower()]
-    return (errors[0] if errors else log[:300]).strip()
+# slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the
+# particulars, such as the undefined name, in the label under the quoted source line. Its first error is the header
+# joined with that label, so two probes that fail on different names have different causes.
+LABELLED = frozenset({"slang"})
+_HEADER = re.compile(r"error\[(?P<code>E\d+)\]: (?P<message>.+)")
+_LABEL = re.compile(r"\s*\d*\s*\|\s*\^+\s+(?P<label>\S.*)")
+
+
+def first_error(log: str, language: str = "") -> str:
+    """The first line of a tool's log that reports an error, or the log's start when none says so. For a
+    ``language`` in :data:`LABELLED`, the error's header is joined with the label under its source line.
+    """
+    lines = log.splitlines()
+    for index, line in enumerate(lines):
+        if "error" not in line.lower():
+            continue
+        header = _HEADER.fullmatch(line.strip()) if language in LABELLED else None
+        return _labelled(header, lines[index + 1 :]) if header else line.strip()
+    return log[:300].strip()
+
+
+def _labelled(header: re.Match[str], following: list[str]) -> str:
+    """The error ``header`` with the first label of its own block. A label that only repeats the header adds
+    nothing, and one that starts with the header's words replaces them."""
+    for line in following:
+        if _HEADER.fullmatch(line.strip()):
+            break
+        label = _LABEL.fullmatch(line)
+        if label:
+            text, message = label["label"].strip().rstrip("."), header["message"]
+            if text.lower() == message.lower():
+                break
+            if not text.lower().startswith(message.lower()):
+                text = f"{message}: {text}"
+            return f"error[{header['code']}]: {text}"
+    return header.group(0)
 
 
 def lower(
@@ -561,7 +618,12 @@ def lower(
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)
         filled = [a.format(**fields) for a in arguments]
-        compiled = _run([*command(tool), *filled], scratch)
+        compiler = (
+            rustgpu.command(rustgpu.target(stage))
+            if tool == "rust-gpu"
+            else command(tool)
+        )
+        compiled = _run([*compiler, *filled], scratch)
         if not compiled.accepted:
             return "", compiled.log
         try:
