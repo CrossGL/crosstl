@@ -168,8 +168,16 @@ def undeclared_type_uses(program):
         if isinstance(node, A.GenericParameterNode)
         for bound in node.constraints
     }
+    # A generic type's arguments (``Texture2D<float4>``, ``RayQuery<RAY_FLAG_NONE>``) are resource or library
+    # spellings the generators resolve, and a constant argument is not a type name at all; neither is checked.
+    generic_args = {
+        id(arg)
+        for node in _nodes(program)
+        if isinstance(node, A.NamedType)
+        for arg in node.generic_args
+    }
     uses = []
-    for node in _nodes(program, _dead_functions(program) | bounds):
+    for node in _nodes(program, _dead_functions(program) | bounds | generic_args):
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name
