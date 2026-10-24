@@ -51,6 +51,7 @@ from ..host_workgroup_size import (
     require_static_workgroup_size,
 )
 from .array_utils import prepend_array_dimension
+from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -2891,8 +2892,11 @@ class WGSLCodeGen:
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
                     operand_type = self.type_name_string(operand_type)
-                operand = wgsl_logical_not_operand(operand, operand_type)
-            return f"{expr.operator}{operand}"
+                converted = wgsl_logical_not_operand(operand, operand_type)
+                if converted != operand:
+                    # A bool conversion is a constructor call, a primary.
+                    return f"!{converted}"
+            return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
