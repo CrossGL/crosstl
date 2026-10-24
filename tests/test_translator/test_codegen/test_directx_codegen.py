@@ -6736,9 +6736,13 @@ def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
     }}
     """
 
-    message = refused_hlsl(generate_code, parse_code(tokenize_code(shader)))
+    generated_code, message = hlsl_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
 
     assert "HLSL has no fwidth" in message
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
     assert reason in message
 
 
