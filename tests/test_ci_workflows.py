@@ -220,6 +220,32 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
         assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
 
 
+def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
+    # Every conformance job already waits for the leg selection, so the planner
+    # skips that step instead and leaves `run` empty.
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "conformance.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    planner = jobs["legs"]
+    assert planner["permissions"] == {"actions": "read", "contents": "read"}
+    assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
+    assert planner["outputs"]["run"] == "${{ steps.select.outputs.run }}"
+    steps = {step.get("id"): index for index, step in enumerate(planner["steps"])}
+    reference = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    assert planner["steps"][steps["queue"]] == reference
+    select = planner["steps"][steps["select"]]
+    assert steps["queue"] < steps["select"]
+    assert select["if"] == "steps.queue.outputs.tested != 'true'"
+    for name, job in jobs.items():
+        if name in {"legs", "result"}:
+            continue
+        assert job["needs"] == "legs", name
+        assert job["if"] == "needs.legs.outputs.run == 'true'", name
+
+
 def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
     # actions/setup-python fails its post step when the pip cache folder was never
     # created, so a job that caches pip downloads must also install with pip.

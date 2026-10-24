@@ -25,9 +25,10 @@ touches Metal or Direct3D.
   group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
   to `main`. A pull request merges only when this run passes.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
-  backend, complete and examples workflows skip a push whose commit already
-  passed the merge queue, and run in full for any other commit. The MLX tier, conformance, the corpus and coverage also run
-  nightly, and fuzzing runs weekly.
+  backend, complete, examples and conformance workflows skip a push whose
+  commit already passed the merge queue, and run in full for any other commit.
+  The MLX tier, conformance, the corpus and coverage also run nightly, and
+  fuzzing runs weekly.
 
 A maintainer can request the merge-queue tier on a pull request before
 queueing it. The `ci:full` label applies from the next push, and
