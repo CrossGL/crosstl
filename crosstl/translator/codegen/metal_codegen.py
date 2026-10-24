@@ -382,6 +382,7 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_parameters,
 )
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
@@ -555,7 +556,12 @@ METAL_GROUPSHARED_ENTRY_STAGES = frozenset(
 )
 
 
-class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctionMixin):
+class MetalCodeGen(
+    MetalHlslResourceMixin,
+    MetalHlslValueMixin,
+    MetalHlslFunctionMixin,
+    MetalNarrowVectorMixin,
+):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
     BINARY_PRECEDENCE = {
@@ -9587,8 +9593,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         native = self.metal_native_narrow_bitcast_storage_type(value_type)
         if native is None or not re.fullmatch(r"u?(?:char|short)[234]?", native):
             return None
+        carrier = self.map_type(value_type)
+        if self.metal_narrow_is_normalized(rendered, carrier, native):
+            # Narrow vector arithmetic already wrapped the value.
+            return rendered
         # Keep arithmetic carriers widened, but preserve the source conversion.
-        return f"{self.map_type(value_type)}({native}({rendered}))"
+        return f"{carrier}({native}({rendered}))"
 
     def metal_narrow_integer_update_expression(
         self, node, target, operator, value=None
@@ -10128,6 +10138,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(getattr(expr, "true_expr", None))
             false_type = self.expression_result_type(getattr(expr, "false_expr", None))
+            common_type = self.metal_conditional_result_type(true_type, false_type)
+            if common_type is not None:
+                return common_type
             if self.is_vector_value_type(true_type):
                 return true_type
             if self.is_vector_value_type(false_type):
@@ -11523,8 +11536,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
             operator = self.map_operator(expr.op)
-            left = self.generate_binary_operand(expr.left, operator)
-            right = self.generate_binary_operand(expr.right, operator, True)
+            left = self.metal_narrow_vector_operand(
+                expr.left, self.generate_binary_operand(expr.left, operator)
+            )
+            right = self.metal_narrow_vector_operand(
+                expr.right, self.generate_binary_operand(expr.right, operator, True)
+            )
             if operator in {"<", ">", "<=", ">="}:
                 if self.map_type(self.expression_result_type(expr.left)) == "bool":
                     left = f"int({left})"
@@ -11557,7 +11574,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     right = self.cast_binary_operand_to_expected_vector(
                         right, self.expression_result_type(expr.right), expected_type
                     )
-            return f"{left} {operator} {right}"
+            return self.metal_narrow_vector_wrap(
+                expr, operator, f"{left} {operator} {right}"
+            )
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
@@ -11612,10 +11631,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 operand = metal_logical_not_operand(
                     operand, self.expression_result_type(expr.operand)
                 )
+            operand = self.metal_narrow_vector_operand(expr.operand, operand)
             if operator in {"+", "-"} and operand.startswith(("+", "-")):
                 # Keep adjacent signs from becoming an increment or decrement.
                 operand = f"({operand})"
-            return f"{operator}{operand}"
+            return self.metal_narrow_vector_wrap(expr, operator, f"{operator}{operand}")
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
@@ -12494,7 +12514,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
             return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
-            return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
+            true_code, false_code = self.metal_conditional_arms(
+                expr,
+                self.generate_expression(expr.true_expr),
+                self.generate_expression(expr.false_expr),
+            )
+            return f"{self.generate_expression(expr.condition)} ? {true_code} : {false_code}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
