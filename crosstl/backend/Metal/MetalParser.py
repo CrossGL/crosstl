@@ -8,6 +8,7 @@ from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 from .signed_type_spellings import fold_signed_type_spellings
+from .simd_aliases import SIMD_TYPE_ALIASES
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -419,23 +420,7 @@ class MetalParser:
             "packed_uint2",
             "packed_uint3",
             "packed_uint4",
-            "simd_float2",
-            "simd_float3",
-            "simd_float4",
-            "simd_float2x2",
-            "simd_float3x3",
-            "simd_float4x4",
-            "simd_int2",
-            "simd_int3",
-            "simd_int4",
-            "simd_uint2",
-            "simd_uint3",
-            "simd_uint4",
-            "vector_float2",
-            "vector_float3",
-            "vector_float4",
-            "matrix_float3x3",
-            "matrix_float4x4",
+            *SIMD_TYPE_ALIASES,
         }
         self.local_variable_scopes = []
         self.local_type_scopes = []

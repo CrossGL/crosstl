@@ -59,7 +59,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
-from .simd_header_types import SIMD_HEADER_TYPES
+from .simd_aliases import SIMD_TYPE_ALIASES
 from .texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
@@ -1099,8 +1099,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
-        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
-        *SIMD_HEADER_TYPES,
+        # <simd/simd.h> names Metal's vector and matrix types with these aliases too.
+        *SIMD_TYPE_ALIASES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1766,21 +1766,6 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "packed_uint2": "uvec2",
             "packed_uint3": "uvec3",
             "packed_uint4": "uvec4",
-            # SIMD types
-            "simd_float2": "vec2",
-            "simd_float3": "vec3",
-            "simd_float4": "vec4",
-            "simd_float2x2": "mat2",
-            "simd_float3x3": "mat3",
-            "simd_float4x4": "mat4",
-            "simd_int2": "ivec2",
-            "simd_int3": "ivec3",
-            "simd_int4": "ivec4",
-            "simd_uint2": "uvec2",
-            "simd_uint3": "uvec3",
-            "simd_uint4": "uvec4",
-            # simd.h aliases commonly found in shared Metal headers
-            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -1894,6 +1879,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             # Sampler type
             "sampler": "sampler",
         }
+        # <simd/simd.h> aliases map like the Metal types they name.
+        self.type_map.update(
+            {
+                alias: self.type_map[metal_type]
+                for alias, metal_type in SIMD_TYPE_ALIASES.items()
+                if metal_type in self.type_map
+            }
+        )
         self.type_aliases = {}
         self.type_alias_qualifiers = {}
         self.type_alias_pointee_qualifiers = {}
