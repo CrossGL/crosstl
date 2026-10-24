@@ -5,6 +5,11 @@ A translation the reference tool accepts can still compute something else. Where
 same inputs, and a translation that writes other results, writes outside its output buffer, or that the runtime
 rejects is wrong.
 
+HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
+reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
+same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
+validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
+
 The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that read one
 input buffer run. The other probes keep their validation result. Integer inputs are small and non-negative, so no
 probe shifts, extracts or inserts bits outside what every language defines.
@@ -18,10 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
+from . import validators
 from .model import Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
 SUFFIXES = {"glsl": ".comp", "metal": ".metal", "spirv": ".spvasm"}
+# The languages that run as the SPIR-V their reference compiler lowers them to.
+VIA_SPIRV = frozenset({"hlsl", "slang", "wgsl"})
 THREADS = 64
 # Output words one thread may write: a 4x4 float matrix is the largest result a probe stores.
 WORDS = 16
@@ -32,6 +40,10 @@ _INPUT = re.compile(r"\b(fin|iin|uin)\b")
 # rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
 # use what 4.60 adds.
 _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
+# lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
+# rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
+# their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
+_FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
@@ -61,6 +73,25 @@ def runnable(language: str, source: str) -> str:
     if language == "glsl":
         return _GLSL_460.sub("#version 450 core", source, count=1)
     return source
+
+
+def runs(language: str) -> bool:
+    """Whether the harness runs probes in ``language``, directly or as SPIR-V."""
+    return language in SUFFIXES or language in VIA_SPIRV
+
+
+def target(language: str) -> str:
+    """The language the harness runs ``language``'s probes as."""
+    return "spirv" if language in VIA_SPIRV else language
+
+
+def as_spirv(language: str, source: str) -> str:
+    """The SPIR-V assembly ``language``'s reference compiler writes for a compute ``source``, or an empty string when
+    it rejects the source."""
+    # naga takes no entry point; HLSL and Slang name theirs after [numthreads(...)].
+    entry = "main" if language == "wgsl" else validators.hlsl_entry(source, "compute")
+    assembly, _ = validators.lower(language, source, entry)
+    return assembly
 
 
 def inputs(buffer: str):
@@ -125,19 +156,29 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
     """
     from tests.conformance import runner
 
-    suffix, cases, outputs, lowered = SUFFIXES[language], [], {}, set()
+    runs_as = target(language)
+    suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
     for index, result in chunk:
         [buffer] = set(_INPUT.findall(result.sources[0]))
         data = inputs(buffer)
-        for role, source in zip(("native", "translated"), result.sources):
+        texts = [runnable(language, source) for source in result.sources]
+        if language in VIA_SPIRV:
+            texts = [as_spirv(language, text) for text in texts]
+            if not all(texts):
+                continue
+        elif texts[1] != result.sources[1]:
+            lowered.add(index)
+        if runs_as == "spirv" and any(_FLOAT16.search(text) for text in texts):
+            continue
+        for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(runnable(language, source))
-            if role == "translated" and runnable(language, source) != source:
-                lowered.add(index)
-            cases.append(_case(f"{index:05d}-{role}", path, language, data, outputs))
+            path.write_text(text)
+            cases.append(_case(f"{index:05d}-{role}", path, runs_as, data, outputs))
+    if not cases:
+        return {}
     records = runner.run_suite(
-        cases, [language], ["strict"], selection, root, reference=True
+        cases, [runs_as], ["strict"], selection, root, reference=True
     )
     found = {}
     for record in records:
@@ -157,8 +198,12 @@ def _judge(
     runtime = native["runtime"]
     if lowered and translated["outcome"] == "driver-rejected":
         return result
+    language = result.feature.language
+    where = f"on {runtime}" + (
+        f" as SPIR-V from {validators.TOOLS[language]}" if language in VIA_SPIRV else ""
+    )
     if translated["outcome"] in _BROKEN:
-        detail = f"on {runtime}, the translation {_BROKEN[translated['outcome']]}"
+        detail = f"{where}, the translation {_BROKEN[translated['outcome']]}"
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] != "preserved":
         return result
@@ -167,7 +212,7 @@ def _judge(
     )
     if found:
         first, _, rest = found.partition("\n")
-        detail = f"on {runtime}, the translation {first}\n{rest}"
+        detail = f"{where}, the translation {first}\n{rest}"
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     return replace(result, runtime=runtime)
 
@@ -183,17 +228,20 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     by_language: dict[str, list[tuple[int, Result]]] = {}
     for index, result in enumerate(results):
         language = result.feature.language
-        if language in SUFFIXES and executable(result):
+        if runs(language) and executable(result):
             by_language.setdefault(language, []).append((index, result))
     used = set()
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-execution-") as scratch:
         for language, items in by_language.items():
-            selection = runner.select_runtimes(runtimes, [language])
-            available = [pair for pair in selection[language] if pair[1].available]
+            if language in VIA_SPIRV and not validators.can_lower(language):
+                continue
+            runs_as = target(language)
+            selection = runner.select_runtimes(runtimes, [runs_as])
+            available = [pair for pair in selection[runs_as] if pair[1].available]
             if not available:
                 continue
             # One runtime per language keeps a result's verdict independent of how many devices the host has.
-            selection = {language: available[:1]}
+            selection = {runs_as: available[:1]}
             chunks = [items[n::workers] for n in range(workers) if items[n::workers]]
             with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
                 done = pool.map(
@@ -217,4 +265,6 @@ def idle(results: list[Result], used: list[str]) -> list[str]:
     from tests.conformance.runtimes import RUNTIMES
 
     ran = {RUNTIMES[runtime].target for runtime in used}
+    if "spirv" in ran:
+        ran |= {language for language in VIA_SPIRV if validators.can_lower(language)}
     return sorted({r.feature.language for r in results if executable(r)} - ran)

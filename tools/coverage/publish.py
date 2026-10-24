@@ -11,8 +11,10 @@ import csv
 import io
 from collections import Counter
 from pathlib import Path
+from urllib.parse import quote
 
 from . import chart, ir, trend
+from .causes import cause, diagnostic, grouped, headline
 from .model import OUTCOMES
 from .report import dumps
 
@@ -20,6 +22,8 @@ from .report import dumps
 HISTORY_RUNS = 400
 HISTORY_FIELDS = ("date", "commit", "language", "direction", "score", *OUTCOMES)
 DETAIL_LIMIT = 160
+# A cause in COVERAGE.md is longer, so that two causes do not read the same once cut.
+CAUSE_LIMIT = 400
 WORKFLOW = "coverage.yml"
 
 
@@ -134,42 +138,94 @@ def _executed(report: dict) -> list[str]:
     return [
         "Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one "
         "input buffer also runs: the native probe and CrossTL's translation get the same inputs, and a "
-        f"translation that writes other results is wrong. Executed: {ran}.",
+        "translation that writes other results is wrong. HLSL, Slang and WGSL probes run as the SPIR-V their "
+        f"reference compiler writes for them. Executed: {ran}.",
         "",
     ]
 
 
-def _gaps(row: dict) -> list[str]:
-    """The refused and wrong features of one row, grouped by category, plus the untested count per category."""
+def _code(text: str) -> str:
+    """``text`` as one bounded Markdown code span, so the ``<probe>`` and ``<feature>`` of a cause stay visible."""
+    line = " ".join(text.split())
+    if len(line) > CAUSE_LIMIT:
+        line = line[: CAUSE_LIMIT - 1].rstrip() + "…"
+    return "`" + line.replace("`", "'") + "`"
+
+
+def _summary(row: dict, text: str, features: list[dict]) -> str:
+    """The headline of a cause, or of its one feature's own diagnostic, which names the feature."""
+    if len(features) == 1:
+        text = diagnostic(features[0])
+    if row["language"] == ir.LANGUAGE:
+        # An IR gap's diagnostic starts with the language whose probe gave it.
+        language, _, rest = text.partition(": ")
+        return f"{language}: {headline(rest)}"
+    return headline(text)
+
+
+def _bugs_url(repository: str, row: dict) -> str:
+    """The open bug issues of ``row``, which carry the labels :func:`.issues.bug_labels` gives them."""
+    labels = (
+        "coverage",
+        "bug",
+        f"backend:{row['language']}",
+        f"direction:{row['direction']}",
+    )
+    query = " ".join(["is:issue", "is:open", *(f"label:{name}" for name in labels)])
+    return f"https://github.com/{repository}/issues?q={quote(query, safe=':')}"
+
+
+def _causes(row: dict, outcome: str) -> list[str]:
+    """One list item per cause of ``row``'s ``outcome`` results, the cause shared by most features first."""
+    if outcome == "wrong":
+        groups = grouped(row)
+    else:
+        found: dict[str, list[dict]] = {}
+        for feature in sorted(row["features"], key=lambda f: f["name"]):
+            if feature["outcome"] == outcome:
+                found.setdefault(cause(feature, row["language"]), []).append(feature)
+        groups = sorted(found.items(), key=lambda item: (-len(item[1]), item[0]))
+    lines = []
+    for text, features in groups:
+        names = ", ".join(f"`{f['name']}`" for f in features)
+        count = f" ({len(features)})" if len(features) > 1 else ""
+        lines.append(f"- {_code(_summary(row, text, features))}{count}: {names}")
+    return lines
+
+
+def _gaps(row: dict, repository: str) -> list[str]:
+    """The refused and wrong features of one row grouped by cause, plus the untested count per category.
+
+    The wrong results are grouped as the bug issues are (:func:`.causes.grouped`), so each item is one bug.
+    """
     language, direction = label(row)
-    gaps = [f for f in row["features"] if f["outcome"] in ("refused", "wrong")]
+    counts = row["counts"]
     untested = Counter(
         f["category"] for f in row["features"] if f["outcome"] == "untested"
     )
-    if not gaps and not untested:
+    if not counts["refused"] and not counts["wrong"] and not untested:
         return []
     lines = [f"### {language} {direction}", ""]
-    if gaps:
+    if counts["refused"] or counts["wrong"]:
         lines += [
             "<details>",
-            f"<summary>{len(gaps)} gaps: {row['counts']['refused']} refused, {row['counts']['wrong']} wrong</summary>",
+            f"<summary>{counts['refused'] + counts['wrong']} gaps: {counts['refused']} refused, "
+            f"{counts['wrong']} wrong</summary>",
             "",
         ]
-        for category in sorted({f["category"] for f in gaps}):
-            lines.append(f"**{category}**")
-            lines.append("")
-            for feature in sorted(
-                (f for f in gaps if f["category"] == category), key=lambda f: f["name"]
-            ):
-                detail = f": {cell(feature['detail'])}" if feature.get("detail") else ""
-                lines.append(f"- `{feature['name']}` {feature['outcome']}{detail}")
-            lines.append("")
+        if counts["wrong"]:
+            bugs = (
+                ""
+                if row["language"] == ir.LANGUAGE
+                else f" ([open bug issues]({_bugs_url(repository, row)}))"
+            )
+            lines += [f"Wrong, by cause{bugs}:", "", *_causes(row, "wrong"), ""]
+        if counts["refused"]:
+            lines += ["Refused, by diagnostic:", "", *_causes(row, "refused"), ""]
         lines += ["</details>", ""]
     if untested:
-        counts = ", ".join(
-            f"{category} {n}" for category, n in sorted(untested.items())
-        )
-        lines += [f"Untested, by category: {counts}.", ""]
+        tally = ", ".join(f"{category} {n}" for category, n in sorted(untested.items()))
+        lines += [f"Untested, by category: {tally}.", ""]
     return lines
 
 
@@ -221,10 +277,14 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         "## Gaps",
         "",
+        "Each row's wrong and refused features are grouped by diagnostic. A diagnostic drops its line numbers and "
+        "writes the probe's own variables as `<probe>`, and one that several features share writes each feature's "
+        "name as `<feature>`.",
+        "",
     ]
     for row in report["backends"]:
         if row["offered"]:
-            lines += _gaps(row)
+            lines += _gaps(row, repository)
     return "\n".join(lines).rstrip() + "\n"
 
 
