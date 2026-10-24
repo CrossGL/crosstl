@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import constructs
+from . import constructs, execution
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type, tuple_element
@@ -89,6 +89,7 @@ class _Builder:
         interpolant: str = "",
         payload: bool = False,
         tracing: bool = False,
+        source: str = "",
     ):
         self.dialect = dialect
         self.receiver = receiver
@@ -99,7 +100,11 @@ class _Builder:
         self.tracing = tracing
         self.traced = False
         self.uniforms = Uniforms(dialect)
+        # The storage every scalar argument is read from, if one is (:func:`_one_input`).
+        self.source = source
         self.offsets: dict[str, int] = {}
+        # The storages of the input buffers the call takes whole.
+        self.passed: set[str] = set()
         self.lines: list[str] = list(receiver.locals) if receiver else []
         # Variables the compute workgroup shares, for a parameter that takes one.
         self.shared: list[str] = []
@@ -112,9 +117,14 @@ class _Builder:
 
     def element(self, scalar: str) -> str:
         storage = _storage(scalar)
-        offset = self.offsets.get(storage, 0)
-        self.offsets[storage] = offset + 1
-        read = self.dialect.read(_BUFFERS[storage], offset)
+        held = self.source or storage
+        offset = self.offsets.get(held, 0)
+        self.offsets[held] = offset + 1
+        read = self.dialect.read(_BUFFERS[held], offset)
+        if held != storage:
+            # An integer from the float buffer, whose inputs lie in [-4, 4), or from the uint buffer.
+            whole = f"({read} * {read})" if held == "float" else read
+            read = self.dialect.cast(Type(storage), whole)
         if scalar == "bool":
             return self.dialect.positive(read)
         if scalar != storage:
@@ -252,6 +262,7 @@ class _Builder:
                 if param.type.shape or storage not in _BUFFERS:
                     raise ProbeError(f"no probe buffer holds {param.type.scalar}")
                 self.offsets.setdefault(storage, 0)
+                self.passed.add(storage)
                 arguments.append(dialect.buffer_argument(_BUFFERS[storage]))
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
@@ -347,9 +358,54 @@ class _Builder:
         ]
 
 
-def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
+def _assemble(
+    feature: Feature, dialect: Dialect, source: str = ""
+) -> tuple[Receiver | None, _Builder]:
+    """A new receiver and builder for ``feature``'s probe, which read every scalar argument from ``source`` if set."""
+    # A method is called on an object of its type, which the feature's group names.
+    receiver = (
+        Receiver(feature.group, dialect, feature.spelling)
+        if feature.category == "method"
+        else None
+    )
+    interpolant = feature.name in _INTERPOLANTS and (
+        "flat" if feature.name in _FLAT else "smooth"
+    )
+    builder = _Builder(
+        dialect,
+        receiver,
+        interpolant or "",
+        feature.stage in _PAYLOAD_STAGES,
+        feature.stage == _TRACING_STAGE,
+        source,
+    )
+    return receiver, builder
+
+
+def _one_input(builder: _Builder) -> str:
+    """The storage that every scalar argument of a probe reading several scalar types is read from, or nothing.
+
+    The conformance harness binds one input buffer, so a probe that declares two does not run. Integers then come
+    from the float buffer, squared so that they stay small and non-negative, or with no float argument from the uint
+    buffer. A buffer the call takes whole keeps its type, and so does a probe reading more than :mod:`.execution`
+    fills in.
+    """
+    read = set(builder.offsets)
+    if len(read) < 2 or builder.passed:
+        return ""
+    if sum(builder.offsets.values()) > execution.SPAN:
+        return ""
+    return "float" if "float" in read else "uint"
+
+
+def build(
+    feature: Feature, language: str, *, baseline: bool = False, one_input: bool = True
+) -> Probe:
     """The probe for ``feature`` in ``language``, a key of :data:`DIALECTS`: CrossGL (``crossgl``, or for WebGL
     ``crossgl-es``) for the output direction, the feature's own language for input and for lowering to SPIR-V.
+
+    A compute probe in a language :mod:`.execution` runs reads all its scalar arguments from one input buffer
+    (:func:`_one_input`) unless ``one_input`` is false.
     """
     dialect = DIALECTS[language]
     crossgl = dialect.language == "crossgl"
@@ -377,26 +433,16 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
             "CrossGL has no spelling for this operation"
             + (f": {feature.note}" if feature.note else "")
         )
-    # A method is called on an object of its type, which the feature's group names.
-    receiver = (
-        Receiver(feature.group, dialect, feature.spelling)
-        if feature.category == "method"
-        else None
-    )
-    interpolant = feature.name in _INTERPOLANTS and (
-        "flat" if feature.name in _FLAT else "smooth"
-    )
-    builder = _Builder(
-        dialect,
-        receiver,
-        interpolant or "",
-        feature.stage in _PAYLOAD_STAGES,
-        feature.stage == _TRACING_STAGE,
-    )
     signature = feature.signature
     if crossgl and feature.counterpart:
         signature = feature.counterpart
+    receiver, builder = _assemble(feature, dialect)
     body, output = builder.body(name, signature, baseline)
+    runs = feature.stage == "compute" and execution.runs(feature.language)
+    source = _one_input(builder) if one_input and runs else ""
+    if source:
+        receiver, builder = _assemble(feature, dialect, source)
+        body, output = builder.body(name, signature, baseline)
     buffers = [
         (dialect.type(Type(scalar)), _BUFFERS[scalar])
         for scalar in ("float", "int", "uint")

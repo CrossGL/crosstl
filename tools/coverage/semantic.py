@@ -149,8 +149,11 @@ def lower(feature: Feature) -> tuple[str, str]:
         tool = validators.SPIRV_COMPILERS[feature.language][0]
         return "", f"{tool} or spirv-dis is not installed"
     try:
-        probe = probes.build(feature, feature.language)
-        baseline = probes.build(feature, feature.language, baseline=True)
+        # One buffer per scalar type, so the integers read from the float buffer add no instruction to the call.
+        probe = probes.build(feature, feature.language, one_input=False)
+        baseline = probes.build(
+            feature, feature.language, baseline=True, one_input=False
+        )
     except probes.ProbeError as error:
         return "", str(error)
     stage = feature.stage

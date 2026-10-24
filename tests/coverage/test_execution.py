@@ -49,7 +49,8 @@ def test_only_supported_probes_that_read_one_input_buffer_run():
         "ldexp",
         Signature(Type("float"), (Param(Type("float")), Param(Type("int")))),
     )
-    two_buffers = probes.build(ldexp, "metal").source
+    assert execution.executable(supported(probes.build(ldexp, "metal").source))
+    two_buffers = probes.build(ldexp, "metal", one_input=False).source
     assert not execution.executable(supported(two_buffers))
     assert not execution.executable(
         Result(SIN, "output", "supported", sources=(two_buffers, two_buffers))
