@@ -1979,6 +1979,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         "ddy_coarse": "ddy_coarse",
         "ddy_fine": "ddy_fine",
         "fwidth": "fwidth",
+        "fwidthCoarse": "ddx_coarse/ddy_coarse",
+        "fwidthFine": "ddx_fine/ddy_fine",
     }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
@@ -28005,6 +28007,45 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "asfloat(0x7fc00000)"
         if not args and func_name == "infinity":
             return "asfloat(0x7f800000)"
+        if func_name in {"fwidthFine", "fwidthCoarse"} and len(args) == 1:
+            # HLSL has no fine or coarse fwidth; GLSL 4.60 section 8.14
+            # defines fwidthFine(p) as abs(dFdxFine(p)) + abs(dFdyFine(p)).
+            granularity = "fine" if func_name == "fwidthFine" else "coarse"
+            targets = ("abs", f"ddx_{granularity}", f"ddy_{granularity}")
+            lowering = f"abs(ddx_{granularity}(p)) + abs(ddy_{granularity}(p))"
+            shadowed = [
+                target
+                for target in targets
+                if self.hlsl_function_name_is_shadowed(target)
+            ]
+            if shadowed:
+                return self.refuse_lowering(
+                    f"{func_name} call: HLSL has no {func_name}, and its lowering "
+                    f"{lowering} would name the shader's own '{shadowed[0]}'",
+                    "0.0",
+                )
+            # The lowering evaluates p twice, so p must not assign, increment
+            # or call one of the shader's own functions.
+            if any(
+                isinstance(node, AssignmentNode)
+                or (isinstance(node, UnaryOpNode) and node.op in {"++", "--"})
+                or (
+                    isinstance(node, FunctionCallNode)
+                    and self.hlsl_function_name_is_shadowed(
+                        self.function_call_name(node)
+                    )
+                )
+                for node in self.walk_ast(args[0])
+            ):
+                return self.refuse_lowering(
+                    f"{func_name} call: HLSL has no {func_name}, and its lowering "
+                    f"{lowering} would evaluate an argument with side effects "
+                    "twice",
+                    "0.0",
+                )
+            arg = self.generate_expression(args[0])
+            return f"(abs(ddx_{granularity}({arg})) + abs(ddy_{granularity}({arg})))"
+
         if (
             func_name in {"frac", "fract"}
             and len(args) == 1
