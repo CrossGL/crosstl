@@ -6,6 +6,8 @@ nor deducible ([temp.deduct.call], [temp.arg.explicit]/4). Translation used to m
 helper's ``sizeof(U)`` read 4 instead of 2 and the half argument was widened.
 """
 
+import re
+
 import pytest
 
 import crosstl
@@ -85,8 +87,25 @@ def test_deducible_default_takes_the_deduced_type(tmp_path, backend, signature):
     assert "int(4)" not in code
 
 
+def spirv_type_id(code, declaration):
+    match = re.search(rf"^(%\w+) = {declaration}$", code, re.MULTILINE)
+    assert match, declaration
+    return match.group(1)
+
+
 def test_deducible_default_translates_to_spirv(tmp_path):
-    assert "OpFunctionCall %int" in translate(tmp_path, DEDUCED_DEFAULT, "vulkan")
+    path = tmp_path / "kernel.metal"
+    path.write_text(DEDUCED_DEFAULT)
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed.
+    code = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    int_id = spirv_type_id(code, "OpTypeInt 32 1")
+    # Without the Float16 capability SPIR-V widens half to 32 bits.
+    float_id = spirv_type_id(code, r"OpTypeFloat \d+")
+    # The helper takes the deduced half factor and returns int.
+    assert re.search(
+        rf"= OpTypeFunction {int_id} {float_id} {int_id}$", code, re.MULTILINE
+    )
+    assert re.search(rf"= OpFunctionCall {int_id} ", code)
 
 
 @pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
