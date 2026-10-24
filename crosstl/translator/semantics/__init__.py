@@ -15,6 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .binding_constants import fold_binding_constants
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -201,6 +202,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
@@ -227,6 +229,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
     resolve_intrinsic_named_functions(program)
+    fold_binding_constants(program)
     rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
     lower_subpass_inputs(program, report.target)
