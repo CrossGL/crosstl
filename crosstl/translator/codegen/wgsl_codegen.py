@@ -65,9 +65,10 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
-class WGSLCodeGen:
+class WGSLCodeGen(WGSLValueSideEffectsMixin):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
     SUPPORTED_STAGE_NAMES = {"vertex", "fragment", "compute"}
@@ -2465,6 +2466,11 @@ class WGSLCodeGen:
 
     def generate_statement(self, stmt, indent=0):
         pad = "    " * indent
+        lowered = self.lower_value_side_effects(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         if isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
@@ -2489,7 +2495,7 @@ class WGSLCodeGen:
         if isinstance(stmt, ExpressionStatementNode):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment_statement(stmt.expression, indent)
-            return f"{pad}{self.generate_expression(stmt.expression)};"
+            return f"{pad}{self.generate_statement_expression(stmt.expression)};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):
@@ -2558,7 +2564,9 @@ class WGSLCodeGen:
             condition = (
                 self.generate_expression(node.condition) if node.condition else ""
             )
-            update = self.generate_expression(node.update) if node.update else ""
+            update = (
+                self.generate_statement_expression(node.update) if node.update else ""
+            )
             return (
                 f"{pad}for ({init}; {condition}; {update}) "
                 f"{self.generate_block(node.body, indent)}"
@@ -2587,11 +2595,18 @@ class WGSLCodeGen:
                 init.name, var_type, initializer=init.initial_value
             )
             return line
-        if isinstance(init, AssignmentNode):
-            return self.generate_assignment(init)
         if isinstance(init, ExpressionStatementNode):
-            return self.generate_expression(init.expression)
-        return self.generate_expression(init)
+            return self.generate_statement_expression(init.expression)
+        return self.generate_statement_expression(init)
+
+    def generate_statement_expression(self, expr):
+        """An expression in statement position, where WGSL allows updates."""
+        if isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        if is_increment(expr):
+            operator = "+=" if expr.operator == "++" else "-="
+            return f"{self.generate_expression(expr.operand)} {operator} 1"
+        return self.generate_expression(expr)
 
     def generate_switch(self, node, indent):
         pad = "    " * indent
@@ -2898,17 +2913,11 @@ class WGSLCodeGen:
                 f"{self.generate_expression(expr.right)})"
             )
         if isinstance(expr, UnaryOpNode):
+            if is_increment(expr):
+                self.reject_unordered_side_effect(expr)
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
-                if expr.operator == "++":
-                    return f"{operand} += 1"
-                if expr.operator == "--":
-                    return f"{operand} -= 1"
                 return f"{operand}{expr.operator}"
-            if expr.operator == "++":
-                return f"{operand} += 1"
-            if expr.operator == "--":
-                return f"{operand} -= 1"
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
@@ -2987,7 +2996,7 @@ class WGSLCodeGen:
         if isinstance(expr, RangeNode):
             raise ValueError("WGSL target does not support range expressions")
         if isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr)
+            self.reject_unordered_side_effect(expr)
         raise ValueError(
             f"WGSL target does not support expression {type(expr).__name__}"
         )
