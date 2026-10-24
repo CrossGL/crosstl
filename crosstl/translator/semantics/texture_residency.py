@@ -1,7 +1,7 @@
 """Texture residency queries, checked and refused for targets whose emitters do not lower them.
 
 CrossGL's ``textureResidency(read, texel)`` and ``textureResident(code)``
-(:mod:`crosstl.translator.codegen.texture_residency`) are lowered by the MSL and desktop GLSL emitters. Every other
+(:mod:`crosstl.translator.codegen.texture_residency`) are lowered by the MSL, desktop GLSL, HLSL and SPIR-V emitters. Every other
 target used to print the CrossGL call verbatim, which no target compiler accepts. :func:`refuse_texture_residency`
 checks the shape of every query and refuses the others before generation with
 :class:`~crosstl.translator.codegen.texture_residency.TextureResidencyUnsupportedError`:
@@ -9,7 +9,7 @@ checks the shape of every query and refuses the others before generation with
 * GLSL ES 3.00 (WebGL 2) has no sparse textures; GL_ARB_sparse_texture2 is a desktop OpenGL extension.
 * WGSL has no sparse textures or residency feedback (WGSL section 17.7).
 * CUDA and HIP texture fetches report no residency.
-* The SPIR-V (``OpImageSparse*``) emitter, and the Slang, Rust and Mojo emitters, have no lowering for it yet.
+* The Slang, Rust and Mojo emitters have no lowering for it yet.
 
 For HLSL targets, :func:`declare_hlsl_residency_status` declares one ``uint`` local per query at the top of its
 function, to receive the read's ``out uint Status`` operand, and names it on the call
@@ -40,7 +40,8 @@ __all__ = [
 # requirements).
 HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 RESIDENCY_TARGETS = (
-    frozenset({"metal", "opengl", "glsl", "cgl", "crossgl"}) | HLSL_TARGETS
+    frozenset({"metal", "opengl", "glsl", "vulkan", "spirv", "cgl", "crossgl"})
+    | HLSL_TARGETS
 )
 _STATUS_PREFIX = "crosstl_residency_status_"
 _REASONS = {

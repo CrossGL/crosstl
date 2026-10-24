@@ -205,6 +205,10 @@ from .spirv_struct_varyings import (
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
+from .spirv_texture_residency import (
+    spirv_texture_residency_call,
+    spirv_texture_resident_call,
+)
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .spirv_uniform_block_arrays import (
     declare_uniform_block_array,
@@ -218,6 +222,10 @@ from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
     spirv_texture_lod_clamp_call,
+)
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
 )
 
 
@@ -7445,7 +7453,7 @@ class VulkanSPIRVCodeGen(
         component_type_name, component_count = vector_info
         if component_type_name not in {"int", "uint"}:
             return None
-        if len(expr.args) != component_count:
+        if len(expr.args) not in {1, component_count}:
             return None
 
         component_values = [
@@ -7453,6 +7461,8 @@ class VulkanSPIRVCodeGen(
         ]
         if any(value is None for value in component_values):
             return None
+        # A single scalar operand is replicated into every component (GLSL 4.60, section 5.4.2).
+        component_values *= component_count // len(component_values)
 
         component_type = self.register_primitive_type(component_type_name)
         vector_type = self.register_vector_type(component_type, component_count)
@@ -29791,6 +29801,15 @@ class VulkanSPIRVCodeGen(
                 and not self.has_function_reference(callee_name)
             ):
                 return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if callee_name == TEXTURE_RESIDENCY_OPERATION and not (
+                self.has_function_reference(callee_name)
+            ):
+                return spirv_texture_residency_call(self, list(expr.args), expr)
+            if callee_name == TEXTURE_RESIDENT_OPERATION and not (
+                self.has_function_reference(callee_name)
+            ):
+                return spirv_texture_resident_call(self, list(expr.args), expr)
 
             if (
                 callee_name in OUTPUT_OPERAND_FUNCTIONS
