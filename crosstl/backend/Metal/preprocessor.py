@@ -42,6 +42,7 @@ from .text_scanners import (
     strip_top_level_default_value,
 )
 from .type_layout import metal_type_layout, metal_type_size
+from .value_traits import struct_value_trait_definitions
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 # Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
@@ -444,6 +445,8 @@ class _MetalBooleanVariableTemplate:
     is_partial_specialization: bool
     span: Tuple[int, int]
     namespace: str
+    # ``value`` for a struct template read as a trait (``Name<T>::value``).
+    member: str = ""
 
 
 @dataclass(frozen=True)
@@ -7040,7 +7043,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if name.rsplit("::", 1)[-1] in boolean_templates:
                 angle_start = expr.find("<", named.start())
                 angle_end = self._find_matching_angle(expr, angle_start)
-                if angle_end is None or expr[angle_end + 1 :].strip():
+                suffix = "" if angle_end is None else expr[angle_end + 1 :].strip()
+                member = re.fullmatch(r"::\s*(value)", suffix)
+                if angle_end is None or (suffix and member is None):
                     raise self._UnrecognizedConstraint(expression)
                 return self._evaluate_boolean_variable_template(
                     name,
@@ -7053,6 +7058,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     position=position,
                     namespace_visibility=namespace_visibility,
                     lookup_position=lookup_position,
+                    member=member.group(1) if member else "",
                 )
 
         parsed_trait = self._parse_metal_type_trait_expression(expr)
@@ -9404,6 +9410,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 )
             cursor = semicolon + 1
+        traits = struct_value_trait_definitions(
+            self, code, _MetalBooleanVariableTemplate
+        )
+        for trait_name, trait_definitions in traits.items():
+            definitions.setdefault(trait_name, []).extend(trait_definitions)
         return definitions
 
     def _evaluate_boolean_variable_template(
@@ -9419,10 +9430,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         position: int = 0,
         namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
         lookup_position: Optional[int] = None,
+        member: str = "",
     ) -> bool:
         visible = self._visible_boolean_variable_templates(
             name, definitions, position, namespace_visibility, lookup_position
         )
+        if any(definition.member != member for definition in visible):
+            raise self._UnrecognizedConstraint(name)
 
         def canonical(argument: str, at: int) -> str:
             normalized = self._canonical_type_trait_operand(
