@@ -26,6 +26,12 @@ from .enum_utils import (
     substitute_generic_type_name,
 )
 from .generic_body_types import substitute_body_types
+from .generic_vector_deduction import (
+    bind_generic_vector_parameter,
+    generic_vector_signature_name,
+    substituted_generic_type,
+    substituted_generic_type_name,
+)
 from .image_access_contracts import (
     IMAGE_ATOMIC_INTRINSIC_NAMES,
     RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES,
@@ -185,8 +191,14 @@ def prepare_generic_function_specializations(generator, functions):
         definitions[func_name].append(func)
     generator.generic_function_definitions = definitions
     generator.generic_function_definition_ordinals = definition_ordinals
+    generator.concrete_function_names = {
+        func.name
+        for func in functions or []
+        if getattr(func, "name", None) and not generic_function_parameters(func)
+    }
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
+    generator.generic_function_resolved_call_ids = set()
 
     if not definitions:
         return {}
@@ -299,6 +311,8 @@ def collect_unresolved_generic_function_call_names(generator, functions):
     unresolved = []
     seen_names = set()
     visited = set()
+    # Calls that specialization resolved with their function's local types, which this walk does not track.
+    resolved_call_ids = getattr(generator, "generic_function_resolved_call_ids", set())
 
     def visit(value):
         if value is None or isinstance(value, (str, bytes, int, float, bool)):
@@ -319,6 +333,7 @@ def collect_unresolved_generic_function_call_names(generator, functions):
                 visit(arg)
             if (
                 func_name in definitions
+                and id(value) not in resolved_call_ids
                 and generic_function_call_name(generator, func_name, args) is None
                 and func_name not in seen_names
             ):
@@ -387,6 +402,17 @@ def raise_unresolved_generic_function_call(generator, func_name, target_name):
         f"generic function '{func_name}'{suffix}; specialize the function before "
         f"{target_name} generation"
     )
+
+
+def reject_unresolved_generic_function_call(generator, func_name, target_name):
+    """Raise for a call that names only generic helpers when none of them was specialized for it.
+
+    The generic helper itself is never emitted, so such a call would name an undeclared function. A concrete
+    function of the same name may still take the call.
+    """
+    if func_name in (getattr(generator, "concrete_function_names", None) or ()):
+        return
+    raise_unresolved_generic_function_call(generator, func_name, target_name)
 
 
 def generic_function_value_arguments(generator, func_name, args):
@@ -488,7 +514,10 @@ def _specialized_function_accepts_call(generator, func, args):
     return saw_informative_argument or saw_unknown_argument
 
 
-def _raw_generic_signature_type_name(generator, type_value):
+def _raw_generic_signature_type_name(generator, type_value, generic_params=()):
+    generic_vector = generic_vector_signature_name(type_value, generic_params)
+    if generic_vector is not None:
+        return generic_vector
     saved_substitutions = getattr(
         generator,
         "current_generic_function_substitutions",
@@ -542,6 +571,7 @@ def _generic_function_candidate_call_match(generator, func, func_name, args):
         expected_type = _raw_generic_signature_type_name(
             generator,
             getattr(param, "param_type", getattr(param, "vtype", None)),
+            generic_param_set,
         )
         actual_type = _safe_call_argument_type_name(generator, arg)
         if not actual_type:
@@ -724,11 +754,9 @@ def _collect_from_function(generator, func, substitutions):
     generator.current_generic_function_substitutions = substitutions
     try:
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
-            param_type = generator.type_name_string(
-                getattr(param, "param_type", getattr(param, "vtype", None))
-            )
-            generator.local_variable_types[param.name] = substitute_generic_type_name(
-                param_type,
+            generator.local_variable_types[param.name] = substituted_generic_type_name(
+                generator,
+                getattr(param, "param_type", getattr(param, "vtype", None)),
                 substitutions,
             )
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
@@ -761,14 +789,13 @@ def _analyze_statement(generator, stmt, substitutions):
     if isinstance(stmt, VariableNode):
         initial_value = getattr(stmt, "initial_value", None)
         _analyze_expression(generator, initial_value, substitutions)
-        declared_type = generator.type_name_string(getattr(stmt, "var_type", None))
-        if declared_type is None:
-            declared_type = generator.type_name_string(
-                _safe_expression_result_type(generator, initial_value)
-            )
-        if declared_type:
-            generator.local_variable_types[stmt.name] = substitute_generic_type_name(
-                declared_type,
+        declared_value = getattr(stmt, "var_type", None)
+        if generator.type_name_string(declared_value) is None:
+            declared_value = _safe_expression_result_type(generator, initial_value)
+        if generator.type_name_string(declared_value):
+            generator.local_variable_types[stmt.name] = substituted_generic_type_name(
+                generator,
+                declared_value,
                 substitutions,
             )
         return
@@ -811,8 +838,12 @@ def _analyze_expression(generator, expr, substitutions):
         args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
         for arg in args:
             _analyze_expression(generator, arg, substitutions)
-        if func_name is not None:
-            generic_function_call_key(generator, func_name, args)
+        if (
+            func_name is not None
+            and generic_function_call_key(generator, func_name, args) is not None
+        ):
+            # Remember the call: later passes walk it without its function's local types.
+            generator.generic_function_resolved_call_ids.add(id(expr))
         return
     if isinstance(expr, ConstructorNode):
         for arg in getattr(expr, "arguments", []) or []:
@@ -846,15 +877,17 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         overload_ordinal,
     )
     clone.generic_params = []
-    clone.return_type = substitute_generic_type_name(
-        generator.type_name_string(getattr(func, "return_type", "void")),
+    clone.return_type = substituted_generic_type(
+        generator,
+        getattr(func, "return_type", "void"),
         substitutions,
     )
     for param in getattr(clone, "parameters", getattr(clone, "params", [])) or []:
-        param_type = generator.type_name_string(
-            getattr(param, "param_type", getattr(param, "vtype", None))
+        concrete_type = substituted_generic_type(
+            generator,
+            getattr(param, "param_type", getattr(param, "vtype", None)),
+            substitutions,
         )
-        concrete_type = substitute_generic_type_name(param_type, substitutions)
         if hasattr(param, "param_type"):
             param.param_type = concrete_type
         if hasattr(param, "vtype"):
@@ -925,6 +958,16 @@ def _collect_type_parameter_bindings(
     expected_base, expected_args = generic_type_parts(expected_type)
     actual_base, actual_args = generic_type_parts(actual_type)
     if expected_base != actual_base or len(expected_args) != len(actual_args):
+        bind_generic_vector_parameter(
+            expected_type,
+            actual_type,
+            lambda expected_element, actual_element: _collect_type_parameter_bindings(
+                expected_element,
+                actual_element,
+                substitutions,
+                generic_params,
+            ),
+        )
         return
 
     for expected_arg, actual_arg in zip(expected_args, actual_args):
