@@ -372,6 +372,18 @@ class Rust(Dialect):
         "FpCategory": (Type("uint"), "({}) as u32"),
         "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
     }
+    # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
+    _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        closure = self._CLOSURE.fullmatch(kind.opaque)
+        numeric = {
+            spelled for scalar, spelled in self._SCALARS.items() if scalar != "bool"
+        }
+        if not closure or closure.group(1) not in numeric:
+            return None
+        # The closure doubles its argument, so a translation that drops the call computes something else.
+        return Handle(f"|x: {closure.group(1)}| x + x")
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         if opaque in self._CONVERTED:
