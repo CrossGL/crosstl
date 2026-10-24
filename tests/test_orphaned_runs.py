@@ -1,13 +1,16 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
+import yaml
 
 from tools import orphaned_runs
 from tools.orphaned_runs import GitHub, Run, orphaned, target
 
 GROUP = "gh-readonly-queue/main/pr-12-" + "a" * 40
 LIVE = "gh-readonly-queue/main/pr-13-" + "b" * 40
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/orphaned-runs.yml"
 
 
 def test_target_is_the_branch_a_merge_group_merges_into():
@@ -153,3 +156,21 @@ def test_main_cancels_up_to_the_limit(monkeypatch, capsys):
         "left 1 for the next run (limit 1)",
         "2 of 3 active merge-group runs orphaned, 1 cancelled",
     ]
+
+
+def test_the_workflow_sweeps_whenever_the_queue_creates_a_group():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # Replacing discarded groups creates new ones, so merge_group is when orphans appear; schedules start late.
+    assert {"merge_group", "schedule", "workflow_dispatch"} <= set(workflow[True])
+    jobs = workflow["jobs"]
+    assert jobs["cancel"]["if"] == "github.event_name != 'pull_request'"
+    assert jobs["cancel"]["permissions"] == {"actions": "write", "contents": "read"}
+    # Every sweep shares one group, so a burst of new groups runs one sweep and queues the newest.
+    concurrency = workflow["concurrency"]
+    assert concurrency["group"] == (
+        "orphaned-runs-${{ github.event.pull_request.number || 'sweep' }}"
+    )
+    assert (
+        concurrency["cancel-in-progress"]
+        == "${{ github.event_name == 'pull_request' }}"
+    )

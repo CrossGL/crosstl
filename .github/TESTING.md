@@ -77,7 +77,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
-| `orphaned-runs.yml` | Every 20 minutes: cancels the runs of merge groups the queue has discarded (`tools/orphaned_runs.py`), so they stop holding runners |
+| `orphaned-runs.yml` | On every merge group, with a schedule as a backstop: cancels the runs of merge groups the queue has discarded (`tools/orphaned_runs.py`), so they stop holding runners |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.

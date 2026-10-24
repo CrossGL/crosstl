@@ -3,11 +3,16 @@ name: Orphaned Merge-Group Runs
 # When an entry fails or leaves the merge queue, GitHub replaces the merge groups behind it but lets the runs of the
 # old groups finish. This cancels those runs (tools/orphaned_runs.py) so they free their runners; the runs of a
 # group that landed are kept. Pull requests that change the tool list what it would cancel.
+#
+# Replacing the groups creates new ones, so the sweep runs on every merge_group event. Runs triggered together
+# share one concurrency group: one sweeps while the newest waits, and the others are dropped. The schedule is a
+# backstop only, since GitHub starts scheduled runs on this repository hours late.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
+  merge_group:
   schedule:
     - cron: '7,27,47 * * * *'
   pull_request:
@@ -20,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: orphaned-runs-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: orphaned-runs-${{ github.event.pull_request.number || 'sweep' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
