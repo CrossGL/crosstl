@@ -372,11 +372,12 @@ jobs:
         with:
           dotnet-version: "10.0.400"
       - name: Install Mesa EGL and OpenGL
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgbm1
-          dpkg-query -W libegl-mesa0 libgl1-mesa-dri
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri libgbm1
+          recommends: "false"
+      - name: Record the Mesa versions
+        run: dpkg-query -W libegl-mesa0 libgl1-mesa-dri
       - name: Install CrossTL
         run: python -m pip install -e . pytest==9.1.1 moderngl==5.12.0
       - name: Apply the documented non-Windows upstream patches
