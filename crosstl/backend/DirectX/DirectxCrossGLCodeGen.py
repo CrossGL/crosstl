@@ -595,6 +595,7 @@ class HLSLToCrossGLConverter(
         self.struct_member_array_dims = {}
         self.structs_by_name = {}
         self.flattened_stage_struct_names = set()
+        self.vertex_input_struct_names = set()
         self.integer_constant_values = {}
         self.suppress_storage_image_index_lowering = False
         self.read_raw_texel_method_result = False
@@ -1956,9 +1957,13 @@ class HLSLToCrossGLConverter(
 
         return " ".join(f"@ {attribute}" for attribute in attributes)
 
-    def format_semantic_and_interpolation_attributes(self, node, semantic):
+    def format_semantic_and_interpolation_attributes(
+        self, node, semantic, function_qualifier=None
+    ):
         attributes = []
-        mapped_semantic = self.map_semantic(semantic, parameter=node)
+        mapped_semantic = self.map_semantic(
+            semantic, function_qualifier=function_qualifier, parameter=node
+        )
         if mapped_semantic:
             attributes.append(mapped_semantic)
         interpolation_attributes = self.format_interpolation_attributes(node)
@@ -3665,6 +3670,7 @@ class HLSLToCrossGLConverter(
         self.flattened_stage_struct_names = self.collect_flattened_stage_struct_names(
             ast
         )
+        self.vertex_input_struct_names = self.collect_vertex_input_struct_names(ast)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -3696,7 +3702,9 @@ class HLSLToCrossGLConverter(
                         continue
                     array_suffix = self.format_array_suffixes(member)
                     attributes = self.format_semantic_and_interpolation_attributes(
-                        member, member.semantic
+                        member,
+                        member.semantic,
+                        self.struct_member_stage(node),
                     )
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
                     code += self.format_matrix_layout_attributes(member, 2)
@@ -3821,6 +3829,55 @@ class HLSLToCrossGLConverter(
             if type_name in self.struct_type_names:
                 used_elsewhere.add(type_name)
         return flattened - used_elsewhere
+
+    def struct_member_stage(self, struct_node):
+        if getattr(struct_node, "name", None) in self.vertex_input_struct_names:
+            return "vertex"
+        return None
+
+    def collect_vertex_input_struct_names(self, ast):
+        """Return the structs that entry points use only as vertex inputs.
+
+        Direct3D reads ``SV_Position`` on a vertex input as an ordinary attribute and on every other stage
+        interface as the position built-in (DXC's signature interpretation table), so a member of these structs
+        stays an attribute. A CrossGL struct member or parameter carries one semantic, so an ``SV_Position`` that
+        is both a vertex input and a stage output is refused.
+        """
+        struct_names = self.struct_type_names - self.flattened_stage_struct_names
+        vertex_inputs = set()
+        other_uses = set()
+        for func in getattr(ast, "functions", []) or []:
+            stage_name = str(getattr(func, "qualifier", "") or "").lower()
+            if not stage_name:
+                continue
+            other_uses.update(
+                self.struct_names_in_type(getattr(func, "return_type", None))
+            )
+            for param in getattr(func, "params", []) or []:
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(param, "qualifiers", []) or []
+                }
+                param_type = getattr(param, "vtype", None)
+                if stage_name == "vertex" and "out" not in qualifiers:
+                    vertex_inputs.add(self.raw_type_base(param_type))
+                if stage_name != "vertex" or qualifiers & {"out", "inout"}:
+                    other_uses.update(self.struct_names_in_type(param_type))
+        for name in sorted(vertex_inputs & other_uses & struct_names):
+            for member in getattr(self.structs_by_name.get(name), "members", []) or []:
+                semantic = getattr(member, "semantic", None)
+                if self.is_position_semantic(semantic):
+                    self.refuse_import(
+                        f"{name}.{member.name} : {semantic} is an attribute in the "
+                        f"vertex input {name} and the position built-in where {name} "
+                        "is a stage output"
+                    )
+        return (vertex_inputs & struct_names) - other_uses
+
+    def struct_names_in_type(self, type_name):
+        return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(type_name or ""))) & (
+            self.struct_type_names
+        )
 
     def generate_patch_constant_interface_outputs(
         self, func, functions_by_name, structs_by_name, indent=2
@@ -5862,6 +5919,29 @@ class HLSLToCrossGLConverter(
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    @staticmethod
+    def is_position_semantic(semantic):
+        return re.fullmatch(r"SV_POSITION0?", str(semantic or "").upper()) is not None
+
+    def is_vertex_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not self.is_position_semantic(semantic):
+            return False
+        if str(function_qualifier or "").lower() != "vertex":
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "inout" in qualifiers:
+            self.refuse_import(
+                f"inout vertex parameter {getattr(parameter, 'name', '')} : {semantic} "
+                "is an attribute as input and the position built-in as output"
+            )
+            return False
+        return "out" not in qualifiers
+
     def is_fragment_coverage_input_parameter(
         self, semantic, function_qualifier=None, parameter=None
     ):
@@ -5908,6 +5988,11 @@ class HLSLToCrossGLConverter(
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_vertex_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            # Direct3D reads SV_Position on a vertex input as an ordinary attribute.
+            return "@ Position"
         if self.is_fragment_coverage_input_parameter(
             semantic, function_qualifier, parameter
         ):
@@ -6100,7 +6185,7 @@ class HLSLToCrossGLConverter(
 
         for member in node.members:
             attributes = self.format_semantic_and_interpolation_attributes(
-                member, member.semantic
+                member, member.semantic, self.struct_member_stage(node)
             )
 
             array_suffix = self.format_array_suffixes(member)
