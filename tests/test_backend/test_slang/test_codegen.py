@@ -3884,6 +3884,9 @@ def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
         AllMemoryBarrier();
         DeviceMemoryBarrierWithGroupSync();
         AllMemoryBarrierWithGroupSync();
+        if (id.x == 0u) {
+            hlsl::DeviceMemoryBarrierWithGroupSync();
+        }
         outp[id.x] = 1.0;
     }
     """
@@ -3905,7 +3908,11 @@ def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
         "allMemoryBarrier();",
         "workgroupBarrier();",
         "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
     ]
+    assert "hlsl::" not in generated_code
     cgl_translator.parse(generated_code)
 
 
