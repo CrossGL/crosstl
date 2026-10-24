@@ -283,8 +283,8 @@ def test_uniform_exits_execute(tmp_path, rows):
 def test_uniform_exit_gate_is_required_on_every_native_target():
     from pathlib import Path
 
-    from tests.ci_helpers import assert_paths_covered
     from tests import workflow_text
+    from tests.ci_helpers import assert_paths_covered
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
