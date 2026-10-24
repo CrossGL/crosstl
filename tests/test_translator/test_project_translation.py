@@ -56156,10 +56156,13 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
-    # Metal output is scanned for leaked Mojo host constructs; the SPIR-V
-    # emitter refuses the unresolved host call itself, before any output exists.
+    # Neither target writes output. The Mojo importer turns
+    # `comptime float_dtype = DType.float32` into an untyped CrossGL global,
+    # which Metal refuses before the generated-output scan for leaked Mojo host
+    # constructs can run (#2808). The SPIR-V emitter refuses the unresolved
+    # host call itself.
     assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1,
+        "project.translate.metal-lowering-unsupported": 1,
         "project.translate.vulkan-builtin-unsupported": 1,
     }
 
@@ -56174,7 +56177,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         artifact["target"]: artifact for artifact in payload["artifacts"]
     }
     assert (
-        "unresolved Mojo host/runtime constructs" in artifacts_by_target["metal"][
+        "the type of 'float_dtype' is not written" in artifacts_by_target["metal"][
             "error"
         ]
     )
@@ -56191,16 +56194,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["sourceBackend"] == "mojo"
 
     metal = diagnostics_by_target["metal"]
-    assert (
-        metal["code"]
-        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
-    )
-    assert metal["location"]["file"].startswith("out/metal/")
-    assert metal["originalLocation"]["file"] == "vector_addition.mojo"
-    assert metal["checkKind"] == "artifact"
-    assert metal["missingCapabilities"] == [
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-    ]
+    assert metal["code"] == "project.translate.metal-lowering-unsupported"
+    assert "the type of 'float_dtype' is not written" in metal["message"]
+    assert metal["location"]["file"] == "vector_addition.mojo"
+    assert metal["missingCapabilities"] == ["metal.lowering"]
 
     vulkan = diagnostics_by_target["vulkan"]
     assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
