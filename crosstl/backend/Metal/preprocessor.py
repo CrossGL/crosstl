@@ -500,6 +500,9 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+    # ``using``/``typedef`` names a type: it shadows outer constants but is no
+    # unresolved value.
+    type_alias: bool = False
 
 
 @dataclass(frozen=True)
@@ -4852,7 +4855,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 resolved,
                 qualified_replacements,
             )
-            candidate = self._replace_identifiers(candidate, replacements)
+            candidate = self._replace_identifiers(
+                candidate,
+                replacements,
+                skip_template_names=True,
+            )
             if candidate == resolved:
                 break
             resolved = candidate
@@ -5200,6 +5207,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     scope_start=scope_start,
                     scope_end=scope_end,
                     value=value,
+                    type_alias=bool(type_tokens)
+                    and type_tokens[0] in {"using", "typedef"},
                 )
             )
         record_parameters_through(len(code))
@@ -23671,7 +23680,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 (
                     name
                     for name, binding in visible_local_constants.items()
-                    if binding.value is None
+                    if binding.value is None and not binding.type_alias
                 ),
             )
             if unresolved_local_constants:
@@ -23990,7 +23999,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     (
                         name
                         for name, binding in visible_local_constants.items()
-                        if binding.value is None
+                        if binding.value is None and not binding.type_alias
                     ),
                 )
                 if unresolved_local_constants:
@@ -28376,7 +28385,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _split_top_level_commas(self, text: str) -> List[str]:
         return split_top_level_commas(text, self._read_string)
 
-    def _replace_identifiers(self, text: str, replacements: Dict[str, str]) -> str:
+    def _replace_identifiers(
+        self,
+        text: str,
+        replacements: Dict[str, str],
+        *,
+        skip_template_names: bool = False,
+    ) -> str:
+        # With ``skip_template_names`` an identifier followed by ``<`` is kept: a
+        # plain alias takes no template arguments, so ``Op<`` after
+        # ``using Op = Op<T>;`` names the template the alias refers to.
         result = ""
         i = 0
         while i < len(text):
@@ -28403,7 +28421,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 continue
             if text[i].isalpha() or text[i] == "_":
                 ident, consumed = self._read_identifier(text, i)
-                if self._is_member_identifier_context(text, i):
+                if self._is_member_identifier_context(text, i) or (
+                    skip_template_names
+                    and ident in replacements
+                    and text[i + consumed :].lstrip().startswith("<")
+                ):
                     result += ident
                 else:
                     result += replacements.get(ident, ident)
