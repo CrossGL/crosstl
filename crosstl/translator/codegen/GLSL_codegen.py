@@ -40018,6 +40018,12 @@ complex64_t crossgl_complex64_mod_assign(
             if mad_call is not None:
                 return mad_call
 
+            packed_dot = self.generate_packed_dot4add_call(
+                original_func_name, expr.args
+            )
+            if packed_dot is not None:
+                return packed_dot
+
             if original_func_name not in self.function_return_types:
                 func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
@@ -42292,6 +42298,43 @@ complex64_t crossgl_complex64_mod_assign(
         right = self.generate_expression(args[1])
         addend = self.generate_expression(args[2])
         return f"(({left} * {right}) + {addend})"
+
+    # HLSL dot4add_i8packed(a, b, acc) and dot4add_u8packed(a, b, acc) add the
+    # dot product of the four 8-bit lanes packed in a and b to acc, with byte 0
+    # the least significant lane. GLSL has no packed integer dot product, so
+    # each operand is split into a four-lane vector once and the lanes go
+    # through dot(). Every lane product and their sum stay below 2^24 in
+    # magnitude, so the float dot product is exact. A signed lane is
+    # sign-extended by shifting it into the top byte and arithmetically
+    # shifting it back down.
+    PACKED_DOT4ADD_LANES = {
+        "dot4add_i8packed": (
+            "int",
+            "((ivec4(int({value})) << ivec4(24, 16, 8, 0)) >> ivec4(24))",
+        ),
+        "dot4add_u8packed": (
+            "uint",
+            "((uvec4(uint({value})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))",
+        ),
+    }
+
+    def generate_packed_dot4add_call(self, func_name, args):
+        lowering = self.PACKED_DOT4ADD_LANES.get(func_name)
+        if lowering is None or func_name in self.function_return_types:
+            return None
+        if len(args) != 3:
+            raise ValueError(
+                f"OpenGL {func_name} alias requires 3 arguments; got {len(args)}"
+            )
+
+        scalar_type, lanes = lowering
+        left = lanes.format(value=self.generate_expression(args[0]))
+        right = lanes.format(value=self.generate_expression(args[1]))
+        accumulator = self.generate_expression(args[2])
+        return (
+            f"({scalar_type}({accumulator}) + "
+            f"{scalar_type}(dot(vec4({left}), vec4({right}))))"
+        )
 
     def generate_clip_statement(self, expression, indent):
         if not isinstance(expression, FunctionCallNode):
