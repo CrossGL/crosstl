@@ -35,7 +35,7 @@ def metal_runs():
         return False
 
 
-def test_only_supported_probes_that_read_one_input_buffer_run():
+def test_only_supported_probes_with_matching_ordered_input_buffers_run():
     assert execution.executable(supported())
     assert not execution.executable(Result(SIN, "output", "supported"))
     assert not execution.executable(
@@ -49,8 +49,19 @@ def test_only_supported_probes_that_read_one_input_buffer_run():
     )
     two_buffers = probes.build(ldexp, "metal").source
     assert not execution.executable(supported(two_buffers))
-    assert not execution.executable(
+    assert execution.executable(
         Result(SIN, "output", "supported", sources=(two_buffers, two_buffers))
+    )
+    reordered = (
+        two_buffers.replace("fin", "temporary")
+        .replace("iin", "fin")
+        .replace("temporary", "iin")
+    )
+    assert not execution.executable(
+        Result(SIN, "output", "supported", sources=(two_buffers, reordered))
+    )
+    assert not execution.executable(
+        Result(SIN, "output", "supported", sources=("void main() {}", "void main() {}"))
     )
 
 
@@ -349,3 +360,53 @@ def test_an_execution_bug_is_reproduced_with_execute():
     assert "--feature sin --execute" in body
     assert "but run, it does not compute what the native Metal probe computes" in body
     assert not execution.found("probe.metal:3:1: error: no matching function")
+
+
+@pytest.mark.parametrize(
+    "language", ["metal", "glsl", "hlsl", "slang", "wgsl", "spirv"]
+)
+@pytest.mark.parametrize("names", [("fin", "iin"), ("uin", "fin", "iin")])
+def test_execution_passes_one_typed_array_per_declared_input(
+    monkeypatch, tmp_path, language, names
+):
+    # A non-alphabetic order catches sorting the buffers instead of preserving declarations.
+    source = " ".join(names) + "\n" + " ".join(reversed(names))
+    feature = Feature(language, "function", "mixed", SIN.signature)
+    result = Result(feature, "output", "supported", sources=(source, source))
+    assert execution.executable(result)
+    assert execution.input_buffers(source) == names
+    if language in execution.VIA_SPIRV:
+        monkeypatch.setattr(
+            execution,
+            "as_spirv",
+            lambda language, text: "; lowered without input names",
+        )
+    captured = []
+
+    def run_suite(cases, *args, **kwargs):
+        captured.extend(cases)
+        return []
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    execution._execute(language, [(0, result)], {}, tmp_path)
+    assert len(captured) == 2
+    for case in captured:
+        assert len(case.input_buffers) == len(names)
+        for name, data in zip(names, case.input_buffers):
+            np.testing.assert_array_equal(data, execution.inputs(name))
+            assert data.dtype == execution.inputs(name).dtype
+
+
+@pytest.mark.parametrize("language", ["metal", "glsl", "hlsl", "slang", "wgsl"])
+def test_generated_mixed_scalar_probe_is_executable(language):
+    feature = Feature(
+        language,
+        "function",
+        "ldexp",
+        Signature(Type("float"), (Param(Type("float")), Param(Type("int")))),
+    )
+    source = probes.build(feature, language).source
+    assert execution.input_buffers(source) == ("fin", "iin")
+    assert execution.executable(
+        Result(feature, "output", "supported", sources=(source, source))
+    )

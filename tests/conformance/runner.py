@@ -7,10 +7,10 @@ per runtime so container runtimes start once. Outcomes:
 - ``refused``: the translator raised a typed diagnostic; ``translator-error``: it failed without one;
 - ``invalid``: the target's native checker rejected the artifact; ``driver-rejected``: the runtime's own compiler
   or pipeline creation rejected an artifact the checker accepted; ``interface-changed``: the artifact no longer
-  exposes its source's two-buffer interface, or the constants block its case gives the host;
+  exposes its source's storage-buffer interface, or the constants block its case gives the host;
 - ``preserved`` / ``diverged``: the execution matched or contradicted the source-rule oracle; ``observed``: the
   source rule leaves the result undefined, so the result is recorded without an obligation;
-- ``memory-corruption``: the kernel wrote the input buffer or past the end of the output buffer;
+- ``memory-corruption``: the kernel wrote an input buffer or past the end of the output buffer;
 - ``compiled-only``, ``unavailable``, ``timeout``, ``runtime-error``, ``harness-error``: no execution evidence.
 """
 
@@ -29,6 +29,7 @@ import numpy as np
 
 from .cases import BY_ID, CANARY, CASES, compare
 from .interface import InterfaceChanged, interface
+from .native import buffer_files
 from .process import run
 from .runtimes import REPOSITORY, RUNTIMES, execute, provision
 from .toolchains import profile
@@ -129,7 +130,15 @@ def prepare(
         readings=case.readings,
         rule=case.rule,
         sourceSHA256=digest(case.src.read_bytes()),
-        inputSHA256=digest(case.inputs.tobytes()),
+        inputSHA256=(
+            digest(case.input_buffers[0].tobytes())
+            if len(case.input_buffers) == 1
+            else digest(
+                json.dumps(
+                    [digest(data.tobytes()) for data in case.input_buffers]
+                ).encode()
+            )
+        ),
         environment=environment,
         host=platform.system(),
         translation=translation,
@@ -142,7 +151,13 @@ def prepare(
         return cell
     base["artifactSHA256"] = digest(artifact.read_bytes())
     try:
-        abi = interface(artifact, target, case.group, case.constants is not None)
+        abi = interface(
+            artifact,
+            target,
+            case.group,
+            case.constants is not None,
+            input_count=len(case.input_buffers),
+        )
     except InterfaceChanged as error:
         cell.outcome = "harness-error" if route == "reference" else "interface-changed"
         base["message"] = str(error)
@@ -184,7 +199,10 @@ def stage(cell, runtime):
         ).tobytes()
     )
     guard = np.full(GUARD_WORDS, CANARY, dtype=np.uint32).tobytes()
-    (directory / "input.bin").write_bytes(case.inputs.tobytes())
+    for filename, data in zip(
+        buffer_files(len(case.input_buffers)), case.input_buffers
+    ):
+        (directory / filename).write_bytes(data.tobytes())
     (directory / "output.bin").write_bytes(initial + guard)
     if case.constants is not None:
         (directory / "constants.bin").write_bytes(case.constants)
@@ -211,7 +229,12 @@ def evaluate(cell, job, size, result):
     if result["status"] != "executed":
         return {"outcome": result["status"], "execution": result}
     output = (directory / "output.bin").read_bytes()
-    unchanged = (directory / "input.bin").read_bytes() == case.inputs.tobytes()
+    unchanged = all(
+        (directory / filename).read_bytes() == data.tobytes()
+        for filename, data in zip(
+            buffer_files(len(case.input_buffers)), case.input_buffers
+        )
+    )
     guard = np.full(GUARD_WORDS, CANARY, dtype=np.uint32).tobytes()
     guarded = len(output) == size + len(guard) and output[size:] == guard
     matched, detail = compare(case, output[:size])

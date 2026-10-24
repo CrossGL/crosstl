@@ -10,8 +10,8 @@ reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulka
 same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
 validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
 
-The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that read one
-input buffer run. The other probes keep their validation result. Integer inputs are small and non-negative, so no
+The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
+Probes with different input interfaces keep their validation result. Integer inputs are small and non-negative, so no
 probe shifts, extracts or inserts bits outside what every language defines.
 """
 
@@ -60,12 +60,17 @@ def found(detail: str) -> bool:
     )
 
 
+def input_buffers(source: str) -> tuple[str, ...]:
+    """Probe input names in declaration order, before their uses in the entry point."""
+    return tuple(dict.fromkeys(_INPUT.findall(source)))
+
+
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation read one input buffer."""
+    """Whether ``result`` is a supported compute probe whose native probe and translation read the same ordered inputs."""
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
-    buffers = [set(_INPUT.findall(source)) for source in result.sources]
-    return len(buffers[0]) == 1 and buffers[0] == buffers[1]
+    buffers = [input_buffers(source) for source in result.sources]
+    return bool(buffers[0]) and buffers[0] == buffers[1]
 
 
 def runnable(language: str, source: str) -> str:
@@ -159,8 +164,7 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
     runs_as = target(language)
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
     for index, result in chunk:
-        [buffer] = set(_INPUT.findall(result.sources[0]))
-        data = inputs(buffer)
+        data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
         texts = [runnable(language, source) for source in result.sources]
         if language in VIA_SPIRV:
             texts = [as_spirv(language, text) for text in texts]
