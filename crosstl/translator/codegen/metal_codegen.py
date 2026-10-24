@@ -361,6 +361,7 @@ from .metal_array_copies import (
 )
 from .metal_atomic_addresses import metal_vector_component_address
 from .metal_buffer_arrays import expand_entry_buffer_array
+from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
@@ -22876,6 +22877,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
     def generate_glsl_buffer_block_store(self, target, rhs, op):
+        component_store = metal_buffer_component_store(self, target, rhs, op)
+        if component_store is not None:
+            return component_store
         access = self.glsl_buffer_block_array_access(target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
