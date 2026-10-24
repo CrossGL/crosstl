@@ -156,6 +156,10 @@ from .call_effects import builtin_argument_write_indices
 from .clip_position_defaults import default_clip_position_member
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .entry_selection import entry_type_references
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -35062,6 +35066,7 @@ complex64_t crossgl_complex64_mod_assign(
             resolved = re.sub(r"\s+", " ", resolved).strip()
             if resolved.endswith("&"):
                 resolved = resolved[:-1].rstrip()
+            resolved = crossgl_named_vector_spelling(resolved)
             if resolved == type_name == alias_target:
                 return resolved
             type_name = resolved
@@ -56192,6 +56197,10 @@ complex64_t crossgl_complex64_mod_assign(
             if substituted_type != vtype_str:
                 return self.map_type(substituted_type)
 
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
+
         vector_base, vector_args = generic_type_parts(vtype_str)
         if (
             len(vector_args) == 2
@@ -57757,16 +57766,10 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                if element_type == "float":
-                    return f"vec{size}"
-                elif element_type == "int":
-                    return f"ivec{size}"
-                elif element_type == "uint":
-                    return f"uvec{size}"
-                elif element_type == "bool":
-                    return f"bvec{size}"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
             return self.expression_to_string(type_node)
         else:

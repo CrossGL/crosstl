@@ -155,6 +155,10 @@ from .builtin_result_types import (
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -27199,6 +27203,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee = self.generate_expression(func_expr)
 
             original_func_name = self.hlsl_builtin_option_constructor_name(func_name)
+            original_func_name = crossgl_named_vector_spelling(original_func_name)
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
@@ -54371,20 +54376,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"uint{size}"
                 elif element_type == "bool":
                     return f"bool{size}"
-                elif element_type in {
-                    "f16",
-                    "f32",
-                    "f64",
-                    "i8",
-                    "u8",
-                    "i16",
-                    "u16",
-                    "i32",
-                    "u32",
-                }:
-                    return f"vec{size}<{element_type}>"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
             return self.expression_to_string(type_node)
         else:
@@ -54699,6 +54694,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.map_type(aliases[vtype_str])
             finally:
                 self.hlsl_type_alias_resolution_stack = seen
+
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
 
         cooperative_base, cooperative_args = generic_type_parts(vtype_str)
         if (
