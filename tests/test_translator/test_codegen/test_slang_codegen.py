@@ -24202,10 +24202,6 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
     assert "uimage2D" not in generated_code
 
 
-if __name__ == "__main__":
-    pytest.main()
-
-
 def test_slang_groups_member_and_subscript_operands():
     """Postfix ``.member`` and ``[index]`` apply to the whole operand (#2813)."""
     code = """
@@ -24237,3 +24233,7 @@ def test_slang_groups_member_and_subscript_operands():
     assert "v + v.yx" not in generated_code
     assert "v * 3.0[1]" not in generated_code
     assert "+ v.x + fin[i];" in generated_code
+
+
+if __name__ == "__main__":
+    pytest.main()
