@@ -228,7 +228,7 @@ jobs:
         run: >-
           dotnet build tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj -c Release
           -p:CrossTLTrustedCorpusBaseline=true
-          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/baseline-audit.props
+          "-p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/baseline-audit.props"
       - name: Export the adapted test cases and generated HLSL
         run: >-
           dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
@@ -299,7 +299,7 @@ jobs:
         run: >-
           dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
           -c Release -p:CrossTLTrustedCorpusBaseline=true
-          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+          "-p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets"
       - name: Export the test cases and generated HLSL
         run: >-
           dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
@@ -389,7 +389,7 @@ jobs:
         run: >-
           dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
           -c Release -p:CrossTLTrustedCorpusBaseline=true
-          -p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets
+          "-p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets"
       - name: Export the test cases and generated HLSL
         run: >-
           dotnet run --project demos/integrations/computesharp/discovery/Discovery.csproj -c Release --
