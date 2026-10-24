@@ -21,8 +21,17 @@ structs outside any block. This pass rewrites the declaration, for every target,
   lay out member by member. ``name[i]`` becomes ``{name}Storage.name[i]``, ``buffer_load(name, i)`` an element
   read, ``buffer_store(name, i, v)`` an assignment statement and ``buffer_dimensions(name)`` a ``length()``.
 
-``buffer S name[]`` with a struct ``S`` is left alone: the parser gives GLSL's array of buffer blocks,
-``buffer S { ... } name[];``, the same form, and the emitters read it as that descriptor array.
+``buffer S name[]`` with a struct ``S`` is one storage buffer of ``S`` elements, as Metal's ``device S*`` always
+read it; GLSL had printed an unsized array of buffer blocks, which glslang rejects, SPIR-V a runtime descriptor
+array and HLSL a refusal. A struct of 32-bit scalars and two- and four-component vectors without std430 padding
+takes the structured-buffer form, since its offsets agree in std430, HLSL and MSL; any other struct takes the
+buffer block form. GLSL's array of buffer blocks, ``buffer B { ... } name[N];``, which the parser marks with
+``@glsl_buffer_block``, keeps its meaning of one binding per element and is left alone.
+
+``buffer T name[N]`` is likewise one storage buffer holding ``N`` elements; HLSL had declared a ``static``
+private array, so stores never reached memory, GLSL a ``uniform`` array, and struct elements gave ``N`` blocks.
+It takes the same two forms. A flat element drops the count from the type, and ``name.length()`` and
+``buffer_dimensions(name)`` become ``N``, the count the source declared; a block keeps ``T name[N]``.
 
 Stage interface arrays that GLSL sizes implicitly (geometry inputs, tessellation control outputs, mesh outputs,
 ``pervertex`` inputs, ``gl_ClipDistance`` and ``gl_CullDistance``) first get the count their stage implies, and
@@ -75,6 +84,32 @@ class UnsizedArrayUnsupportedError(TranslationDiagnostic):
             target=target,
             code=f"{CODE_PREFIX}{target}-unsized-array-unsupported",
         )
+
+
+_LAYOUT_MEMBER_ATTRIBUTES = frozenset({"offset", "align", "packoffset", "packed"})
+
+
+def _flat_struct(struct) -> bool:
+    """Whether a struct of 32-bit scalars and two- and four-component vectors has no padding in std430.
+
+    Such a struct has the same member offsets and stride in std430, the scalar layout, an HLSL structured buffer
+    (which packs to 4 bytes) and MSL (whose alignments for these types match std430), so a runtime array of it can
+    be a structured buffer. Any padding, or a member that is not such a vector, leaves it to the buffer block.
+    """
+    members = list(getattr(struct, "members", None) or [])
+    offset, alignment = 0, 4
+    for member in members:
+        member_type = getattr(member, "member_type", None)
+        if not _flat_element(member_type) or (
+            _attribute_names(member) & _LAYOUT_MEMBER_ATTRIBUTES
+        ):
+            return False
+        size = 4 * type_from_node(member_type).lanes
+        if offset % size:
+            return False
+        offset += size
+        alignment = max(alignment, size)
+    return bool(members) and offset % alignment == 0
 
 
 def _unsized(type_node):
@@ -197,9 +232,9 @@ class _Legalizer:
             for variable in list(getattr(owner, field, None) or [])
             if isinstance(variable, A.VariableNode)
             and "buffer" in _qualifiers(variable)
-            and _unsized(variable.var_type)
+            and isinstance(variable.var_type, A.ArrayType)
             and self.is_value(variable.var_type.element_type)
-            and not self.is_struct(variable.var_type.element_type)
+            and "glsl_buffer_block" not in _attribute_names(variable)
         ]
         if buffers:
             self.parents = _parents(self.program)
@@ -263,8 +298,12 @@ class _Legalizer:
         layout = str(layouts[0].name).lower() if layouts else "std430"
         readonly = "readonly" in _qualifiers(variable)
         element = variable.var_type.element_type
+        size = variable.var_type.size
         uses, ambiguous = self.uses(variable.name)
-        flat = layout != "std140" and _flat_element(element)
+        flat = layout != "std140" and (
+            _flat_element(element)
+            or (self.is_struct(element) and _flat_struct(self.structs[element.name]))
+        )
         if ambiguous and not flat:
             self.refuse(
                 variable.name,
@@ -279,14 +318,32 @@ class _Legalizer:
             wrapper = "StructuredBuffer" if readonly else "RWStructuredBuffer"
             variable.var_type = variable.vtype = A.NamedType(wrapper, [element])
             for identifier in uses:
-                length = self.length_call(identifier)
-                if length is not None:
-                    dimensions = call(
-                        "buffer_dimensions", [A.IdentifierNode(variable.name)]
-                    )
-                    _replace(self.parents, length, call("int", [dimensions]))
+                self.rewrite_flat_count(identifier, variable.name, size)
             return
-        self.to_block(owner, field, variable, element, layout, readonly, uses)
+        self.to_block(owner, field, variable, element, size, layout, readonly, uses)
+
+    def rewrite_flat_count(self, identifier, name, size):
+        """``name.length()`` of a structured buffer becomes its bound element count, or the declared count of
+        ``buffer T name[N]``, which ``buffer_dimensions(name)`` also gives; the declared count is what the source
+        array had, whatever size of buffer the host binds."""
+        length = self.length_call(identifier)
+        if length is not None:
+            count = (
+                clone(size)
+                if size is not None
+                else call("buffer_dimensions", [A.IdentifierNode(name)])
+            )
+            _replace(self.parents, length, call("int", [count]))
+            return
+        user = self.parent(identifier)
+        if (
+            size is not None
+            and isinstance(user, A.FunctionCallNode)
+            and call_name(user) == "buffer_dimensions"
+            and len(user.arguments or []) == 1
+            and user.arguments[0] is identifier
+        ):
+            _replace(self.parents, user, call("uint", [clone(size)]))
 
     def length_call(self, identifier):
         """The ``name.length()`` call around ``identifier``, if that is how it is used."""
@@ -297,11 +354,12 @@ class _Legalizer:
                 return length
         return None
 
-    def to_block(self, owner, field, variable, element, layout, readonly, uses):
+    def to_block(self, owner, field, variable, element, size, layout, readonly, uses):
         name = variable.name
         struct_name = self.fresh(f"{name[:1].upper()}{name[1:]}Block")
         instance = self.fresh(f"{name}Storage")
-        member = A.StructMemberNode(name, A.ArrayType(clone(element), None))
+        count = clone(size) if size is not None else None
+        member = A.StructMemberNode(name, A.ArrayType(clone(element), count))
         self.program.structs.append(A.StructNode(struct_name, [member]))
         self.structs[struct_name] = self.program.structs[-1]
         attributes = [A.AttributeNode("glsl_buffer_block", [A.IdentifierNode(layout)])]
