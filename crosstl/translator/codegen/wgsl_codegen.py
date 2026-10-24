@@ -440,15 +440,17 @@ class WGSLCodeGen:
         "memorybarrier",
     }
     # WGSL has no memory-only barrier: workgroupBarrier, storageBarrier and
-    # textureBarrier each also synchronize execution across the workgroup and
-    # must be reached in uniform control flow, which WGSL validation enforces.
-    # A CrossGL memory barrier therefore lowers to the WGSL barrier that orders
-    # the same address space; the extra execution synchronization is stronger
-    # than the source asks for but never weaker.
+    # textureBarrier each also synchronize execution across the workgroup and,
+    # like Metal's threadgroup_barrier, must be reached in uniform control flow.
+    # A CrossGL memory barrier therefore lowers to the WGSL barriers for every
+    # address space it orders; the extra execution synchronization is stronger
+    # than the source asks for but never weaker. groupMemoryBarrier orders
+    # buffer, image and shared memory (GLSL 4.60 section 8.16), and
+    # deviceMemoryBarrier orders buffers and textures (HLSL DeviceMemoryBarrier).
     WGSL_MEMORY_BARRIER_LOWERING = {
-        "groupmemorybarrier": ("workgroupBarrier",),
+        "groupmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
         "memorybarriershared": ("workgroupBarrier",),
-        "devicememorybarrier": ("storageBarrier",),
+        "devicememorybarrier": ("storageBarrier", "textureBarrier"),
         "memorybarrierbuffer": ("storageBarrier",),
         "memorybarrierimage": ("textureBarrier",),
         "allmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
