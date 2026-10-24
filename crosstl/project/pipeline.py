@@ -21316,22 +21316,30 @@ def _unresolved_metal_template_placeholders_in_type(
     type_text: str,
     template_parameter_names: set[str],
     concrete_type_names: set[str] | None = None,
+    template_type_names: set[str] | None = None,
 ) -> list[str]:
     normalized = _strip_metal_type_qualifiers(type_text)
     if "." in normalized or "->" in normalized:
         return []
 
     concrete_names = concrete_type_names or set()
+    # A declared struct or template name is a type, whatever its spelling
+    # (``MD<float>``, ``RGB``), not a placeholder for a template argument.
+    declared_names = concrete_names | (template_type_names or set())
+
+    def looks_like_placeholder(identifier: str) -> bool:
+        return (
+            identifier not in declared_names
+            and _metal_looks_like_template_placeholder_identifier(identifier)
+        )
+
     missing: list[str] = []
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
         if token in concrete_names:
             embedded_missing = [
                 part
                 for part in token.split("_")[1:]
-                if (
-                    part in template_parameter_names
-                    or _metal_looks_like_template_placeholder_identifier(part)
-                )
+                if (part in template_parameter_names or looks_like_placeholder(part))
             ]
             for part in embedded_missing:
                 if part not in missing:
@@ -21339,8 +21347,7 @@ def _unresolved_metal_template_placeholders_in_type(
             if not embedded_missing:
                 continue
         if (
-            token in template_parameter_names
-            or _metal_looks_like_template_placeholder_identifier(token)
+            token in template_parameter_names or looks_like_placeholder(token)
         ) and token not in missing:
             missing.append(token)
     return missing
@@ -21579,6 +21586,7 @@ def _unresolved_metal_standalone_template_type_records(
             type_text,
             template_parameter_names,
             concrete_type_names,
+            declared_template_type_names,
         )
         if not missing:
             return
