@@ -4,10 +4,10 @@ rust-gpu is a rustc codegen backend. ``CROSSTL_COVERAGE_RUST_GPU`` names a rust-
 commands have run::
 
     cargo build --release -p rustc_codegen_spirv
-    cargo run --release -p compiletests -- --target-env vulkan1.1 lang/core/intrinsics/log10
+    cargo run --release -p compiletests -- --target-env vulkan1.1,vulkan1.2 lang/core/intrinsics/log10
 
 The first builds the backend. The second runs one of rust-gpu's own compile tests, which builds ``core`` and
-``spirv-std`` for the SPIR-V target and writes the target's specification. A probe is then compiled the way those
+``spirv-std`` for each SPIR-V target and writes the targets' specifications. A probe is then compiled the way those
 tests compile theirs: one ``rustc`` call against the prebuilt libraries, which takes well under a second.
 """
 
@@ -21,6 +21,11 @@ import subprocess
 from pathlib import Path
 
 TARGET = "spirv-unknown-vulkan1.1"
+# SPV_EXT_mesh_shader needs SPIR-V 1.4, so mesh and task probes compile for Vulkan 1.2 (SPIR-V 1.5), the environment
+# the other languages' mesh probes are validated for (validators.SPIRV_1_4_ENVIRONMENT).
+MESH_TARGET = "spirv-unknown-vulkan1.2"
+MESH_STAGES = frozenset({"mesh", "task"})
+TARGETS = (TARGET, MESH_TARGET)
 # The flags spirv-builder passes to every shader crate (rust-gpu's tests/compiletests/src/main.rs, ``rust_flags``).
 _FLAGS = (
     "-Zbinary-dep-depinfo",
@@ -70,6 +75,8 @@ EXTENSIONS = (
     "SPV_EXT_shader_atomic_float_min_max",
     "SPV_KHR_shader_clock",
 )
+MESH_CAPABILITIES = ("MeshShadingEXT",)
+MESH_EXTENSIONS = ("SPV_EXT_mesh_shader",)
 # The libraries a probe links, as spirv-builder passes them: ``core`` and ``compiler_builtins`` replace the prelude.
 _LIBRARIES = (
     ("compiler_builtins", True),
@@ -118,18 +125,28 @@ def _library(build: Path, crate: str) -> Path | None:
     return found[0] if len(found) == 1 else None
 
 
+def target(stage: str) -> str:
+    """The SPIR-V target a probe of ``stage`` compiles for."""
+    return MESH_TARGET if stage in MESH_STAGES else TARGET
+
+
 @functools.lru_cache(maxsize=None)
-def command() -> tuple[str, ...]:
-    """``rustc`` and every flag a probe compiles with but its file name and output directory; ``()`` without a
-    usable build."""
+def command(target: str = TARGET) -> tuple[str, ...]:
+    """``rustc`` and every flag a probe compiles for ``target`` with but its file name and output directory; ``()``
+    without a build that has libraries for every target in :data:`TARGETS`."""
+    commands = {name: _command(name) for name in TARGETS}
+    return commands[target] if all(commands.values()) else ()
+
+
+def _command(target: str) -> tuple[str, ...]:
     checkout = root()
     if checkout is None:
         return ()
-    target = checkout / "target"
-    backend = target / "release" / "librustc_codegen_spirv.so"
-    spec = target / "compiletest-target-spec" / f"{TARGET}.json"
-    deps = target / "compiletest-deps"
-    builds = [deps / TARGET / "debug" / "build", deps / "debug" / "build"]
+    built = checkout / "target"
+    backend = built / "release" / "librustc_codegen_spirv.so"
+    spec = built / "compiletest-target-spec" / f"{target}.json"
+    deps = built / "compiletest-deps"
+    builds = [deps / target / "debug" / "build", deps / "debug" / "build"]
     if not (backend.is_file() and spec.is_file()):
         return ()
     rustc = _rustc(checkout)
@@ -149,8 +166,12 @@ def command() -> tuple[str, ...]:
     search = []
     for build in builds:
         search += [f"-Ldependency={out}" for out in sorted(build.glob("*/*/out"))]
-    features = [f"+{name}" for name in CAPABILITIES]
-    features += [f"+ext:{name}" for name in EXTENSIONS]
+    capabilities, extensions = CAPABILITIES, EXTENSIONS
+    if target == MESH_TARGET:
+        capabilities += MESH_CAPABILITIES
+        extensions += MESH_EXTENSIONS
+    features = [f"+{name}" for name in capabilities]
+    features += [f"+ext:{name}" for name in extensions]
     return (
         rustc,
         f"-Zcodegen-backend={backend}",

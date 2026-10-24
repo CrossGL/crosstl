@@ -7,8 +7,9 @@ from; regenerate it only to move to a newer version, and say so in the pull requ
 
 Each line of ``metal.txt`` is ``header name result(param, ...)``: one overload per function, chosen as the GLSL list
 chooses its generic types, with template parameters made concrete. ``inout`` marks the atomic object an atomic
-function updates, and ``memory_order`` and ``mem_flags`` an enumeration the probe passes as a constant. A function
-with no overload a probe can call is listed with ``-`` in place of the signature.
+function updates, and ``memory_order`` and ``mem_flags`` an enumeration the probe passes as a constant. A name such
+as ``make_filled_matrix<float,3>`` carries the template arguments a probe spells because no argument fixes them. A
+function with no overload a probe can call is listed with ``-`` in place of the signature.
 """
 
 from __future__ import annotations
@@ -94,6 +95,11 @@ def _concrete(spelling: str, template: str, bound: str = "") -> str:
         return bound
     if spelling == "T" and template:
         return _template_type(template)
+    if template and re.search(
+        rf"is_convertible<\s*{re.escape(spelling)}\s*,\s*T\s*>", template
+    ):
+        # A parameter the declaration converts to T, as make_filled_matrix's value is, takes T's type.
+        return _template_type(template)
     matrix = re.fullmatch(r"matrix\s*<\s*T\s*,\s*(\w+)\s*,\s*(\w+)\s*>", spelling)
     if matrix:
         columns, rows = (n if n.isdigit() else "3" for n in matrix.groups())
@@ -128,6 +134,40 @@ def _arguments(declaration: str, start: int) -> str:
     return declaration[start + 1 :]
 
 
+def _explicit(template: str, params: str) -> str | None:
+    """The template arguments the probe spells, as ``<float,3>`` for ``make_filled_matrix``: one for each template
+    parameter up to the last that has no default and that no function parameter fixes. An empty string when the
+    arguments fix them all, and ``None`` when one of them has no probe value."""
+    if not template:
+        return ""
+    declared = []
+    for part in split(template[template.index("<") + 1 : template.rindex(">")]):
+        head, _, default = part.partition("=")
+        words = head.split()
+        if len(words) == 2:
+            declared.append((words[0], words[1], bool(default.strip())))
+    free = [
+        index
+        for index, (_, name, default) in enumerate(declared)
+        if not default and not re.search(rf"\b{re.escape(name)}\b", params)
+    ]
+    if not free:
+        return ""
+    arguments = []
+    for kind, name, _ in declared[: free[-1] + 1]:
+        if kind in ("typename", "class"):
+            value = _concrete(name, template)
+            if not _value(value):
+                return None
+            arguments.append(value)
+        elif kind == "int":
+            # The size a matrix of a generic shape is probed with; see _concrete.
+            arguments.append("3")
+        else:
+            return None
+    return f"<{','.join(arguments)}>"
+
+
 def _declared(part: str, template: str, bound: str) -> str | None:
     """The listed type of one declared parameter, or ``None`` for one with a default, which the probe leaves out."""
     if "=" in part:
@@ -144,7 +184,8 @@ def _declared(part: str, template: str, bound: str) -> str | None:
         if part.startswith("thread ") and _value(kind):
             return f"address {kind}"
         return f"{kind}*"
-    reference = "&" in part
+    # A reference to const, such as MSL 4.1's ``determinant(const thread matrix<T, K, K> &a)``, takes a value.
+    reference = "&" in part and not re.match(r"const\b", part)
     words = part.replace("&", " ").rsplit(None, 1)
     kind = _concrete(words[0] if len(words) == 2 else part, template, bound)
     return f"out {kind}" if reference else kind
@@ -188,7 +229,8 @@ def declarations(header: str, text: str):
         # Metal's atomic functions fix the types their template parameters may take; see _atomic_type.
         bound = _atomic_type(match.group("result")) if header == "metal_atomic" else ""
         params = []
-        for part in split(_arguments(declaration, match.end() - 1)):
+        arguments = _arguments(declaration, match.end() - 1)
+        for part in split(arguments):
             kind = _declared(part, template, bound)
             if kind is not None:
                 params.append(kind)
@@ -196,6 +238,7 @@ def declarations(header: str, text: str):
             match.group("name"),
             _concrete(match.group("result"), template, bound),
             params,
+            _explicit(template, arguments),
         )
         template = ""
 
@@ -203,13 +246,18 @@ def declarations(header: str, text: str):
 _PREFERRED = ("float", "int", "uint", "bool", "long", "ulong", "half")
 
 
-def _preference(overload: tuple[str, list[str]]) -> tuple:
-    result, params = overload
+def _usable(result: str, params: list[str], explicit: str | None) -> bool:
+    """Whether a probe can call the overload: it passes and receives values, and can spell its template arguments."""
+    return explicit is not None and _result(result) and all(_value(k) for k in params)
+
+
+def _preference(overload: tuple[str, list[str], str | None]) -> tuple:
+    result, params, _ = overload
     first = params[0] if params else result
     scalar = re.match(r"[a-z]+", first).group(0) if re.match(r"[a-z]+", first) else ""
     width = re.search(r"(\d)$", first)
     return (
-        not (_result(result) and all(_value(k) for k in params)),
+        not _usable(*overload),
         _PREFERRED.index(scalar) if scalar in _PREFERRED else len(_PREFERRED),
         {None: 1, "3": 0}.get(width and width.group(1), 2),
         # Of two otherwise equal overloads, such as an atomic function with and without memory flags, the shorter.
@@ -226,21 +274,19 @@ def generate(include: Path, toolchain: str, language: str) -> str:
     ]
     listed: set[str] = set()
     for header in HEADERS:
-        overloads: dict[str, list[tuple[str, list[str]]]] = {}
-        for name, result, params in declarations(
-            header, (include / header).read_text()
-        ):
-            overloads.setdefault(name, []).append((result, params))
+        overloads: dict[str, list[tuple[str, list[str], str | None]]] = {}
+        for name, *overload in declarations(header, (include / header).read_text()):
+            overloads.setdefault(name, []).append(tuple(overload))
         # A function declared in several headers, such as abs for floats and for integers, is listed once.
         for name, found in sorted(overloads.items()):
             if name in listed:
                 continue
             listed.add(name)
-            result, params = min(found, key=_preference)
-            usable = _result(result) and all(_value(k) for k in params)
+            result, params, explicit = min(found, key=_preference)
             lines.append(
-                f"{header} {name} "
-                + (f"{result}({', '.join(params)})" if usable else "-")
+                f"{header} {name}{explicit} {result}({', '.join(params)})"
+                if _usable(result, params, explicit)
+                else f"{header} {name} -"
             )
     return "\n".join(lines) + "\n"
 
@@ -287,6 +333,8 @@ def parse(
         if not line.strip() or line.startswith("#"):
             continue
         header, name, declared = line.split(" ", 2)
+        name, _, arguments = name.partition("<")
+        explicit = f"{name}<{arguments.replace(',', ', ')}" if arguments else ""
         signature = None
         if declared != "-":
             result, params = re.fullmatch(r"(\w+)\((.*)\)", declared).groups()
@@ -301,6 +349,10 @@ def parse(
         elif signature and any(p.type.opaque in ENUMS for p in signature.params):
             spelling = ""
             note = "CrossGL has no operation that takes a memory order or memory flags"
+        elif explicit and spelling == name:
+            # CrossGL calls a function it has no name of its own for by Metal's name, with the same template
+            # arguments, which neither language deduces from the result.
+            spelling = explicit
         features.append(
             Feature(
                 "metal",
@@ -311,6 +363,7 @@ def parse(
                 crossgl=spelling,
                 stage=STAGES.get(header, "compute"),
                 note=note,
+                spelling=explicit,
                 counterpart=counterpart,
             )
         )

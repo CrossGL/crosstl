@@ -5351,10 +5351,19 @@ def _require_directx_dispatch_generated_artifacts(
             "sha256": generated[hash_field],
             "sizeBytes": generated["sizeBytes"],
         }
+    pinned = MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[family]
     _require(
-        observed == MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[family],
-        f"{family} generated HLSL identities changed",
+        set(observed) == set(pinned),
+        f"{family} generated HLSL variants changed",
     )
+    for name in sorted(observed):
+        _check_generated_pin(
+            f"{family} generated HLSL for {name}",
+            sha256=observed[name]["sha256"],
+            size_bytes=observed[name]["sizeBytes"],
+            expected_sha256=pinned[name]["sha256"],
+            expected_size_bytes=pinned[name]["sizeBytes"],
+        )
 
 
 def _require_layer_norm_dispatch_frontier_report(

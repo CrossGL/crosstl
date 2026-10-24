@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -141,6 +142,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
@@ -155,6 +157,10 @@ from .call_effects import builtin_argument_write_indices
 from .clip_position_defaults import default_clip_position_member
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .entry_selection import entry_type_references
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -195,6 +201,7 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
@@ -223,11 +230,19 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin
+from .glsl_ray_queries import (
+    glsl_ray_desc_declaration,
+    glsl_ray_query_constant_expression,
+    glsl_ray_query_initialize_flags,
+)
 from .glsl_refusals import (
     OpenGLLoweringRefused,
+    input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
+from .glsl_scalar_block_layout import scalar_block_layout_extension_line
 from .glsl_shadow_lod import (
     SHADOW_LOD_EXTENSION_SAMPLERS,
     is_zero_lod_literal,
@@ -240,6 +255,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
     flattened_stage_output_assignment,
@@ -469,6 +485,7 @@ from .scalar_return_bounds import (
     scalar_return_interval,
     vector_return_intervals,
 )
+from .sizeof_calls import sizeof_call_bytes
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -508,6 +525,13 @@ from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     glsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
+)
+from .texture_residency import (
+    GLSL_RESIDENCY_EXTENSION,
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
+    glsl_texture_residency_call,
+    glsl_texture_resident_call,
 )
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
@@ -1524,6 +1548,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
 
 
 class GLSLCodeGen(
+    GLSLNarrowVectorMixin,
     GLSLDescriptorSetBindingsMixin,
     LoweringRefusalMixin,
     GLSLEmulatedMatrices,
@@ -1559,6 +1584,8 @@ class GLSLCodeGen(
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
@@ -1628,19 +1655,17 @@ class GLSLCodeGen(
         "callable",
     }
     RAY_QUERY_METHOD_MAP = {
-        "Initialize": ("rayQueryInitializeEXT", None),
         "TraceRayInline": ("rayQueryInitializeEXT", None),
         "Proceed": ("rayQueryProceedEXT", None),
         "Abort": ("rayQueryTerminateEXT", None),
-        "Terminate": ("rayQueryTerminateEXT", None),
-        "GenerateIntersection": ("rayQueryGenerateIntersectionEXT", None),
-        "ConfirmIntersection": ("rayQueryConfirmIntersectionEXT", None),
+        "CommitProceduralPrimitiveHit": ("rayQueryGenerateIntersectionEXT", None),
+        "CommitNonOpaqueTriangleHit": ("rayQueryConfirmIntersectionEXT", None),
         "RayTMin": ("rayQueryGetRayTMinEXT", None),
         "RayFlags": ("rayQueryGetRayFlagsEXT", None),
         "WorldRayOrigin": ("rayQueryGetWorldRayOriginEXT", None),
         "WorldRayDirection": ("rayQueryGetWorldRayDirectionEXT", None),
         "CandidateType": ("rayQueryGetIntersectionTypeEXT", "false"),
-        "CommittedType": ("rayQueryGetIntersectionTypeEXT", "true"),
+        "CommittedStatus": ("rayQueryGetIntersectionTypeEXT", "true"),
         "CandidatePrimitiveIndex": (
             "rayQueryGetIntersectionPrimitiveIndexEXT",
             "false",
@@ -1649,8 +1674,18 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionPrimitiveIndexEXT",
             "true",
         ),
-        "CandidateInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
-        "CommittedInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
+        # HLSL semantics: InstanceID is the application-defined custom index,
+        # InstanceIndex the instance's position in the top-level structure.
+        "CandidateInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "false",
+        ),
+        "CommittedInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
+        "CommittedInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
         "CandidateGeometryIndex": (
             "rayQueryGetIntersectionGeometryIndexEXT",
             "false",
@@ -1659,19 +1694,11 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionGeometryIndexEXT",
             "true",
         ),
-        "CandidateInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
-            "false",
-        ),
-        "CommittedInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
-            "true",
-        ),
-        "CandidateInstanceShaderBindingTableRecordOffset": (
+        "CandidateInstanceContributionToHitGroupIndex": (
             "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
             "false",
         ),
-        "CommittedInstanceShaderBindingTableRecordOffset": (
+        "CommittedInstanceContributionToHitGroupIndex": (
             "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
             "true",
         ),
@@ -1691,7 +1718,7 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionObjectRayDirectionEXT",
             "true",
         ),
-        "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
+        "CandidateTriangleRayT": ("rayQueryGetIntersectionTEXT", "false"),
         "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
         "CandidateTriangleBarycentrics": (
             "rayQueryGetIntersectionBarycentricsEXT",
@@ -1717,7 +1744,11 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionTriangleVertexPositionsEXT",
             "true",
         ),
-        "CandidateAABBOpaque": ("rayQueryGetIntersectionCandidateAABBOpaqueEXT", None),
+        # DXR asks whether the candidate is non-opaque; GLSL whether it is opaque.
+        "CandidateProceduralPrimitiveNonOpaque": (
+            "rayQueryGetIntersectionCandidateAABBOpaqueEXT",
+            None,
+        ),
         "CandidateObjectToWorld": (
             "rayQueryGetIntersectionObjectToWorldEXT",
             "false",
@@ -1751,39 +1782,46 @@ class GLSLCodeGen(
             "true",
         ),
     }
+    # Ray query methods with a bool result, so `!rq.Proceed()` has a typed operand.
+    RAY_QUERY_BOOL_METHODS = frozenset(
+        {
+            "Proceed",
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+            "CandidateProceduralPrimitiveNonOpaque",
+        }
+    )
     RAY_QUERY_POSITION_FETCH_METHODS = {
         "CandidateTriangleVertexPositions",
         "CommittedTriangleVertexPositions",
     }
     RAY_QUERY_METHOD_ARITIES = {
-        "Initialize": (4, 7),
         "TraceRayInline": (4, 7),
         "Proceed": (0,),
         "Abort": (0,),
-        "Terminate": (0,),
-        "GenerateIntersection": (1,),
-        "ConfirmIntersection": (0,),
+        "CommitProceduralPrimitiveHit": (1,),
+        "CommitNonOpaqueTriangleHit": (0,),
         "RayTMin": (0,),
         "RayFlags": (0,),
         "WorldRayOrigin": (0,),
         "WorldRayDirection": (0,),
         "CandidateType": (0,),
-        "CommittedType": (0,),
+        "CommittedStatus": (0,),
         "CandidatePrimitiveIndex": (0,),
         "CommittedPrimitiveIndex": (0,),
         "CandidateInstanceID": (0,),
         "CommittedInstanceID": (0,),
         "CandidateGeometryIndex": (0,),
         "CommittedGeometryIndex": (0,),
-        "CandidateInstanceCustomIndex": (0,),
-        "CommittedInstanceCustomIndex": (0,),
-        "CandidateInstanceShaderBindingTableRecordOffset": (0,),
-        "CommittedInstanceShaderBindingTableRecordOffset": (0,),
+        "CandidateInstanceIndex": (0,),
+        "CommittedInstanceIndex": (0,),
+        "CandidateInstanceContributionToHitGroupIndex": (0,),
+        "CommittedInstanceContributionToHitGroupIndex": (0,),
         "CandidateObjectRayOrigin": (0,),
         "CandidateObjectRayDirection": (0,),
         "CommittedObjectRayOrigin": (0,),
         "CommittedObjectRayDirection": (0,),
-        "CandidateRayT": (0,),
+        "CandidateTriangleRayT": (0,),
         "CommittedRayT": (0,),
         "CandidateTriangleBarycentrics": (0,),
         "CommittedTriangleBarycentrics": (0,),
@@ -1791,7 +1829,7 @@ class GLSLCodeGen(
         "CommittedTriangleFrontFace": (0,),
         "CandidateTriangleVertexPositions": (1,),
         "CommittedTriangleVertexPositions": (1,),
-        "CandidateAABBOpaque": (0,),
+        "CandidateProceduralPrimitiveNonOpaque": (0,),
         "CandidateObjectToWorld": (0,),
         "CommittedObjectToWorld": (0,),
         "CandidateObjectToWorld3x4": (0,),
@@ -1999,11 +2037,6 @@ class GLSLCodeGen(
         "signbit",
         "metal::signbit",
         "metal_u3a_u3asignbit",
-    }
-    GLSL_STANDARD_IDENTIFIER_CONSTANTS = {
-        # GLSL does not define the C/Metal NAN macro.  Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        "NAN": "uintBitsToFloat(0x7fc00000u)",
     }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
@@ -3061,17 +3094,17 @@ class GLSLCodeGen(
             "int32_t": "int",
             "int64": "int64_t",
             "int64_t": "int64_t",
-            "long": "int",
-            "signed long": "int",
-            "ptrdiff_t": "int",
+            "long": "int64_t",
+            "signed long": "int64_t",
+            "ptrdiff_t": "int64_t",
             "uint16": "uint",
             "uint16_t": "uint",
             "uint32_t": "uint",
             "uint64": "uint64_t",
             "uint64_t": "uint64_t",
-            "ulong": "uint",
-            "unsigned long": "uint",
-            "size_t": "uint",
+            "ulong": "uint64_t",
+            "unsigned long": "uint64_t",
+            "size_t": "uint64_t",
             "int2": "ivec2",
             "int3": "ivec3",
             "int4": "ivec4",
@@ -4047,9 +4080,17 @@ class GLSLCodeGen(
         ):
             # GLSL ES has no such extension; the version requirements refuse the clamp functions there.
             lines.append(f"#extension {GLSL_LOD_CLAMP_EXTENSION} : require")
+        if self.uses_texture_residency(ast, target_stage) and not (
+            self.glsl_version_is_es(getattr(self, "current_glsl_version_line", None))
+        ):
+            # GLSL ES has no such extension; the version requirements refuse the sparse functions there.
+            lines.append(f"#extension {GLSL_RESIDENCY_EXTENSION} : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
+        scalar_layout = scalar_block_layout_extension_line(self, ast)
+        if scalar_layout is not None:
+            lines.append(scalar_layout)
         return lines
 
     def uses_glsl_debug_printf(self, ast):
@@ -4061,6 +4102,18 @@ class GLSLCodeGen(
             isinstance(node, FunctionCallNode)
             and self.function_call_name(node) in {"printf", "debugPrintfEXT"}
             for node in self.walk_ast(ast)
+        )
+
+    def uses_texture_residency(self, ast, target_stage=None):
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if GLSL_RESIDENCY_EXTENSION in str(getattr(directive, "content", "") or ""):
+                return False  # The source enables the extension itself.
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node)
+            in {TEXTURE_RESIDENCY_OPERATION, TEXTURE_RESIDENT_OPERATION}
+            for root in self.ray_query_search_roots(ast, target_stage)
+            for node in self.walk_ast(root)
         )
 
     def uses_texture_lod_clamp(self, ast, target_stage=None):
@@ -8962,6 +9015,10 @@ class GLSLCodeGen(
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        for node in all_global_vars:
+            input_attachment_reason = input_attachment_refusal_reason(node)
+            if input_attachment_reason is not None:
+                self.refuse_lowering(input_attachment_reason)
         specialization_global_ids = {
             id(node) for node in self.glsl_global_specialization_constants
         }
@@ -9290,6 +9347,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
@@ -18205,11 +18263,6 @@ class GLSLCodeGen(
         used_names = collect_stage_entry_reserved_function_names(
             ast, None, stage_entry_types
         )
-        if (
-            self.should_emit_stage_guards(ast, target_stage)
-            and "main" not in used_names
-        ):
-            return {entry_id: "main" for entry_id, _stage_name, _func in entries}
 
         def target_names(assigned_names):
             return {
@@ -18222,6 +18275,31 @@ class GLSLCodeGen(
                 )
                 for entry_id, name in assigned_names.items()
             }
+
+        if (
+            self.should_emit_stage_guards(ast, target_stage)
+            and "main" not in used_names
+        ):
+            # Each stage's guarded section declares one main: the stage's first entry. Later entries of the
+            # same stage stay ordinary functions, as for a single-stage program.
+            first_of_stage, later = {}, []
+            for entry_id, stage_name, func in entries:
+                if stage_name in first_of_stage.values():
+                    later.append((entry_id, stage_name, func))
+                else:
+                    first_of_stage[entry_id] = stage_name
+            names = {entry_id: "main" for entry_id in first_of_stage}
+            if later:
+                names.update(
+                    target_names(
+                        assign_stage_entry_names(
+                            later,
+                            used_names | {"main"},
+                            lambda stage_name, _func: f"{stage_name}_main",
+                        )
+                    )
+                )
+            return names
 
         stage_names = {stage_name for _entry_id, stage_name, _func in entries}
         if len(entries) > 1 and len(stage_names) == 1 and "main" not in used_names:
@@ -19730,8 +19808,25 @@ class GLSLCodeGen(
             call_args.append(committed)
         args = self.ray_query_initialize_arguments(operation, args)
         args = [self.generate_expression(arg) for arg in args]
+        if operation == "TraceRayInline" and len(args) > 1:
+            args[1] = glsl_ray_query_initialize_flags(self, query, args[1])
         call_args.extend(args)
-        return f"{function_name}({', '.join(call_args)})"
+        call = f"{function_name}({', '.join(call_args)})"
+        if operation == "CandidateProceduralPrimitiveNonOpaque":
+            return f"(!{call})"
+        return call
+
+    def is_bool_ray_query_call(self, expr):
+        if isinstance(expr, RayQueryOpNode):
+            return getattr(expr, "operation", None) in self.RAY_QUERY_BOOL_METHODS
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        callee = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee, MemberAccessNode):
+            return False
+        if callee.member not in self.RAY_QUERY_BOOL_METHODS:
+            return False
+        return self.is_ray_query_type(self.expression_result_type(callee.object))
 
     def can_lower_ray_query_receiver(self, operation, query):
         receiver_type = self.expression_result_type(query)
@@ -19769,7 +19864,7 @@ class GLSLCodeGen(
         return f"{' or '.join(str(arity) for arity in allowed_arities)} arguments"
 
     def ray_query_initialize_arguments(self, operation, args):
-        if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
+        if operation != "TraceRayInline" or len(args) != 4:
             return args
 
         acceleration, ray_flags, cull_mask, ray_desc = args
@@ -21010,6 +21105,8 @@ class GLSLCodeGen(
         for declaration in self.stage_builtin_parameter_local_alias_declarations(
             func, shader_type
         ):
+            code += f"    {declaration}\n"
+        for declaration in stage_input_struct_value_declarations(self, func):
             code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
             code += self.generate_glsl_hlsl_cbuffer_loads(1)
@@ -31270,6 +31367,8 @@ class GLSLCodeGen(
                     )
                 if name and render_standard_math_constant(name, "opengl") is not None:
                     return False, False
+                if name and render_float_limit_constant(name, "opengl") is not None:
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -34972,6 +35071,7 @@ complex64_t crossgl_complex64_mod_assign(
             resolved = re.sub(r"\s+", " ", resolved).strip()
             if resolved.endswith("&"):
                 resolved = resolved[:-1].rstrip()
+            resolved = crossgl_named_vector_spelling(resolved)
             if resolved == type_name == alias_target:
                 return resolved
             type_name = resolved
@@ -35741,6 +35841,12 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
 
         narrow = expected["narrow"]
+        if narrow is not None:
+            carried = self.glsl_narrow_vector_carrier_form(
+                generated, expected["source"]
+            )
+            if carried is not None:
+                return carried
         exact_source_type = self.glsl_source_type_signature(
             actual["source"]
         ) == self.glsl_source_type_signature(expected["source"])
@@ -36551,6 +36657,8 @@ complex64_t crossgl_complex64_mod_assign(
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
+        if self.is_bool_ray_query_call(expr):
+            return "bool"
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
             return (
@@ -39219,9 +39327,11 @@ complex64_t crossgl_complex64_mod_assign(
         if target_name != name or self.glsl_identifier_is_resolved(name):
             return target_name
 
-        special_constant = self.GLSL_STANDARD_IDENTIFIER_CONSTANTS.get(name)
-        if special_constant is not None:
-            return special_constant
+        # GLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        limit_constant = render_float_limit_constant(name, "opengl")
+        if limit_constant is not None:
+            return limit_constant
         standard_constant = render_standard_math_constant(name, "opengl")
         return standard_constant if standard_constant is not None else target_name
 
@@ -39298,6 +39408,9 @@ complex64_t crossgl_complex64_mod_assign(
             return storage_read
         if expr is None:
             return ""
+        ray_query_constant = glsl_ray_query_constant_expression(self, expr)
+        if ray_query_constant is not None:
+            return ray_query_constant
         if isinstance(expr, PointerReinterpretNode):
             target_type = self.type_name_string(
                 getattr(getattr(expr, "target_type", None), "pointee_type", None)
@@ -39548,10 +39661,15 @@ complex64_t crossgl_complex64_mod_assign(
                 if ieee_arithmetic is not None:
                     return ieee_arithmetic
             return self.glsl_apply_narrow_float_contract(
-                f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
+                self.glsl_narrow_vector_wrap(expr, op, f"({left} {op} {right})"),
+                self.glsl_source_expression_type(expr),
+                expr,
             )
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
-            return self.generate_assignment(expr)
+            return assignment_value_expression(
+                self.generate_assignment(expr),
+                discarded=expr is self.current_discarded_expression,
+            )
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
             emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
@@ -39636,7 +39754,9 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }
-            return f"({operand}{op})" if is_postfix else f"({op}{operand})"
+            if is_postfix:
+                return f"({operand}{op})"
+            return self.glsl_narrow_vector_wrap(expr, op, f"({op}{operand})")
         elif isinstance(expr, WaveOpNode):
             return self.generate_glsl_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
@@ -39925,6 +40045,12 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
+            sizeof_bytes = sizeof_call_bytes(
+                self, original_func_name, expr.args, "opengl"
+            )
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
+
             static_generic_call = generate_static_generic_numeric_call(
                 self,
                 original_func_name,
@@ -39937,6 +40063,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if enum_constructor is not None:
                 return enum_constructor
+
+            if original_func_name == TEXTURE_RESIDENCY_OPERATION:
+                return glsl_texture_residency_call(self, expr.args, expr)
+            if original_func_name == TEXTURE_RESIDENT_OPERATION:
+                return glsl_texture_resident_call(self, expr.args, expr)
 
             if is_texture_lod_clamp_operation(original_func_name):
                 return glsl_texture_lod_clamp_call(
@@ -39982,9 +40113,17 @@ complex64_t crossgl_complex64_mod_assign(
                     original_func_name,
                     expr.args,
                 )
-            elif original_func_name in getattr(
-                self, "generic_function_definitions", {}
-            ) and getattr(self, "enforce_concrete_glsl_types", False):
+            else:
+                reject_unresolved_explicit_generic_call(
+                    self, original_func_name, "OpenGL"
+                )
+            if (
+                specialized_func_name is None
+                and original_func_name in getattr(
+                    self, "generic_function_definitions", {}
+                )
+                and getattr(self, "enforce_concrete_glsl_types", False)
+            ):
                 raise OpenGLTemplateTypeError(
                     "OpenGL codegen cannot infer concrete template arguments "
                     f"for generic function '{original_func_name}'; provide a "
@@ -56090,6 +56229,10 @@ complex64_t crossgl_complex64_mod_assign(
             if substituted_type != vtype_str:
                 return self.map_type(substituted_type)
 
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
+
         vector_base, vector_args = generic_type_parts(vtype_str)
         if (
             len(vector_args) == 2
@@ -57655,16 +57798,10 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                if element_type == "float":
-                    return f"vec{size}"
-                elif element_type == "int":
-                    return f"ivec{size}"
-                elif element_type == "uint":
-                    return f"uvec{size}"
-                elif element_type == "bool":
-                    return f"bvec{size}"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
             return self.expression_to_string(type_node)
         else:

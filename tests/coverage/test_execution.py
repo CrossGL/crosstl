@@ -1,0 +1,413 @@
+from dataclasses import replace
+
+import numpy as np
+import pytest
+
+from tests.conformance import runner as harness
+from tests.conformance import runtimes
+from tools.coverage import (
+    execution,
+    issues,
+    probes,
+    publish,
+    report,
+    runner,
+    validators,
+)
+from tools.coverage.model import Feature, Param, Result, Signature, Type
+
+SIN = Feature(
+    "metal",
+    "function",
+    "sin",
+    Signature(Type("float"), (Param(Type("float")),)),
+    crossgl="sin",
+)
+NATIVE = probes.build(SIN, "metal").source
+
+
+def supported(translated=NATIVE, direction="output"):
+    return Result(SIN, direction, "supported", sources=(NATIVE, translated))
+
+
+def metal_runs():
+    try:
+        return runtimes.provision(runtimes.RUNTIMES["metal-apple"]).available
+    except Exception:  # noqa: BLE001 - an unprovisionable runtime is an unavailable one
+        return False
+
+
+def test_only_supported_probes_that_read_one_input_buffer_run():
+    assert execution.executable(supported())
+    assert not execution.executable(Result(SIN, "output", "supported"))
+    assert not execution.executable(
+        Result(SIN, "output", "wrong", sources=(NATIVE, NATIVE))
+    )
+    ldexp = Feature(
+        "metal",
+        "function",
+        "ldexp",
+        Signature(Type("float"), (Param(Type("float")), Param(Type("int")))),
+    )
+    two_buffers = probes.build(ldexp, "metal").source
+    assert not execution.executable(supported(two_buffers))
+    assert not execution.executable(
+        Result(SIN, "output", "supported", sources=(two_buffers, two_buffers))
+    )
+
+
+def test_every_run_gets_the_same_inputs_and_small_integers():
+    assert np.array_equal(execution.inputs("fin"), execution.inputs("fin"))
+    for buffer, dtype in (("iin", np.int32), ("uin", np.uint32)):
+        data = execution.inputs(buffer)
+        assert data.dtype == dtype
+        assert data.min() >= 0 and data.max() < 16
+    assert len(execution.inputs("fin")) == execution.THREADS + execution.SPAN
+
+
+def test_results_match_word_for_word_and_nan_matches_nan():
+    words = np.array([0x3F800000, 0x7FC00000, 0xA5A5A5A5], dtype=np.uint32)
+    other_nan = np.array([0x3F800000, 0x7FC00001, 0xA5A5A5A5], dtype=np.uint32)
+    assert execution.difference(words, other_nan) == ""
+    changed = np.array([0x3F800001, 0x7FC00000, 0], dtype=np.uint32)
+    found = execution.difference(words, changed)
+    assert found.startswith(execution.DIVERGED + "\n")
+    assert "2 output words differ. The first, word 0, is 0x3f800001" in found
+    assert "the native probe writes 0x3f800000" in found
+
+
+def _fake_harness(
+    monkeypatch, translated_outcome, written, runtime="metal-apple", environments=None
+):
+    """Make run_suite report the native probe as run and the translation as ``translated_outcome``.
+
+    ``environments``, when given, collects the Vulkan environment of each run.
+    """
+
+    class Provided:
+        available = True
+
+    runtime = runtimes.RUNTIMES[runtime]
+    monkeypatch.setattr(
+        harness,
+        "select_runtimes",
+        lambda spec, targets: {t: [(runtime, Provided())] for t in targets},
+    )
+
+    def run_suite(
+        cases, targets, configs, selection, root, *, reference=False, environment
+    ):
+        assert reference and targets == [runtime.target] and configs == ["strict"]
+        if environments is not None:
+            environments.append(environment)
+        records = []
+        for case in cases:
+            assert "#version 460" not in case.src.read_text()
+            role = case.id.split("-")[1]
+            outcome = "preserved" if role == "native" else translated_outcome
+            words = np.zeros(case.out_count, dtype=np.uint32)
+            if role == "translated":
+                words[:] = written
+            if outcome in ("preserved", "memory-corruption"):
+                case.check(case.inputs, words)
+            records.append({"case": case.id, "runtime": runtime.id, "outcome": outcome})
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "written", "expected", "detail"),
+    [
+        ("preserved", 0, "supported", ""),
+        (
+            "preserved",
+            1,
+            "wrong",
+            f"on metal-apple, the translation {execution.DIVERGED}",
+        ),
+        (
+            "memory-corruption",
+            0,
+            "wrong",
+            "on metal-apple, the translation writes outside its output buffer",
+        ),
+        ("driver-rejected", 0, "wrong", "on metal-apple, the translation is rejected"),
+        # No evidence either way: the validation result stands.
+        ("timeout", 0, "supported", ""),
+        ("interface-changed", 0, "supported", ""),
+    ],
+)
+def test_a_translation_that_computes_otherwise_is_wrong(
+    monkeypatch, outcome, written, expected, detail
+):
+    _fake_harness(monkeypatch, outcome, written)
+    untouched = Result(SIN, "input", "refused", "a diagnostic")
+    [result, other], used = execution.run([supported(), untouched], workers=2)
+    assert used == ["metal-apple"]
+    assert other == untouched
+    assert result.outcome == expected
+    assert result.detail.startswith(detail)
+    ran = outcome in ("preserved", "memory-corruption", "driver-rejected")
+    assert result.runtime == ("metal-apple" if ran else "")
+    assert execution.found(result.detail) == (expected == "wrong")
+
+
+def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
+    assert execution.runnable("glsl", "#version 460\nvoid main() {}\n") == (
+        "#version 450 core\nvoid main() {}\n"
+    )
+    assert execution.runnable("glsl", "#version 450 core\n") == "#version 450 core\n"
+    assert execution.runnable("metal", NATIVE) == NATIVE
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [("#version 460", "supported"), ("#version 450 core", "wrong")],
+)
+def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
+    monkeypatch, declared, expected
+):
+    _fake_harness(monkeypatch, "driver-rejected", 0, "opengl-llvmpipe")
+    feature = Feature("glsl", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "glsl").source
+    assert native.startswith("#version 460\n")
+    translated = native.replace("#version 460", declared, 1)
+    probe = Result(feature, "input", "supported", sources=(native, translated))
+    [result], used = execution.run([probe])
+    assert used == ["opengl-llvmpipe"]
+    assert result.outcome == expected
+
+
+def _hlsl(translated=None):
+    feature = Feature("hlsl", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "hlsl").source
+    return Result(
+        feature, "output", "supported", sources=(native, translated or native)
+    )
+
+
+@pytest.mark.parametrize(
+    ("translated_outcome", "written", "expected", "detail"),
+    [
+        ("preserved", 0, "supported", ""),
+        (
+            "preserved",
+            1,
+            "wrong",
+            f"on vulkan-lavapipe as SPIR-V from dxc, the translation {execution.DIVERGED}",
+        ),
+        ("harness-error", 0, "supported", ""),
+    ],
+)
+def test_hlsl_slang_and_wgsl_probes_run_as_spirv_on_vulkan(
+    monkeypatch, translated_outcome, written, expected, detail
+):
+    _fake_harness(monkeypatch, translated_outcome, written, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    lowered = []
+
+    def as_spirv(language, source):
+        lowered.append(language)
+        return f"; {language} as SPIR-V\n"
+
+    monkeypatch.setattr(execution, "as_spirv", as_spirv)
+    [result], used = execution.run([_hlsl()])
+    assert lowered == ["hlsl", "hlsl"]
+    assert used == ["vulkan-lavapipe"]
+    assert result.outcome == expected
+    assert result.detail.startswith(detail)
+    assert execution.found(result.detail) == (expected == "wrong")
+    # A translation that did not run leaves HLSL without a probe that ran.
+    assert execution.idle([result]) == ([] if result.runtime else ["hlsl"])
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("", "vulkan1.1"), ("1.0", "vulkan1.1"), ("1.3", "vulkan1.1")]
+    + [("1.4", "vulkan1.2"), ("1.5", "vulkan1.2"), ("1.6", "vulkan1.3")],
+)
+def test_spirv_runs_in_the_oldest_environment_that_takes_its_version(version, expected):
+    header = f"; SPIR-V\n; Version: {version}\n" if version else ""
+    assert execution.environment([f"{header}OpCapability Shader\n"]) == expected
+    older = "; SPIR-V\n; Version: 1.0\n"
+    assert execution.environment([older, header]) == expected
+
+
+def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
+    monkeypatch,
+):
+    # slangc writes SPIR-V 1.5, which spirv-val rejects for Vulkan 1.1, so no Slang probe would ever run there.
+    environments = []
+    _fake_harness(monkeypatch, "preserved", 0, "vulkan-lavapipe", environments)
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    versions = {"slang": "1.5", "hlsl": "1.3"}
+    monkeypatch.setattr(
+        execution,
+        "as_spirv",
+        lambda language, source: f"; SPIR-V\n; Version: {versions[language]}\n",
+    )
+    feature = Feature("slang", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "slang").source
+    slang = Result(feature, "input", "supported", sources=(native, native))
+    [result, hlsl], used = execution.run([slang, _hlsl()], workers=1)
+    assert sorted(environments) == ["vulkan1.1", "vulkan1.2"]
+    assert result.runtime == hlsl.runtime == "vulkan-lavapipe"
+
+
+@pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
+def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
+    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes."""
+    if not validators.can_lower(language):
+        pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
+    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, language).source
+    probe = Result(feature, "output", "supported", sources=(native, native))
+    [result], used = execution.run([probe], workers=1)
+    if not used:
+        pytest.skip("no Vulkan runtime")
+    assert (result.outcome, result.runtime) == ("supported", used[0])
+
+
+def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
+    _fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        execution,
+        "as_spirv",
+        lambda language, source: "" if "CSMain" in source else ";",
+    )
+    probe = _hlsl(_hlsl().sources[0].replace("void main", "void CSMain"))
+    assert execution.run([probe])[0] == [probe]
+    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    assert execution.run([_hlsl()]) == ([_hlsl()], [])
+    assert execution.idle([_hlsl()]) == ["hlsl"]
+
+
+@pytest.mark.parametrize("language", ["hlsl", "spirv"])
+def test_a_probe_that_rounds_through_16_bit_floats_keeps_its_validation_result(
+    monkeypatch, language
+):
+    # lavapipe drops a float-to-half-to-float round trip, so such a native probe is no reference.
+    _fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    half = "%half = OpTypeFloat 16\n; reads fin\n"
+    single = "%float = OpTypeFloat 32\n; reads fin\n"
+    feature = Feature(language, "function", "asfloat16", SIN.signature)
+    for source, outcome in ((half, "supported"), (single, "wrong")):
+        monkeypatch.setattr(execution, "as_spirv", lambda language, text: source)
+        probe = Result(feature, "output", "supported", sources=(source, source))
+        assert execution.run([probe])[0][0].outcome == outcome
+
+
+@pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
+def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
+    if not validators.can_lower(language):
+        pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
+    from tests.conformance import interface
+
+    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    source = probes.build(feature, language).source
+    path = tmp_path / "probe.spvasm"
+    path.write_text(execution.as_spirv(language, source))
+    found = interface.interface(path, "spirv", 1)
+    assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+    if language == "hlsl":
+        renamed = source.replace("void main", "void CSMain")
+        path.write_text(execution.as_spirv(language, renamed))
+        assert interface.interface(path, "spirv", 1)["entry"] == "CSMain"
+    assert execution.as_spirv(language, "not a shader") == ""
+
+
+def test_nothing_runs_without_a_runtime(monkeypatch):
+    monkeypatch.setattr(
+        harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}
+    )
+    results = [supported()]
+    assert execution.run(results) == (results, [])
+    assert execution.idle(results) == ["metal"]
+    # One Metal probe that ran is enough.
+    assert execution.idle([*results, replace(supported(), runtime="metal-apple")]) == []
+    assert execution.idle([Result(SIN, "output", "refused")]) == []
+
+
+def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
+    outputs = {}
+    path = tmp_path / "probe.metal"
+    path.write_text(NATIVE)
+    case = execution._case(
+        "00000-native", path, "metal", execution.inputs("fin"), outputs
+    )
+    [record] = harness.run_suite(
+        [case], ["metal"], ["strict"], {"metal": []}, tmp_path / "run", reference=True
+    )
+    assert record["case"] == "00000-native"
+    assert record["runtime"].startswith("compile-only@")
+
+
+@pytest.mark.skipif(not metal_runs(), reason="no Metal runtime")
+def test_metal_runs_the_native_probe_against_the_translation():
+    same = supported()
+    other = supported(NATIVE.replace("sin(a0)", "cos(a0)"))
+    outside = supported(NATIVE.replace("outp[i] = r;", "outp[i + 1024u] = r;"))
+    (same, other, outside), used = execution.run([same, other, outside])
+    assert used == ["metal-apple"]
+    assert (same.outcome, same.runtime) == ("supported", "metal-apple")
+    assert other.outcome == "wrong" and execution.DIVERGED in other.detail
+    assert outside.outcome == "wrong" and "outside its output buffer" in outside.detail
+
+
+def test_supported_metal_compute_results_keep_both_sources(monkeypatch):
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(
+        runner, "_native_rejection", lambda feature, language: (feature, "")
+    )
+    monkeypatch.setattr(runner, "translate", lambda *args: "translated metal")
+    monkeypatch.setattr(
+        runner, "_validated", lambda *args, **kwargs: validators.Verdict(True)
+    )
+    assert runner.run_output(SIN, "metal").sources == (NATIVE, "translated metal")
+    assert runner.run_input(SIN, "metal").sources == (NATIVE, "translated metal")
+    fragment = Feature(
+        "metal", "function", "sin", SIN.signature, crossgl="sin", stage="fragment"
+    )
+    assert runner.run_output(fragment, "metal").sources == ()
+    hlsl = _hlsl().feature
+    assert runner.run_output(hlsl, "hlsl").sources == (
+        _hlsl().sources[0],
+        "translated metal",
+    )
+
+
+def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
+    ran = Result(SIN, "output", "supported", runtime="metal-apple")
+    data = report.build([ran], ["metal"], ["output"])
+    [row] = [b for b in data["backends"] if b["language"] == "metal"]
+    assert (row["runtime"], row["executed"]) == ("metal-apple", 1)
+    assert "Executed: Metal output, 1 probes on metal-apple." in publish.markdown(data)
+    plain = report.build([Result(SIN, "output", "supported")], ["metal"], ["output"])
+    assert "Executed:" not in publish.markdown(plain)
+
+
+def test_an_execution_bug_is_reproduced_with_execute():
+    detail = (
+        f"on metal-apple, the translation {execution.DIVERGED}\n1 output words differ."
+    )
+    feature = {
+        "name": "sin",
+        "category": "function",
+        "outcome": "wrong",
+        "detail": detail,
+    }
+    row = {
+        "language": "metal",
+        "direction": "output",
+        "offered": True,
+        "score": 0.0,
+        "counts": {"supported": 0, "refused": 0, "wrong": 1, "untested": 0},
+        "features": [feature],
+    }
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "but run, it does not compute what the native Metal probe computes" in body
+    assert not execution.found("probe.metal:3:1: error: no matching function")

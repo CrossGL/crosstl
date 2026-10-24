@@ -2560,6 +2560,29 @@ def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_packed_8bit_alias_structured_buffer_element_reparse():
+    # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+    # buffer of them is a structured buffer of uint in CrossGL.
+    hlsl = textwrap.dedent("""
+        StructuredBuffer<uint8_t4_packed> pin;
+        RWStructuredBuffer<int8_t4_packed> pout;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            pout[id.x] = pin[id.x];
+            outp[id.x] = pin[id.x];
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "StructuredBuffer<uint> pin;" in output
+    assert "RWStructuredBuffer<uint> pout;" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
     hlsl = textwrap.dedent("""
@@ -3132,7 +3155,8 @@ def test_codegen_rayquery_stage_roundtrip_drops_native_shader_attribute():
 
     assert "ray_generation" in output.lower()
     assert "@ shader" not in output
-    assert "rayQuery rq;" in output
+    # The query keeps its DXR type and flags in CrossGL.
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in output
     assert "rq.TraceRayInline(accel, RAY_FLAG_NONE, 255, ray);" in output
     assert "rq.Proceed()" in output
     assert "rq.CommitNonOpaqueTriangleHit();" in output
@@ -3528,7 +3552,8 @@ def test_codegen_subpass_input_globals_reparse_crossgl():
 
     assert "@ input_attachment_index(0)" in output
     assert "@ binding(0)" in output
-    assert "sampler2d in_color_r;" in output
+    # A subpass input is an input attachment, not a sampled texture.
+    assert "subpassInput in_color_r;" in output
     assert "vec4 color_r = subpassLoad(in_color_r);" in output
     assert reparsed.global_variables[0].name == "in_color_r"
     assert reparsed.global_variables[0].attributes[0].name == "input_attachment_index"
@@ -4299,7 +4324,7 @@ def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
     output = generate_crossgl(code)
 
     assert (
-        "void CoherentStore(@ globallycoherent "
+        "void CoherentStore(@ globallycoherent @ buffer_layout(hlsl_structured) "
         "RWStructuredBuffer<Payload> data, uint index)" in output
     )
     assert "data[index].value = 1u;" in output

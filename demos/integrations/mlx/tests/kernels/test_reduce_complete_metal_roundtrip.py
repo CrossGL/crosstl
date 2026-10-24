@@ -22,7 +22,10 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     assert_deferred_metal_compiler_diagnostics,
     corpus_workspace,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -901,6 +904,7 @@ def _roundtrip_pinned_mlx_reduce_through_metal(
                 REDUCE_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

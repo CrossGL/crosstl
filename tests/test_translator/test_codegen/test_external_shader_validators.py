@@ -763,6 +763,20 @@ shader SlangMeshTaskValidator {
 """
 
 
+SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
+shader SlangWorkgroupCountValidator {
+    RWStructuredBuffer<uint> groupCounts;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            uvec3 groups = gl_NumWorkGroups;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y;
+        }
+    }
+}
+"""
+
+
 SLANG_INTEGER_WIDTH_VALIDATOR_SHADER = """
 shader SlangIntegerWidthValidator {
     int64 widen(int64 x, u8vec4 y) {
@@ -1186,7 +1200,7 @@ shader GLSLRayQueryComputeValidator {
                 100.0
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -1220,7 +1234,7 @@ shader GLSLRayQueryTraceRayInlineValidator {
                 ray
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -2903,6 +2917,39 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
         )
 
 
+def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_workgroup_count.slang"
+    spirv_path = tmp_path / "slang_workgroup_count.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
+    )
+    assert "uint3 groups = WorkgroupCount();" in code
+    assert "groups.x + WorkgroupCount().y" in code
+    assert "gl_NumWorkGroups" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
+    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
 def test_generated_slang_8bit_and_64bit_integers_compile_with_slangc(tmp_path):
     shader_path = tmp_path / "slang_integer_widths.slang"
     spirv_path = tmp_path / "slang_integer_widths.spv"
@@ -4228,7 +4275,7 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "bool active =" not in code
     assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert ".Proceed(" not in code
-    assert ".CommittedType(" not in code
+    assert ".CommittedStatus(" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

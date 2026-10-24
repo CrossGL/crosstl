@@ -34,6 +34,7 @@ from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _run,
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_boolean_buffer_runtime import (
@@ -44,7 +45,6 @@ from tests.test_translator.test_boolean_buffer_runtime import (
 )
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 from tests.test_translator.test_software_subgroup_product import _package
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_INTEGER_REMAINDER"
@@ -461,7 +461,7 @@ def _run_remainder_case(
 
 def test_ci_requires_integer_remainder_once_per_native_target():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
     assert_native_step_prerequisites(step, job="portable-host", pinned=True)

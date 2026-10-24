@@ -1,14 +1,16 @@
-"""``a.length()`` of an array with a constant element count becomes that count.
+"""``x.length()`` of a sized array, a vector or a matrix becomes its constant count.
 
-GLSL's ``length()`` method on a sized array is a constant integral expression (GLSL 4.60 section 5.9). HLSL, MSL,
-SPIR-V and the other targets have no such method on arrays: the emitters printed the call unchanged, which DXC and
-the Metal compiler reject ("member reference base type 'const float [25]' is not a structure or union"), or refused
-it as a call through a callee expression. This pass replaces the call, for every target but GLSL, with an ``int``
-literal of the array's element count, which is the value GLSL gives it.
+GLSL's ``length()`` method on a sized array is a constant integral expression (GLSL 4.60 section 5.9). On a vector
+it is the number of components and on a matrix the number of columns (sections 5.5 and 5.6); glslang folds all three
+to a constant without evaluating the object. HLSL, MSL, SPIR-V and the other targets have no such method: the
+emitters printed the call unchanged, which DXC and the Metal compiler reject ("member reference base type 'const
+float [25]' is not a structure or union", "illegal vector component name 'l'"), or refused it as a call through a
+callee expression. This pass replaces the call, for every target but GLSL, with an ``int`` literal of that count.
 
-The array's type is found with lexical scopes (:class:`.hub_types.TypeScope`): globals, constants, stage variables,
-parameters and block-scoped locals, through element and member access. A size that is a literal or a constant with a
-literal value is used; any other ``length()`` (a runtime-sized array, a buffer, a vector or matrix, a size that is a
+The object's type is found with lexical scopes (:class:`.hub_types.TypeScope`): globals, constants, stage variables,
+parameters and block-scoped locals, through element and member access; a vector's width is inferred from any
+expression whose value type is known (a swizzle, a call, arithmetic). An array size that is a literal or a constant
+with a literal value is used; any other ``length()`` (a runtime-sized array, a buffer, a size that is a
 specialization constant) is left for the emitters, which lower or refuse it.
 """
 
@@ -87,13 +89,24 @@ class _Folder:
                         self.constants[variable.name] = value
 
     def length(self, node):
-        """The element count ``node`` (a ``length()`` call) evaluates to, or ``None``."""
+        """The constant count ``node`` (a ``length()`` call) evaluates to, or ``None``."""
         if not isinstance(node, A.FunctionCallNode) or node.arguments:
             return None
         callee = node.function
         if not (isinstance(callee, A.MemberAccessNode) and callee.member == "length"):
             return None
-        return self.size(self.scope.node_type(callee.object_expr))
+        receiver = callee.object_expr
+        declared = self.scope.node_type(receiver)
+        if isinstance(declared, A.ArrayType):
+            return self.size(declared)
+        if isinstance(declared, A.MatrixType):
+            # A matrix's length() is its column count (GLSL 4.60 section 5.6).
+            return int(declared.cols) if str(declared.cols).isdigit() else None
+        value = self.scope.infer(receiver)
+        if value is not None and value.lanes > 1:
+            # A vector's length() is its component count (GLSL 4.60 section 5.5).
+            return value.lanes
+        return None
 
     def visit(self, node):
         scoped = isinstance(node, _SCOPES)
@@ -126,7 +139,7 @@ class _Folder:
 
 
 def fold_array_lengths(program, target) -> int:
-    """Replace ``a.length()`` of constant-size arrays in ``program`` by the count; returns how many were folded."""
+    """Replace ``x.length()`` of constant-size arrays, vectors and matrices by the count; returns how many."""
     if not isinstance(program, A.ShaderNode) or str(target or "").lower() in _NATIVE:
         return 0
     return _Folder(program).run()

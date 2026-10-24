@@ -24,8 +24,8 @@ say how far each backend is from complete, which is the question users and contr
 ### 1. A backend is a language and a direction
 
 Output is CrossGL to the target through `crosstl.translate(..., backend=...)`. Input is native source to CrossGL
-through the source importers. The first languages are GLSL, HLSL, Metal, SPIR-V and WGSL; CUDA, HIP, Slang, Rust and
-Mojo follow. A direction CrossTL does not offer, such as WGSL input, is reported as "not offered" rather than 0 %.
+through the source importers. The first languages are GLSL, HLSL, Metal, SPIR-V and WGSL; CUDA, HIP, Slang, Rust,
+Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL input, is reported as "not offered" rather than 0 %.
 
 ### 2. Feature lists come from pinned upstream sources
 
@@ -40,6 +40,7 @@ Mojo follow. A direction CrossTL does not offer, such as WGSL input, is reported
 | HIP | llvm/llvm-project: clang's `__clang_hip_math.h`; ROCm/clr: `amd_hip_atomic.h` and `amd_device_functions.h`, at the versions of the hipcc that validates the probes |
 | Slang | shader-slang/slang: the core module sources `hlsl.meta.slang` and `core.meta.slang` of the slangc release that validates the probes; the global functions of their public sections |
 | Mojo | modular/modular: the `std.math` and `std.bit` modules of the Mojo release that validates the probes, limited to the functions their `__init__.mojo` files export |
+| OpenCL C | llvm/llvm-project: clang's `opencl-c.h`, at the release of the clang that validates the probes; vendor extensions are left out |
 | Rust | Rust-GPU/rust-gpu: the `spirv_std::arch` modules of the release that validates the probes; the `num_traits::Float` trait and glam's `Vec3` methods, at the versions its lock file resolves |
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
@@ -54,10 +55,19 @@ SPIR-V is compiler output rather than a language people write, so its input prob
 feature's GLSL probe to.
 It translates the probe and validates the result with `glslangValidator` (GLSL), DXC (HLSL), `spirv-val`
 (SPIR-V), naga or Tint (WGSL), `xcrun metal` on a macOS runner (Metal), nvcc (CUDA), hipcc (HIP), slangc
-compiling to SPIR-V (Slang), the Mojo compiler with MAX's GPU package (Mojo) or rustc with the rust-gpu
-backend (Rust); none of them needs a GPU to compile. Input probes are validated by
-emitting the imported CrossGL back to the source language. Where Core's conformance runtimes can execute a probe, it is
-executed through a hook Core provides; the runtime harness is not duplicated.
+compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or slangc cannot write as valid SPIR-V
+(Slang), the Mojo compiler with MAX's GPU package (Mojo), rustc with the rust-gpu
+backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
+validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
+OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
+Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one input
+buffer also runs: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs
+through the harness's `run_suite`, and a translation that writes other results is `wrong`. The runtime harness is
+not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V by the
+language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or whose
+SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. CI executes the
+Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the
+Linux job.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score

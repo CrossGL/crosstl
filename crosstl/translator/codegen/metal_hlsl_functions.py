@@ -33,6 +33,7 @@ from ..ast import (
     VariableNode,
 )
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
+from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
 from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
@@ -510,19 +511,22 @@ class MetalHlslFunctionMixin:
             candidate = f"{candidate}_"
         return candidate
 
-    METAL_RESERVED_PROGRAM_IDENTIFIERS = frozenset(
-        {
-            "kernel",
-            "vertex",
-            "fragment",
-            "device",
-            "constant",
-            "thread",
-            "threadgroup",
-            "threadgroup_imageblock",
-            "ray_data",
-            "object_data",
-        }
+    METAL_RESERVED_PROGRAM_IDENTIFIERS = (
+        frozenset(
+            {
+                "kernel",
+                "vertex",
+                "fragment",
+                "device",
+                "constant",
+                "thread",
+                "threadgroup",
+                "threadgroup_imageblock",
+                "ray_data",
+                "object_data",
+            }
+        )
+        | METAL_KEYWORD_IDENTIFIERS
     )
 
     def rename_metal_reserved_program_identifiers(self, ast):

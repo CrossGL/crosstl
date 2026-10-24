@@ -29,7 +29,10 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 from ..corpus_evidence import (
@@ -1276,6 +1279,7 @@ def _roundtrip_pinned_mlx_unary_through_metal(
                 UNARY_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 
