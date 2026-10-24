@@ -2652,7 +2652,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
             resource_count = 1
             array_size = None
-            if hasattr(node, "var_type"):
+            if getattr(node, "var_type", None) is not None:
                 if (
                     hasattr(node.var_type, "name")
                     or hasattr(node.var_type, "element_type")
@@ -2691,11 +2691,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 else:
                     vtype = str(node.var_type)
                     array_suffix = ""
-            elif hasattr(node, "vtype"):
+            elif getattr(node, "vtype", None) is not None:
                 vtype = node.vtype
                 array_suffix = ""
             else:
-                vtype = "float"
+                # No written type: take it from the initializer so a shader-scope
+                # `let scale = 2.0` is `constant float scale = 2.0`, not
+                # `constant None scale` (#2444).
+                vtype = self.infer_metal_global_value_type(node)
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
@@ -3129,12 +3132,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     declaration = f"{declaration}{array_suffix}"
                 qualifier = self.global_variable_qualifier(node)
                 declaration = f"{qualifier}{declaration}"
+                resolved_var_type = getattr(node, "var_type", None) or vtype
                 self.record_metal_program_scope_value_global(
-                    var_name, getattr(node, "var_type", vtype), qualifier, node
+                    var_name, resolved_var_type, qualifier, node
                 )
                 initial_value = getattr(node, "initial_value", None)
                 if initial_value is not None:
-                    expected_type = getattr(node, "var_type", vtype)
+                    expected_type = getattr(node, "var_type", None) or vtype
                     init_expr = self.generate_expression_with_expected(
                         initial_value, expected_type
                     )
@@ -10025,6 +10029,28 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if self.vector_value_width(operand_mapped) == expected_width:
             return f"{expected_mapped}({code})"
         return code
+
+    def infer_metal_global_value_type(self, node):
+        """The type of a shader-scope declaration with no written type (#2444).
+
+        Take it from the initializer: a literal carries its own type, and a
+        more involved expression goes through expression_result_type. When
+        neither gives a type the declaration is refused instead of guessed.
+        """
+        initial_value = getattr(node, "initial_value", None)
+        literal_type = getattr(initial_value, "literal_type", None)
+        if literal_type is not None:
+            return self.type_name_string(literal_type)
+        inferred = self.expression_result_type(initial_value)
+        if inferred:
+            return inferred
+        var_name = getattr(node, "name", getattr(node, "variable_name", "?"))
+        # "float" only lets generation reach the program's other refusals.
+        return self.refuse_lowering(
+            f"global declaration: the type of '{var_name}' is not written and "
+            "cannot be inferred from its initializer",
+            "float",
+        )
 
     def expression_result_type(self, expr):
         if expr is None:

@@ -87,6 +87,8 @@ from .texture_types import (
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
 
+_PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
+
 
 class MetalCallableAliasLoweringError(ValueError):
     """Raised when a callable alias survives as a runtime value."""
@@ -6083,6 +6085,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             self.current_type_resolution_context = previous
 
     def scalar_alias_binding(self, name, *, context=None, stack=()):
+        if str(name).rsplit("::", 1)[-1] not in self.scalar_alias_names:
+            return None
         if context is None and str(name) in self.alias_resolution_shadow_names():
             return None
         declarations = self.scalar_alias_declarations(name, context)
@@ -7130,7 +7134,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
 
     def materialize_alias_template_type(self, metal_type, *, required=False):
         original = str(metal_type or "").strip()
-        if not original:
+        if not original or ("<" not in original and ":" not in original):
+            # Neither a dependent ``Owner::member`` type nor an alias-template instance.
             return original
 
         candidate = re.sub(r"^typename\s+", "", original).strip()
@@ -14270,6 +14275,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     def metal_source_overload_value_type(self, metal_type):
         if metal_type is None:
             return None
+        plain = str(metal_type).strip()
+        if (
+            _PLAIN_TYPE_NAME.fullmatch(plain)
+            and plain not in self.local_type_alias_names
+            and plain not in self.type_aliases
+            and plain not in self.scalar_alias_names
+            and not any(plain in scope for scope in self.template_type_bindings)
+        ):
+            # No alias table or template binding can rewrite this name.
+            return None if plain == "auto" else plain
         resolved = self.resolve_local_type_aliases(metal_type)
         resolved = self.substitute_template_type_text(resolved)
         resolved = self.resolve_type_alias(resolved)
@@ -15394,6 +15409,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         is_materialized_type = any(
             text in bindings for bindings in self.template_type_bindings
         )
+        instance = self.alias_template_instance_parts(text)
         if (
             decltype_type is None
             and "::" not in text
@@ -15402,6 +15418,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             and not is_local_alias
             and not is_type_alias
             and not is_materialized_type
+            and (
+                instance is None
+                or self.alias_template_declaration_for_name(instance[0]) is None
+            )
         ):
             return None
         normalized = self.normalized_metal_type(
@@ -19813,6 +19833,14 @@ float {scalar}(float value) {{
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        if (
+            "<" not in base
+            and ":" not in base
+            and base not in self.scalar_alias_names
+            and base not in self.type_aliases
+        ):
+            # A plain name absent from both alias tables cannot resolve further.
+            return f"{base}{suffix}"
         scalar_binding = self.scalar_alias_binding(base)
         if scalar_binding is not None:
             return f"{scalar_binding[0]}{suffix}"

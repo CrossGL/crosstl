@@ -71,7 +71,8 @@ python -m tools.coverage tools    # which reference tools are installed
 `probes/<language>-<direction>/<feature>/`. A language whose reference tool is
 not installed comes out untested. With `--execute`, the Metal, GLSL and SPIR-V
 compute probes also run on a local GPU or Mesa runtime through the conformance
-harness, as CI does; a result the native probe does not compute is wrong.
+harness, as CI does, and so do the HLSL, Slang and WGSL ones, compiled to SPIR-V
+by DXC, slangc or naga; a result the native probe does not compute is wrong.
 
 ## Picking an issue
 
@@ -87,8 +88,10 @@ Open the pull request against `main`. Required checks run on every push:
 translator, backend, complete-suite, example and demo tests on Linux, macOS and
 Windows, plus Lint and Coverage. Once they pass and a maintainer has reviewed
 the change, it joins the merge queue, which tests the exact commit that will
-land, and is squash-merged. A pull request with no activity for 14 days is
-marked `stale` and closed 7 days later; any push or comment resets the clock.
+land, and is squash-merged. Within an hour, a pull request without labels gets
+the `backend:`, `direction:` and `area:` labels of the files it changes. A pull
+request with no activity for 14 days is marked `stale` and closed 7 days later;
+any push or comment resets the clock.
 
 Keep a pull request to one change. Write commit messages and the pull request
 title in the imperative, describing the behavior that changes ("Reject
