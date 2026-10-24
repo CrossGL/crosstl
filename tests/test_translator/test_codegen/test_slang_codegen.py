@@ -24202,5 +24202,83 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
     assert "uimage2D" not in generated_code
 
 
+def test_slang_groups_member_and_subscript_operands():
+    """Postfix ``.member`` and ``[index]`` apply to the whole operand (#2813)."""
+    code = """
+    shader Group {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec2 v = vec2(fin[i], 2.0);
+                vec2 a = (v + v).yx;
+                float b = (v + v).x;
+                float d = (v * 3.0)[1];
+                float e = (-v).x;
+                float f = (i > 0u ? v : -v).y;
+                outp[i] = a.x + b + d + e + f + v.x + fin[i];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 a = (v + v).yx;" in generated_code
+    assert "float b = (v + v).x;" in generated_code
+    assert "float d = (v * 3.0)[1];" in generated_code
+    assert "float e = (-v).x;" in generated_code
+    assert "float f = (i > 0u ? v : -v).y;" in generated_code
+    assert "v + v.yx" not in generated_code
+    assert "v * 3.0 [1]" not in generated_code
+    assert "+ v.x + fin[i];" in generated_code
+
+
+def test_slang_subscripts_matrix_valued_expressions_by_column():
+    """``[i]`` on a matrix-valued expression reads CrossGL column ``i``, not a Slang row (#2813)."""
+    code = """
+    shader MatrixGroup {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float s = fin[i];
+                vec2 v = vec2(s, 1.0);
+                mat2 m = mat2(s, 2.0, 3.0, 4.0);
+                mat2x3 w = mat2x3(s, 2.0, 3.0, 4.0, 5.0, 6.0);
+                vec2 a = (m * 2.0)[1];
+                vec2 b = (s * m)[1];
+                vec2 c = (m / 2.0)[1];
+                vec2 d = (1.0 - m)[1];
+                vec2 e = transpose(m)[0];
+                vec2 f = (transpose(m) * 2.0)[1];
+                vec2 g = (i > 0u ? m : -m)[1];
+                vec2 h = inverse(m)[1];
+                vec3 k = (w * 2.0)[1];
+                vec2 t = transpose(w)[2];
+                vec2 p = transpose(m) * v;
+                outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 a = (m * 2.0)._m01_m11;" in generated_code
+    assert "float2 b = (s * m)._m01_m11;" in generated_code
+    assert "float2 c = (m / 2.0)._m01_m11;" in generated_code
+    assert "float2 d = (1.0 - m)._m01_m11;" in generated_code
+    assert "float2 e = (transpose(m))._m00_m10;" in generated_code
+    assert "float2 f = (transpose(m) * 2.0)._m01_m11;" in generated_code
+    assert "float2 g = ((i > 0u ? m : -m))._m01_m11;" in generated_code
+    assert "float2 h = (_crossgl_inverse_float2x2(m))._m01_m11;" in generated_code
+    assert "float3 k = (w * 2.0)._m01_m11_m21;" in generated_code
+    assert "float2 t = (transpose(w))._m02_m12;" in generated_code
+    assert "float2 p = mul(transpose(m), v);" in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

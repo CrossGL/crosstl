@@ -61,6 +61,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .ast_walk import walk_ast_values
+from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -8747,6 +8748,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.comparison_expression_result_type(left_type, right_type)
         if expr.op in {"&&", "||"}:
             return self.logical_expression_result_type(left_type, right_type)
+        matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+            expr.op, left_type, right_type
+        )
+        if matrix_type is not None:
+            return matrix_type
         if self.is_vector_value_type(left_type):
             return left_type
         if self.is_vector_value_type(right_type):
@@ -8834,6 +8840,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type is None:
+                return None
+            same_type = self.convert_type(true_type) == self.convert_type(false_type)
+            return true_type if same_type else None
         if isinstance(expr, ConstructorNode):
             constructor_type = self.type_name_string(
                 getattr(expr, "constructor_type", None)
@@ -9078,6 +9091,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
 
+        if func_name in {"transpose", "inverse", "matrixCompMult", "outerProduct"}:
+            return builtin_call_result_type(
+                func_name,
+                [self.type_name_string(self.expression_result_type(a)) for a in args],
+                C_FAMILY,
+            )
+
         return self.glsl_bitcast_result_type(func_name, args)
 
     def glsl_bitcast_result_type(self, func_name, args):
@@ -9161,6 +9181,27 @@ class SlangCodeGen(LoweringRefusalMixin):
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)
 
+    @staticmethod
+    def slang_postfix_operand(node, rendered):
+        """``rendered`` grouped so a following ``.member`` or ``[index]`` applies to all of it."""
+        if not isinstance(
+            node, (BinaryOpNode, TernaryOpNode, UnaryOpNode, AssignmentNode)
+        ):
+            return rendered
+        text = rendered.strip()
+        if text.startswith("(") and text.endswith(")"):
+            depth = 0
+            for position, char in enumerate(text):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and position != len(text) - 1:
+                        break
+            else:
+                return text
+        return f"({text})"
+
     def binary_child_needs_parentheses(self, parent_op, child, is_right_child=False):
         if not isinstance(child, BinaryOpNode):
             return False
@@ -9222,7 +9263,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if matrix_access is not None:
                 return matrix_access
-            array = self.generate_expression(array_expr)
+            array = self.slang_postfix_operand(
+                array_expr, self.generate_expression(array_expr)
+            )
             index = self.format_array_access_index(index_expr)
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
@@ -9253,7 +9296,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if member_info is not None:
                 return member_info["global_name"]
-            obj = self.generate_expression_without_expected(node.object)
+            obj = self.slang_postfix_operand(
+                node.object, self.generate_expression_without_expected(node.object)
+            )
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
             pointer = self.generate_expression(node.pointer_expr)
