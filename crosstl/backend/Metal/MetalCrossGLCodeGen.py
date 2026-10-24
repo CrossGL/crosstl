@@ -41,10 +41,15 @@ from ...translator.semantics.sampler_states import (
 )
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from .aggregate_scalar_conversions import (
+    refuse_aggregate_builtin_operation,
+    render_aggregate_scalar_conversion,
+)
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .color_attachments import color_attachment_semantic, enumerator_index_values
 from .comparison_samplers import collect_comparison_sampler_ids
+from .conditional_types import split_template_arguments
 from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_builtin_result_type,
@@ -60,6 +65,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
     METAL_SPARSE_TEXTURE_METHODS,
@@ -68,6 +74,7 @@ from .sparse_color import (
     refuse_sparse_color_reference,
     refuse_sparse_color_type,
 )
+from .static_member_calls import unresolved_static_member_call_owner
 from .texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
@@ -2309,7 +2316,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             unqualified_struct = resolved_struct.rsplit("::", 1)[-1]
             if unqualified_struct in self.struct_name_map:
                 resolved_struct = unqualified_struct
+            else:
+                resolved_struct = (
+                    self.struct_member_alias_owner(resolved_struct) or resolved_struct
+                )
         return resolved_struct, member_name
+
+    def struct_member_alias_owner(self, qualified_name):
+        # `Tile::Frag_t::kElems` names a static member of the struct that the
+        # member alias `Tile::Frag_t` denotes ([class.qual]); follow the alias
+        # chain from a visible concrete struct, or give up with None.
+        owner, aliases = qualified_name.split("::", 1)
+        if owner not in self.struct_name_map:
+            return None
+        target = self.resolve_concrete_struct_member_aliases(owner, f"::{aliases}")
+        if target is None:
+            return None
+        target = self.normalized_metal_type(self.resolve_type_alias(target))
+        return target if target in self.struct_name_map else None
 
     def static_struct_member_type(self, name):
         owner = self.static_struct_member_owner(name)
@@ -5323,10 +5347,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             qualifiers = {
                 str(item).lower() for item in getattr(member, "qualifiers", []) or []
             }
+            # On a pointer member, ``constant`` names the pointee's address
+            # space; the member itself is an assignable pointer value.
             if (
                 "constant" in qualifiers
-                or self.reference_element_type(member_type) is not None
-            ):
+                and self.pointer_element_type(member_type) is None
+            ) or self.reference_element_type(member_type) is not None:
                 raise MetalConstructorContractError(
                     owner,
                     (),
@@ -6828,6 +6854,32 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 break
         return values, duplicates, set(pending)
 
+    def sibling_member_alias_target(
+        self, struct_node, local_target, target, binding_context, member_stack
+    ):
+        # `typedef typename Frag_t::frag_type frag_type;` names a member of the
+        # struct that the sibling alias `Frag_t` denotes; follow it when that
+        # struct is concrete and visible, and keep `target` otherwise.
+        head, _separator, rest = local_target.partition("::")
+        if not rest or not re.fullmatch(r"[A-Za-z_]\w*", head):
+            return target
+        scalar_bindings, pack_bindings, signature = binding_context
+        chained = self.struct_member_alias_candidate(
+            struct_node,
+            head,
+            scalar_bindings,
+            pack_bindings,
+            signature,
+            member_stack=member_stack,
+        )
+        if chained is None:
+            return target
+        owner = self.normalized_metal_type(self.resolve_type_alias(chained[0]))
+        if owner not in self.struct_name_map:
+            return target
+        resolved = self.resolve_concrete_struct_member_aliases(owner, f"::{rest}")
+        return target if resolved is None else resolved
+
     def struct_member_alias_candidate(
         self,
         struct_node,
@@ -6886,6 +6938,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 nested_qualifiers = ()
         else:
             nested_qualifiers = ()
+            target = self.sibling_member_alias_target(
+                struct_node,
+                local_target,
+                target,
+                (scalar_bindings, pack_bindings, signature),
+                (*member_stack, member_name),
+            )
 
         target += "".join(
             "[]" if size is None else f"[{self.format_array_extent(size)}]"
@@ -10450,7 +10509,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                             )
                         )
                         try:
-                            if (
+                            converted_value = render_aggregate_scalar_conversion(
+                                self,
+                                self.current_function_return_type,
+                                stmt.value,
+                                "=",
+                                is_main,
+                            )
+                            if converted_value is not None:
+                                value = converted_value
+                            elif (
                                 self.metal_constructor_contract(
                                     self.current_function_return_type
                                 )
@@ -11127,6 +11195,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         if not name or not alias_type:
             return
         alias_type = self.resolve_metal_decltype_type(alias_type) or alias_type
+        alias_type = resolve_concrete_scoped_member_type(self, alias_type) or alias_type
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
         binding = self.scalar_alias_binding(alias_type)
         if binding is not None:
@@ -11711,10 +11780,26 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             initializer_type = self.expression_metal_type(node.left)
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
+        converted_rhs = None
+        if component_info is None and lhs_info is None:
+            converted_rhs = render_aggregate_scalar_conversion(
+                self,
+                (
+                    getattr(node.left, "vtype", None)
+                    if isinstance(node.left, VariableNode)
+                    else None
+                )
+                or self.expression_metal_type(node.left),
+                node.right,
+                node.operator,
+                is_main,
+            )
         try:
             # `device T& r = buffer[i]` binds the element; buffer_load would
             # bind a copy and drop every write through `r`.
-            if self.binds_reference_to_structured_buffer_element(node):
+            if converted_rhs is not None:
+                rhs = converted_rhs
+            elif self.binds_reference_to_structured_buffer_element(node):
                 rhs = self.generate_structured_buffer_element_lvalue(
                     node.right, is_main
                 )
@@ -12184,6 +12269,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         f"{helper_name}({self.generate_expression(operand, is_main)})"
                     )
                 return f"{operands[0]} {expr.op} {operands[1]}"
+            refuse_aggregate_builtin_operation(
+                self, expr, getattr(expr, "source_location", None)
+            )
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             source_types = [
@@ -12447,6 +12535,19 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 expr.args,
                 getattr(expr, "source_location", None),
             )
+            unbound_member = unresolved_static_member_call_owner(
+                self, materialized_name
+            )
+            if unbound_member is not None:
+                raise MetalStructMethodCallResolutionError(
+                    unbound_member[0],
+                    unbound_member[1],
+                    (),
+                    (),
+                    "the struct declares no materialized static member function of "
+                    "that name",
+                    getattr(expr, "source_location", None),
+                )
             function_name = self.map_function_call_name(
                 materialized_name,
                 expr.args,
@@ -18697,9 +18798,13 @@ float {scalar}(float value) {{
         if close_index is None:
             return None
 
-        suffix = text[close_index + 1 :].strip()
-        if suffix and re.fullmatch(r"[*&]+", suffix) is None:
+        suffix_match = re.fullmatch(
+            r"((?:\s*::\s*[A-Za-z_]\w*)*)\s*([*&]*)", text[close_index + 1 :]
+        )
+        if suffix_match is None:
             return None
+        member_suffix = re.sub(r"\s+", "", suffix_match.group(1))
+        suffix = member_suffix + suffix_match.group(2)
         expression_text = text[open_index + 1 : close_index].strip()
         if not expression_text or expression_text == "auto":
             return None
@@ -18724,7 +18829,35 @@ float {scalar}(float value) {{
             and not resolved_type.endswith("&")
         ):
             resolved_type += "&"
+        if member_suffix:
+            if re.search(r"[*&\[]", resolved_type):
+                # A reference, pointer or array type has no nested members.
+                return None
+            resolved_type = self.resolve_concrete_struct_member_aliases(
+                resolved_type, member_suffix
+            )
+            if resolved_type is None:
+                return None
+            suffix = suffix[len(member_suffix) :]
         return f"{resolved_type}{suffix}"
+
+    def resolve_concrete_struct_member_aliases(self, owner, member_suffix):
+        """Follow ``::member`` type aliases from a concrete struct, as ``decltype(local)::member`` names them."""
+        current = str(owner).strip()
+        for member in member_suffix.split("::")[1:]:
+            struct_name = self.normalized_metal_type(current)
+            if struct_name in self.ambiguous_struct_names:
+                return None
+            struct_node = self.struct_declarations.get(struct_name)
+            aliases = [
+                alias
+                for alias in getattr(struct_node, "type_aliases", None) or ()
+                if getattr(alias, "name", None) == member
+            ]
+            if len(aliases) != 1:
+                return None
+            current = str(self.resolve_type_alias(aliases[0].alias_type)).strip()
+        return current
 
     def map_type(self, metal_type):
         """Map a Metal type name to the closest CrossGL type name."""
@@ -19501,7 +19634,10 @@ float {scalar}(float value) {{
         the legacy integer-safe else branch used by existing diagnostics and
         parsing contracts.
         """
-        candidate = str(base).strip()
+        # ``typename metal::conditional_t<...>`` names the same selection.
+        candidate = re.sub(
+            r"^(?:typename\s+)?(?:::\s*)?(?:metal\s*::\s*)?", "", str(base).strip()
+        )
         type_accessor = False
         if candidate.endswith("::type"):
             candidate = candidate[: -len("::type")].strip()
@@ -19516,8 +19652,10 @@ float {scalar}(float value) {{
         # ``conditional`` metafunction only yields a type through ``::type``.
         if name == "conditional" and not type_accessor:
             return None
-        args = self.split_generic_arguments(inner[:-1])
-        if len(args) != 3:
+        # Conditions such as ``flag && (N < 4)`` hold angle brackets that are
+        # operators, so split with the template-argument rules.
+        args = split_template_arguments(inner[:-1])
+        if args is None or len(args) != 3:
             return None
 
         bindings = {
@@ -19544,6 +19682,12 @@ float {scalar}(float value) {{
         selected_branch = selected_branch.strip()
         if not selected_branch:
             return None
+        # A branch may itself be a selection, as in nested conditional_t.
+        nested = self.resolve_conditional_type(
+            selected_branch, require_concrete=require_concrete
+        )
+        if nested is not None:
+            return nested
         return self.map_type(selected_branch)
 
     def map_generic_type_argument(self, argument):

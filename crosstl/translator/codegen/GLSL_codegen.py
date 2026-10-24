@@ -80,6 +80,11 @@ from ..dispatch_region_contract import (
     with_dispatch_region_header,
 )
 from ..float_limit_constants import render_float_limit_constant
+from ..immutable_storage import (
+    checked_immutable_storage,
+    codegen_immutable_storage_names,
+    with_immutable_storage_header,
+)
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -157,6 +162,12 @@ from .call_effects import builtin_argument_write_indices
 from .clip_position_defaults import default_clip_position_member
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .counter_loops import (
+    any_start_counter_loop_terminates,
+    any_start_counter_loops,
+    counter_update,
+    wrapping_counter_loop_uniform,
+)
 from .crossgl_vector_names import (
     crossgl_named_vector_spelling,
     crossgl_named_vector_type,
@@ -192,6 +203,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -215,6 +227,7 @@ from .generic_struct_utils import (
 )
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -461,6 +474,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .metadata_call_bounds import (
+    call_parameter_bounds,
+    inherited_metadata_bindings,
+    join_parameter_bounds,
+)
 from .operator_spellings import map_c_family_operator
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -476,6 +494,7 @@ from .resource_arrays import (
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
+from .resource_helper_calls import is_read_only_helper_expression
 from .sampler_pairs import (
     lower_combined_sampler_pairs,
     with_combined_sampler_header,
@@ -486,6 +505,7 @@ from .scalar_return_bounds import (
     vector_return_intervals,
 )
 from .sizeof_calls import sizeof_call_bytes
+from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -520,6 +540,12 @@ from .subgroup_control_flow import (
     converge_subgroup_guarded_returns,
     has_subgroup_early_exits,
 )
+from .subgroup_loop_carried import loop_carried_candidates, loop_carried_names
+from .subgroup_reassignments import (
+    ReassignmentFlow,
+    followed_locals,
+    followed_offsets,
+)
 from .texture_lod_clamp import (
     GLSL_LOD_CLAMP_EXTENSION,
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -533,7 +559,7 @@ from .texture_residency import (
     glsl_texture_residency_call,
     glsl_texture_resident_call,
 )
-from .uniform_returns import UniformReturnAnalysis
+from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
@@ -2126,6 +2152,8 @@ class GLSLCodeGen(
             "WaveActiveMin",
             "WaveActiveMax",
             "WaveShuffleDown",
+            "WaveShuffleUp",
+            "WaveShuffleXor",
             "WaveReadLaneAt",
             "WaveShuffleAndFillUp",
             "subgroupExecutionBarrier",
@@ -2133,7 +2161,18 @@ class GLSLCodeGen(
             "CooperativeMatrixMultiplyAccumulate",
             *GLSL_SOFTWARE_SUBGROUP_VOTES,
             *GLSL_SOFTWARE_SUBGROUP_SCANS,
+            *SOFTWARE_QUAD_REDUCTIONS,
         }
+    )
+    # Relative shuffles: source-lane validity and source lane. A source lane
+    # outside the active subgroup yields the calling lane's value.
+    GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES = {
+        "WaveShuffleDown": ("delta < ({active} - lane)", "lane + delta"),
+        "WaveShuffleUp": ("delta <= lane", "lane - delta"),
+        "WaveShuffleXor": ("(lane ^ delta) < {active}", "lane ^ delta"),
+    }
+    GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES = frozenset(
+        {"WaveReadLaneAt", *GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES}
     )
     GLSL_SOFTWARE_SUBGROUP_VALUE_TYPES = frozenset({"float", "int", "uint"})
     GLSL_SOFTWARE_SUBGROUP_BUILTIN_ALIASES = frozenset(
@@ -2685,6 +2724,8 @@ class GLSLCodeGen(
         """Initialize GLSL type maps and per-generation stage/resource state."""
         self.float_atomic_storage = FloatAtomicStorage(self)
         self.metadata_preconditions = []
+        self.immutable_storage = []
+        self.glsl_immutable_storage_names = frozenset()
         self.set_cooperative_matrix_software_lowering(
             cooperative_matrix_software_lowering
         )
@@ -4868,11 +4909,18 @@ class GLSLCodeGen(
                 isinstance(statement, IfNode)
                 and id(statement) in self.glsl_software_subgroup_uniform_if_node_ids
             ):
-                for branch in [
-                    statement.if_body,
-                    *(getattr(statement, "else_if_bodies", []) or []),
-                    getattr(statement, "else_body", None),
-                ]:
+                fixed = getattr(self, "glsl_software_subgroup_constant_guards", {}).get(
+                    id(statement)
+                )
+                for branch in (
+                    [statement.if_body if fixed else statement.else_body]
+                    if fixed is not None
+                    else [
+                        statement.if_body,
+                        *(getattr(statement, "else_if_bodies", []) or []),
+                        getattr(statement, "else_body", None),
+                    ]
+                ):
                     call_ids.update(
                         self.glsl_software_subgroup_uniform_top_level_call_ids(branch)
                     )
@@ -4891,6 +4939,7 @@ class GLSLCodeGen(
         self.glsl_software_subgroup_omitted_helper_function_ids = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_function_metadata = {}
         self.glsl_software_subgroup_modular_stride_loops = set()
 
         functions = self.glsl_software_subgroup_functions(ast)
@@ -5038,18 +5087,21 @@ class GLSLCodeGen(
             for node in self.walk_ast(getattr(function, "body", None))
             if isinstance(node, FunctionCallNode)
         ]
+        storage_loads = set()
         for call in calls:
             name = self.function_call_name(call)
+            if name in functions_by_name or not isinstance(
+                call.function, (str, IdentifierNode)
+            ):
+                continue
             if (
-                name not in functions_by_name
-                and isinstance(call.function, (str, IdentifierNode))
-                and (
-                    self.glsl_software_subgroup_exit_constructor(call)
-                    or (name in {"min", "max"} and len(call.arguments) == 2)
-                    or (name == "clamp" and len(call.arguments) == 3)
-                )
+                self.glsl_software_subgroup_exit_constructor(call)
+                or (name in {"min", "max"} and len(call.arguments) == 2)
+                or (name == "clamp" and len(call.arguments) == 3)
             ):
                 self.glsl_software_subgroup_uniform_call_ids.add(id(call))
+            elif storage_load_call(name, call.arguments):
+                storage_loads.add(id(call))
         analysis = UniformReturnAnalysis(
             {
                 call_id: functions_by_id[target_id]
@@ -5059,6 +5111,7 @@ class GLSLCodeGen(
             },
             self.glsl_software_subgroup_uniform_call_ids,
             self.structs_by_name,
+            storage_loads,
         )
         self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {
@@ -5182,9 +5235,11 @@ class GLSLCodeGen(
             if relevant is not None:
                 raise relevant
 
+        # Calls in branches a constant guard rules out never run.
+        dead_ids = getattr(self, "glsl_software_subgroup_dead_node_ids", set())
         roots = set()
         for call, target_id in edges.get(entry_id, ()):
-            if target_id not in reaches_operation:
+            if target_id not in reaches_operation or id(call) in dead_ids:
                 continue
             operation, operation_node = first_operation(target_id)
             target = functions_by_id[target_id]
@@ -5247,7 +5302,7 @@ class GLSLCodeGen(
                 if relevant is not None:
                     raise relevant
             for call, target_id in edges.get(function_id, ()):
-                if target_id not in reaches_operation:
+                if target_id not in reaches_operation or id(call) in dead_ids:
                     continue
                 if target_id not in approved:
                     approved.add(target_id)
@@ -5284,11 +5339,23 @@ class GLSLCodeGen(
         # Intersect caller facts before inspecting a callee. A parameter is not
         # uniform merely because one invocation supplies a constant argument.
         uniform_parameters = {}
+        # Checked metadata bounds every call passes to a helper parameter.
+        parameter_bounds = {}
 
         def propagate(function_id, arguments):
+            bounds = self.glsl_software_subgroup_function_metadata.get(function_id)
             for call, target_id in edges.get(function_id, ()):
-                if target_id not in approved:
+                if target_id not in approved or id(call) in dead_ids:
                     continue
+                parameter_bounds[target_id] = join_parameter_bounds(
+                    parameter_bounds.get(target_id),
+                    call_parameter_bounds(
+                        getattr(functions_by_id[target_id], "parameters", ()) or (),
+                        getattr(call, "arguments", ()) or (),
+                        bounds,
+                        self.type_name_string,
+                    ),
+                )
                 if id(call) not in arguments:
                     operation, operation_node = first_operation(target_id)
                     raise self.glsl_software_subgroup_error(
@@ -5325,7 +5392,10 @@ class GLSLCodeGen(
             )
             self.glsl_software_subgroup_function_uniform_seeds[function_id] = seeds
             arguments = self.glsl_software_subgroup_uniform_arguments(
-                function, seeds, entry=False
+                function,
+                seeds,
+                entry=False,
+                inherited_bounds=parameter_bounds.get(function_id),
             )
             propagate(function_id, arguments)
 
@@ -5918,10 +5988,17 @@ class GLSLCodeGen(
                 "maskedIfPlan"
             ]
 
+    def prepare_glsl_software_subgroup_constant_guards(self, ast):
+        (
+            self.glsl_software_subgroup_constant_guards,
+            self.glsl_software_subgroup_dead_node_ids,
+        ) = glsl_constant_guards(self, self.glsl_software_subgroup_functions(ast))
+
     def validate_glsl_software_subgroup_contract(self, ast, target_stage=None):
         self.required_glsl_software_subgroup_helpers = set()
         self.glsl_software_subgroup_loop_constants = {}
         self.glsl_software_subgroup_loop_metadata = {}
+        self.glsl_software_subgroup_function_metadata = {}
         self.glsl_software_subgroup_modular_stride_loops = set()
         self.glsl_software_subgroup_call_mutations = {}
         self.glsl_software_subgroup_uniform_call_ids = set()
@@ -5949,12 +6026,15 @@ class GLSLCodeGen(
         self.glsl_software_subgroup_guard_names = set()
         self.glsl_software_subgroup_guard_constant_names = set()
         self.glsl_software_subgroup_result_overrides = {}
+        self.glsl_software_subgroup_constant_guards = {}
+        self.glsl_software_subgroup_dead_node_ids = set()
         if self.software_subgroup_width is None:
             return
         for function in self.glsl_software_subgroup_functions(ast):
             self.glsl_software_subgroup_modular_stride_loops.update(
                 modular_stride_loops(function, self.type_name_string, self.walk_ast)
             )
+        self.prepare_glsl_software_subgroup_constant_guards(ast)
 
         entries = self.glsl_software_subgroup_stage_entries(ast, target_stage)
         if len(entries) != 1 or entries[0][0] != "compute":
@@ -6268,14 +6348,15 @@ class GLSLCodeGen(
             return True
         if isinstance(node, IdentifierNode):
             return node.name in names
-        if isinstance(node, ArrayAccessNode):
-            base = node.array_expr
+        load = self.glsl_software_subgroup_uniform_returns.storage_load(node)
+        if isinstance(node, ArrayAccessNode) or load is not None:
+            base, index = load or (node.array_expr, node.index_expr)
             if (
                 not isinstance(base, IdentifierNode)
                 or base.name not in self.glsl_software_subgroup_resource_names
             ):
                 return False
-            children = [base, node.index_expr]
+            children = [base, index]
         elif isinstance(node, (MemberAccessNode, SwizzleNode)):
             base = (
                 node.object_expr
@@ -6385,7 +6466,36 @@ class GLSLCodeGen(
                 mutable.update(
                     self.glsl_software_subgroup_expression_identifier_names(invalidated)
                 )
+        # Locals declared in several scopes but never written hold one value per
+        # declaration; the flows scope each declaration's fact.
+        parameters = {parameter.name for parameter in function.parameters or []}
+        redeclared = {
+            name
+            for name, count in declarations.items()
+            if count > 1 and name not in mutable and name not in parameters
+        }
         mutable.update(name for name, count in declarations.items() if count > 1)
+        # Immutable entry storage moved only by uniform-trackable offsets stays a
+        # resource; the exit and argument flows follow its view.
+        offsets = (
+            followed_offsets(
+                function,
+                {
+                    parameter.name
+                    for parameter in function.parameters or []
+                    if declarations.get(parameter.name) == 1
+                    and self.glsl_software_subgroup_constant_resource(parameter)
+                },
+                self.glsl_software_subgroup_call_mutations,
+                walk=self.walk_ast,
+                map_operator=self.map_operator,
+                identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+                write_roots=self.glsl_mutation_target_names,
+            )
+            if entry
+            else set()
+        )
+        names.update(offsets)
         self.glsl_software_subgroup_resource_names = {
             declaration.name
             for declaration in [
@@ -6397,7 +6507,7 @@ class GLSLCodeGen(
                 ),
             ]
             if declarations[declaration.name] == 1
-            and declaration.name not in mutable
+            and (declaration.name not in mutable or declaration.name in offsets)
             and self.glsl_software_subgroup_uniform_returns.resource_type(
                 getattr(
                     declaration, "param_type", getattr(declaration, "var_type", None)
@@ -6405,7 +6515,7 @@ class GLSLCodeGen(
                 declaration,
             )
         }
-        names.difference_update(mutable)
+        names.difference_update(mutable - offsets)
         if (
             self.glsl_software_subgroup_count == 1
             and "gl_SubgroupID" not in mutable
@@ -6415,20 +6525,69 @@ class GLSLCodeGen(
         components = {
             name: axes for name, axes in components.items() if name not in mutable
         }
+        analysis = self.glsl_software_subgroup_uniform_returns
+        # Locals clamped outside loops, as a causal attention block bound, stay
+        # uniform where every write before the use is uniform.
+        followed = followed_locals(
+            function,
+            mutable,
+            self.glsl_software_subgroup_call_mutations,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+            write_roots=self.glsl_mutation_target_names,
+            value_type=analysis.value_type,
+            volatile=lambda node: analysis._qualified(node, {"volatile"}),
+        )
+        if entry:
+            # A counter only its initializer-free loops write is uniform at
+            # each loop when the flow proves it so; the loop proof does the rest.
+            followed = set(followed) | {
+                record[0]
+                for record in getattr(
+                    self, "glsl_software_subgroup_counter_loops", {}
+                ).values()
+            }
+        # Locals a uniform loop advances on every trip, as a block-mask offset.
+        carried = loop_carried_candidates(
+            function,
+            mutable,
+            self.glsl_software_subgroup_call_mutations,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            identifier_names=self.glsl_software_subgroup_expression_identifier_names,
+            value_type=analysis.value_type,
+            volatile=lambda node: analysis._qualified(node, {"volatile"}),
+            write_roots=self.glsl_mutation_target_names,
+            excluded=set(followed) | set(offsets),
+        )
         return {
             "uniform_names": names,
             "uniform_components": components,
             "mutable_names": mutable,
+            "offset_names": offsets,
+            "followed_names": set(followed) | carried,
+            "carried_names": carried,
+            "redeclared_names": redeclared,
         }
 
-    def glsl_software_subgroup_uniform_arguments(self, function, seeds, *, entry):
+    def glsl_software_subgroup_uniform_arguments(
+        self, function, seeds, *, entry, inherited_bounds=None
+    ):
         facts = self.glsl_software_subgroup_exit_facts(function, seeds, entry)
-        metadata_bounds = metadata_loop_bindings(
-            function,
-            self.metadata_preconditions if entry else (),
-            facts["mutable_names"],
-            self.walk_ast,
+        metadata_bounds = (
+            metadata_loop_bindings(
+                function,
+                self.metadata_preconditions,
+                facts["mutable_names"],
+                self.walk_ast,
+            )
+            if entry
+            else inherited_metadata_bindings(
+                function, inherited_bounds, facts["mutable_names"], self.walk_ast
+            )
         )
+        self.glsl_software_subgroup_function_metadata[id(function)] = metadata_bounds
         self.glsl_software_subgroup_loop_metadata.update(
             (id(node), metadata_bounds)
             for node in self.walk_ast(function.body)
@@ -6443,30 +6602,67 @@ class GLSLCodeGen(
             )
         )
         arguments = {}
+        analysis = self.glsl_software_subgroup_uniform_returns
+        followed = facts["followed_names"]
+        guards = getattr(self, "glsl_software_subgroup_constant_guards", {})
+
+        def declares_uniform(statement, names, components):
+            return (
+                (
+                    statement.name not in facts["mutable_names"]
+                    or statement.name in followed
+                    or statement.name in facts["redeclared_names"]
+                )
+                and (
+                    analysis.value_type(statement.var_type)
+                    or statement.name in self.glsl_software_subgroup_resource_names
+                )
+                and self.glsl_software_subgroup_exit_uniform_expression(
+                    statement.initial_value, names, components
+                )
+            )
+
+        flow = ReassignmentFlow(
+            followed,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
+            declares_uniform=declares_uniform,
+            offsets=facts["offset_names"],
+            carried=facts["carried_names"],
+            trip_uniform=lambda loop, names, components: (
+                self.glsl_software_subgroup_uniform_for(loop, names)
+            ),
+            counter_loop=self.glsl_software_subgroup_uniform_counter,
+        )
 
         def visit(body, names, components):
+            previous = None
             for statement in self.glsl_software_subgroup_statement_list(body):
+                if previous is not None:
+                    flow.follow(previous, names, components)
+                previous = statement
                 if isinstance(statement, VariableNode):
                     names.discard(statement.name)
                     components.pop(statement.name, None)
-                    if (
-                        statement.name not in facts["mutable_names"]
-                        and (
-                            self.glsl_software_subgroup_uniform_returns.value_type(
-                                statement.var_type
-                            )
-                            or statement.name
-                            in self.glsl_software_subgroup_resource_names
-                        )
-                        and self.glsl_software_subgroup_exit_uniform_expression(
-                            statement.initial_value, names, components
-                        )
-                    ):
+                    if declares_uniform(statement, names, components):
                         names.add(statement.name)
                 if isinstance(statement, BlockNode) or hasattr(statement, "statements"):
                     visit(statement, set(names), dict(components))
                     continue
                 if isinstance(statement, IfNode):
+                    fixed = guards.get(id(statement))
+                    if fixed is not None:
+                        # Every invocation takes the branch the constant selects.
+                        self.glsl_software_subgroup_uniform_if_node_ids.add(
+                            id(statement)
+                        )
+                        visit(
+                            statement.if_body if fixed else statement.else_body,
+                            set(names),
+                            dict(components),
+                        )
+                        continue
                     conditions = [
                         statement.condition,
                         *(getattr(statement, "else_if_conditions", []) or []),
@@ -6492,9 +6688,14 @@ class GLSLCodeGen(
                         self.glsl_software_subgroup_uniform_for_node_ids.add(
                             id(statement)
                         )
-                        nested_names = set(names) | {statement.init.name}
+                        # A proven initializer-free counter loop has no init.
+                        loop_name = getattr(statement.init, "name", None)
+                        trip_names, _kept = flow.carried_trip(
+                            statement, names, components
+                        )
+                        nested_names = trip_names | ({loop_name} - {None})
                         nested_components = dict(components)
-                        nested_components.pop(statement.init.name, None)
+                        nested_components.pop(loop_name, None)
                         visit(statement.body, nested_names, nested_components)
                     elif (
                         entry
@@ -6513,7 +6714,14 @@ class GLSLCodeGen(
                         nested_components.pop(statement.init.name, None)
                         visit(
                             statement.body,
-                            set(names) - {statement.init.name},
+                            set(names)
+                            - {statement.init.name}
+                            - loop_carried_names(
+                                statement,
+                                facts["carried_names"],
+                                self.walk_ast,
+                                self.map_operator,
+                            ),
                             nested_components,
                         )
                     continue
@@ -6564,10 +6772,22 @@ class GLSLCodeGen(
         uniform_names=None,
         uniform_components=None,
         mutable_names=None,
+        offset_names=None,
+        followed_names=None,
+        carried_names=None,
+        redeclared_names=None,
     ):
+        # Branches a constant guard rules out never run.
+        dead_ids = getattr(self, "glsl_software_subgroup_dead_node_ids", set())
+        guards = getattr(self, "glsl_software_subgroup_constant_guards", {})
+
         def contains_work(root):
-            return bool(self.glsl_software_subgroup_operation_records(root)) or any(
+            return any(
+                id(record[1]) not in dead_ids
+                for record in self.glsl_software_subgroup_operation_records(root)
+            ) or any(
                 isinstance(node, FunctionCallNode)
+                and id(node) not in dead_ids
                 and self.glsl_software_subgroup_candidate_helper_call(node)
                 for node in self.glsl_software_subgroup_reachable_nodes(root)
             )
@@ -6576,22 +6796,48 @@ class GLSLCodeGen(
         uniform_names = set(uniform_names or ())
         uniform_components = dict(uniform_components or {})
         mutable_names = set(mutable_names or ())
+        offset_names = set(offset_names or ())
+        followed_names = set(followed_names or ())
+
+        def declares_uniform(statement, names, components):
+            return (
+                (
+                    statement.name not in mutable_names
+                    or statement.name in followed_names
+                    or statement.name in (redeclared_names or ())
+                )
+                and (
+                    self.glsl_software_subgroup_uniform_returns.value_type(
+                        statement.var_type
+                    )
+                    or statement.name in self.glsl_software_subgroup_resource_names
+                )
+                and self.glsl_software_subgroup_exit_uniform_expression(
+                    statement.initial_value, names, components
+                )
+            )
+
+        # Offsets of immutable entry storage and followed locals' writes.
+        flow = ReassignmentFlow(
+            followed_names,
+            walk=self.walk_ast,
+            map_operator=self.map_operator,
+            uniform_expression=self.glsl_software_subgroup_exit_uniform_expression,
+            declares_uniform=declares_uniform,
+            offsets=offset_names,
+            carried=carried_names or (),
+            trip_uniform=lambda loop, names, components: (
+                self.glsl_software_subgroup_uniform_for(loop, names)
+            ),
+            counter_loop=self.glsl_software_subgroup_uniform_counter,
+        )
         for index, statement in enumerate(statements):
+            if index and (offset_names or followed_names):
+                flow.follow(statements[index - 1], uniform_names, uniform_components)
             if isinstance(statement, VariableNode):
                 uniform_names.discard(statement.name)
                 uniform_components.pop(statement.name, None)
-                if (
-                    statement.name not in mutable_names
-                    and (
-                        self.glsl_software_subgroup_uniform_returns.value_type(
-                            statement.var_type
-                        )
-                        or statement.name in self.glsl_software_subgroup_resource_names
-                    )
-                    and self.glsl_software_subgroup_exit_uniform_expression(
-                        statement.initial_value, uniform_names, uniform_components
-                    )
-                ):
+                if declares_uniform(statement, uniform_names, uniform_components):
                     uniform_names.add(statement.name)
             subsequent_work = later_work or any(
                 contains_work(item) for item in statements[index + 1 :]
@@ -6599,9 +6845,25 @@ class GLSLCodeGen(
             has_work = contains_work(statement)
             has_exit = any(
                 isinstance(node, (ReturnNode, BreakNode, ContinueNode))
+                and id(node) not in dead_ids
                 for node in self.glsl_software_subgroup_reachable_nodes(statement)
             )
-            if isinstance(statement, IfNode):
+            fixed = guards.get(id(statement)) if isinstance(statement, IfNode) else None
+            if fixed is not None:
+                # Every invocation takes the branch the constant selects.
+                self.validate_glsl_software_subgroup_exits(
+                    statement.if_body if fixed else statement.else_body,
+                    subsequent_work,
+                    operation=operation,
+                    uniform_names=uniform_names,
+                    uniform_components=uniform_components,
+                    mutable_names=mutable_names,
+                    offset_names=offset_names,
+                    followed_names=followed_names,
+                    carried_names=carried_names,
+                    redeclared_names=redeclared_names,
+                )
+            elif isinstance(statement, IfNode):
                 conditions = [
                     statement.condition,
                     *(getattr(statement, "else_if_conditions", []) or []),
@@ -6635,6 +6897,10 @@ class GLSLCodeGen(
                         uniform_names=uniform_names,
                         uniform_components=uniform_components,
                         mutable_names=mutable_names,
+                        offset_names=offset_names,
+                        followed_names=followed_names,
+                        carried_names=carried_names,
+                        redeclared_names=redeclared_names,
                     )
             elif isinstance(
                 statement,
@@ -6664,6 +6930,10 @@ class GLSLCodeGen(
                     uniform_names=uniform_names,
                     uniform_components=uniform_components,
                     mutable_names=mutable_names,
+                    offset_names=offset_names,
+                    followed_names=followed_names,
+                    carried_names=carried_names,
+                    redeclared_names=redeclared_names,
                 )
 
     def glsl_software_subgroup_uniform_seed_names(
@@ -6722,10 +6992,17 @@ class GLSLCodeGen(
         return names
 
     def glsl_software_subgroup_constant_resource(self, parameter):
+        """Whether an entry parameter is read-only storage nothing writes.
+
+        Constant storage is immutable by type. Read-only storage is immutable
+        only when a checked contract names the parameter, because another
+        binding of the dispatch could otherwise alias it and write.
+        """
         analysis = self.glsl_software_subgroup_uniform_returns
         return analysis.resource_type(parameter.param_type, parameter) and (
             analysis._qualified(parameter, {"constant"})
             or getattr(parameter.param_type, "address_space", None) == "constant"
+            or getattr(parameter, "name", None) in self.glsl_immutable_storage_names
         )
 
     def glsl_software_subgroup_uniform_expression(self, expression, uniform_names):
@@ -6764,7 +7041,55 @@ class GLSLCodeGen(
             if isinstance(node, IdentifierNode) and getattr(node, "name", None)
         }
 
+    def glsl_software_subgroup_dependency_names(self, expression):
+        """Identifiers whose values or storage ``expression`` can observe.
+
+        A call whose effect-free arguments have a dependency summary observes
+        only the arguments that summary reads, and storage only through
+        immutable resources. Arguments it merely forwards, such as resource
+        identities passed to an accessor helper, cannot change its value.
+        Every other node observes every identifier beneath it.
+        """
+        analysis = self.glsl_software_subgroup_uniform_returns
+        resources = getattr(self, "glsl_software_subgroup_resource_names", set())
+        names = set()
+        visited = set()
+        pending = [expression]
+        while pending:
+            value = pending.pop()
+            if value is None or isinstance(value, (str, int, float, bool)):
+                continue
+            if isinstance(value, dict):
+                pending.extend(value.values())
+                continue
+            if isinstance(value, (list, tuple, set)):
+                pending.extend(value)
+                continue
+            if id(value) in visited:
+                continue
+            visited.add(id(value))
+            if isinstance(value, FunctionCallNode):
+                required = analysis.uniform_arguments(value, resources)
+                if required is not None:
+                    pending.extend(required)
+                    continue
+            if isinstance(value, IdentifierNode) and getattr(value, "name", None):
+                names.add(value.name)
+            if hasattr(value, "__dict__"):
+                pending.extend(vars(value).values())
+        return names
+
     def glsl_software_subgroup_analyze_uniform_if(self, node, uniform_names):
+        fixed = getattr(self, "glsl_software_subgroup_constant_guards", {}).get(
+            id(node)
+        )
+        if fixed is not None:
+            # Every invocation takes the branch the constant selects.
+            self.glsl_software_subgroup_uniform_if_node_ids.add(id(node))
+            return self.glsl_software_subgroup_analyze_uniform_statements(
+                node.if_body if fixed else getattr(node, "else_body", None),
+                set(uniform_names),
+            )
         conditions = [
             getattr(node, "condition", getattr(node, "if_condition", None)),
             *(getattr(node, "else_if_conditions", []) or []),
@@ -6890,9 +7215,15 @@ class GLSLCodeGen(
             elif trip_uniform:
                 nested_names.discard(loop_name)
             counter = self.glsl_software_subgroup_counter_loops.get(id(statement))
-            if is_uniform and counter is not None:
-                # Written only by this uniform loop's update, the counter is
-                # uniform before, inside and after the loop.
+            if (
+                is_uniform
+                and counter is not None
+                and id(statement)
+                in getattr(self, "glsl_software_subgroup_fresh_counter_loops", ())
+            ):
+                # Written only by this uniform loop's update from its literal
+                # initializer, the counter is uniform before, inside and after
+                # the loop.
                 self.glsl_software_subgroup_immutable_uniform_names.add(counter[0])
             self.glsl_software_subgroup_analyze_uniform_statements(
                 getattr(statement, "body", None),
@@ -7180,9 +7511,9 @@ class GLSLCodeGen(
             ):
                 return False
 
-        bound_names = self.glsl_software_subgroup_expression_identifier_names(bound)
+        bound_names = self.glsl_software_subgroup_dependency_names(bound)
         stride_names = (
-            self.glsl_software_subgroup_expression_identifier_names(update.value)
+            self.glsl_software_subgroup_dependency_names(update.value)
             if additive_update or geometric_update or modular_update
             else set()
         )
@@ -7222,7 +7553,11 @@ class GLSLCodeGen(
         """Initializer-free counter loops whose counter no call may write.
 
         Before the helper pass resolves call effects, every name a call or a
-        pointer or reference declaration reads counts as written.
+        pointer or reference declaration reads counts as written. Loops that
+        ``init_less_counter_loops`` proves start from the counter's literal
+        initializer are recorded as fresh; ``any_start_counter_loops`` adds
+        loops the counter may reach with any value, which the flow analysis
+        must prove uniform.
         """
         mutations = getattr(self, "glsl_software_subgroup_call_mutations", {})
 
@@ -7239,7 +7574,20 @@ class GLSLCodeGen(
                 list(node.arguments or [])
             )
 
-        return init_less_counter_loops(entry_function, self.walk_ast, writes)
+        fresh = init_less_counter_loops(entry_function, self.walk_ast, writes)
+        self.glsl_software_subgroup_fresh_counter_loops = set(fresh)
+        loops = any_start_counter_loops(entry_function, self.walk_ast, writes)
+        loops.update(fresh)
+        return loops
+
+    def glsl_software_subgroup_uniform_counter(self, node, uniform_names, _components):
+        """The counter of ``node`` when every invocation runs its trips alike."""
+        record = getattr(self, "glsl_software_subgroup_counter_loops", {}).get(id(node))
+        if record is None or not self.glsl_software_subgroup_counter_loop_uniform(
+            node, uniform_names
+        ):
+            return None
+        return record[0]
 
     def glsl_software_subgroup_counter_loop_uniform(self, node, uniform_names):
         """Accept MLX's ``int t = 0; for (; t + C <= T; t += C)`` chunk loop.
@@ -7249,7 +7597,8 @@ class GLSLCodeGen(
         bound, a literal offset and stride, and a body that leaves them alone,
         every invocation runs the same trips, so the counter stays uniform
         after the loop too. The checked termination proof uses the bound's
-        literal value or metadata range.
+        literal value or metadata range; a 32-bit unsigned counter, which
+        wraps alike on every target, needs none.
         """
         record = getattr(self, "glsl_software_subgroup_counter_loops", {}).get(id(node))
         if record is None or uniform_names is None:
@@ -7270,10 +7619,16 @@ class GLSLCodeGen(
             if key in uniform_names and key != name
         }
         # The initializer runs at the declaration, where a later local may
-        # not yet shadow a constant it names; only literals are proven.
-        start = checked_induction_value(declaration.initial_value, {})
+        # not yet shadow a constant it names; only literals are proven. A loop
+        # the counter may reach with another value proves every start.
+        start = (
+            checked_induction_value(declaration.initial_value, {})
+            if id(node)
+            in getattr(self, "glsl_software_subgroup_fresh_counter_loops", ())
+            else None
+        )
         condition = getattr(node, "condition", None)
-        if start is None or not isinstance(condition, BinaryOpNode):
+        if not isinstance(condition, BinaryOpNode):
             return False
         operator = self.map_operator(condition.operator)
         left = condition.left
@@ -7302,33 +7657,44 @@ class GLSLCodeGen(
         if literal_bound is not None:
             stops = [literal_bound]
         else:
+            if not self.glsl_software_subgroup_uniform_expression(bound, uniform_names):
+                return False
             record = (
                 getattr(self, "glsl_software_subgroup_loop_metadata", {})
                 .get(id(node), {})
                 .get(metadata_bound_key(bound))
             )
-            if record is None or not self.glsl_software_subgroup_uniform_expression(
-                bound, uniform_names
-            ):
-                return False
-            convert = _UnsignedLiteralInt if record["dtype"].startswith("u") else int
-            stops = [convert(record["minimum"]), convert(record["maximum"])]
-        update = node.update
+            stops = []
+            if record is not None:
+                convert = (
+                    _UnsignedLiteralInt if record["dtype"].startswith("u") else int
+                )
+                stops = [convert(record["minimum"]), convert(record["maximum"])]
+        update = counter_update(node.update)
+        if update is None or update[0] != name:
+            return False
+        _counter, sign, stride = update
         stride_names = set()
-        if isinstance(update, AssignmentNode):
-            step = checked_induction_value(update.value, constants)
+        step = sign
+        if stride is not None:
+            magnitude = checked_induction_value(stride, constants)
+            step = None if magnitude is None else sign * magnitude
             stride_names = self.glsl_software_subgroup_expression_identifier_names(
-                update.value
+                stride
             )
-        else:
-            step = 1
-        if step is None or not offset_counter_loop_terminates(
-            self.type_name_string(declaration.var_type),
-            start,
-            offset,
-            stops,
-            step,
-            operator,
+        type_name = self.type_name_string(declaration.var_type)
+        if step is None or not (
+            stops
+            and (
+                start is not None
+                and offset_counter_loop_terminates(
+                    type_name, start, offset, stops, step, operator
+                )
+                or any_start_counter_loop_terminates(
+                    type_name, offset, stops, step, operator
+                )
+            )
+            or wrapping_counter_loop_uniform(type_name, offset, step, operator)
         ):
             return False
         return self.glsl_software_subgroup_loop_controls_preserved(
@@ -8302,6 +8668,10 @@ class GLSLCodeGen(
     def set_metadata_preconditions(self, records):
         self.metadata_preconditions = checked_metadata_preconditions(records)
 
+    def set_immutable_storage(self, records):
+        """Name read-only storage parameters that no writable binding aliases."""
+        self.immutable_storage = checked_immutable_storage(records)
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points.
 
@@ -8357,18 +8727,28 @@ class GLSLCodeGen(
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
-        self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
-        code = self._generate_program(ast, target_stage)
-        roots = self.float_atomic_storage.roots
-        if roots:
-            self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
+        immutable, self.glsl_immutable_storage_names = codegen_immutable_storage_names(
+            self.glsl_software_subgroup_stage_entries(ast, target_stage),
+            self.immutable_storage,
+            ast,
+        )
+        try:
+            self.float_atomic_storage = FloatAtomicStorage(self, discover=True)
             code = self._generate_program(ast, target_stage)
-            self.float_atomic_storage.verify()
+            roots = self.float_atomic_storage.roots
+            if roots:
+                self.float_atomic_storage = FloatAtomicStorage(self, roots=roots)
+                code = self._generate_program(ast, target_stage)
+                self.float_atomic_storage.verify()
+        finally:
+            self.glsl_immutable_storage_names = frozenset()
         if records:
             code = with_metadata_precondition_header(code, records)
         code = with_combined_sampler_header(
             code, getattr(self, "combined_sampler_records", ())
         )
+        if immutable:
+            code = with_immutable_storage_header(code, immutable)
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
@@ -14573,6 +14953,7 @@ class GLSLCodeGen(
                 self.glsl_side_effect_free_expression(argument)
                 or isinstance(argument, FunctionCallNode)
                 and argument_members
+                or is_read_only_helper_expression(self, argument)
             ):
                 return {}
             for member, interval in argument_members.items():
@@ -16262,7 +16643,17 @@ class GLSLCodeGen(
                 for child in value.child_nodes():
                     visit(child, active_aliases, active_intervals)
 
-        visit_sequence(getattr(function, "body", []), aliases, intervals)
+        # The body is analyzed outside its own generation scope, so its parameters
+        # must shadow same-named caller locals when helper calls are summarized.
+        parameter_types = {
+            parameter.name: getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            for parameter in parameters
+            if getattr(parameter, "name", None)
+        }
+        with self.glsl_lexical_source_type_scope(parameter_types):
+            visit_sequence(getattr(function, "body", []), aliases, intervals)
         return access_intervals
 
     def validate_glsl_workgroup_pointer_specialization(
@@ -16453,10 +16844,11 @@ class GLSLCodeGen(
             return None, None
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
-        workgroup_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
-            callee,
-            args,
-        )
+        # Argument intervals depend on the caller's lexical types, as the binding does.
+        with self.glsl_lexical_source_type_scope(lexical_source_types):
+            workgroup_parameter_intervals = (
+                self.glsl_workgroup_call_parameter_intervals(callee, args)
+            )
         access_requirements = self.function_image_access_requirements.get(func_name, {})
         bindings = {}
         key_parts = []
@@ -16959,10 +17351,11 @@ class GLSLCodeGen(
         if source_func is None:
             return None
 
-        proof_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
-            source_func,
-            args,
-        )
+        with self.glsl_lexical_source_type_scope(lexical_source_types):
+            proof_parameter_intervals = self.glsl_workgroup_call_parameter_intervals(
+                source_func,
+                args,
+            )
         copied_nodes = {}
         clone = deepcopy(source_func, copied_nodes)
         # Resource specialization changes bindings, not the proven control flow.
@@ -30514,6 +30907,40 @@ class GLSLCodeGen(
             return complete.minimum - base[1], complete.maximum - base[0]
         return base[0] - complete.maximum, base[1] - complete.minimum
 
+    def generate_glsl_storage_pointer_step(self, expression, operator):
+        """``p++``, ``++p``, ``p--`` or ``--p`` of a storage pointer whose value
+        is discarded.
+
+        A storage pointer lowers to its backing buffer and an element offset,
+        so the step moves the offset by one element, as ``p += 1`` does. A
+        step whose value is used needs the pointer as a first-class value and
+        stays refused.
+        """
+        if expression is not self.current_discarded_expression:
+            return None
+        operand = expression.operand
+        if not isinstance(operand, (str, IdentifierNode, VariableNode)):
+            return None
+        name = getattr(operand, "name", None) or self.expression_name(operand)
+        binding = self.current_glsl_storage_pointer_aliases.get(name)
+        if binding is None or binding.get("kind") != "storage-pointer":
+            return None
+        offset = binding.get("offset")
+        if binding.get("resource_root") or not self.glsl_storage_pointer_offset_lvalue(
+            offset
+        ):
+            raise OpenGLStoragePointerError(
+                f"OpenGL cannot reassign storage pointer '{name}'",
+                parameter_name=name,
+                reason="assignment-storage-unavailable",
+                source_location=getattr(expression, "source_location", None),
+            )
+        increment = operator == "++" or expression.op in {
+            "PRE_INCREMENT",
+            "POST_INCREMENT",
+        }
+        return f"({offset} {'+=' if increment else '-='} 1)"
+
     def generate_glsl_storage_pointer_assignment(self, node, indent):
         target = getattr(node, "target", getattr(node, "left", None))
         if not isinstance(target, (str, IdentifierNode, VariableNode)):
@@ -38524,6 +38951,11 @@ complex64_t crossgl_complex64_mod_assign(
             *(getattr(node, "else_if_conditions", []) or []),
         ]
         bodies = [node.if_body, *(getattr(node, "else_if_bodies", []) or [])]
+        fixed = getattr(self, "glsl_software_subgroup_constant_guards", {}).get(
+            id(node)
+        )
+        if fixed is not None:
+            return True, node.if_body if fixed else getattr(node, "else_body", None)
         for condition, body in zip(conditions, bodies):
             literal = evaluate_literal_int_expression(
                 condition,
@@ -39254,6 +39686,13 @@ complex64_t crossgl_complex64_mod_assign(
             return ""
         if isinstance(init, str):
             return init
+        if isinstance(init, list):
+            return join_for_initializer(
+                init,
+                lambda item: isinstance(item, VariableNode),
+                self.generate_for_initializer,
+                self.generate_for_initializer,
+            )
         if isinstance(init, VariableNode) or (
             hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
         ):
@@ -39725,6 +40164,9 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }:
+                pointer_step = self.generate_glsl_storage_pointer_step(expr, op)
+                if pointer_step is not None:
+                    return pointer_step
                 self.validate_glsl_private_pointer_byte_view_mutation(expr.operand)
                 self.validate_glsl_storage_pointer_mutation_target(expr.operand)
                 self.validate_glsl_buffer_block_member_access(
@@ -42407,12 +42849,15 @@ complex64_t crossgl_complex64_mod_assign(
             "WaveActiveAllTrue": "All",
             "WaveActiveAnyTrue": "Any",
             "WaveShuffleDown": "ShuffleDown",
+            "WaveShuffleUp": "ShuffleUp",
+            "WaveShuffleXor": "ShuffleXor",
             "WaveReadLaneAt": "ReadLaneAt",
             "WaveShuffleAndFillUp": "ShuffleAndFillUp",
             "WavePrefixSum": "PrefixSum",
             "WavePrefixProduct": "PrefixProduct",
             "WavePrefixInclusiveSum": "PrefixInclusiveSum",
             "WavePrefixInclusiveProduct": "PrefixInclusiveProduct",
+            "QuadActiveSum": "QuadSum",
         }[operation]
         type_suffix = self.GLSL_SOFTWARE_SUBGROUP_TYPE_SUFFIXES[value_type]
         return self.glsl_generated_module_identifier(
@@ -42523,6 +42968,9 @@ complex64_t crossgl_complex64_mod_assign(
             "WavePrefixInclusiveProduct": 10,
             "WaveReadLaneAt": 11,
             "WaveShuffleAndFillUp": 12,
+            "WaveShuffleUp": 13,
+            "WaveShuffleXor": 14,
+            "QuadActiveSum": 15,
         }
         for operation, value_type in sorted(
             self.required_glsl_software_subgroup_helpers,
@@ -42533,7 +42981,7 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             helper = self.glsl_software_subgroup_helper_name(operation, value_type)
             if (
-                operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+                operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES
                 and value_type == "uvec2"
             ):
                 component_helper = self.glsl_software_subgroup_helper_name(
@@ -42598,6 +43046,11 @@ complex64_t crossgl_complex64_mod_assign(
             if operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS:
                 code += self.glsl_software_subgroup_scan_helper(
                     operation, value_type, helper, scratch, binary16=half_sum
+                )
+                continue
+            if operation in SOFTWARE_QUAD_REDUCTIONS:
+                code += glsl_quad_sum_helper(
+                    value_type, helper, scratch, invocation_count
                 )
                 continue
             if invocation_count == self.software_subgroup_width:
@@ -42696,12 +43149,13 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 absolute = operation == "WaveReadLaneAt"
                 parameter = "index" if absolute else "delta"
-                valid = (
-                    f"index < {active_count}"
-                    if absolute
-                    else f"delta < ({active_count} - lane)"
-                )
-                source_lane = "index" if absolute else "lane + delta"
+                if absolute:
+                    valid, source_lane = f"index < {active_count}", "index"
+                else:
+                    valid, source_lane = self.GLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES[
+                        operation
+                    ]
+                    valid = valid.format(active=active_count)
                 code += (
                     f"{value_type} {helper}({value_type} value, uint {parameter}) {{\n"
                     f"{lane_setup}"
@@ -43022,7 +43476,7 @@ complex64_t crossgl_complex64_mod_assign(
         )
         vector_shuffle_type = (
             mapped_value_type
-            if operation in {"WaveShuffleDown", "WaveReadLaneAt"}
+            if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES
             and mapped_value_type == "uvec2"
             else None
         )
@@ -43037,6 +43491,7 @@ complex64_t crossgl_complex64_mod_assign(
         if (
             operation == "WaveActiveProduct"
             or operation in self.GLSL_SOFTWARE_SUBGROUP_SCANS
+            or operation in SOFTWARE_QUAD_REDUCTIONS
             or (operation == "WaveReadLaneAt" and vector_shuffle_type is None)
         ):
             layout = scalar_storage_layout(self.glsl_normalized_source_type(value_type))
@@ -43070,7 +43525,7 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="value-type-unsupported",
                 source_location=source_location,
             )
-        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
+        if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES:
             delta_type = self.glsl_source_expression_type(arguments[1])
             mapped_delta_type = (
                 self.map_type(delta_type) if delta_type is not None else None
@@ -43101,7 +43556,7 @@ complex64_t crossgl_complex64_mod_assign(
         self.required_glsl_software_subgroup_helpers.add((operation, helper_type))
         helper = self.glsl_software_subgroup_helper_name(operation, helper_type)
         value = self.generate_expression_with_expected(arguments[0], mapped_value_type)
-        if operation in {"WaveShuffleDown", "WaveReadLaneAt"}:
+        if operation in self.GLSL_SOFTWARE_SUBGROUP_LANE_SHUFFLES:
             delta = self.generate_expression(arguments[1])
             return f"{helper}({value}, uint({delta}))"
         if narrow_integer_scan is not None:
@@ -43822,6 +44277,7 @@ complex64_t crossgl_complex64_mod_assign(
             if assertion.applies_to(
                 expression_name,
                 function_name or self.current_glsl_source_function_name,
+                getattr(self, "current_glsl_indexed_storage", None),
             )
         ]
         if not matches:
@@ -44311,7 +44767,24 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_target_index_literal(operand.minimum, "int")
         return f"int({rendered})"
 
-    def glsl_index_expression(
+    def glsl_index_expression(self, index_expr, indexed_expr=None, **options):
+        """Render a subscript index, scoping assertions to the indexed storage."""
+        previous = getattr(self, "current_glsl_indexed_storage", None)
+        if isinstance(indexed_expr, IdentifierNode):
+            storage = indexed_expr.name
+        elif isinstance(indexed_expr, str):
+            storage = indexed_expr
+        else:
+            storage = None
+        self.current_glsl_indexed_storage = storage
+        try:
+            return self.glsl_storage_index_expression(
+                index_expr, indexed_expr, **options
+            )
+        finally:
+            self.current_glsl_indexed_storage = previous
+
+    def glsl_storage_index_expression(
         self,
         index_expr,
         indexed_expr=None,
@@ -50584,6 +51057,15 @@ complex64_t crossgl_complex64_mod_assign(
         constants = self.visible_literal_int_constants(function)
         arrays = {}
         ambiguous = set()
+        # CrossGL keeps a fixed private array parameter as a whole array, so a
+        # view into it is backed by that array just as a local one is.
+        for parameter in getattr(function, "parameters", []) or []:
+            if self.glsl_private_pointer_array_parameter(parameter):
+                info = self.glsl_private_pointer_local_array_node_info(
+                    parameter, constants
+                )
+                if info is not None:
+                    arrays[parameter.name] = info
         for node in self.walk_ast(getattr(function, "body", [])):
             if not isinstance(node, (VariableNode, ArrayNode)):
                 continue
@@ -50602,8 +51084,27 @@ complex64_t crossgl_complex64_mod_assign(
             arrays[name]["extent"] = None
         return arrays
 
+    @staticmethod
+    def glsl_private_pointer_array_parameter(parameter):
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        if not isinstance(parameter_type, ArrayType) or isinstance(
+            getattr(parameter_type, "element_type", None), (PointerType, ArrayType)
+        ):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return bool(qualifiers.intersection({"thread", "private", "function"}))
+
     def glsl_private_pointer_local_array_node_info(self, node, constants):
-        node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        node_type = getattr(
+            node,
+            "var_type",
+            getattr(node, "vtype", getattr(node, "param_type", None)),
+        )
         if isinstance(node_type, ArrayType):
             element_type = node_type.element_type
             size_expression = node_type.size

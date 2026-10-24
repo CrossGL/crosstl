@@ -38,6 +38,13 @@ from crosstl.backend.Metal.function_specialization import (
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
 )
+from crosstl.backend.Metal.member_lowering_layers import (
+    lower_members_with_late_specializations,
+)
+from crosstl.backend.Metal.template_overloads import (
+    declared_type_names,
+    select_instantiated_overload,
+)
 from crosstl.backend.Metal.text_scanners import mask_comments_and_literals
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
@@ -73,6 +80,11 @@ from crosstl.project.host_reflection import (
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
+)
+from crosstl.project.source_closure_memo import (
+    memoized_entry_discovery,
+    memoized_preprocessor_run,
+    memoized_source_host_interface,
 )
 from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointError,
@@ -129,6 +141,14 @@ from crosstl.translator.frozen_specializations import (
     fold_frozen_specialization_branches,
     frozen_specialization_header,
     frozen_specializations,
+)
+from crosstl.translator.immutable_storage import (
+    ImmutableStorageContract,
+    ImmutableStorageError,
+    parse_immutable_storage,
+    program_functions,
+    resolve_immutable_storage,
+    with_immutable_storage_header,
 )
 from crosstl.translator.metadata_preconditions import (
     MetadataPreconditionError,
@@ -1523,6 +1543,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "indexRangeAssertionCount",
         "metadataPreconditions",
         "metadataPreconditionCount",
+        "immutableStorage",
+        "immutableStorageCount",
         "workgroupAccessAssertions",
         "workgroupAccessAssertionCount",
         "includeDirs",
@@ -7652,6 +7674,7 @@ class ProjectConfig:
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
     metadata_preconditions: Sequence[Any] = ()
+    immutable_storage: Sequence[Any] = ()
     workgroup_access_assertions: Sequence[Any] = ()
     translate_discovered_entry_points: Sequence[str] | str = ()
     _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
@@ -7784,6 +7807,19 @@ class ProjectConfig:
                 )
                 for condition in parse_metadata_preconditions(
                     self.metadata_preconditions
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "immutable_storage",
+            tuple(
+                replace(
+                    contract, source=_normalize_project_relative_path(contract.source)
+                )
+                for contract in parse_immutable_storage(
+                    self.immutable_storage,
+                    field_name="ProjectConfig.immutable_storage",
                 )
             ),
         )
@@ -8940,6 +8976,10 @@ class ProjectPortabilityReport:
                     item.to_json() for item in self.config.metadata_preconditions
                 ],
                 "metadataPreconditionCount": len(self.config.metadata_preconditions),
+                "immutableStorage": [
+                    item.to_json() for item in self.config.immutable_storage
+                ],
+                "immutableStorageCount": len(self.config.immutable_storage),
                 "workgroupAccessAssertions": [
                     assertion.to_json()
                     for assertion in self.config.workgroup_access_assertions
@@ -9292,6 +9332,7 @@ def load_project_config(
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
         metadata_preconditions=project.get("metadata_preconditions", ()),
+        immutable_storage=project.get("immutable_storage", ()),
         workgroup_access_assertions=workgroup_access_assertions,
     )
 
@@ -9595,6 +9636,23 @@ def _metadata_precondition_pattern_diagnostics(config, units):
     ]
 
 
+def _immutable_storage_pattern_diagnostics(config, units):
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.immutable-storage-pattern-unmatched",
+            message=(
+                f"Immutable storage source pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            details={"pattern": pattern},
+        )
+        for pattern in sorted({item.source for item in config.immutable_storage})
+        if not any(fnmatch.fnmatch(unit.relative_path, pattern) for unit in units)
+    ]
+
+
 def _metadata_precondition_source_matches(config, units):
     """Resolve source selectors without assuming configured entries exist.
 
@@ -9690,7 +9748,8 @@ def _discover_project_source_entries(
 ) -> tuple[SourceEntryDiscovery, list[ProjectDiagnostic]]:
     try:
         source = path.read_text(encoding="utf-8")
-        discovery = source_spec.discover_entry_points(
+        discovery = memoized_entry_discovery(
+            source_spec,
             source,
             file_path=str(path),
             include_paths=_frontend_include_dirs(config),
@@ -9874,6 +9933,7 @@ def scan_project(
     diagnostics.extend(_entry_workgroup_size_rule_diagnostics(scan_config, units))
     diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     diagnostics.extend(_metadata_precondition_pattern_diagnostics(scan_config, units))
+    diagnostics.extend(_immutable_storage_pattern_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -13887,25 +13947,61 @@ def _iter_runtime_reference_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates, key=lambda candidate: _relpath(candidate, config.root))
 
 
-def _runtime_reference_for_match(
-    *,
-    config: ProjectConfig,
-    path: Path,
-    line_number: int,
-    match: re.Match[str],
-    backend: str,
-    kind: str,
-    fallback_symbol: str | None,
-) -> dict[str, Any]:
-    symbol = fallback_symbol or match.group(1)
-    return {
-        "path": _relpath(path, config.root),
-        "line": line_number,
-        "column": match.start() + 1,
-        "backend": backend,
-        "kind": kind,
-        "symbol": symbol,
-    }
+_runtime_text_reference_cache: OrderedDict[
+    tuple[str, bool], tuple[tuple[int, int, str, str, str], ...]
+] = OrderedDict()
+_runtime_text_reference_cache_lock = Lock()
+RUNTIME_TEXT_REFERENCE_CACHE_LIMIT = 8192
+
+
+def _runtime_text_references(
+    text: str, *, build_candidate: bool
+) -> tuple[tuple[int, int, str, str, str], ...]:
+    """Return (line, column, backend, kind, symbol) matches in one file's text.
+
+    The result is a pure function of the text and whether the file is a build
+    description, so repeated scans of an unchanged repository reuse it.
+    """
+
+    key = (
+        hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest(),
+        build_candidate,
+    )
+    with _runtime_text_reference_cache_lock:
+        cached = _runtime_text_reference_cache.get(key)
+        if cached is not None:
+            _runtime_text_reference_cache.move_to_end(key)
+            return cached
+    rules = [
+        rule
+        for rule in RUNTIME_REFERENCE_RULES
+        if build_candidate or rule[1] != "build-system"
+    ]
+    matches: list[tuple[int, int, str, str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for backend, kind, pattern, fallback_symbol in rules:
+            for match in pattern.finditer(line):
+                matches.append(
+                    (
+                        line_number,
+                        match.start() + 1,
+                        backend,
+                        kind,
+                        fallback_symbol or match.group(1),
+                    )
+                )
+                if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                    break
+            if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+                break
+        if len(matches) >= RUNTIME_REFERENCE_LIMIT:
+            break
+    result = tuple(matches)
+    with _runtime_text_reference_cache_lock:
+        _runtime_text_reference_cache[key] = result
+        while len(_runtime_text_reference_cache) > RUNTIME_TEXT_REFERENCE_CACHE_LIMIT:
+            _runtime_text_reference_cache.popitem(last=False)
+    return result
 
 
 def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
@@ -13914,30 +14010,25 @@ def _runtime_references(config: ProjectConfig) -> list[dict[str, Any]]:
         try:
             if path.stat().st_size > RUNTIME_REFERENCE_FILE_SIZE_LIMIT:
                 continue
-            lines = path.read_text(encoding="utf-8").splitlines()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for line_number, line in enumerate(lines, start=1):
-            for backend, kind, pattern, fallback_symbol in RUNTIME_REFERENCE_RULES:
-                if (
-                    kind == "build-system"
-                    and not _is_runtime_build_reference_candidate(path)
-                ):
-                    continue
-                for match in pattern.finditer(line):
-                    references.append(
-                        _runtime_reference_for_match(
-                            config=config,
-                            path=path,
-                            line_number=line_number,
-                            match=match,
-                            backend=backend,
-                            kind=kind,
-                            fallback_symbol=fallback_symbol,
-                        )
-                    )
-                    if len(references) >= RUNTIME_REFERENCE_LIMIT:
-                        return references
+        relative_path = _relpath(path, config.root)
+        for line, column, backend, kind, symbol in _runtime_text_references(
+            text, build_candidate=_is_runtime_build_reference_candidate(path)
+        ):
+            references.append(
+                {
+                    "path": relative_path,
+                    "line": line,
+                    "column": column,
+                    "backend": backend,
+                    "kind": kind,
+                    "symbol": symbol,
+                }
+            )
+            if len(references) >= RUNTIME_REFERENCE_LIMIT:
+                return references
     return references
 
 
@@ -14050,6 +14141,18 @@ def _is_template_hostile_target(target: str) -> bool:
 
 
 def _metal_preprocess_without_template_materialization(
+    preprocessor: Any, code: str, *, file_path: str
+) -> str:
+    return memoized_preprocessor_run(
+        preprocessor,
+        code,
+        file_path=file_path,
+        source_backend="metal",
+        run=_expand_metal_without_template_materialization,
+    )
+
+
+def _expand_metal_without_template_materialization(
     preprocessor: Any, code: str, *, file_path: str
 ) -> str:
     from crosstl.backend.Metal.preprocessor import PRESERVED_INCLUDE_SENTINEL
@@ -16399,6 +16502,28 @@ def _metal_concrete_function_definition_fingerprints(
     return fingerprints
 
 
+def _metal_statement_start(source: str, start: int, end: int) -> int:
+    """Return where the statement in ``source[start:end]`` begins.
+
+    A statement span runs from the previous ``;``, so it can begin with the
+    trailing comment of the line before (``int n = 8; // size``).  Comments are
+    not part of the statement ([lex.comment]), so skip them and whitespace.
+    """
+    position = start
+    while position < end:
+        if source[position].isspace():
+            position += 1
+        elif source.startswith("//", position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
+        elif source.startswith("/*", position):
+            comment_end = source.find("*/", position + 2, end)
+            position = end if comment_end == -1 else comment_end + 2
+        else:
+            return position
+    return start
+
+
 def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     statement_start = start
@@ -16429,7 +16554,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
             and angle_depth == 0
             and brace_depth == 0
         ):
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
@@ -16485,7 +16612,9 @@ def _metal_scoped_statement_spans(
             continue
         ch = source[i]
         if ch == ";" and paren_depth == bracket_depth == 0:
-            spans.append((statement_start, i + 1))
+            spans.append(
+                (_metal_statement_start(source, statement_start, i + 1), i + 1)
+            )
             statement_start = i + 1
         elif ch == "(":
             paren_depth += 1
@@ -20270,37 +20399,50 @@ def _lower_metal_struct_members_with_generated_aliases(
         if alias_declarations is not None
         else _metal_template_alias_declarations(preprocessor, source)
     )
-    if prematerialize:
-        source = preprocessor._materialize_explicit_template_struct_instantiations(
-            source,
+
+    def materialize(text: str) -> str:
+        return preprocessor._materialize_explicit_template_struct_instantiations(
+            text,
             work_budget=work_budget,
             allow_partial_object_specializations=True,
         )
-    preexisting_template_spans = preprocessor._find_template_declaration_spans(source)
-    preexisting_function_headers = frozenset(
-        re.sub(
-            r"\s+",
-            " ",
-            _metal_function_header(source, function).strip(),
+
+    def lower(text: str) -> str:
+        preexisting_template_spans = preprocessor._find_template_declaration_spans(text)
+        preexisting_function_headers = frozenset(
+            re.sub(
+                r"\s+",
+                " ",
+                _metal_function_header(text, function).strip(),
+            )
+            for function in preprocessor._find_non_template_function_definitions(
+                text,
+                list(preexisting_template_spans),
+            )
         )
-        for function in preprocessor._find_non_template_function_definitions(
-            source,
-            list(preexisting_template_spans),
+        lowered = preprocessor._lower_struct_member_functions(text)
+        canonicalized = _canonicalize_relocated_metal_template_aliases(
+            preprocessor,
+            lowered,
+            captured_declarations,
+            preexisting_function_headers=preexisting_function_headers,
         )
-    )
-    lowered = preprocessor._lower_struct_member_functions(source)
-    canonicalized = _canonicalize_relocated_metal_template_aliases(
+        if canonicalized == lowered and not rematerialize:
+            return lowered
+        return materialize(canonicalized)
+
+    from crosstl.backend.Metal.preprocessor import MetalStructMethodError
+
+    if prematerialize:
+        source = materialize(source)
+    # A lowered member body can name a struct specialization nothing else
+    # names; lower again with it materialized up front (see the helper).
+    return lower_members_with_late_specializations(
         preprocessor,
-        lowered,
-        captured_declarations,
-        preexisting_function_headers=preexisting_function_headers,
-    )
-    if canonicalized == lowered and not rematerialize:
-        return lowered
-    return preprocessor._materialize_explicit_template_struct_instantiations(
-        canonicalized,
-        work_budget=work_budget,
-        allow_partial_object_specializations=True,
+        source,
+        lower,
+        materialize,
+        MetalStructMethodError,
     )
 
 
@@ -21977,9 +22119,13 @@ def _metal_dispatch_bool_callbacks_defer_to_frontend(
     template: Any,
     templates: Sequence[Any],
     template_spans: Sequence[tuple[int, int]],
-    reachable_function_spans: Sequence[tuple[int, int]],
+    reachable_function_spans: Sequence[tuple[int, int]] | None,
 ) -> bool:
     if not _metal_dispatch_bool_callback_contract(preprocessor, template):
+        return False
+    if not reachable_function_spans:
+        # Without a concrete entry root there are no reachable call sites to
+        # prove the callback contract against, so the helper is not deferred.
         return False
     if sum(candidate.name == template.name for candidate in templates) != 1:
         return False
@@ -22447,6 +22593,14 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
+    template_overloads: dict[str, list[Any]] = {}
+    for template in templates:
+        template_overloads.setdefault(template.name, []).append(template)
+    overload_type_names = (
+        declared_type_names(preprocessed)
+        if any(len(group) > 1 for group in template_overloads.values())
+        else frozenset()
+    )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
@@ -22454,7 +22608,12 @@ def _project_template_materialization_for_artifact(
         tuple[str, tuple[tuple[str, str], ...], str]
     ] = set()
     for instantiation in source_instantiations:
-        template = template_lookup.get(instantiation.function_name)
+        template = select_instantiated_overload(
+            preprocessor,
+            overload_type_names,
+            template_overloads.get(instantiation.function_name, ()),
+            instantiation.template_arguments,
+        )
         if template is None:
             continue
         raw_arguments = list(instantiation.template_arguments)
@@ -27718,6 +27877,7 @@ def _generate_project_target_from_crossgl_ast(
     index_range_assertions: Sequence[IndexRangeAssertion] = (),
     metadata_preconditions: Sequence[Any] = (),
     metadata_source_matches: Mapping[MetadataRangePrecondition, set[str]] | None = None,
+    immutable_storage: Sequence[ImmutableStorageContract] = (),
     workgroup_access_assertions: Sequence[WorkgroupAccessAssertion] = (),
     software_subgroup_width: Any | None = None,
     software_subgroup_applicability: str | None = None,
@@ -27852,6 +28012,19 @@ def _generate_project_target_from_crossgl_ast(
     configure_metadata = getattr(codegen, "set_metadata_preconditions", None)
     if callable(configure_metadata):
         configure_metadata(resolved_metadata)
+    resolved_immutable = []
+    if immutable_storage:
+        stages = _crossgl_compute_stages(selected_ast, remaining_entry_point)
+        if len(stages) != 1:
+            raise ImmutableStorageError(
+                "Immutable storage requires one selected compute entry."
+            )
+        resolved_immutable = _entry_immutable_storage(
+            stages[0].entry_point, immutable_storage, selected_ast, entry_point
+        )
+    configure_immutable = getattr(codegen, "set_immutable_storage", None)
+    if callable(configure_immutable):
+        configure_immutable(resolved_immutable)
     if software_subgroup_applicability is not None:
         entries = (
             codegen.hlsl_software_subgroup_stage_entries(selected_ast)
@@ -27960,9 +28133,31 @@ def _generate_project_target_from_crossgl_ast(
             generated = format_shader_code(generated, target, str(output_path))
     if resolved_metadata and not callable(configure_metadata):
         generated = with_metadata_precondition_header(generated, resolved_metadata)
+    if resolved_immutable and not callable(configure_immutable):
+        generated = with_immutable_storage_header(generated, resolved_immutable)
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
         output_file.write(generated)
     return generated
+
+
+def _entry_immutable_storage(function, contracts, ast, entry_point):
+    """Resolve the contracts naming the selected entry's source entry point.
+
+    The source entry comes from the retained resource identities. Without them
+    a contract naming the entry cannot resolve, so translation fails closed.
+    """
+    entries = {
+        origin["entryPoint"]
+        for parameter in function.parameters
+        for origin in (source_resource_identity(parameter),)
+        if origin is not None
+    } or {entry_point, function.name} - {None}
+    return resolve_immutable_storage(
+        function,
+        [item for item in contracts if item.entry_point in entries],
+        getattr(ast, "structs", ()),
+        program_functions(ast),
+    )
 
 
 def _project_target_workgroup_entries(
@@ -28711,6 +28906,7 @@ def _translate_project_impl(
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
             metadata_preconditions=config.metadata_preconditions,
+            immutable_storage=config.immutable_storage,
             workgroup_access_assertions=config.workgroup_access_assertions,
         )
     config = _config_with_selected_variants(config, variants)
@@ -28948,6 +29144,13 @@ def _translate_project_impl(
                     )
                     if target in {"opengl", "directx"}
                     else ()
+                )
+                # Only targets whose dispatch paths enforce the contract carry it.
+                immutable_storage = tuple(
+                    item
+                    for item in config.immutable_storage
+                    if target in {"metal", "directx", "opengl"}
+                    and fnmatch.fnmatch(unit.relative_path, item.source)
                 )
                 software_subgroup_width = None
                 software_subgroup_applicability = None
@@ -29679,6 +29882,7 @@ def _translate_project_impl(
                                                 metadata_source_matches,
                                             ),
                                             metadata_source_matches=metadata_source_matches,
+                                            immutable_storage=immutable_storage,
                                             workgroup_access_assertions=(
                                                 workgroup_access_assertions
                                             ),
@@ -29768,6 +29972,7 @@ def _translate_project_impl(
                                         index_range_assertions=(index_range_assertions),
                                         metadata_preconditions=metadata_preconditions,
                                         metadata_source_matches=metadata_source_matches,
+                                        immutable_storage=immutable_storage,
                                         workgroup_access_assertions=(
                                             workgroup_access_assertions
                                         ),
@@ -29817,6 +30022,7 @@ def _translate_project_impl(
                     if generated_source is None and (
                         index_range_assertions
                         or metadata_preconditions
+                        or immutable_storage
                         or any(
                             record.get("frozen") for record in specialization_constants
                         )
@@ -29858,6 +30064,7 @@ def _translate_project_impl(
                             index_range_assertions=index_range_assertions,
                             metadata_preconditions=metadata_preconditions,
                             metadata_source_matches=metadata_source_matches,
+                            immutable_storage=immutable_storage,
                             workgroup_access_assertions=(workgroup_access_assertions),
                             software_subgroup_width=software_subgroup_width,
                             software_subgroup_applicability=software_subgroup_applicability,
@@ -32567,16 +32774,16 @@ def _runtime_manifest_source_host_interface(
         return None
 
     try:
-        ast = source_spec.parse(
+        host_interface = memoized_source_host_interface(
+            source_spec,
             source_path.read_text(encoding="utf-8"),
             file_path=str(source_path),
+            reflect=_runtime_host_interface_from_ast,
+            reflect_options={"parser": parser_name or "", "source": "source-artifact"},
         )
     except Exception:
         return None
 
-    host_interface = _runtime_host_interface_from_ast(
-        ast, parser=parser_name or "", source="source-artifact"
-    )
     if (
         host_interface["entryPointCount"] == 0
         and host_interface["resourceCount"] == 0
@@ -36655,6 +36862,11 @@ def _runtime_package_resource_identity_diagnostics(package_path, artifact, refle
                             ]
                         }
                         if "metadataMemberPreconditions" in provenance
+                        else {}
+                    ),
+                    **(
+                        {"immutableStorage": provenance["immutableStorage"]}
+                        if "immutableStorage" in provenance
                         else {}
                     ),
                 }
@@ -48248,6 +48460,7 @@ def _project_config_for_scan_validation(
         },
         variant_specialization_constants=variant_specializations,
         metadata_preconditions=project.get("metadataPreconditions", ()),
+        immutable_storage=project.get("immutableStorage", ()),
         workgroup_size=workgroup_size,
         variant_workgroup_sizes={
             name: value
@@ -54111,6 +54324,16 @@ def _project_metadata_contract_reasons(
             if type(count) is not int or count != len(values):
                 reasons.append(
                     "project.metadataPreconditionCount must match project.metadataPreconditions"
+                )
+        except ValueError as exc:
+            reasons.append(str(exc))
+    if "immutableStorage" in project or "immutableStorageCount" in project:
+        try:
+            values = parse_immutable_storage(project.get("immutableStorage", ()))
+            count = project.get("immutableStorageCount")
+            if type(count) is not int or count != len(values):
+                reasons.append(
+                    "project.immutableStorageCount must match project.immutableStorage"
                 )
         except ValueError as exc:
             reasons.append(str(exc))

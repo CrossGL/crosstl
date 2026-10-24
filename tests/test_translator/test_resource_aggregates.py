@@ -487,7 +487,8 @@ def test_resource_aggregate_executes_natively(tmp_path, case):
     "body,reason",
     [
         ("cursor.input[tid] = 4;", "write-through-readonly-pointer"),
-        ("cursor.input++;", "pointer-unary-operator"),
+        # A discarded increment steps the handle; a used one is refused.
+        ("first[tid] = *cursor.input++;", "pointer-unary-operator"),
         ("first[tid] = int(cursor.input - cursor.input);", "pointer-binary-operator"),
         ("cursor.output = cursor.input;", "pointer-contract-mismatch"),
         ("cursor.input = 0;", "pointer-contract-mismatch"),

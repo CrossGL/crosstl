@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.copy_workloads import source_words
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
@@ -53,6 +54,21 @@ def cases():
             ("x", (131070,), (-1,)),
             ("y", (65535, 2), (0, 1)),
             ("z", (65535, 1, 2), (0, 0, 1)),
+        )
+    )
+    # Copies whose launch exceeds 65535 groups on an axis run as exact regions.
+    result.extend(
+        {
+            "id": "uint32-split-" + axis,
+            "dtype": "uint32",
+            "shape": list(shape),
+            "strides": list(strides),
+        }
+        for axis, shape, strides in (
+            ("x", (131073,), (-1,)),
+            ("y", (65537, 2), (0, 1)),
+            ("z", (65537, 1, 2), (0, 0, 1)),
+            ("z-inner", (2, 65536, 1, 1), (1, 2, 0, 0)),
         )
     )
     return result
@@ -116,7 +132,10 @@ def run_cases(mx, np, directory, host=None):
         )
         item = record(np, case, before, after, actual)
         count = host.dispatch_count - start if host else 0
-        require(count == (1 if host else 0), "Copy dispatch count differs")
+        require(
+            count == (len(copy_regions(case)) if host else 0),
+            "Copy dispatch count differs",
+        )
         item.update(dispatchStart=start, dispatchCount=count)
         records.append(item)
         (directory / "results.json").write_text(json.dumps(records, indent=2) + "\n")
@@ -148,7 +167,28 @@ def require_values(np, values, expected, dtype):
     require(values == expected, "Copy physical values differ")
 
 
-def audit_case(np, case, item, event, directory):
+def layout(case):
+    """Return the host's normalized copy shape, source and destination strides."""
+    padding = max(0, 2 - len(case["shape"]))
+    shape = [1] * padding + case["shape"]
+    strides = [0] * padding + case["strides"]
+    strides = [0 if size == 1 else step for size, step in zip(shape, strides)]
+    destination = [0] * padding + [
+        math.prod(case["shape"][i + 1 :]) for i in range(len(case["shape"]))
+    ]
+    return shape, strides, destination
+
+
+def copy_regions(case):
+    shape, strides, destination = layout(case)
+    return copy_layout.launch_regions(shape, strides, destination, 0)
+
+
+def dispatch_total():
+    return sum(len(copy_regions(case)) for case in cases())
+
+
+def audit_case(np, case, item, events, directory):
     with np.load(directory / (case["id"] + ".npz"), allow_pickle=False) as saved:
         observed = record(np, case, saved["before"], saved["after"], saved["actual"])
     require(
@@ -161,58 +201,15 @@ def audit_case(np, case, item, event, directory):
         "Copy retained readback identity differs",
     )
     original, offset, low, high = storage(np, case)
-    padding = max(0, 2 - len(case["shape"]))
-    shape = [1] * padding + case["shape"]
-    strides = [0] * padding + case["strides"]
-    strides = [0 if size == 1 else step for size, step in zip(shape, strides)]
+    shape, strides, destination_strides = layout(case)
     count = math.prod(shape)
-    metadata = {
-        "shape": shape,
-        "sourceStrides": strides,
-        "destinationStrides": (
-            [0] * padding
-            + [math.prod(case["shape"][i + 1 :]) for i in range(len(case["shape"]))]
-        ),
-        "sourceOffset": -low,
-        "destinationOffset": 0,
-        "sourceCount": high - low + 1,
-        "destinationCount": count,
-        "preserveDestination": False,
-        "workgroupCount": [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])],
-    }
+    regions = copy_regions(case)
+    require(len(events) == len(regions), "Copy launch regions differ")
     logical = "bool_" if case["dtype"] == "bool" else "uint32"
-    physical = "bool" if logical == "bool_" and event["target"] == "metal" else "uint32"
+    target = events[0]["target"]
+    physical = "bool" if logical == "bool_" and target == "metal" else "uint32"
     entry = "ggn2_dynamic_copy" + logical + logical
-    native_entry = {"opengl": "main", "directx": "CSMain"}.get(event["target"], entry)
-    require(
-        event["entry"] == entry
-        and event["threads"] == count
-        and event["dispatchVersion"] == 3
-        and event["copyMetadata"] == metadata
-        and event["workgroupCount"] == metadata["workgroupCount"]
-        and event["workgroupSize"] == [1, 1, 1],
-        "Copy launch or layout differs",
-    )
-    request = event["details"]["request"]
-    require(
-        request["entryPoint"] == request["dispatch"]["entryPoint"] == native_entry
-        and request["dispatch"]["workgroupCount"] == metadata["workgroupCount"]
-        and request["dispatch"]["workgroupSize"] == [1, 1, 1],
-        "Copy native request differs",
-    )
-    inputs = {}
-    for name, value in event["inputs"].items():
-        binding = request["buffers"][name]
-        layout = binding["binding"]["metadata"]["scalarLayout"]
-        member = layout.get("memberName", name).removeprefix(entry.rstrip("_") + "_")
-        require(
-            member not in inputs
-            and value["dtype"] == binding["dtype"] == layout["elementType"]
-            and value["shape"] == binding["shape"] == [len(value["values"])]
-            and layout["elementStrideBytes"] == np.dtype(value["dtype"]).itemsize,
-            "Copy physical binding differs",
-        )
-        inputs[member] = value
+    native_entry = {"opengl": "main", "directx": "CSMain"}.get(target, entry)
     source = original[offset + low : offset + high + 1]
     expected = reference(np, case).copy().reshape(-1)
     if logical == "bool_":
@@ -221,28 +218,84 @@ def audit_case(np, case, item, event, directory):
     else:
         source, expected = source.view(np.uint32), expected.view(np.uint32)
         guard = COPY_GUARD
-    values = {
-        "src": source.tolist(),
-        "dst": [0] * count + guard,
-        "src_shape": shape,
-        "src_strides": strides,
-        "dst_strides": metadata["destinationStrides"],
-        "ndim": [len(shape)],
-        "src_offset": [-low],
-        "dst_offset": [0],
-    }
-    require(set(inputs) == set(values), "Copy native inputs are incomplete")
-    for name, expected_values in values.items():
-        require_values(
-            np, inputs[name]["values"], expected_values, inputs[name]["dtype"]
+    source, expected = source.tolist(), expected.tolist()
+    # Regions after the first preserve the elements earlier regions wrote.
+    state = [0] * count
+    for index, (event, (part, origin, destination_offset)) in enumerate(
+        zip(events, regions)
+    ):
+        extents = [(size - 1) * step for size, step in zip(part, strides)]
+        part_low = origin + sum(min(value, 0) for value in extents)
+        part_high = origin + sum(max(value, 0) for value in extents)
+        metadata = {
+            "shape": part,
+            "sourceStrides": strides,
+            "destinationStrides": destination_strides,
+            "sourceOffset": origin - part_low,
+            "destinationOffset": destination_offset,
+            "sourceCount": part_high - part_low + 1,
+            "destinationCount": count,
+            "preserveDestination": index > 0,
+            "workgroupCount": [(part[-1] + 1) // 2, part[-2], math.prod(part[:-2])],
+        }
+        require(
+            event["entry"] == entry
+            and event["target"] == target
+            and event["threads"] == math.prod(part)
+            and event["dispatchVersion"] == 3
+            and event["copyMetadata"] == metadata
+            and event["workgroupCount"] == metadata["workgroupCount"]
+            and event["workgroupSize"] == [1, 1, 1],
+            "Copy launch or layout differs",
         )
-    require(
-        inputs["src"]["dtype"] == inputs["dst"]["dtype"] == physical,
-        "Copy physical source or destination type differs",
-    )
-    require_values(np, event["copyValues"], expected.tolist(), physical)
-    require_values(np, event["copyGuardWords"], guard, physical)
-    audit_native_execution(event)
+        request = event["details"]["request"]
+        require(
+            request["entryPoint"] == request["dispatch"]["entryPoint"] == native_entry
+            and request["dispatch"]["workgroupCount"] == metadata["workgroupCount"]
+            and request["dispatch"]["workgroupSize"] == [1, 1, 1],
+            "Copy native request differs",
+        )
+        inputs = {}
+        for name, value in event["inputs"].items():
+            binding = request["buffers"][name]
+            scalar = binding["binding"]["metadata"]["scalarLayout"]
+            member = scalar.get("memberName", name).removeprefix(
+                entry.rstrip("_") + "_"
+            )
+            require(
+                member not in inputs
+                and value["dtype"] == binding["dtype"] == scalar["elementType"]
+                and value["shape"] == binding["shape"] == [len(value["values"])]
+                and scalar["elementStrideBytes"] == np.dtype(value["dtype"]).itemsize,
+                "Copy physical binding differs",
+            )
+            inputs[member] = value
+        values = {
+            "src": source[part_low - low : part_high - low + 1],
+            "dst": state + guard,
+            "src_shape": part,
+            "src_strides": strides,
+            "dst_strides": destination_strides,
+            "ndim": [len(part)],
+            "src_offset": [origin - part_low],
+            "dst_offset": [destination_offset],
+        }
+        require(set(inputs) == set(values), "Copy native inputs are incomplete")
+        for name, expected_values in values.items():
+            require_values(
+                np, inputs[name]["values"], expected_values, inputs[name]["dtype"]
+            )
+        require(
+            inputs["src"]["dtype"] == inputs["dst"]["dtype"] == physical,
+            "Copy physical source or destination type differs",
+        )
+        state = list(state)
+        for position in copy_layout.destination_indices(metadata):
+            state[position] = expected[position]
+        require_values(np, event["copyValues"], state, physical)
+        require_values(np, event["copyGuardWords"], guard, physical)
+        audit_native_execution(event)
+    require(state == expected, "Copy regions do not cover the destination")
 
 
 def verify(root, packages, output):
@@ -268,12 +321,11 @@ def verify(root, packages, output):
         native = run_cases(mx, np, output / "native", host)
         trace = [json.loads(line) for line in host.trace.read_text().splitlines()]
         require(
-            len(trace) == host.dispatch_count == len(cases()),
+            len(trace) == host.dispatch_count == dispatch_total(),
             "Copy trace coverage differs",
         )
-        for index, (case, original, translated, event) in enumerate(
-            zip(cases(), cpu, native, trace)
-        ):
+        first = 0
+        for case, original, translated in zip(cases(), cpu, native):
             require(
                 {
                     k: v
@@ -287,12 +339,16 @@ def verify(root, packages, output):
                 },
                 "CPU and generated copy results differ",
             )
+            count = len(copy_regions(case))
             require(
-                translated["dispatchStart"] == index
-                and translated["dispatchCount"] == 1,
+                translated["dispatchStart"] == first
+                and translated["dispatchCount"] == count,
                 "Copy trace boundary differs",
             )
-            audit_case(np, case, translated, event, output / "native")
+            audit_case(
+                np, case, translated, trace[first : first + count], output / "native"
+            )
+            first += count
         require(preparation == verify_prepared(root), "Prepared MLX source changed")
         result.update(
             passed=True,
@@ -352,7 +408,7 @@ def run_bounded(root, packages, output):
         and evidence.get("commit") == COMMIT
         and evidence.get("target") == target
         and evidence.get("casesPerPath") == len(cases())
-        and evidence.get("dispatchCount") == len(cases())
+        and evidence.get("dispatchCount") == dispatch_total()
         and evidence.get("fullUpstreamSuite") is False,
         "Large copy evidence is incomplete",
     )
