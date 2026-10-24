@@ -34,6 +34,7 @@ GATING_WORKFLOWS = {
 # The job that decides whether a push to main repeats a commit the merge queue
 # already tested, per workflow.
 QUEUE_TESTED_WORKFLOWS = {
+    "computesharp.yml": "plan",
     "backend-tests.yml": "python-versions",
     "translator-tests.yml": "python-versions",
     "full-tests.yml": "plan",
@@ -227,7 +228,11 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     planner = jobs[plan]
-    assert planner["permissions"] == {"actions": "read"}
+    assert planner["permissions"] == (
+        {"actions": "read", "contents": "read"}
+        if filename == "computesharp.yml"
+        else {"actions": "read"}
+    )
     assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
     (step,) = (step for step in planner["steps"] if step.get("id") == "queue")
     assert step["if"] == "github.event_name == 'push'"
@@ -243,7 +248,57 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
+        guard = f"needs.{plan}.outputs.tested != 'true'"
+        if filename == "computesharp.yml":
+            # Keep the port's independent run/execute filters and cancellation rule.
+            assert job["if"].startswith("${{ " + guard + " && "), (filename, name)
+        else:
+            assert job["if"] == guard, (filename, name)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"), reason="Bash required"
+)
+@pytest.mark.parametrize(
+    "count,exit_code,expected", [(1, 0, "true"), (0, 0, "false"), ("", 1, "false")]
+)
+def test_computesharp_queue_lookup_handles_success_and_failure(
+    tmp_path, count, exit_code, expected
+):
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "computesharp.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        step for step in workflow["jobs"]["plan"]["steps"] if step.get("id") == "queue"
+    )
+    output = tmp_path / "output"
+    args = tmp_path / "args"
+    # Run the actual workflow shell with a local API substitute, without network access.
+    script = (
+        'gh() { printf "%s" "$*" > "$LOOKUP_ARGS"; printf "%s" "$COUNT"; return "$EXIT_CODE"; }\n'
+        + step["run"]
+    )
+    subprocess.run(
+        ["bash", "-e", "-c", script],
+        check=True,
+        env={
+            **os.environ,
+            "COUNT": str(count),
+            "EXIT_CODE": str(exit_code),
+            "GITHUB_OUTPUT": str(output),
+            "LOOKUP_ARGS": str(args),
+            "GITHUB_REPOSITORY": "CrossGL/crosstl",
+            "GITHUB_SHA": "tested-commit",
+            "GITHUB_WORKFLOW_REF": (
+                "CrossGL/crosstl/.github/workflows/computesharp.yml@refs/heads/main"
+            ),
+        },
+    )
+    assert output.read_text().strip() == f"tested={expected}"
+    assert (
+        "workflows/computesharp.yml/runs?head_sha=tested-commit&event=merge_group&status=success"
+        in args.read_text()
+    )
 
 
 def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
