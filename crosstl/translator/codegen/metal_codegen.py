@@ -24219,7 +24219,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             or len(args) < 2
         ):
             return
-        coord_type = self.expression_result_type(args[1])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[1])
+        )
         if coord_type is None or self.is_integer_coordinate_type(coord_type):
             return
         raise ValueError(
@@ -24246,7 +24248,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         expected_dimension = self.resource_coordinate_dimension(texture_type)
         if expected_dimension is None:
             return
-        coord_type = self.expression_result_type(args[1])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[1])
+        )
         coord_dimension = integer_coordinate_dimension_from_type_name(
             self.type_name_string(coord_type), self.map_type
         )
@@ -24279,7 +24283,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if expected_dimension is None:
             return
         for offset_index in offset_indices:
-            offset_type = self.expression_result_type(args[offset_index])
+            offset_type = self.metal_referenced_value_type(
+                self.expression_result_type(args[offset_index])
+            )
             if offset_type is None:
                 continue
             if not self.is_integer_coordinate_type(offset_type):
@@ -24333,7 +24339,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         expected_dimension = self.resource_query_lod_coordinate_dimension(texture_type)
         if expected_dimension is None:
             return
-        coord_type = self.expression_result_type(args[coord_index])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[coord_index])
+        )
         if coord_type is None:
             return
         coord_dimension = self.query_lod_coordinate_dimension(coord_type)
@@ -24372,7 +24380,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if expected_dimension is None:
             return
         for gradient_index in gradient_indices:
-            gradient_type = self.expression_result_type(args[gradient_index])
+            gradient_type = self.metal_referenced_value_type(
+                self.expression_result_type(args[gradient_index])
+            )
             if gradient_type is None:
                 continue
             gradient_dimension = self.gradient_argument_dimension(gradient_type)
@@ -24429,6 +24439,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return None
         return self.reference_referent_type_name(argument_type) or argument_type
 
+    @staticmethod
+    def metal_referenced_value_type(vtype):
+        """Return the value type a reference-typed expression reads as."""
+        if isinstance(vtype, ReferenceType):
+            return vtype.referenced_type
+        if isinstance(vtype, str) and vtype.rstrip().endswith("&"):
+            return vtype.rstrip().rstrip("&").rstrip()
+        return vtype
+
     def validate_compare_argument(self, func_name, args):
         compare_index = texture_compare_argument_index(
             func_name,
@@ -24437,7 +24456,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
         if compare_index is None:
             return
-        compare_type = self.expression_result_type(args[compare_index])
+        compare_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[compare_index])
+        )
         if compare_type is None or self.is_scalar_floating_type(compare_type):
             return
         raise ValueError(
