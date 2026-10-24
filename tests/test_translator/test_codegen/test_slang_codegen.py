@@ -24204,3 +24204,81 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_slang_codegen_maps_builtin_attribute_parameters_to_system_values():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id),
+                      uvec3 lid @builtin(local_invocation_id),
+                      uvec3 wid @builtin(workgroup_id)) {
+                o[gid.x] = lid.x + wid.x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint3 gid : SV_DispatchThreadID" in generated
+    assert "uint3 lid : SV_GroupThreadID" in generated
+    assert "uint3 wid : SV_GroupID" in generated
+    assert ": builtin" not in generated
+
+
+def test_slang_codegen_maps_builtin_attribute_stage_io_like_gl_spellings():
+    code = """
+    shader Q {
+        vertex {
+            vec4 main(vec3 p @ POSITION, uint vid @builtin(vertex_index)) @builtin(position) {
+                return vec4(p, float(vid));
+            }
+        }
+        fragment {
+            vec4 main(vec4 fc @builtin(position)) @gl_FragColor {
+                return fc;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint vid : SV_VertexID) : SV_Position" in generated
+    assert "float4 fc : SV_Position) : SV_Target" in generated
+    assert "builtin" not in generated
+
+
+def test_slang_codegen_binds_num_workgroups_parameter_from_workgroup_count():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id), uvec3 nwg @gl_NumWorkGroups,
+                      uvec3 count @builtin(num_workgroups)) {
+                o[gid.x] = nwg.x + count.y;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "void main(uint3 gid : SV_DispatchThreadID)" in generated
+    assert "uint3 nwg = WorkgroupCount();" in generated
+    assert "uint3 count = WorkgroupCount();" in generated
+    assert "gl_NumWorkGroups" not in generated
+
+
+def test_slang_codegen_refuses_num_workgroups_parameter_outside_compute():
+    code = """
+    shader P {
+        fragment {
+            vec4 main(uvec3 nwg @gl_NumWorkGroups) @gl_FragColor {
+                return vec4(float(nwg.x));
+            }
+        }
+    }
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    assert any(
+        "gl_NumWorkGroups parameter 'nwg'" in reason for reason in refused.reasons
+    )
