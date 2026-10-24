@@ -202,13 +202,13 @@ def test_helper_loop_bound_executes_natively(tmp_path):
 def test_helper_bounds_are_required_on_all_native_platforms():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     assert 'CROSTL_REQUIRE_METADATA_PRECONDITIONS: "1"' in step

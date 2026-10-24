@@ -265,13 +265,13 @@ def test_pinned_gather_front_native_parity(gather_source, tmp_path, width, strid
 def test_gather_native_gate_is_required():
     import yaml
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_step_section(workflow, "Validate pinned gather loops")
+    step = workflow_text.workflow_step_section(workflow, "Validate pinned gather loops")
     for required in (
         "test_current_gather.py",
         f'{REQUIRE_ENV}: "1"',
@@ -286,7 +286,7 @@ def test_gather_native_gate_is_required():
     assert "continue-on-error" not in step
     for event in ("push", "pull_request"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/kernels/test_current_gather.py",
         )
     job = yaml.safe_load(workflow)["jobs"]["portable-host"]

@@ -236,11 +236,11 @@ kernel void records(
 def test_byte_record_views_are_required_on_every_native_target():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate collective helper arguments"
     )
     assert "tests/test_translator/test_byte_record_views.py" in step

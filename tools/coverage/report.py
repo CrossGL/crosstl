@@ -132,7 +132,8 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
     tools = sorted(
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
-        # Slang functions that SPIR-V lacks are compiled for HLSL and checked by DXC.
+        # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
+        # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
         # SPIR-V input probes are glslang's output.

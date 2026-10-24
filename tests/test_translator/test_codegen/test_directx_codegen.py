@@ -6650,6 +6650,97 @@ def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_directx_fine_and_coarse_fwidth_lower_to_hlsl_derivatives():
+    shader = """
+    shader FineCoarseFwidth {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 fine = fwidthFine(uv);
+                vec2 coarse = fwidthCoarse(uv * 2.0);
+                return vec4(fine, coarse);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 fine = (abs(ddx_fine(uv)) + abs(ddy_fine(uv)));" in generated_code
+    assert (
+        "float2 coarse = (abs(ddx_coarse((uv * 2.0))) + "
+        "abs(ddy_coarse((uv * 2.0))));"
+    ) in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fwidth_fine_name_is_not_lowered():
+    shader = """
+    shader FwidthFineShadowing {
+        float fwidthFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = fwidthFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fine = fwidthFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "declaration, call, reason",
+    [
+        (
+            "float abs = 1.0;",
+            "fwidthFine(uv) * abs",
+            "would name the shader's own 'abs'",
+        ),
+        (
+            "float ddy_coarse = 1.0;",
+            "fwidthCoarse(uv) * ddy_coarse",
+            "would name the shader's own 'ddy_coarse'",
+        ),
+        (
+            "int i = 0;",
+            "fwidthFine(uv * float(i++))",
+            "would evaluate an argument with side effects twice",
+        ),
+    ],
+)
+def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
+    declaration, call, reason
+):
+    shader = f"""
+    shader FineCoarseFwidthRefusal {{
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                {declaration}
+                vec2 r = {call};
+                return vec4(r, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated_code, message = hlsl_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
+
+    assert "HLSL has no fwidth" in message
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+    assert reason in message
+
+
 def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     shader = """
     shader FineDerivativeShadowing {
@@ -6683,6 +6774,8 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "dFdyFine",
         "dFdyCoarse",
         "fwidth",
+        "fwidthFine",
+        "fwidthCoarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):

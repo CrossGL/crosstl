@@ -147,6 +147,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
@@ -242,6 +243,7 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -1572,6 +1574,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
 
 
 class GLSLCodeGen(
+    GLSLNarrowVectorMixin,
     GLSLDescriptorSetBindingsMixin,
     LoweringRefusalMixin,
     GLSLEmulatedMatrices,
@@ -3132,17 +3135,17 @@ class GLSLCodeGen(
             "int32_t": "int",
             "int64": "int64_t",
             "int64_t": "int64_t",
-            "long": "int",
-            "signed long": "int",
-            "ptrdiff_t": "int",
+            "long": "int64_t",
+            "signed long": "int64_t",
+            "ptrdiff_t": "int64_t",
             "uint16": "uint",
             "uint16_t": "uint",
             "uint32_t": "uint",
             "uint64": "uint64_t",
             "uint64_t": "uint64_t",
-            "ulong": "uint",
-            "unsigned long": "uint",
-            "size_t": "uint",
+            "ulong": "uint64_t",
+            "unsigned long": "uint64_t",
+            "size_t": "uint64_t",
             "int2": "ivec2",
             "int3": "ivec3",
             "int4": "ivec4",
@@ -36265,6 +36268,12 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
 
         narrow = expected["narrow"]
+        if narrow is not None:
+            carried = self.glsl_narrow_vector_carrier_form(
+                generated, expected["source"]
+            )
+            if carried is not None:
+                return carried
         exact_source_type = self.glsl_source_type_signature(
             actual["source"]
         ) == self.glsl_source_type_signature(expected["source"])
@@ -40091,10 +40100,15 @@ complex64_t crossgl_complex64_mod_assign(
                 if ieee_arithmetic is not None:
                     return ieee_arithmetic
             return self.glsl_apply_narrow_float_contract(
-                f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
+                self.glsl_narrow_vector_wrap(expr, op, f"({left} {op} {right})"),
+                self.glsl_source_expression_type(expr),
+                expr,
             )
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
-            return self.generate_assignment(expr)
+            return assignment_value_expression(
+                self.generate_assignment(expr),
+                discarded=expr is self.current_discarded_expression,
+            )
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
             emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
@@ -40182,7 +40196,9 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }
-            return f"({operand}{op})" if is_postfix else f"({op}{operand})"
+            if is_postfix:
+                return f"({operand}{op})"
+            return self.glsl_narrow_vector_wrap(expr, op, f"({op}{operand})")
         elif isinstance(expr, WaveOpNode):
             return self.generate_glsl_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):

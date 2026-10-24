@@ -284,11 +284,11 @@ def test_uniform_exit_gate_is_required_on_every_native_target():
     from pathlib import Path
 
     from tests.ci_helpers import assert_paths_covered
-    from tools import ci_coverage
+    from tests import workflow_text
 
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_step_section(
+    step = workflow_text.workflow_step_section(
         workflow, "Validate subgroup-guarded returns"
     )
     assert "test_subgroup_uniform_exits.py" in step
@@ -296,6 +296,6 @@ def test_uniform_exit_gate_is_required_on_every_native_target():
     assert "continue-on-error" not in step and "if:" not in step
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_subgroup_uniform_exits.py",
         )

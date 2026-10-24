@@ -283,13 +283,13 @@ def test_instantiated_branch_assertions_execute(tmp_path, layout):
 def test_branch_assertions_are_required_on_all_native_platforms():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[2]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate collective helper arguments"
     )
     assert f'{REQUIRE_ENV}: "1"' in step

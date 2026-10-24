@@ -37,8 +37,11 @@ _WIDTHS = {
     "Int16": ("int16", "uint16"),
     "Int64": ("int64", "uint64"),
 }
-# Buffers every kernel probe declares, bound in this order.
+# The buffers a kernel probe may declare, bound in this order. A probe declares the input buffers its template reads
+# and always the output buffer, so one that reads a single input binds it at 0 and the output at 1, as the
+# conformance harness that runs probes binds them.
 _BUFFERS = (("float", "fin"), ("int", "iin"), ("float", "outp"))
+_INPUTS = re.compile(r"\b(fin|iin)\b")
 
 
 @dataclass(frozen=True)
@@ -213,7 +216,13 @@ def build(feature: Feature, dialect):
         source = _Text(template.program).substitute(spelled)
         suffix = _PROGRAM_SUFFIX.get(language, {}).get(feature.stage, dialect.suffix)
         return source, template.entry or dialect.entry, suffix
-    buffers = [(dialect.type(Type(scalar)), name) for scalar, name in _BUFFERS]
+    parts = (template.body, template.prelude, template.declarations, template.params)
+    read = set(_INPUTS.findall("\n".join(parts)))
+    buffers = [
+        (dialect.type(Type(scalar)), name)
+        for scalar, name in _BUFFERS
+        if name == "outp" or name in read
+    ]
     source = dialect.kernel(
         buffers,
         _lines(template.body, spelled),
