@@ -230,6 +230,7 @@ from .glsl_refusals import (
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
+from .glsl_scalar_block_layout import scalar_block_layout_extension_line
 from .glsl_shadow_lod import (
     SHADOW_LOD_EXTENSION_SAMPLERS,
     is_zero_lod_literal,
@@ -4050,6 +4051,9 @@ class GLSLCodeGen(
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
+        scalar_layout = scalar_block_layout_extension_line(self, ast)
+        if scalar_layout is not None:
+            lines.append(scalar_layout)
         return lines
 
     def uses_glsl_debug_printf(self, ast):
