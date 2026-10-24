@@ -26,7 +26,7 @@ pip install crosstl
 
 CrossTL needs Python 3.11 or later. Validating the generated code needs the target's own compiler or validator
 (glslang, DXC, spirv-tools, naga, the Metal compiler, nvcc, hipcc, slangc, rust-gpu or the Mojo compiler), which
-CrossTL does not install.
+CrossTL does not install. `crosstl doctor` lists the tools it looks for and which of them are on `PATH`.
 
 ## Quickstart
 
