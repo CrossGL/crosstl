@@ -512,6 +512,13 @@ from .texture_lod_clamp import (
     glsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
 )
+from .texture_residency import (
+    GLSL_RESIDENCY_EXTENSION,
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
+    glsl_texture_residency_call,
+    glsl_texture_resident_call,
+)
 from .uniform_returns import UniformReturnAnalysis
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
@@ -4047,6 +4054,11 @@ class GLSLCodeGen(
         ):
             # GLSL ES has no such extension; the version requirements refuse the clamp functions there.
             lines.append(f"#extension {GLSL_LOD_CLAMP_EXTENSION} : require")
+        if self.uses_texture_residency(ast, target_stage) and not (
+            self.glsl_version_is_es(getattr(self, "current_glsl_version_line", None))
+        ):
+            # GLSL ES has no such extension; the version requirements refuse the sparse functions there.
+            lines.append(f"#extension {GLSL_RESIDENCY_EXTENSION} : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
@@ -4061,6 +4073,18 @@ class GLSLCodeGen(
             isinstance(node, FunctionCallNode)
             and self.function_call_name(node) in {"printf", "debugPrintfEXT"}
             for node in self.walk_ast(ast)
+        )
+
+    def uses_texture_residency(self, ast, target_stage=None):
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if GLSL_RESIDENCY_EXTENSION in str(getattr(directive, "content", "") or ""):
+                return False  # The source enables the extension itself.
+        return any(
+            isinstance(node, FunctionCallNode)
+            and self.function_call_name(node)
+            in {TEXTURE_RESIDENCY_OPERATION, TEXTURE_RESIDENT_OPERATION}
+            for root in self.ray_query_search_roots(ast, target_stage)
+            for node in self.walk_ast(root)
         )
 
     def uses_texture_lod_clamp(self, ast, target_stage=None):
@@ -39967,6 +39991,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if enum_constructor is not None:
                 return enum_constructor
+
+            if original_func_name == TEXTURE_RESIDENCY_OPERATION:
+                return glsl_texture_residency_call(self, expr.args, expr)
+            if original_func_name == TEXTURE_RESIDENT_OPERATION:
+                return glsl_texture_resident_call(self, expr.args, expr)
 
             if is_texture_lod_clamp_operation(original_func_name):
                 return glsl_texture_lod_clamp_call(

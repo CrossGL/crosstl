@@ -437,6 +437,13 @@ from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
 )
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
+    emit_metal_texture_residency_helpers,
+    metal_texture_residency_call,
+    metal_texture_resident_call,
+)
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
@@ -1054,6 +1061,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_ballot_helper = False
         self.metal_wave_extension_helpers = {}
         self.metal_exponent_helpers = {}
+        self.metal_texture_residency_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -2382,6 +2390,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_ballot_helper = False
         self.metal_wave_extension_helpers = {}
         self.metal_exponent_helpers = {}
+        self.metal_texture_residency_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -3250,6 +3259,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_metal_wave_helpers()
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
+        code += emit_metal_texture_residency_helpers(self)
         code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
@@ -11887,6 +11897,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
             if mesh_output_call is not None:
                 return mesh_output_call
+
+            if func_name == TEXTURE_RESIDENCY_OPERATION:
+                return metal_texture_residency_call(self, expr.args, expr)
+            if func_name == TEXTURE_RESIDENT_OPERATION:
+                return metal_texture_resident_call(self, expr.args, expr)
 
             if is_texture_lod_clamp_operation(func_name):
                 return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)

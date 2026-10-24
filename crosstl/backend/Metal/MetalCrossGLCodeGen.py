@@ -61,6 +61,13 @@ from .preprocessor import (
     MetalTemplateSpecializationError,
 )
 from .simd_aliases import SIMD_TYPE_ALIASES
+from .sparse_color import (
+    METAL_SPARSE_TEXTURE_METHODS,
+    import_sparse_color_assignment,
+    import_sparse_color_member,
+    refuse_sparse_color_reference,
+    refuse_sparse_color_type,
+)
 from .texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
@@ -72,17 +79,6 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
-
-# MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
-METAL_SPARSE_TEXTURE_METHODS = frozenset(
-    {
-        "sparse_sample",
-        "sparse_sample_compare",
-        "sparse_read",
-        "sparse_gather",
-        "sparse_gather_compare",
-    }
-)
 
 
 class MetalCallableAliasLoweringError(ValueError):
@@ -10339,6 +10335,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         decl += f" = {initializer}"
                 code += f"{decl};\n"
             elif isinstance(stmt, AssignmentNode):
+                sparse_color = import_sparse_color_assignment(
+                    self, stmt, is_main, indent
+                )
+                if sparse_color is not None:
+                    code += sparse_color
+                    continue
                 declaration = getattr(stmt, "left", None)
                 if isinstance(declaration, VariableNode) and getattr(
                     declaration, "vtype", None
@@ -12044,6 +12046,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             if expr.vtype:
                 return self.format_decl(expr, include_semantic=False)
             else:
+                sparse_reference = refuse_sparse_color_reference(self, expr)
+                if sparse_reference is not None:
+                    return sparse_reference
                 constant = self.render_integral_constant_binding(expr.name)
                 if constant is not None:
                     return constant
@@ -12437,6 +12442,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
             return f"{callee}({args})"
         elif isinstance(expr, MethodCallNode):
+            sparse_member = import_sparse_color_member(self, expr, is_main)
+            if sparse_member is not None:
+                return sparse_member
             wide_vector = self.wide_vector_expression_info(expr.object)
             if wide_vector is not None:
                 raise MetalWideVectorLoweringError(
@@ -18646,6 +18654,9 @@ float {scalar}(float value) {{
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+        sparse_color = refuse_sparse_color_type(self, metal_type)
+        if sparse_color is not None:
+            return sparse_color
 
         metal_type = self.substitute_template_type_text(metal_type)
         metal_type = self.substitute_template_value_text(metal_type)
