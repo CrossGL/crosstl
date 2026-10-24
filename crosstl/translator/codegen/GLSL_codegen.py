@@ -196,6 +196,7 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
@@ -40084,9 +40085,17 @@ complex64_t crossgl_complex64_mod_assign(
                     original_func_name,
                     expr.args,
                 )
-            elif original_func_name in getattr(
-                self, "generic_function_definitions", {}
-            ) and getattr(self, "enforce_concrete_glsl_types", False):
+            else:
+                reject_unresolved_explicit_generic_call(
+                    self, original_func_name, "OpenGL"
+                )
+            if (
+                specialized_func_name is None
+                and original_func_name in getattr(
+                    self, "generic_function_definitions", {}
+                )
+                and getattr(self, "enforce_concrete_glsl_types", False)
+            ):
                 raise OpenGLTemplateTypeError(
                     "OpenGL codegen cannot infer concrete template arguments "
                     f"for generic function '{original_func_name}'; provide a "

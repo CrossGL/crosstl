@@ -18200,6 +18200,21 @@ def _infer_plain_template_helper_arguments(
         if inference_template_arguments
         else ({}, {})
     )
+    if inference_template_arguments and not explicit_variadic_bindings:
+        # Only the supplied arguments are explicit. A parameter after them is
+        # deduced from the call first and takes its default only when it cannot
+        # be deduced; the default may also name a deduced parameter
+        # (``typename Indexer::IndexT``). Defaults are applied after deduction.
+        supplied = set(
+            (getattr(template, "template_parameters", []) or [])[
+                : len(inference_template_arguments)
+            ]
+        )
+        explicit_bindings = {
+            parameter: value
+            for parameter, value in explicit_bindings.items()
+            if parameter in supplied
+        }
     # Explicit template arguments are fixed before function-parameter overload
     # viability is checked. A by-value parameter that is exactly one fixed type
     # parameter may therefore accept ordinary source scalar conversion

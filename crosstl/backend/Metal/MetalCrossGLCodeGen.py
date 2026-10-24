@@ -7326,6 +7326,47 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             return None
         return function_name, arguments
 
+    def map_generic_function_call_name(self, name):
+        """``helper<int>`` for a call that names a user type-generic function with explicit type arguments.
+
+        The function is emitted as a CrossGL ``generic`` declaration, so its call keeps the explicit arguments and
+        CrossGL deduces the rest; sanitizing ``helper<int>`` into one identifier would name no function.
+        """
+        text = str(name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        compact = text.replace(" ", "")
+        if any(
+            str(function_name).replace(" ", "") == compact
+            for function_name in self.user_function_names
+        ):
+            # An explicit specialization (``template<> uint f<uint>(...)``) is its own function.
+            return None
+        angle = text.find("<")
+        base = text[:angle].strip()
+        candidates = self.user_function_overloads_by_name.get(
+            base.rsplit("::", 1)[-1], []
+        )
+        if not candidates or any(
+            not getattr(candidate, "template_parameters", None)
+            or any(
+                kind not in {"typename", "class"}
+                for kind, _parameter in candidate.template_parameters
+            )
+            for candidate in candidates
+        ):
+            return None
+        arguments = self.split_generic_arguments(text[angle + 1 : -1])
+        if not arguments or len(arguments) > min(
+            len(candidate.template_parameters) for candidate in candidates
+        ):
+            return None
+        mapped = [
+            self.map_type(self.normalized_metal_type(self.resolve_type_alias(argument)))
+            for argument in arguments
+        ]
+        return f"{self.sanitize_identifier(base)}<{', '.join(mapped)}>"
+
     def value_template_overload_signature(self, function):
         parameters = ", ".join(self.metal_function_source_signature(function))
         template_parameters = ", ".join(
@@ -13936,6 +13977,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
             if metal_wave_name is not None:
                 return metal_wave_name
+            generic_call_name = self.map_generic_function_call_name(name)
+            if generic_call_name is not None:
+                return generic_call_name
             return self.sanitize_identifier(name)
 
         target_type = self.normalized_metal_type(

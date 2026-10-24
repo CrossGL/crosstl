@@ -32,6 +32,7 @@ from .floating_point import reject_contraction_tokens
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
+    deducible_template_parameters,
 )
 from .template_constants import unresolved_constant_references
 from .text_scanners import (
@@ -1391,6 +1392,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     template,
                     template_arguments,
                 ):
+                    continue
+                if not template.variadic_template_parameters and (
+                    set(template.template_parameters[len(template_arguments) :])
+                    & deducible_template_parameters(self, template)
+                ):
+                    # A defaulted parameter the call can deduce takes the
+                    # deduced type, not its default; argument deduction decides.
                     continue
                 specialized_name = materialized_names.get(key)
                 if specialized_name is not None:
