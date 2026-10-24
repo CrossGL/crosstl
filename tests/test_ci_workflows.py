@@ -31,6 +31,20 @@ GATING_WORKFLOWS = {
     "lint.yml": "Lint result",
     "demo-project-testing.yml": "MLX validation result",
 }
+# The job that decides whether a push to main repeats a commit the merge queue
+# already tested, per workflow.
+QUEUE_TESTED_WORKFLOWS = {
+    "backend-tests.yml": "python-versions",
+    "translator-tests.yml": "python-versions",
+    "full-tests.yml": "plan",
+    "examples-test.yml": "python-versions",
+}
+RUN_GROUP = "${{ github.event.pull_request.number || github.run_id }}"
+MAIN_PUSH_GROUP = (
+    "${{ github.event.pull_request.number"
+    " || (github.event_name == 'push' && github.ref)"
+    " || github.run_id }}"
+)
 
 
 def _workflows():
@@ -159,27 +173,51 @@ def test_jobs_after_a_skippable_leg_check_their_own_status():
 
 
 @pytest.mark.parametrize(
-    "filename",
+    "filename,group",
     [
-        "backend-tests.yml",
-        "translator-tests.yml",
-        "full-tests.yml",
-        "examples-test.yml",
-        "demo.yml",
+        *((name, RUN_GROUP) for name in sorted(QUEUE_TESTED_WORKFLOWS)),
+        # The demo has no merge-group run, and coverage publishes from its own push
+        # run, so pushes to main share one group: a burst of merges runs them only
+        # for the newest commit.
+        ("demo.yml", MAIN_PUSH_GROUP),
+        ("coverage.yml", MAIN_PUSH_GROUP),
     ],
 )
-def test_test_workflows_replace_only_superseded_pull_request_runs(filename):
+def test_test_workflows_drop_only_superseded_runs(filename, group):
+    # A cancelled run turns the workflow's status badge red, so only pull-request
+    # runs and pushes that have a newer push waiting behind them are ever dropped.
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
     policy = workflow["concurrency"]
     assert policy == {
-        "group": (
-            "ci-${{ github.workflow }}-${{ github.event_name }}-"
-            "${{ github.event.pull_request.number || github.run_id }}"
-        ),
+        "group": "ci-${{ github.workflow }}-${{ github.event_name }}-" + group,
         "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     }
     for job in workflow["jobs"].values():
         assert job.get("concurrency", {}).get("group") != policy["group"]
+
+
+@pytest.mark.parametrize("filename,plan", sorted(QUEUE_TESTED_WORKFLOWS.items()))
+def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, plan):
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    planner = jobs[plan]
+    assert planner["permissions"] == {"actions": "read"}
+    assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
+    (step,) = (step for step in planner["steps"] if step.get("id") == "queue")
+    assert step["if"] == "github.event_name == 'push'"
+    assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
+    # A failed lookup must run the tests rather than skip them.
+    assert "|| echo 0)" in step["run"]
+    reference = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    assert step == reference
+    for name, job in jobs.items():
+        if name in {plan, "result"}:
+            continue
+        needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+        assert plan in needs, (filename, name)
+        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
 
 
 def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
