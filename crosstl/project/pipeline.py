@@ -17017,7 +17017,15 @@ def _metal_local_using_alias(
 def _metal_rewrite_identifier_tokens(
     text: str,
     replacements: Mapping[str, str],
+    *,
+    skip_template_names: bool = False,
 ) -> tuple[str, bool]:
+    """Replace identifier tokens outside member and scope contexts.
+
+    With ``skip_template_names``, a token followed by ``<`` is kept: a plain
+    alias cannot take template arguments, so such a token names the template an
+    alias like ``using Op = Op<T>;`` refers to.
+    """
     if not replacements:
         return text, False
 
@@ -17042,6 +17050,12 @@ def _metal_rewrite_identifier_tokens(
                     "->",
                 }
             replacement = None if member_context else replacements.get(token)
+            if replacement is not None and skip_template_names:
+                following = j
+                while following < len(text) and text[following].isspace():
+                    following += 1
+                if following < len(text) and text[following] == "<":
+                    replacement = None
             if replacement is None:
                 parts.append(token)
             else:
@@ -17079,9 +17093,20 @@ def _metal_rewrite_embedded_identifier_parts(
                 i = j
                 continue
             embedded_parts = token.split("_")
-            rewritten_parts = [
-                str(replacements.get(part, part)) for part in embedded_parts
-            ]
+            rewritten_parts = []
+            for index, part in enumerate(embedded_parts):
+                replacement = str(replacements.get(part, part))
+                replacement_parts = replacement.split("_")
+                if (
+                    len(replacement_parts) > 1
+                    and replacement_parts[0] == part
+                    and embedded_parts[index : index + len(replacement_parts)]
+                    == replacement_parts
+                ):
+                    # ``using Op = Op<T>;`` mangles to ``Op_T``: a part already
+                    # followed by its replacement's arguments is resolved.
+                    replacement = part
+                rewritten_parts.append(replacement)
             rewritten = "_".join(rewritten_parts)
             parts.append(rewritten)
             changed = changed or rewritten != token
@@ -17196,7 +17221,11 @@ def _metal_resolve_type_identifiers(
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, alias_changed = _metal_rewrite_identifier_tokens(
+            text,
+            alias_values,
+            skip_template_names=True,
+        )
         text, constant_changed = _metal_rewrite_identifier_tokens(
             text,
             constant_values,
