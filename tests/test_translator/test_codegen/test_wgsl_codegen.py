@@ -2855,3 +2855,79 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_translate_hlsl_8bit_pack_intrinsics_to_wgsl_pack_builtins(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "var r0: u32 = pack4xI8(a);" in generated
+    assert "var r1: u32 = pack4xU8(b);" in generated
+    assert "var r2: u32 = pack4xI8Clamp(a);" in generated
+    assert "var r3: u32 = pack4xU8Clamp(vec4<u32>(max(a, vec4<i32>(0))));" in generated
+    assert "var u0: vec4<i32> = unpack4xI8(r0);" in generated
+    assert "var u1: vec4<u32> = unpack4xU8(r1);" in generated
+    for name in ("pack_s8", "pack_u8", "pack_clamp_", "unpack_s8s32", "unpack_u8u32"):
+        assert name not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_8bit_pack_converts_argument_signedness(tmp_path):
+    source_path = tmp_path / "pack_sign.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int4 a = int4(1, -2, 3, -4);
+            uint4 b = uint4(5u, 6u, 7u, 8u);
+            outp[id.x] = pack_u8(a) + pack_s8(b) + pack_clamp_u8(b);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "pack4xU8(vec4<u32>(a))" in generated
+    assert "pack4xI8(vec4<i32>(b))" in generated
+    assert "pack4xU8Clamp(b)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_8bit_pack_requires_one_argument():
+    shader = parse_shader("""
+        shader PackedEightBit {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    ivec4 a = ivec4(1, 2, 3, 4);
+                    uint r = pack_s8(a, a);
+                }
+            }
+        }
+        """)
+
+    with pytest.raises(ValueError, match="pack_s8\\(\\) with exactly 1 argument"):
+        WGSLCodeGen().generate(shader)
