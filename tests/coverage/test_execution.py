@@ -299,7 +299,9 @@ def test_metal_runs_the_native_probe_against_the_translation():
 
 def test_supported_metal_compute_results_keep_both_sources(monkeypatch):
     monkeypatch.setattr(validators, "available", lambda language, target="": True)
-    monkeypatch.setattr(runner, "_native_rejection", lambda feature, language: "")
+    monkeypatch.setattr(
+        runner, "_native_rejection", lambda feature, language: (feature, "")
+    )
     monkeypatch.setattr(runner, "translate", lambda *args: "translated metal")
     monkeypatch.setattr(
         runner, "_validated", lambda *args, **kwargs: validators.Verdict(True)

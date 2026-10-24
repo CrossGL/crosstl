@@ -4,7 +4,7 @@ import json
 import pytest
 
 from tools.coverage import report, runner, upstream, validators
-from tools.coverage.model import Feature, Result, Score, Signature, Type
+from tools.coverage.model import Feature, Param, Result, Score, Signature, Type
 
 ABS = Feature(
     "glsl", "function", "abs", Signature(Type("float", (3,)), ()), crossgl="abs"
@@ -131,6 +131,90 @@ def test_output_probe_end_to_end():
         "supported",
         "glslangValidator",
     ), result.detail
+
+
+# slangc 2026.9 writes an OpAtomicCompareExchange on floats for this call, which its SPIR-V validator rejects.
+SPIRV_ONLY_REJECTION = (
+    "error: AtomicCompareExchange: expected Result Type to be integer scalar type"
+)
+
+
+def _slang_compiler(monkeypatch, accepts: set[str]) -> list[tuple[str, str]]:
+    """Stand in for slangc and DXC: accept every source for the targets in ``accepts`` ("" is SPIR-V)."""
+    seen = []
+
+    def validated(language, source, stage, entry="", target=""):
+        seen.append((source, target))
+        if target in accepts:
+            return validators.Verdict(True)
+        if target:
+            return validators.Verdict(False, "error: rejected for HLSL")
+        return validators.Verdict(False, SPIRV_ONLY_REJECTION)
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(runner, "_validated", validated)
+    monkeypatch.setattr(runner, "parse_crossgl", lambda source: None)
+    monkeypatch.setattr(runner, "translate", lambda *args: "translated slang")
+    monkeypatch.setattr(
+        runner,
+        "lower",
+        lambda feature: ("" if feature.target else "OpAtomicCompareExchange", ""),
+    )
+    return seen
+
+
+SLANG_SIN = Feature(
+    "slang",
+    "function",
+    "sin",
+    Signature(Type("float"), (Param(Type("float")),)),
+    crossgl="sin",
+)
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_slangc_cannot_write_as_spirv_is_probed_for_hlsl(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "supported", result.detail
+    assert result.feature.target == "hlsl"
+    # The native probe is tried for SPIR-V first, then HLSL; the translation is checked for HLSL only.
+    assert [target for _, target in seen] == ["", "hlsl", "hlsl"]
+    assert seen[-1][0] == "translated slang"
+    if direction == "output":
+        # The semantic id is the one the SPIR-V probe lowered to.
+        assert result.semantic == "OpAtomicCompareExchange"
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_both_targets_reject_keeps_the_spirv_reason(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, set())
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "untested"
+    assert result.detail == f"the probe itself is rejected: {SPIRV_ONLY_REJECTION}"
+    assert result.feature.target == ""
+    assert [target for _, target in seen] == ["", "hlsl"]
+
+
+def test_a_probe_its_usual_target_accepts_is_not_retried(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {""})
+    result = runner.run_input(SLANG_SIN, "slang")
+    assert (result.outcome, result.feature.target) == ("supported", "")
+    assert [target for _, target in seen] == ["", ""]
+
+
+def test_only_slang_falls_back_to_another_target(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    glsl = Feature("glsl", "function", "sin", SLANG_SIN.signature, crossgl="sin")
+    result = runner.run_input(glsl, "glsl")
+    assert result.outcome == "untested"
+    assert [target for _, target in seen] == [""]
 
 
 # The shape of slangc 2026.9's log for an undefined name: the header names the kind of error, the label the name.
