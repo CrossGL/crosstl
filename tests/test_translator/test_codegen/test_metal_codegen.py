@@ -1470,6 +1470,55 @@ def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
     assert "lerp(" not in generated_code
 
 
+def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    assert (
+        "(int(acc)+int(dot(float4(as_type<char4>(uint(a[id.x]))),"
+        "float4(as_type<char4>(uint(b[id.x]))))))"
+    ) in compact
+    assert (
+        "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"
+        "float4(as_type<uchar4>(uint(b[id.x]))))))"
+    ) in compact
+    assert "dot4add_" not in generated
+
+
+def test_metal_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint a = tid.x;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
 def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
     shader = """
     shader MetalLerpAliasLocalMixShadow {
