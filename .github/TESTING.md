@@ -9,7 +9,7 @@ touches Metal or Direct3D.
 
 - **Pull request tier.** Runs on every push.
   - Translator and backend tests for every component on Python 3.11 and
-    3.15 on Ubuntu, plus one job each on macOS and Windows that runs every
+    3.15 on Ubuntu, plus sharded macOS and Windows jobs that run every
     component on Python 3.13.
   - The complete core suite.
   - Shader validators and runtime parity on all three platforms.
@@ -59,9 +59,9 @@ A gating workflow runs on every pull request and uses a planning job, not a
 
 | Workflow | Checks |
 |---|---|
-| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each |
+| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each, and every test on macOS in two |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into six shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite, split by test id into eight shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |

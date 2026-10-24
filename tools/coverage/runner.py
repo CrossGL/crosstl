@@ -6,10 +6,11 @@ import hashlib
 import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
-from . import probes, spirv_input, validators
-from .model import Feature, Result
+from . import execution, probes, spirv_input, validators
+from .model import ROUND_TRIPS, Feature, Result
 from .semantic import lower
 
 OUTPUT_BACKENDS = {
@@ -35,6 +36,7 @@ INPUT_BACKENDS = {
     "hlsl": "directx",
     "metal": "metal",
     "mojo": "mojo",
+    "opencl": "opencl",
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
@@ -121,10 +123,7 @@ def _validated(
     verdict = _verdict(language, source, stage, entry, target)
     if verdict.accepted:
         return verdict
-    errors = [line for line in verdict.log.splitlines() if "error" in line.lower()]
-    return validators.Verdict(
-        False, (errors[0] if errors else verdict.log[:300]).strip()
-    )
+    return validators.Verdict(False, validators.first_error(verdict.log, language))
 
 
 def parse_crossgl(source: str) -> None:
@@ -161,6 +160,11 @@ def _native_rejection(feature: Feature, language: str) -> str:
     return "" if verdict.accepted else verdict.log
 
 
+def _runs(feature: Feature, language: str) -> bool:
+    """Whether :mod:`.execution` can run ``feature``'s probes in ``language``."""
+    return feature.stage == "compute" and language in execution.SUFFIXES
+
+
 def run_output(feature: Feature, language: str) -> Result:
     semantic, _ = lower(feature)
 
@@ -192,7 +196,20 @@ def run_output(feature: Feature, language: str) -> Result:
         )
         return result("untested", f"{tool} is not installed")
     verdict = _validated(language, translated, feature.stage, "", feature.target)
-    return result("supported") if verdict.accepted else result("wrong", verdict.log)
+    if not verdict.accepted:
+        return result("wrong", verdict.log)
+    # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
+    if _runs(feature, language) and not feature.counterpart:
+        try:
+            native = (
+                spirv_input.build(feature)
+                if language == "spirv"
+                else probes.build(feature, language)
+            ).source
+        except probes.ProbeError:
+            return result("supported")
+        return replace(result("supported"), sources=(native, translated))
+    return result("supported")
 
 
 def run_input(feature: Feature, language: str) -> Result:
@@ -218,18 +235,30 @@ def run_input(feature: Feature, language: str) -> Result:
     if not native.accepted:
         return result("untested", f"the probe itself is rejected: {native.log}")
     backend = INPUT_BACKENDS[language]
+    emitted = ROUND_TRIPS.get(language, language)
     try:
-        crossgl = translate(probe.source, probe.suffix, "cgl", backend)
-        translated = translate(crossgl, ".cgl", OUTPUT_BACKENDS[language], "cgl")
+        # A language CrossTL cannot generate goes through CrossTL's own pipeline to the emitted language, which
+        # imports the probe to CrossGL and, for OpenCL C, lowers its kernel parameters for the target in one call.
+        if emitted == language:
+            crossgl = translate(probe.source, probe.suffix, "cgl", backend)
+            translated = translate(crossgl, ".cgl", OUTPUT_BACKENDS[language], "cgl")
+        else:
+            translated = translate(
+                probe.source, probe.suffix, OUTPUT_BACKENDS[emitted], backend
+            )
     except Refused as error:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
-    verdict = _validated(language, translated, feature.stage, "", feature.target)
+    verdict = _validated(emitted, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
-    return result("wrong", lost) if lost else result("supported")
+    if lost:
+        return result("wrong", lost)
+    if emitted == language and _runs(feature, language):
+        return replace(result("supported"), sources=(probe.source, translated))
+    return result("supported")
 
 
 def _job(job: tuple[Feature, str, str]) -> Result:

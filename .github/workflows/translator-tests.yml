@@ -74,8 +74,9 @@ jobs:
           - OS: windows-latest
           - OS: macOS-latest
         # A K-of-N leg runs shard K of N (tools/pytest_shard.py). The general
-        # tests took 13 to 24 minutes on one runner and every translator test
-        # 28 minutes on Windows; macOS needs 13 and stays whole.
+        # tests took 13 to 24 minutes on one runner, every translator test 28
+        # minutes on Windows and 15 on macOS, the longest required job in the
+        # merge queue, which builds one group at a time.
         include:
           - component: all-1-of-3
             python-version: "3.13"
@@ -86,7 +87,10 @@ jobs:
           - component: all-3-of-3
             python-version: "3.13"
             OS: windows-latest
-          - component: all
+          - component: all-1-of-2
+            python-version: "3.13"
+            OS: macOS-latest
+          - component: all-2-of-2
             python-version: "3.13"
             OS: macOS-latest
 

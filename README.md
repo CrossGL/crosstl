@@ -13,8 +13,9 @@ directly and generate every target from one source file.
 ![CrossTL coverage per language and direction](https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg)
 
 CI measures this chart on every push to `main` and nightly. Every feature in a pinned upstream feature list gets a
-generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result. The
-score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result. Metal,
+GLSL and SPIR-V compute probes also run, on the GPU or on Mesa's software drivers, where the translation must
+compute what the native probe computes. The score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 lists every gap behind each bar.
 
 ## Install
@@ -84,12 +85,13 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | Slang | `slang` | measured | measured |
 | Rust (rust-gpu) | `rust` | measured | measured |
 | Mojo | `mojo` | measured | measured |
-| OpenCL C | | not offered | available |
+| OpenCL C | | not offered | measured |
 
-A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md). An
-available direction is implemented and unit-tested but not yet measured. The language names `glsl`, `hlsl`, `msl`
-and `spirv` work as backend names too, and `cgl` writes the CrossGL a native source imports to. CrossGL has its own
-coverage row, CrossGL IR, which measures how many of the features in all the measured languages CrossGL can express.
+A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+CrossTL has no OpenCL C generator, so the OpenCL C input row checks the HLSL that CrossTL writes from each OpenCL C
+probe. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the CrossGL a
+native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of
+all the measured output languages CrossGL can express.
 
 CrossTL is meant to fail closed: a construct it cannot translate raises a diagnostic that names the construct and
 the target, instead of emitting a placeholder. Output that the reference tool rejects counts as wrong in the coverage

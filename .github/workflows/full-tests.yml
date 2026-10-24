@@ -26,14 +26,15 @@ jobs:
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     runs-on: ubuntu-latest
-    # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
-    # minutes each, the longest job of a merge-queue run; six bring a shard close
-    # to the other gating workflows. Each shard still collects the whole suite.
+    # tools/pytest_shard.py splits the suite by test id. Six shards ran their tests
+    # for about 10 minutes each, the longest job of a merge-queue run once macOS
+    # translator tests were split; eight bring a shard under the translator legs.
+    # Each shard still collects the whole suite.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
       - name: Checkout repository
@@ -61,11 +62,14 @@ jobs:
         run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
       - name: Run complete test suite
+        # The default xdist scheduler hands each worker a fixed run of consecutive
+        # tests, so the worker that drew the slow ones finished minutes after the
+        # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
           python -m pytest tests demos/integrations \
             -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
-            --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
+            --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
@@ -245,19 +249,17 @@ jobs:
           - os: ubuntu-latest
             adapter: opengl
             required_tools: glslangValidator
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
+            apt_packages: glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
           - os: ubuntu-latest
             adapter: vulkan
             required_tools: spirv-val,spirv-as
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+            apt_packages: glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
           - os: macOS-latest
             adapter: metal
             required_tools: xcrun
-            install_command: xcrun -sdk macosx -f metal
           - os: windows-latest
             adapter: directx
             required_tools: dxc
-            install_command: ""
 
     steps:
       - name: Checkout repository
@@ -270,26 +272,22 @@ jobs:
           cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
-      - name: Install adapter toolchain
-        shell: bash
-        env:
-          INSTALL_COMMAND: ${{ matrix.install_command }}
+      # The packages.microsoft.com sources on hosted runners are not needed here, and apt-get update fails when that
+      # repository is unavailable.
+      - name: Remove optional hosted-runner apt sources
+        if: matrix.apt_packages
         run: |
-          if [ "${RUNNER_OS:-}" = "Linux" ] && [ -n "$INSTALL_COMMAND" ]; then
-            mapfile -t runner_apt_sources < <(
-              grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-            )
+          { grep -rl packages.microsoft.com /etc/apt/sources.list.d || true; } | xargs -r sudo rm -fv
 
-            if ((${#runner_apt_sources[@]})); then
-              printf 'Removing optional hosted-runner apt sources before apt update:\n'
-              printf '  %s\n' "${runner_apt_sources[@]}"
-              sudo rm -f "${runner_apt_sources[@]}"
-            fi
-          fi
+      - name: Install adapter toolchain
+        if: matrix.apt_packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ${{ matrix.apt_packages }}
 
-          if [ -n "$INSTALL_COMMAND" ]; then
-            eval "$INSTALL_COMMAND"
-          fi
+      - name: Check the Metal compiler
+        if: runner.os == 'macOS'
+        run: xcrun -sdk macosx -f metal
 
       - name: Probe runtime parity adapter availability
         id: probe_runtime_parity

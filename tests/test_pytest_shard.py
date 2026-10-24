@@ -114,6 +114,8 @@ def test_complete_suite_runs_one_job_per_shard():
     )
     assert "-p tools.pytest_shard" in command
     assert '--shard "${{ matrix.shard }}/${{ strategy.job-total }}"' in command
+    # Test times range from milliseconds to minutes; idle workers take queued tests.
+    assert "-n auto --dist worksteal" in command
 
 
 def test_translator_shard_legs_cover_every_shard():
@@ -132,12 +134,18 @@ def test_translator_shard_legs_cover_every_shard():
             suite, _, spec = name.partition("-")
             index, _, count = spec.partition("-of-")
             sharded.setdefault((suite, runner), set()).add((int(index), int(count)))
-    assert set(sharded) == {("general", "ubuntu-latest"), ("all", "windows-latest")}
+    assert set(sharded) == {
+        ("general", "ubuntu-latest"),
+        ("all", "windows-latest"),
+        ("all", "macOS-latest"),
+    }
     for parts in sharded.values():
         counts = {count for _, count in parts}
         assert len(counts) == 1
         assert {index for index, _ in parts} == set(range(1, counts.pop() + 1))
     assert "general" not in matrix["component"]
+    # A whole leg next to the shards of the same suite would run it twice.
+    assert not {(name, runner) for name, runner in legs} & set(sharded)
     command = next(
         step["run"]
         for step in job["steps"]
