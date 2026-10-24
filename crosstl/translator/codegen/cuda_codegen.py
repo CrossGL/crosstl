@@ -144,6 +144,11 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+CUDA_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
+}
+
 CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
     "countbits": "bitCount",
     "reversebits": "bitfieldReverse",
@@ -3484,6 +3489,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
         target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -3511,6 +3523,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         result_type = self.cuda_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None
+
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            return f"{wide_bitcast[0]}({args[0]})"
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)

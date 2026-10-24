@@ -3964,6 +3964,35 @@ class TestCudaCodeGen:
         assert " rsqrt(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_64bit_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    double d = 1.0;
+                    int64_t l = 1;
+                    int64_t bits = doubleBitsToLong(d);
+                    double fromBits = longBitsToDouble(l);
+                    double roundTrip = longBitsToDouble(doubleBitsToLong(d));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "bits = __double_as_longlong(d);" in cuda_code
+        assert "fromBits = __longlong_as_double(l);" in cuda_code
+        round_trip = "roundTrip = __longlong_as_double(__double_as_longlong(d));"
+        assert round_trip in cuda_code
+        assert "doubleBitsToLong" not in cuda_code
+        assert "longBitsToDouble" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
         source_code = """
         shader TestShader {
