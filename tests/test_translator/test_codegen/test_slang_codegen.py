@@ -325,6 +325,30 @@ def test_float16_aliases_emit_slang_half_types():
     assert "f16(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("crossgl_type", "slang_type"),
+    [
+        ("i8", "int8_t"),
+        ("u8", "uint8_t"),
+        ("i64", "int64_t"),
+        ("u64", "uint64_t"),
+        ("int8", "int8_t"),
+        ("uint8", "uint8_t"),
+        ("int64", "int64_t"),
+        ("uint64", "uint64_t"),
+        ("i8vec2", "vector<int8_t, 2>"),
+        ("i8vec4", "vector<int8_t, 4>"),
+        ("u8vec2", "vector<uint8_t, 2>"),
+        ("u64vec2", "vector<uint64_t, 2>"),
+        ("i64vec4", "vector<int64_t, 4>"),
+        ("vec2<i64>", "vector<int64_t, 2>"),
+        ("vec2<u64>", "vector<uint64_t, 2>"),
+    ],
+)
+def test_integer_width_types_convert_to_slang_spellings(crossgl_type, slang_type):
+    assert SlangCodeGen().convert_type(crossgl_type) == slang_type
+
+
 def test_stage_only_shader_emits_slang_entry_point():
     code = """
     shader main {
