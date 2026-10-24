@@ -3,7 +3,7 @@
 import ctypes
 import math
 
-from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
+from demos.integrations.mlx.portable_host.reduction_packages import ALL_ROW_ENTRIES
 from demos.integrations.mlx.portable_host.small_row_packages import (
     ALL_SMALL_ROW_ENTRIES,
 )
@@ -45,7 +45,7 @@ def width(row_size):
 
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
-    entries = {**ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
+    entries = {**ALL_ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
@@ -102,7 +102,7 @@ def validate_metadata(
     entry, metadata, logical_size, input_count, output_count, execution
 ):
     """Validate a detached row layout before cache lookup or source translation."""
-    entries = {**ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
+    entries = {**ALL_ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if not isinstance(entry, str) or entry not in entries:
         raise ValueError("Unknown row reduction entry")
     spec = signature(entry)

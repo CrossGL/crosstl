@@ -5,6 +5,11 @@ import itertools
 import math
 import re
 
+from demos.integrations.mlx.portable_host.element_storage import (
+    CTYPES,
+    STORAGE_DTYPES,
+)
+
 MAX_ELEMENTS = 65535
 # Reserve 32 output guards and fit even eight-byte carriers in signed byte sizes.
 MAX_STORAGE_ELEMENTS = 2**28 - 33
@@ -16,6 +21,13 @@ TYPES = {
     "uint64": ctypes.c_uint64,
     "bool_": ctypes.c_uint8,
 }
+# Value types first carried by their own runtime words; every other MLX
+# storage type travels through ``element_storage`` as exact logical words.
+WORD_TYPES = tuple(TYPES)
+TYPES.update(
+    {dtype: CTYPES[dtype] for dtype in STORAGE_DTYPES if dtype not in TYPES}
+)
+VALUE_PATTERN = "|".join(sorted(STORAGE_DTYPES, key=len, reverse=True))
 METADATA = {
     "src_shape": "int32",
     "src_strides": "int64",
@@ -31,8 +43,7 @@ METADATA = {
 
 def signature(entry):
     match = re.fullmatch(
-        r"gather(float32|int32|uint32|int64|uint64|bool_)"
-        r"(int32|uint32|int64|uint64)_([0-9]+)_([0-9]+)_int",
+        rf"gather({VALUE_PATTERN})(int32|uint32|int64|uint64)_([0-9]+)_([0-9]+)_int",
         entry,
     )
     if match is None:

@@ -484,9 +484,11 @@ def test_partition_sums_validate_their_16_bit_passes(two_pass, dtype):
     entry, buffers, count, execution, _ = _buffers(two_pass)
     entry = entry.replace("float32", dtype)
     assert reduction_packages.PARTITION_SUM_ENTRIES[entry] == dtype
-    # The column workloads reduce MLX arrays, whose 16-bit sums stay refused.
+    # The default column family keeps its base types; 16-bit floats are the
+    # column-half family, which includes the partition sums.
     assert entry not in reduction_packages.COLUMN_ENTRIES
     assert entry in reduction_packages.ENTRY_GROUPS["column"]
+    assert reduction_packages.HALF_COLUMN_ENTRIES[entry] == dtype
     for name in ("in", "out"):
         old = buffers[name]
         buffers[name] = runtime.Buffer(
@@ -510,4 +512,20 @@ def test_column_packages_translate_partition_sums_only_on_request():
         "column": reduction_packages.COLUMN_ENTRIES
     }
     source = Path(runtime.__file__).read_text(encoding="utf-8")
-    assert "entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES" in source
+    assert "entry in COLUMN_ENTRIES or entry in HALF_COLUMN_ENTRIES" in source
+
+
+def test_column_half_family_holds_every_16_bit_looped_and_two_pass_entry():
+    expected = {
+        f"col_reduce_{mode}_{rank}_32_32_reduce_{operation}{dtype}": dtype
+        for mode in ("looped", "2pass")
+        for rank in (1, 2, 5)
+        for operation in ("sum", "prod", "min", "max")
+        for dtype in ("float16", "bfloat16")
+    }
+    assert reduction_packages.HALF_COLUMN_ENTRIES == expected
+    assert reduction_packages.ENTRY_GROUPS["column-half"] == expected
+    assert set(reduction_packages.PARTITION_SUM_ENTRIES) < set(expected)
+    assert not set(expected) & set(reduction_packages.COLUMN_ENTRIES)
+    assert reduction_packages.FAMILY_WIDTHS["column-half"] == (256,)
+    assert "column-half" not in reduction_packages.ON_DEMAND_FAMILIES

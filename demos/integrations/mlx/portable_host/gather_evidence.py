@@ -4,7 +4,7 @@ import hashlib
 import math
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import gather_workloads
+from demos.integrations.mlx.portable_host import gather_storage, gather_workloads
 from demos.integrations.mlx.portable_host.gather_layout import signature
 from demos.integrations.mlx.portable_host.runtime import BOOLEAN_GUARD, COPY_GUARD
 
@@ -118,7 +118,8 @@ def audit_event(np, event):
         member = "out" if member == "out_" else member
         require(member not in inputs, "Duplicate gather binding")
         require(
-            binding["dtype"] == value["dtype"] == layout["elementType"]
+            binding["dtype"] == value["dtype"]
+            and binding_layout_matches(event["entry"], member, layout, value)
             and binding["shape"] == value["shape"]
             and binding.get("encoding") == value.get("encoding"),
             "Gather binding layout changed",
@@ -141,7 +142,7 @@ def audit_event(np, event):
         set(inputs) == required | {f"idx{i}" for i in range(count)},
         "Gather bindings are incomplete",
     )
-    arrays = {name: storage(np, value) for name, value in inputs.items()}
+    arrays = value_arrays(np, event, inputs)
     shape = arrays["src_shape"].tolist()
     strides = arrays["src_strides"].tolist()
     slices = arrays["slice_sizes"].tolist()
@@ -214,16 +215,37 @@ def audit_event(np, event):
     return audit_result(np, event, inputs, source, indices, expected, grid, metadata)
 
 
-def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
-    """Check native execution evidence independently of the indexing reference."""
+def binding_layout_matches(entry, member, layout, value):
+    """Extended values match their reflected carrier; words their own type."""
+    dtype = entry_dtype(entry)
+    if member in gather_storage.VALUES and gather_storage.extended(dtype):
+        return gather_storage.reflected_layout_matches(layout, value, dtype)
+    return value["dtype"] == layout["elementType"]
+
+
+def value_arrays(np, event, inputs):
+    """Decode every retained upload; extended values become logical words."""
+    dtype = entry_dtype(event["entry"])
+    return {
+        name: (
+            gather_storage.decoded(np, dtype, event["target"], value)
+            if name in gather_storage.VALUES and gather_storage.extended(dtype)
+            else storage(np, value)
+        )
+        for name, value in inputs.items()
+    }
+
+
+def entry_dtype(entry):
     from demos.integrations.mlx.portable_host.gather_packages import (
         signature as entry_signature,
     )
 
-    dtype = entry_signature(event["entry"])[0]
-    target = event["target"]
-    require(target in {"metal", "directx", "opengl"}, "Unknown gather target")
-    request = event["details"]["request"]
+    return entry_signature(entry)[0]
+
+
+def audit_word_values(np, event, inputs, expected, dtype, target):
+    """Native result storage of the types carried as their own words."""
     physical = (
         ("bool" if target == "metal" else "uint32") if dtype == "bool_" else dtype
     )
@@ -251,6 +273,62 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
         and inputs["out"]["values"] == [guard[0]] * len(actual) + guard,
         "Gather guard or output initialization changed",
     )
+    raw = storage(np, dict(inputs["out"], shape=[len(actual)], values=actual))
+    if dtype == "bool_":
+        raw = raw.astype(np.bool_)
+    require(
+        hashlib.sha256(raw.tobytes()).hexdigest() == event["outputHash"],
+        "Gather host output hash changed",
+    )
+
+
+def audit_element_values(np, event, inputs, expected, dtype, target):
+    """Native result storage of the types carried as ``element_storage`` words."""
+    physical = gather_storage.packet(dtype, target, [])["dtype"]
+    require(
+        inputs["src"]["dtype"] == inputs["out"]["dtype"] == physical,
+        "Gather value storage changed",
+    )
+    actual = event["gatherValues"]
+    ctype = gather_storage.CTYPES[dtype]
+    require(
+        isinstance(actual, list)
+        and all(type(word) is int and ctype(word).value == word for word in actual),
+        "Gather native result is outside its storage type",
+    )
+    logical = np.array(actual, dtype=gather_storage.NUMPY_WORDS[dtype])
+    require(
+        gather_workloads.words(np, logical) == expected,
+        "Gather native result disagrees with retained uploads",
+    )
+    guard = gather_storage.guard_words(dtype)
+    require(
+        event["gatherGuardValues"] == guard
+        and inputs["out"]
+        == gather_storage.packet(
+            dtype, target, gather_storage.guard_words(dtype, len(actual)) + guard
+        ),
+        "Gather guard or output initialization changed",
+    )
+    require(
+        gather_storage.output_hash(dtype, actual) == event["outputHash"],
+        "Gather host output hash changed",
+    )
+
+
+def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
+    """Check native execution evidence independently of the indexing reference."""
+    dtype = entry_dtype(event["entry"])
+    target = event["target"]
+    require(target in {"metal", "directx", "opengl"}, "Unknown gather target")
+    request = event["details"]["request"]
+    audit_values = (
+        audit_element_values
+        if gather_storage.extended(dtype)
+        else audit_word_values
+    )
+    audit_values(np, event, inputs, expected, dtype, target)
+    actual = event["gatherValues"]
     require(
         event["threads"] == math.prod(grid) == len(actual)
         and all(1 <= dimension <= 65535 for dimension in grid)
@@ -267,13 +345,6 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
         and request["dispatch"]["workgroupCount"] == grid
         and request["dispatch"]["workgroupSize"] == [1, 1, 1],
         "Gather native request changed",
-    )
-    raw = storage(np, dict(inputs["out"], shape=[len(actual)], values=actual))
-    if dtype == "bool_":
-        raw = raw.astype(np.bool_)
-    require(
-        hashlib.sha256(raw.tobytes()).hexdigest() == event["outputHash"],
-        "Gather host output hash changed",
     )
     require(event["gatherMetadata"] == metadata, "Gather metadata and uploads disagree")
     audit_native_execution(event)

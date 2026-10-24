@@ -326,7 +326,7 @@ def buffers(dtype="float32", index_dtype="int32"):
         "idx0": (index_dtype, [3, 0]),
     }
     memory = {
-        name: (runtime.TYPES[kind] * len(values))(*values)
+        name: (gather_layout.TYPES[kind] * len(values))(*values)
         for name, (kind, values) in data.items()
     }
     supplied = {
@@ -364,7 +364,7 @@ def test_gather_layout_matches_all_supported_storage_types(dtype, index_dtype):
 
 def replace_buffer(supplied, memory, name, kind, values):
     size = values if isinstance(values, int) else len(values)
-    allocation = runtime.TYPES[kind] * size
+    allocation = gather_layout.TYPES[kind] * size
     memory[name] = allocation() if isinstance(values, int) else allocation(*values)
     supplied[name] = runtime.Buffer(
         name.encode(),
@@ -724,7 +724,9 @@ def test_gather_cache_reuses_covering_range_and_rechecks_source(
         ),
     )
     first = cache.get(entry, 11)
-    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
+    capacity = (
+        gather_layout.MAX_STORAGE_ELEMENTS if entry.startswith("gather") else 65535
+    )
     for bound in (0, 11, 14, 19, 65534, capacity - 1):
         assert cache.get(entry, bound) == first and len(calls) == 1
     assert calls[0]["maximumIndex"] == capacity - 1
@@ -768,7 +770,9 @@ def test_gather_covering_assertion_matches_validated_host_capacity(
         raise RuntimeError("configuration captured")
 
     monkeypatch.setattr(gather_packages, "translate_project", translate)
-    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
+    capacity = (
+        gather_layout.MAX_STORAGE_ELEMENTS if entry.startswith("gather") else 65535
+    )
     with pytest.raises(RuntimeError, match="configuration captured"):
         cache._build(
             entry,

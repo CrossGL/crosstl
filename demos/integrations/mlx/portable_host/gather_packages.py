@@ -35,6 +35,14 @@ SOURCE_TYPES = {
     "int64": "int64_t",
     "uint64": "uint64_t",
     "bool_": "bool",
+    # get_type_string's spellings of the types indexing.cpp instantiates.
+    "float16": "float16_t",
+    "bfloat16": "bfloat16_t",
+    "complex64": "complex64_t",
+    "int8": "int8_t",
+    "int16": "int16_t",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
 }
 
 
@@ -177,7 +185,7 @@ class GatherPackageCache:
         signature(entry)
         capacity = (
             gather_layout.MAX_STORAGE_ELEMENTS
-            if entry.startswith("gather") and not entry.startswith("gather_axis")
+            if entry.startswith("gather")
             else MAX_ELEMENTS
         )
         if type(maximum_index) is not int or not 0 <= maximum_index < capacity:

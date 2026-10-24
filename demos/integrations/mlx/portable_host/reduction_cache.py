@@ -23,7 +23,7 @@ from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revisio
 from demos.integrations.mlx.portable_host.reduction_layout import stage
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ALL_ENTRIES,
-    ROW_ENTRIES,
+    ALL_ROW_ENTRIES,
     SOURCE,
 )
 
@@ -40,7 +40,7 @@ def verify_events(events, root, directory, index):
         execution = {name: event[name] for name in ("workgroupCount", "workgroupSize")}
         entry, count = event["entry"], event["threads"]
         layout = None
-        if entry in ROW_ENTRIES:
+        if entry in ALL_ROW_ENTRIES:
             layout = event.get("reductionLayout")
             if not isinstance(layout, dict) or set(layout) != {
                 "inputCount",
@@ -132,7 +132,7 @@ def check_source_span(packet, dtype, size):
 
 
 def dispatch_contract(entry, count, execution, *, layout=None):
-    if isinstance(entry, str) and entry in ROW_ENTRIES:
+    if isinstance(entry, str) and entry in ALL_ROW_ENTRIES:
         from demos.integrations.mlx.portable_host import row_reduction_layout
 
         if not isinstance(layout, dict) or set(layout) != {

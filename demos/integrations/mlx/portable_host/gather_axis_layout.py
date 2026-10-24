@@ -7,7 +7,9 @@ import re
 
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
+    MAX_STORAGE_ELEMENTS,
     TYPES,
+    VALUE_PATTERN,
     values,
 )
 
@@ -25,8 +27,7 @@ METADATA = {
 
 def signature(entry):
     match = re.fullmatch(
-        r"gather_axis(float32|int32|uint32|int64|uint64|bool_)"
-        r"(int32|uint32|int64|uint64)_int(c|nc)(c|nc)",
+        rf"gather_axis({VALUE_PATTERN})(int32|uint32|int64|uint64)_int(c|nc)(c|nc)",
         entry,
     )
     if match is None:
@@ -38,14 +39,17 @@ def signature(entry):
 def validate(entry, buffers, logical_size, execution):
     dtype, index_dtype, source_contiguous, index_contiguous = signature(entry)
     dtypes = {**METADATA, "src": dtype, "indices": index_dtype, "out": dtype}
-    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_ELEMENTS:
+    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_STORAGE_ELEMENTS:
         raise ValueError("Native axis-gather buffers or logical size do not match")
     for name, buffer in buffers.items():
         if (
             not buffer.data
             or buffer.dtype != dtypes[name].encode("ascii")
-            or not 0 < buffer.count <= MAX_ELEMENTS
+            or not 0 < buffer.count <= MAX_STORAGE_ELEMENTS
             or buffer.output != int(name == "out")
+            or buffer.data % ctypes.alignment(TYPES[dtypes[name]])
+            or buffer.data + buffer.count * ctypes.sizeof(TYPES[dtypes[name]])
+            > 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
         ):
             raise ValueError("Native axis-gather buffer layout or direction is invalid")
     for name in ("ndim", "axis", "axis_size", "src_ax_stride", "idx_ax_stride"):
@@ -58,9 +62,9 @@ def validate(entry, buffers, logical_size, execution):
     if (
         not 0 <= ndim < 64
         or not 0 <= axis <= ndim
-        or not 1 <= axis_size <= MAX_ELEMENTS
-        or not 0 <= source_step <= MAX_ELEMENTS
-        or not 0 <= index_step <= MAX_ELEMENTS
+        or not 1 <= axis_size <= MAX_STORAGE_ELEMENTS
+        or not 0 <= source_step <= MAX_STORAGE_ELEMENTS
+        or not 0 <= index_step <= MAX_STORAGE_ELEMENTS
         or buffers["out"].count != logical_size
         or any(
             buffers[name].count != max(1, ndim)
@@ -71,8 +75,8 @@ def validate(entry, buffers, logical_size, execution):
     shape, source_strides, index_strides = (
         values(buffers[name])[:ndim] for name in ("shape", "src_strides", "idx_strides")
     )
-    if any(not 1 <= size <= MAX_ELEMENTS for size in shape) or any(
-        not 0 <= step <= MAX_ELEMENTS for step in source_strides + index_strides
+    if any(not 1 <= size <= MAX_STORAGE_ELEMENTS for size in shape) or any(
+        not 0 <= step <= MAX_STORAGE_ELEMENTS for step in source_strides + index_strides
     ):
         raise ValueError("Native axis-gather shape or strides are invalid")
     outer = math.prod(shape)
@@ -80,7 +84,10 @@ def validate(entry, buffers, logical_size, execution):
         raise ValueError("Native axis-gather output does not match its shape")
     index_size = logical_size // outer
     grid = [math.prod(shape[axis:]), index_size, math.prod(shape[:axis])]
-    if index_size < 1 or execution != {
+    # Storage is bounded as a whole; each launch axis keeps the portable limit.
+    if any(not 1 <= dimension <= MAX_ELEMENTS for dimension in grid):
+        raise ValueError("Native axis-gather launch exceeds per-axis workgroup limits")
+    if execution != {
         "workgroupCount": grid,
         "workgroupSize": [1, 1, 1],
     }:

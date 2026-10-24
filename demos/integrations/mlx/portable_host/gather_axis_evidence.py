@@ -5,8 +5,9 @@ import math
 from demos.integrations.mlx.portable_host.gather_axis_layout import METADATA, signature
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_result,
+    binding_layout_matches,
     require,
-    storage,
+    value_arrays,
     view,
 )
 from demos.integrations.mlx.portable_host.gather_workloads import words
@@ -23,7 +24,8 @@ def audit_event(np, event):
         member = "out" if member == "out_" else member
         require(member not in inputs, "Duplicate axis-gather binding")
         require(
-            binding["dtype"] == value["dtype"] == layout["elementType"]
+            binding["dtype"] == value["dtype"]
+            and binding_layout_matches(event["entry"], member, layout, value)
             and binding["shape"] == value["shape"]
             and binding.get("encoding") == value.get("encoding"),
             "Axis-gather binding layout changed",
@@ -33,7 +35,7 @@ def audit_event(np, event):
         set(inputs) == {"src", "indices", "out", *METADATA},
         "Axis-gather bindings are incomplete",
     )
-    arrays = {name: storage(np, value) for name, value in inputs.items()}
+    arrays = value_arrays(np, event, inputs)
     for name, dtype in METADATA.items():
         require(inputs[name]["dtype"] == dtype, "Axis-gather metadata storage changed")
     require(

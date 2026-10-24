@@ -46,16 +46,31 @@ INIT_SOURCE = (
     "instantiate_init_reduce(sum, uint32, uint32_t, Sum)\n"
     "instantiate_init_reduce(prod, uint32, uint32_t, Prod)\n"
 )
+# instantiate_sum_prod and instantiate_min_max keep 16-bit floats as their
+# own accumulator, so every pass rounds in the element type.
+HALF_FLOAT_ENTRIES = {
+    f"all_reduce_{operation}{dtype}": dtype
+    for operation in ("sum", "prod", "min", "max")
+    for dtype in ("float16", "bfloat16")
+}
+ROW_PREFIXES = (
+    "row_reduce_simple_",
+    "row_reduce_looped_1_reduce_",
+    "row_reduce_looped_2_reduce_",
+    "row_reduce_looped_5_reduce_",
+)
 ROW_ENTRIES = {
     prefix + entry.removeprefix("all_reduce_"): dtype
-    for prefix in (
-        "row_reduce_simple_",
-        "row_reduce_looped_1_reduce_",
-        "row_reduce_looped_2_reduce_",
-        "row_reduce_looped_5_reduce_",
-    )
+    for prefix in ROW_PREFIXES
     for entry, dtype in ENTRIES.items()
 }
+# Translated on demand only, so the static row shards keep their inventory.
+HALF_ROW_ENTRIES = {
+    prefix + entry.removeprefix("all_reduce_"): dtype
+    for prefix in ROW_PREFIXES
+    for entry, dtype in HALF_FLOAT_ENTRIES.items()
+}
+ALL_ROW_ENTRIES = {**ROW_ENTRIES, **HALF_ROW_ENTRIES}
 COLUMN_ENTRIES = {
     f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
         "all_reduce_"
@@ -75,17 +90,29 @@ PARTITION_SUM_ENTRIES = {
     for mode in ("looped", "2pass")
     for dtype in ("float16", "bfloat16")
 }
+# Every 16-bit float looped and two-pass column instantiation; the split-K
+# partition sums are its one-axis sums.
+HALF_COLUMN_ENTRIES = {
+    f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
+        "all_reduce_"
+    ): dtype
+    for mode in ("looped", "2pass")
+    for dimension in (1, 2, 5)
+    for entry, dtype in HALF_FLOAT_ENTRIES.items()
+}
 ENTRY_GROUPS = {
     "all": ENTRIES,
     "bfloat": BFLOAT_ENTRIES,
     "half": HALF_ENTRIES,
     "row": ROW_ENTRIES,
+    "row-half": HALF_ROW_ENTRIES,
     "column": {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES},
+    "column-half": HALF_COLUMN_ENTRIES,
     "init": INIT_ENTRIES,
 }
 DEFAULT_ENTRIES = {"column": COLUMN_ENTRIES}
 # Families whose whole-array or row entries the on-demand cache translates.
-ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row"})
+ON_DEMAND_FAMILIES = frozenset({"all", "bfloat", "half", "row", "row-half"})
 WIDTHS = tuple(range(32, 1025, 32))
 ROW_WIDTHS = (32, 128, *range(288, 1025, 32))
 FAMILY_WIDTHS = {
@@ -93,7 +120,9 @@ FAMILY_WIDTHS = {
     "bfloat": WIDTHS,
     "half": WIDTHS,
     "row": ROW_WIDTHS,
+    "row-half": ROW_WIDTHS,
     "column": (256,),
+    "column-half": (256,),
     "init": (1,),
 }
 

@@ -2786,7 +2786,7 @@ jobs:
     name: MLX upstream op tests (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 320
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -2940,6 +2940,19 @@ jobs:
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family column --jobs 4 --output-dir .mlx-portable-upstream-ops/column-reductions \
               2>&1 | tee .mlx-portable-upstream-ops/column-reductions.log
+          # Float16 softmax composes whole-array, row and column maxima and sums.
+          for family in half bfloat row-half; do
+            python tools/run_bounded_command.py --timeout-seconds 60 --label "MLX on-demand $family reduction packages" -- \
+              python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+                --target "${{ matrix.target }}" --family "$family" --on-demand \
+                --output-dir ".mlx-portable-upstream-ops/$family-reductions" \
+                2>&1 | tee ".mlx-portable-upstream-ops/$family-reductions.log"
+          done
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX 16-bit column reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family column-half --jobs 4 \
+              --output-dir .mlx-portable-upstream-ops/column-half-reductions \
+              2>&1 | tee .mlx-portable-upstream-ops/column-half-reductions.log
       - name: Execute unchanged upstream op tests
         env:
           EGL_PLATFORM: surfaceless
@@ -2955,6 +2968,9 @@ jobs:
               --reductions .mlx-portable-upstream-ops/init-packages \
               --reductions .mlx-portable-upstream-ops/all-reductions --reductions .mlx-portable-upstream-ops/row-reductions \
               --reductions .mlx-portable-upstream-ops/column-reductions \
+              --reductions .mlx-portable-upstream-ops/half-reductions --reductions .mlx-portable-upstream-ops/bfloat-reductions \
+              --reductions .mlx-portable-upstream-ops/row-half-reductions \
+              --reductions .mlx-portable-upstream-ops/column-half-reductions \
               --output-dir .mlx-portable-upstream-ops/evidence \
               2>&1 | tee .mlx-portable-upstream-ops/verification.log
       - name: Retain upstream op execution evidence

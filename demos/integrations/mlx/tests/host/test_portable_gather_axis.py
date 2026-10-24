@@ -167,7 +167,8 @@ def test_axis_gather_rejects_invalid_layout_before_dispatch(fault):
     (
         "gather_axisfloat32float32_intcc",
         "gather_axisfloat32int32_int64_tcc",
-        "gather_axisint16int32_intcc",
+        "gather_axisfloat64int32_intcc",
+        "gather_axiscomplex128int32_intcc",
         "gather_axisint64int64_int",
         "gather_axisint64int64_intcc_extra",
     ),

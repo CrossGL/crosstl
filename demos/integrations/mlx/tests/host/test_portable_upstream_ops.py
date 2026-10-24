@@ -436,6 +436,10 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "init_reduce_sumint32",
         "argmin_bfloat16",
         "argmax_uint64",
+        "row_reduce_small_1_reduce_sumfloat16",
+        "row_reduce_small_2_reduce_prodint64",
+        "col_reduce_small_1_reduce_maxfloat16",
+        "col_reduce_small_1_reduce_sumcomplex64",
     ):
         assert entry.startswith(retained), entry
     for entry in (
@@ -443,5 +447,7 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "vv_Addint64",
         "contig_scan_inclusive_sum_int32_int32",
         "row_reduce_small_1_reduce_sumint32",
+        "row_reduce_looped_1_reduce_sumfloat16",
+        "col_reduce_looped_1_32_32_reduce_sumfloat16",
     ):
         assert not entry.startswith(retained), entry

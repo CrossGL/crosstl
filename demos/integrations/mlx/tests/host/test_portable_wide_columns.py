@@ -478,7 +478,8 @@ def test_runtime_and_host_adapter_route_wide_columns():
         Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
     )
     assert (
-        "if (wide && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {"
+        "if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
+        "!small_columns) {"
         in adapter
     )
     assert "column_shape_size(plan.shape) < 32;" in adapter

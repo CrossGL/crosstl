@@ -1551,7 +1551,7 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (inputs.size() < 2 || inputs.size() > 11 ||
       axes_.size() != inputs.size() - 1 || out.size() > max_storage_elements ||
       slice_sizes_.size() != inputs[0].ndim() ||
-      !storage_type(out.dtype()) || out.dtype() != inputs[0].dtype()) {
+      !cast_type(out.dtype()) || out.dtype() != inputs[0].dtype()) {
     throw std::invalid_argument("CrossTL gather specialization exceeds its supported layout.");
   }
   out.set_data(allocator::malloc(out.nbytes()));
@@ -1570,7 +1570,7 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (idx_ndim > 64) {
     throw std::invalid_argument("CrossTL gather index rank exceeds 64.");
   }
-  const std::string entry = std::string("gather") + storage_type(out.dtype()) +
+  const std::string entry = std::string("gather") + cast_type(out.dtype()) +
       storage_type(index_dtype) + "_" + std::to_string(count) + "_" +
       std::to_string(idx_ndim) + "_int";
   require_entry(entry);
@@ -1603,8 +1603,8 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::vector<int32_t> slices(slice_sizes_.begin(), slice_sizes_.end());
   std::vector<int32_t> axes(axes_.begin(), axes_.end());
   std::vector<CrosstlMlxBuffer> buffers = {
-      {"src", storage_type(src.dtype()), const_cast<void*>(src.data<void>()), src_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"src", cast_type(src.dtype()), const_cast<void*>(src.data<void>()), src_span, 0},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"src_shape", "int32", src_shape.data(), ndim, 0},
       {"src_strides", "int64", src_strides.data(), ndim, 0},
       {"src_ndim", "uint64", &ndim, 1, 0},
@@ -1696,11 +1696,12 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  if (inputs.size() != 2 || !storage_type(out.dtype()) ||
+  constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
+  if (inputs.size() != 2 || !cast_type(out.dtype()) ||
       inputs[0].dtype() != out.dtype() || inputs[0].ndim() == 0 ||
       inputs[0].ndim() > 64 || inputs[0].ndim() != inputs[1].ndim() ||
       axis_ < 0 || axis_ >= inputs[0].ndim() ||
-      out.shape() != inputs[1].shape() || out.size() > 65535) {
+      out.shape() != inputs[1].shape() || out.size() > max_storage_elements) {
     throw std::invalid_argument("CrossTL axis gather requires matching bounded array layouts.");
   }
   const auto index_dtype = inputs[1].dtype();
@@ -1719,9 +1720,9 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   auto src = gather_input(inputs[0]);
   auto idx = gather_input(inputs[1]);
-  const auto source_span = gather_span(src);
-  const auto index_span = gather_span(idx);
-  const std::string entry = std::string("gather_axis") + storage_type(out.dtype()) +
+  const auto source_span = gather_span(src, max_storage_elements);
+  const auto index_span = gather_span(idx, max_storage_elements);
+  const std::string entry = std::string("gather_axis") + cast_type(out.dtype()) +
       storage_type(index_dtype) + "_int" + (src.flags().row_contiguous ? "c" : "nc") +
       (idx.flags().row_contiguous ? "c" : "nc");
   require_entry(entry);
@@ -1745,10 +1746,14 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   int32_t axis = axis_, axis_size = src.shape(axis_);
   uint64_t source_step = src.strides()[axis_], index_step = idx.strides()[axis_];
+  // Storage is bounded as a whole; each launch axis keeps the portable limit.
+  if (after > 65535 || uint64_t(idx.shape(axis_)) > 65535 || before > 65535) {
+    throw std::invalid_argument("CrossTL axis gather launch exceeds per-axis workgroup limits.");
+  }
   CrosstlMlxBuffer buffers[] = {
-      {"src", storage_type(src.dtype()), const_cast<void*>(src.data<void>()), source_span, 0},
+      {"src", cast_type(src.dtype()), const_cast<void*>(src.data<void>()), source_span, 0},
       {"indices", storage_type(idx.dtype()), const_cast<void*>(idx.data<void>()), index_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"shape", "int32", shape.data(), shape.size(), 0},
       {"src_strides", "int64", source_strides.data(), source_strides.size(), 0},
       {"idx_strides", "int64", index_strides.data(), index_strides.size(), 0},
@@ -2027,15 +2032,12 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   const bool small_columns =
       (plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce) &&
       !plan.shape.empty() && column_shape_size(plan.shape) < 32;
-  if (wide && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
+  // 16-bit floats also run the looped row and the looped and two-pass column
+  // instantiations; the 8-byte types have only the small and whole-array ones.
+  if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
     throw std::invalid_argument(
-        "CrossTL int64, uint64, complex64 and 16-bit float sum reductions require "
-        "whole-array plans, rows of at most 64 elements or columns of fewer than 32.");
-  }
-  if (half_extrema && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
-    throw std::invalid_argument(
-        "CrossTL 16-bit float extrema require whole-array plans, rows of at most 64 "
-        "elements or columns of fewer than 32.");
+        "CrossTL int64, uint64 and complex64 reductions require whole-array plans, "
+        "rows of at most 64 elements or columns of fewer than 32.");
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
     dispatch_row_reduce(in, out, plan, axes_, operation, dtype);

@@ -277,6 +277,10 @@ RETAINED_VALUES = (
     *DIVMOD_PREFIXES,
     "all_reduce_",
     "init_reduce_",
+    # Wide small-row and small-column audits derive every upload from the
+    # values and hash the outputs, also where they do not recompute them.
+    *wide_row_dispatch.ENTRIES,
+    *wide_column_dispatch.ENTRIES,
 )
 # The CI step bounds the three workers and the audit at 5,000 seconds; a cold
 # native run also translates about a hundred lazy vectors.

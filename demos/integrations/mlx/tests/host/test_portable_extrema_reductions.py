@@ -130,9 +130,16 @@ def test_host_adapter_routes_only_16_bit_extrema():
         "const bool half_extrema = (in.dtype() == bfloat16 || in.dtype() == float16) &&\n"
         "      (reduce_type_ == Min || reduce_type_ == Max);"
     ) in source
+    # Looped rows and looped or two-pass columns of 16-bit floats run the
+    # row and column-half families; only the 8-byte types stay restricted.
+    assert "CrossTL 16-bit float extrema require" not in source
     assert (
-        '"CrossTL 16-bit float extrema require whole-array plans, rows of at most 64 "\n'
-        '        "elements or columns of fewer than 32."'
+        "  if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
+        "!small_columns) {\n"
+        "    throw std::invalid_argument(\n"
+        '        "CrossTL int64, uint64 and complex64 reductions require whole-array '
+        'plans, "\n'
+        '        "rows of at most 64 elements or columns of fewer than 32.");'
     ) in source
 
 

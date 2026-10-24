@@ -384,6 +384,7 @@ def test_host_adapter_routes_wide_types_to_whole_array_or_small_row_plans():
     assert "const bool wide = eight_byte ? !logical" in source
     assert "plan.shape.back() <= 64;" in source
     assert (
-        "if (wide && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {"
+        "if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
+        "!small_columns) {"
         in source
     )
