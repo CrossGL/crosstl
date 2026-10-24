@@ -14,7 +14,7 @@ from tools.coverage import (
     runner,
     validators,
 )
-from tools.coverage.model import Feature, Param, Result, Signature, Type
+from tools.coverage.model import VOID, Feature, Param, Result, Signature, Type
 
 SIN = Feature(
     "metal",
@@ -300,6 +300,29 @@ def test_a_probe_that_rounds_through_16_bit_floats_keeps_its_validation_result(
         assert execution.run([probe])[0][0].outcome == outcome
 
 
+@pytest.mark.parametrize("instruction", ["OpReadClockKHR", "OpTypeRayQueryKHR"])
+def test_a_probe_that_reads_a_clock_or_a_ray_query_keeps_its_validation_result(
+    monkeypatch, instruction
+):
+    # Neither a clock nor a ray query the harness never initializes gives two runs the same result.
+    _fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    feature = Feature("slang", "function", "clockARB", Signature(Type("uint"), ()))
+    for source, outcome in ((f"%1 = {instruction}\n", "supported"), ("", "wrong")):
+        source += "; declares fin\n"
+        monkeypatch.setattr(execution, "as_spirv", lambda language, text: source)
+        probe = Result(feature, "input", "supported", sources=(source, source))
+        assert execution.run([probe])[0][0].outcome == outcome
+
+
+# A call that takes no argument, whose probe declares an input it never reads.
+CALLS = {
+    "hlsl": ("WaveGetLaneIndex", Type("uint")),
+    "slang": ("WaveGetLaneIndex", Type("uint")),
+    "wgsl": ("workgroupBarrier", VOID),
+}
+
+
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     if not validators.can_lower(language):
@@ -307,11 +330,15 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     from tests.conformance import interface
 
     feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
-    source = probes.build(feature, language).source
+    name, result = CALLS[language]
+    call = Feature(language, "function", name, Signature(result, ()))
     path = tmp_path / "probe.spvasm"
-    path.write_text(execution.as_spirv(language, source))
-    found = interface.interface(path, "spirv", 1)
-    assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+    for probe in (feature, call):
+        source = probes.build(probe, language).source
+        path.write_text(execution.as_spirv(language, source))
+        found = interface.interface(path, "spirv", 1)
+        assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+    source = probes.build(feature, language).source
     if language == "hlsl":
         renamed = source.replace("void main", "void CSMain")
         path.write_text(execution.as_spirv(language, renamed))
