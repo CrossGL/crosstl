@@ -6594,28 +6594,39 @@ class SlangCodeGen(LoweringRefusalMixin):
         self, body_statements, shader_type, param_list
     ):
         candidates = self.slang_intrinsic_builtin_candidates(shader_type)
-        if not candidates:
-            return {}
 
         declared_names = {
             getattr(param, "name", None)
             for param in param_list or []
             if getattr(param, "name", None)
         }
+        identifiers = []
         for node in self.walk_ast(body_statements):
             if isinstance(node, VariableNode):
                 declared_names.add(node.name)
+            elif isinstance(node, IdentifierNode):
+                identifiers.append(node)
 
         aliases = {}
-        for node in self.walk_ast(body_statements):
-            if not isinstance(node, IdentifierNode):
+        for node in identifiers:
+            if node.name in declared_names:
                 continue
-            if node.name not in candidates or node.name in declared_names:
-                continue
-
-            return_type, intrinsic = candidates[node.name]
-            aliases[node.name] = intrinsic
-            self.register_variable_type(node.name, return_type)
+            if node.name in candidates:
+                return_type, intrinsic = candidates[node.name]
+                aliases[node.name] = intrinsic
+                self.register_variable_type(node.name, return_type)
+            elif node.name == "gl_NumWorkGroups":
+                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
+                # alias above is only made for a compute entry point.
+                where = (
+                    f"a {shader_type} entry point"
+                    if shader_type
+                    else "a helper function"
+                )
+                self.refuse_lowering(
+                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"in a compute entry point, not in {where}"
+                )
         return aliases
 
     def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
@@ -7725,6 +7736,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "compute":
+            # Slang has no SV_ system value for the dispatch size; it exposes
+            # the number of workgroups through the WorkgroupCount() intrinsic.
+            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 
