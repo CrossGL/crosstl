@@ -576,3 +576,33 @@ def test_row_artifact_evidence_retains_package_identity(tmp_path, fault):
             verify_artifacts(trace, tmp_path, index)
     else:
         verify_artifacts(trace, tmp_path, index)
+
+
+def test_row_source_spans_accept_compacted_uploads_of_the_same_length():
+    from demos.integrations.mlx.portable_host.reduction_cache import (
+        check_source_span,
+    )
+    from demos.integrations.mlx.portable_host.trace_records import (
+        compact_trace_values,
+    )
+
+    values = [float(i) for i in range(420)]
+    full = {"dtype": "float32", "shape": [420], "values": values}
+    compact = compact_trace_values(full)
+    assert "compactedValues" in compact["values"]
+    for packet in (full, compact):
+        check_source_span(packet, "float32", 420)
+    short = compact_trace_values({**full, "values": values[:-1]})
+    digest = {**compact["values"]["compactedValues"], "sha256": "0"}
+    for packet, dtype, size in (
+        (full, "float32", 419),
+        (full, "int32", 420),
+        ({**full, "shape": [419]}, "float32", 420),
+        (short, "float32", 420),
+        ({**compact, "values": {"compactedValues": digest}}, "float32", 420),
+        ({**compact, "values": {"length": 420}}, "float32", 420),
+        ({**full, "values": None}, "float32", 420),
+        (None, "float32", 420),
+    ):
+        with pytest.raises(ValueError, match="source span"):
+            check_source_span(packet, dtype, size)

@@ -1870,7 +1870,7 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 9,705 translated kernels, 24 of them indexing kernels and
+native run dispatches 9,864 translated kernels, 29 of them indexing kernels and
 6 steel GEMM kernels; the whole verification takes about 23 minutes on a
 loaded machine.
 

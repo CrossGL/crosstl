@@ -87,20 +87,48 @@ def verify_events(events, root, directory, index):
                     if parameter == "in"
                     else contract["outputCount"] + 32
                 )
-                packet = event["inputs"][binding["name"]]
-                if (
-                    packet.get("dtype") != binding["scalarLayout"]["elementType"]
-                    or packet.get("shape") != [size]
-                    or not isinstance(packet.get("values"), list)
-                    or len(packet["values"]) != size
-                ):
-                    raise ValueError("Row trace upload differs from its source span")
+                check_source_span(
+                    event["inputs"][binding["name"]],
+                    binding["scalarLayout"]["elementType"],
+                    size,
+                )
         verify_artifacts(
             [event],
             package.parent,
             {"target": index["target"], "descriptors": {entry: descriptor}},
             variants=False,
         )
+
+
+def uploaded_length(values):
+    """Count an upload's values, also when its trace record kept only a digest.
+
+    Traces that do not retain an entry's values replace a long array with its
+    length and SHA-256 (``trace_records.compact_trace_values``).
+    """
+    if isinstance(values, list):
+        return len(values)
+    compacted = values.get("compactedValues") if isinstance(values, dict) else None
+    if (
+        isinstance(compacted, dict)
+        and set(compacted) == {"length", "sha256"}
+        and type(compacted["length"]) is int
+        and isinstance(compacted["sha256"], str)
+        and len(compacted["sha256"]) == 64
+    ):
+        return compacted["length"]
+    return None
+
+
+def check_source_span(packet, dtype, size):
+    """Require a row upload of ``dtype`` that spans exactly ``size`` elements."""
+    if (
+        not isinstance(packet, dict)
+        or packet.get("dtype") != dtype
+        or packet.get("shape") != [size]
+        or uploaded_length(packet.get("values")) != size
+    ):
+        raise ValueError("Row trace upload differs from its source span")
 
 
 def dispatch_contract(entry, count, execution, *, layout=None):
