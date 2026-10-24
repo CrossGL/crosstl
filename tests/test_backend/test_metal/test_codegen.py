@@ -6878,7 +6878,8 @@ def test_codegen_sizeof_local_type_alias_does_not_leak_between_functions():
         """)
 
     assert "return 2;" in crossgl
-    assert "return sizeof(Scalar);" in crossgl
+    # An operand the importer cannot size keeps Metal's layout through metal_sizeof.
+    assert "return metal_sizeof(Scalar);" in crossgl
 
 
 def test_codegen_resolves_function_local_typedef_uses():

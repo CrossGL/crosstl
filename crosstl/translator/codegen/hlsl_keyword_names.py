@@ -334,29 +334,43 @@ _SKIPPED_FIELDS = frozenset({"parent", "annotations"})
 _NAME_FIELDS = ("name", "identifier", "member", "pattern")
 
 
+_ATOMIC_VALUES = (str, int, float, bool, Enum, type(None))
+
+
 def _iter_nodes(root, *, include_opaque=False):
-    """Yield every AST node reachable from ``root`` once."""
+    """Yield every AST node reachable from ``root`` once, parents first.
+
+    Atomic field values are dropped before they reach the stack, so a walk
+    costs one step per node or container rather than one per field.
+    """
     seen = set()
     stack = [root]
+    pop = stack.pop
+    extend = stack.extend
     while stack:
-        node = stack.pop()
-        if node is None or isinstance(node, (str, int, float, bool, Enum)):
+        node = pop()
+        if isinstance(node, _ATOMIC_VALUES):
             continue
         if isinstance(node, (list, tuple)):
-            stack.extend(reversed(node))
+            extend(reversed(node))
             continue
         if isinstance(node, dict):
-            stack.extend(reversed(list(node.values())))
+            extend(reversed(list(node.values())))
             continue
-        if not hasattr(node, "__dict__") or id(node) in seen:
+        fields = getattr(node, "__dict__", None)
+        if fields is None or id(node) in seen:
             continue
         seen.add(id(node))
-        if isinstance(node, _OPAQUE_TYPES) and not include_opaque:
+        if not include_opaque and isinstance(node, _OPAQUE_TYPES):
             continue
         yield node
-        for key, value in reversed(list(vars(node).items())):
-            if key not in _SKIPPED_FIELDS:
-                stack.append(value)
+        children = [
+            value
+            for key, value in fields.items()
+            if key not in _SKIPPED_FIELDS and not isinstance(value, _ATOMIC_VALUES)
+        ]
+        children.reverse()
+        extend(children)
 
 
 def _member_declarations(node):
@@ -393,13 +407,11 @@ def _is_value_type(type_node, struct_names):
     return False
 
 
-def _function_local_ids(ast):
+def _function_local_ids(functions):
     """Ids of variables declared in a function body at function scope."""
     local_ids = set()
-    for node in _iter_nodes(ast):
-        if not isinstance(node, FunctionNode):
-            continue
-        for inner in _iter_nodes(getattr(node, "body", None)):
+    for function in functions:
+        for inner in _iter_nodes(getattr(function, "body", None)):
             if isinstance(inner, VariableNode) and not (
                 set(getattr(inner, "qualifiers", None) or ())
                 & _PROGRAM_SCOPE_QUALIFIERS
@@ -417,35 +429,41 @@ def _constant_buffers(ast):
 
 
 class _Declarations:
-    """The names a program declares, split by namespace and scope."""
+    """The names a program declares, split by namespace and scope.
+
+    One walk collects every declaration. Whether a declaration sits at HLSL
+    program scope matters only for the names HLSL reserves at that scope, so
+    function bodies are walked a second time only when such a name occurs.
+    """
 
     def __init__(self, ast):
         self.values = set()
         self.members = set()
         self.types = set()
-        # Value names declared at HLSL program scope.
+        # Scoped keyword names declared at HLSL program scope.
         self.program_scope = set()
+        # Member accesses that name a method, such as ``tex.sample``.
+        self.callee_members = []
         struct_names = set()
-        for node in _iter_nodes(ast):
-            if isinstance(node, StructNode) and isinstance(node.name, str):
-                struct_names.add(node.name)
-        cbuffer_members = {
-            id(member)
-            for block in _constant_buffers(ast)
-            for member in getattr(block, "members", None) or []
-        }
-        local_ids = _function_local_ids(ast)
+        functions = []
+        scoped = []
         for node in _iter_nodes(ast):
             name = getattr(node, "name", None)
+            if isinstance(node, FunctionCallNode):
+                function = getattr(node, "function", None)
+                if isinstance(function, (MemberAccessNode, PointerAccessNode)):
+                    self.callee_members.append(function)
+            if isinstance(node, FunctionNode):
+                functions.append(node)
+            if isinstance(node, StructNode) and isinstance(name, str):
+                struct_names.add(name)
             if _is_type_alias(node) and isinstance(name, str):
                 # A type alias names a type: its uses are ``NamedType`` nodes.
                 self.types.add(name)
             elif isinstance(node, _VALUE_DECLARATION_TYPES) and isinstance(name, str):
                 self.values.add(name)
-                if self._at_program_scope(
-                    node, struct_names, cbuffer_members, local_ids
-                ):
-                    self.program_scope.add(name)
+                if name in HLSL_SCOPED_KEYWORD_NAMES:
+                    scoped.append(node)
             elif isinstance(node, _TYPE_DECLARATION_TYPES) and isinstance(name, str):
                 self.types.add(name)
             elif isinstance(node, ForInNode):
@@ -456,6 +474,19 @@ class _Declarations:
                 member_name = getattr(member, "name", None)
                 if isinstance(member_name, str):
                     self.members.add(member_name)
+        if scoped:
+            self._record_program_scope(ast, scoped, struct_names, functions)
+
+    def _record_program_scope(self, ast, scoped, struct_names, functions):
+        cbuffer_members = {
+            id(member)
+            for block in _constant_buffers(ast)
+            for member in getattr(block, "members", None) or []
+        }
+        local_ids = _function_local_ids(functions)
+        for node in scoped:
+            if self._at_program_scope(node, struct_names, cbuffer_members, local_ids):
+                self.program_scope.add(node.name)
 
     @staticmethod
     def _at_program_scope(node, struct_names, cbuffer_members, local_ids):
@@ -510,20 +541,19 @@ def _rename_map(declared, used):
     return renames
 
 
-def _callee_member_ids(ast):
-    """Ids of member accesses that name a method, such as ``tex.sample``."""
-    callees = set()
-    for node in _iter_nodes(ast):
-        if isinstance(node, FunctionCallNode):
-            function = getattr(node, "function", None)
-            if isinstance(function, (MemberAccessNode, PointerAccessNode)):
-                callees.add(id(function))
-    return callees
+def _copied_ids(nodes, memo):
+    """Ids, in a deep copy, of ``nodes`` taken from the original tree."""
+    ids = set()
+    for node in nodes:
+        # ``deepcopy`` records every object it duplicates in ``memo``; an
+        # object it shares between the trees is absent and keeps its id.
+        duplicate = memo.get(id(node))
+        ids.add(id(node) if duplicate is None else id(duplicate))
+    return ids
 
 
 class _Renamer:
-    def __init__(self, ast, declarations):
-        used = _program_names(ast)
+    def __init__(self, declarations, used, callee_ids):
         self.values = _rename_map(declarations.keyword_values(), used)
         self.types = _rename_map(declarations.keyword_types(), used)
         self.members = {
@@ -536,7 +566,7 @@ class _Renamer:
         for name, new_name in self.types.items():
             if name not in declarations.values and name not in declarations.members:
                 self.identifiers.setdefault(name, new_name)
-        self.callee_ids = _callee_member_ids(ast)
+        self.callee_ids = callee_ids
 
     def rename(self, node):
         name = getattr(node, "name", None)
@@ -572,17 +602,26 @@ class _Renamer:
 
 
 def legalize_hlsl_keyword_names(ast):
-    """Return ``ast``, or a renamed copy when it declares an HLSL keyword name."""
-    if not any(hlsl_keyword_declarations(ast)):
+    """Return ``ast``, or a renamed copy when it declares an HLSL keyword name.
+
+    The declarations and the names in use are read from ``ast`` itself; the
+    copy has the same names, so only the rename walks the copy.
+    """
+    declarations = _Declarations(ast)
+    if not (declarations.keyword_values() or declarations.keyword_types()):
         return ast
-    ast = deepcopy(ast)
-    renamer = _Renamer(ast, _Declarations(ast))
-    for node in _iter_nodes(ast):
+    used = _program_names(ast)
+    memo = {}
+    renamed = deepcopy(ast, memo)
+    renamer = _Renamer(
+        declarations, used, _copied_ids(declarations.callee_members, memo)
+    )
+    for node in _iter_nodes(renamed):
         renamer.rename(node)
     # Fixed-sampler records name module-scope samplers; they must follow the
     # rename, or the generator no longer finds the sampler and drops its record.
-    annotations = getattr(ast, "annotations", None) or {}
+    annotations = getattr(renamed, "annotations", None) or {}
     for record in annotations.get("fixed_samplers") or ():
         if record["name"] in renamer.values:
             record["name"] = renamer.values[record["name"]]
-    return ast
+    return renamed

@@ -176,6 +176,10 @@ from .counter_loops import (
     counter_update,
     wrapping_counter_loop_uniform,
 )
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -222,6 +226,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
@@ -498,6 +503,7 @@ from .resource_arrays import (
     is_private_pointer_parameter,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import (
     QUAD_BUILTIN_OPERATORS,
     SOFTWARE_QUAD_REDUCTIONS,
@@ -27776,6 +27782,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee = self.generate_expression(func_expr)
 
             original_func_name = self.hlsl_builtin_option_constructor_name(func_name)
+            original_func_name = crossgl_named_vector_spelling(original_func_name)
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
@@ -27810,6 +27817,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if byteaddress_member_call is not None:
                 return byteaddress_member_call
+
+            sizeof_bytes = sizeof_call_bytes(self, func_name, args, "directx")
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
 
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
@@ -27988,6 +27999,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+            else:
+                reject_unresolved_explicit_generic_call(self, func_name, "HLSL")
 
             resolved_overload = None
             if func_name in self.hlsl_mapped_overload_names:
@@ -55255,20 +55268,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"uint{size}"
                 elif element_type == "bool":
                     return f"bool{size}"
-                elif element_type in {
-                    "f16",
-                    "f32",
-                    "f64",
-                    "i8",
-                    "u8",
-                    "i16",
-                    "u16",
-                    "i32",
-                    "u32",
-                }:
-                    return f"vec{size}<{element_type}>"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
             return self.expression_to_string(type_node)
         else:
@@ -55583,6 +55586,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.map_type(aliases[vtype_str])
             finally:
                 self.hlsl_type_alias_resolution_stack = seen
+
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
 
         cooperative_base, cooperative_args = generic_type_parts(vtype_str)
         if (

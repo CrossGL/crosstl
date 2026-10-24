@@ -8800,6 +8800,7 @@ jobs:
           --output-dir .unary-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain unary Metal native compilation evidence
         if: always()
@@ -9089,6 +9090,7 @@ jobs:
           --output-dir .binary-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain binary Metal native compilation evidence
         if: always()
@@ -9225,6 +9227,7 @@ jobs:
           --output-dir .copy-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain copy Metal native compilation evidence
         if: always()
@@ -9361,6 +9364,7 @@ jobs:
           --output-dir .reduce-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain reduce Metal native compilation evidence
         if: always()
@@ -9510,6 +9514,7 @@ jobs:
           --output-dir .quantized-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-std=metal3.1", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Verify affine Metal numerical roundtrip
         run: >-
@@ -9520,6 +9525,7 @@ jobs:
           --bundle-root .quantized-metal-sources
           --contract demos/integrations/mlx/contracts/quantized.metal-roundtrip.json
           --output-dir .quantized-metal-native/affine
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain quantized Metal native compilation evidence
         if: always()

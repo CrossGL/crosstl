@@ -2645,6 +2645,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 self.global_variable_types.get(operand),
             )
             return variable_type or operand
+        if (
+            isinstance(operand, VariableNode)
+            and not getattr(operand, "vtype", None)
+            and isinstance(operand.name, str)
+        ):
+            # The parser reads a type the lexer has no keyword for (``bfloat4``) as a variable reference.
+            variable_type = self.expression_metal_type(operand)
+            return variable_type or self.metal_sizeof_operand_type(operand.name)
         return self.expression_metal_type(operand)
 
     def render_resolved_static_constant(self, key):
@@ -7386,6 +7394,47 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         if function_name not in functions:
             return None
         return function_name, arguments
+
+    def map_generic_function_call_name(self, name):
+        """``helper<int>`` for a call that names a user type-generic function with explicit type arguments.
+
+        The function is emitted as a CrossGL ``generic`` declaration, so its call keeps the explicit arguments and
+        CrossGL deduces the rest; sanitizing ``helper<int>`` into one identifier would name no function.
+        """
+        text = str(name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        compact = text.replace(" ", "")
+        if any(
+            str(function_name).replace(" ", "") == compact
+            for function_name in self.user_function_names
+        ):
+            # An explicit specialization (``template<> uint f<uint>(...)``) is its own function.
+            return None
+        angle = text.find("<")
+        base = text[:angle].strip()
+        candidates = self.user_function_overloads_by_name.get(
+            base.rsplit("::", 1)[-1], []
+        )
+        if not candidates or any(
+            not getattr(candidate, "template_parameters", None)
+            or any(
+                kind not in {"typename", "class"}
+                for kind, _parameter in candidate.template_parameters
+            )
+            for candidate in candidates
+        ):
+            return None
+        arguments = self.split_generic_arguments(text[angle + 1 : -1])
+        if not arguments or len(arguments) > min(
+            len(candidate.template_parameters) for candidate in candidates
+        ):
+            return None
+        mapped = [
+            self.map_type(self.normalized_metal_type(self.resolve_type_alias(argument)))
+            for argument in arguments
+        ]
+        return f"{self.sanitize_identifier(base)}<{', '.join(mapped)}>"
 
     def value_template_overload_signature(self, function):
         parameters = ", ".join(self.metal_function_source_signature(function))
@@ -12526,6 +12575,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 function_name = f"fast::{function_name}"
             elif metal_precise_math_operation(materialized_name) == function_name:
                 function_name = f"precise::{function_name}"
+            elif function_name == "sizeof":
+                # An operand this importer cannot size names a template parameter; CrossGL sizes it with MSL's
+                # layout once the generators know the type.
+                function_name = "metal_sizeof"
             return f"{function_name}({args})"
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_expression(expr, is_main)
@@ -14039,6 +14092,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
             if metal_wave_name is not None:
                 return metal_wave_name
+            generic_call_name = self.map_generic_function_call_name(name)
+            if generic_call_name is not None:
+                return generic_call_name
             return self.sanitize_identifier(name)
 
         target_type = self.normalized_metal_type(

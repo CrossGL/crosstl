@@ -121,6 +121,10 @@ from .builtin_result_types import (
 )
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .entry_selection import entry_type_references
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -163,6 +167,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
 )
 from .generic_struct_utils import (
     build_generic_struct_specialization,
@@ -414,6 +419,7 @@ from .relational_builtins import lower_relational_builtins, metal_logical_not_op
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import collect_resource_array_size_hints
 from .sampler_pairs import canonicalize_separate_textures
+from .sizeof_calls import sizeof_call_bytes
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -11895,6 +11901,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     expr.args,
                 )
 
+            sizeof_bytes = sizeof_call_bytes(self, func_name, expr.args, "metal")
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
+
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
                 return static_generic_call
@@ -11994,6 +12004,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+            else:
+                reject_unresolved_explicit_generic_call(self, func_name, "Metal")
             if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
@@ -27073,20 +27085,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     return f"uint{size}"
                 elif element_type == "bool":
                     return f"bool{size}"
-                elif element_type in {
-                    "f16",
-                    "f32",
-                    "f64",
-                    "i8",
-                    "u8",
-                    "i16",
-                    "u16",
-                    "i32",
-                    "u32",
-                }:
-                    return f"vec{size}<{element_type}>"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         else:
             return str(type_node)
 
@@ -27223,6 +27225,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         resolved_alias = self.resolve_metal_type_alias(vtype_str)
         if resolved_alias != vtype_str:
             return self.map_type(resolved_alias)
+
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
 
         # Some imported frontends retain a local pointer/reference declarator as
         # text even though the CrossGL parser represented it structurally first.

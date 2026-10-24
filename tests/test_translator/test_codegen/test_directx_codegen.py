@@ -7482,9 +7482,10 @@ def test_hlsl_generic_vector_constructors_emit_hlsl_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    # 8-bit vectors widen to 32 bits and wrap like i8vec2 and u8vec4.
+    assert "return (int2(uint2((input + inc)) << 24u) >> 24);" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "return (uint4((input + inc)) & 255u);" in generated_code
     assert "int16_t3 signedShorts(int16_t3 input)" in generated_code
     assert "int16_t3 inc = int16_t3(1, 2, 3);" in generated_code
     assert "uint16_t2 unsignedShorts(uint16_t2 input)" in generated_code
