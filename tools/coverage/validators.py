@@ -239,7 +239,7 @@ def _run(
     return Verdict(result.returncode == 0, log[:2000])
 
 
-def _suffix(language: str, stage: str) -> str:
+def suffix(language: str, stage: str) -> str:
     """The file suffix of a probe, from which glslang tells its stage. A WebGL kernel probe is a fragment shader."""
     if language == "glsl":
         return f".{GLSL_STAGES[stage]}"
@@ -366,7 +366,7 @@ def validate(
     """Check ``source`` with the language's reference validator, compiling for ``target`` when the language has
     more than one (Slang). Call only when :func:`available` is true."""
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-        name = "probe" + _suffix(language, stage)
+        name = "probe" + suffix(language, stage)
         Path(scratch, name).write_text(source)
         if language == "webgl":
             return _essl(name, source, scratch)
