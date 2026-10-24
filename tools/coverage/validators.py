@@ -123,6 +123,8 @@ HIP_ARCH = "gfx1100"
 class Verdict:
     accepted: bool
     log: str = ""
+    # The tool ran out of time, which says more about the machine's load than about the source.
+    timed_out: bool = False
 
 
 def _executable(name: str) -> str | None:
@@ -192,15 +194,19 @@ def version(name: str) -> str:
     return _first_line([*base, flag])
 
 
-def missing(language: str, target: str = "") -> str:
-    """The first tool that checking ``language`` probes for ``target`` needs and this machine lacks, or ``""``."""
-    needed = {
+def toolchain(language: str, target: str = "") -> tuple[str, ...]:
+    """The tools that checking ``language`` probes for ``target`` runs."""
+    return {
         "spirv": ("spirv-as", "spirv-val"),
         "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
         "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
-    return next((tool for tool in needed if not command(tool)), "")
+
+
+def missing(language: str, target: str = "") -> str:
+    """The first tool that checking ``language`` probes for ``target`` needs and this machine lacks, or ``""``."""
+    return next((tool for tool in toolchain(language, target) if not command(tool)), "")
 
 
 def available(language: str, target: str = "") -> bool:
@@ -226,7 +232,9 @@ def _run(
             env={**os.environ, **environment} if environment else None,
         )
     except subprocess.TimeoutExpired:
-        return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
+        return Verdict(
+            False, f"{arguments[0]} timed out after {TIMEOUT} s", timed_out=True
+        )
     log = _ANSI.sub("", (result.stdout if stdout else "") + result.stderr)
     # Some compilers (mojo) print the scratch directory's real path, which on macOS is under /private; the longer
     # spelling goes first, since it contains the other.

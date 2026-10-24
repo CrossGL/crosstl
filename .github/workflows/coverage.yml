@@ -163,9 +163,20 @@ jobs:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-linux-${{ hashFiles('tools/coverage/upstream.py') }}
 
+      # The verdicts of the last run on main, so that only sources CrossTL now writes differently are checked again
+      # (tools/coverage/runner.py). The key changes with the pinned tools and the code that runs them.
+      - name: Restore verdicts
+        id: verdicts
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          restore-keys: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
+
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
           # The clang whose opencl-c.h tools/coverage/upstream.py pins.
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
@@ -173,6 +184,13 @@ jobs:
           python -m tools.coverage run --strict --execute --jobs 4 \
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
             --backend opencl --output coverage-linux.json
+
+      - name: Keep verdicts
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -262,11 +280,27 @@ jobs:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-${{ matrix.backend }}-${{ hashFiles('tools/coverage/upstream.py') }}
 
+      - name: Restore verdicts
+        id: verdicts
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          restore-keys: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
+
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
+
+      - name: Keep verdicts
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:

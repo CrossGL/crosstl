@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 
 import pytest
 
@@ -234,6 +235,53 @@ def test_a_run_validates_each_distinct_source_once(monkeypatch):
     runner.run(["good"], workers=1)
     assert calls == ["good", "bad", "good"]
     assert runner._verdicts is None
+
+
+def _counting_validator(monkeypatch, calls, versions):
+    def validate(language, source, stage="compute", entry="", target=""):
+        calls.append(source)
+        if source == "slow":
+            return validators.Verdict(False, "dxc timed out after 60 s", timed_out=True)
+        return validators.Verdict("bad" not in source, "error: bad probe")
+
+    monkeypatch.setattr(validators, "validate", validate)
+    monkeypatch.setattr(validators, "version", lambda tool: versions[tool])
+    monkeypatch.setattr(
+        runner, "_job", lambda job: runner._validated("hlsl", job, "compute")
+    )
+    runner._checker.cache_clear()
+
+
+def test_kept_verdicts_carry_over_for_the_same_tool(monkeypatch, tmp_path):
+    calls, versions = [], {"dxc": "dxcompiler.dll: 1.8"}
+    _counting_validator(monkeypatch, calls, versions)
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    first = runner.run(["good", "bad", "slow"], workers=1)
+    second = runner.run(["good", "bad", "slow"], workers=1)
+    assert first == second
+    assert second[1] == validators.Verdict(False, "error: bad probe")
+    # A timeout depends on the machine's load, so it is checked again.
+    assert calls == ["good", "bad", "slow", "slow"]
+    # Another tool version checks everything again.
+    versions["dxc"] = "dxcompiler.dll: 1.9"
+    runner._checker.cache_clear()
+    runner.run(["good"], workers=1)
+    assert calls[4:] == ["good"]
+
+
+def test_kept_verdicts_are_only_those_the_last_run_used(monkeypatch, tmp_path):
+    calls = []
+    _counting_validator(monkeypatch, calls, {"dxc": "dxcompiler.dll: 1.8"})
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    runner.run(["good", "bad"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 2
+    # Kept verdicts carry the time of the run that wrote them.
+    for path in tmp_path.iterdir():
+        os.utime(path, (1, 1))
+    runner.run(["good"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 1
+    runner.run(["bad"], workers=1)
+    assert calls == ["good", "bad", "bad"]
 
 
 def test_kept_folders_are_file_names_that_two_features_never_share():
