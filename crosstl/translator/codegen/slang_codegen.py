@@ -61,6 +61,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .ast_walk import walk_ast_values
+from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -8747,6 +8748,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.comparison_expression_result_type(left_type, right_type)
         if expr.op in {"&&", "||"}:
             return self.logical_expression_result_type(left_type, right_type)
+        matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+            expr.op, left_type, right_type
+        )
+        if matrix_type is not None:
+            return matrix_type
         if self.is_vector_value_type(left_type):
             return left_type
         if self.is_vector_value_type(right_type):
@@ -8834,6 +8840,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type is None:
+                return None
+            same_type = self.convert_type(true_type) == self.convert_type(false_type)
+            return true_type if same_type else None
         if isinstance(expr, ConstructorNode):
             constructor_type = self.type_name_string(
                 getattr(expr, "constructor_type", None)
@@ -9077,6 +9090,13 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
+
+        if func_name in {"transpose", "inverse", "matrixCompMult", "outerProduct"}:
+            return builtin_call_result_type(
+                func_name,
+                [self.type_name_string(self.expression_result_type(a)) for a in args],
+                C_FAMILY,
+            )
 
         return self.glsl_bitcast_result_type(func_name, args)
 

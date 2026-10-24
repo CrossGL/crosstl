@@ -102,6 +102,30 @@ class HLSLMatrixOrientation:
             return f"{scalar}{rows}" if width == columns else None
         return f"{scalar}{columns}" if width == rows else None
 
+    def arithmetic_type(self, operator, left_type, right_type):
+        """The type of CrossGL ``left operator right`` for ``+ - * /`` when either operand is a matrix.
+
+        ``*`` is the product of :meth:`product_type`. ``+``, ``-`` and ``/`` are componentwise (GLSL 4.60 section
+        5.9), so a matrix with a scalar, or two matrices of one shape, keep the matrix type.
+        """
+        if operator == "*":
+            return self.product_type(left_type, right_type)
+        if operator not in {"+", "-", "/"}:
+            return None
+        left = self.dimensions(left_type)
+        right = self.dimensions(right_type)
+        if left is None and right is None:
+            return None
+        generator = self.generator
+        if left is not None and right is not None:
+            return generator.map_type(left_type) if left == right else None
+        matrix_type, other = (
+            (left_type, right_type) if left is not None else (right_type, left_type)
+        )
+        if generator.is_vector_value_type(other):
+            return None
+        return generator.map_type(matrix_type)
+
     def constant_index(self, index_expr):
         return self.generator.literal_int_value(
             index_expr, getattr(self.generator, "literal_int_constants", {})
