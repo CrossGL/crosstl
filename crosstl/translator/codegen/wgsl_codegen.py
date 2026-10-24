@@ -66,9 +66,19 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_numeric_types import (
+    refuse_unsupported_wgsl_numeric_type,
+    unsupported_wgsl_numeric_family,
+)
 from .wgsl_parameter_lowering import (
     WGSLParameterLoweringMixin,
     reference_parameter_qualifier,
+)
+from .wgsl_stage_io import (
+    entry_parameter_locations,
+    is_system_semantic_key,
+    refuse_unmapped_system_semantic,
+    with_flat_integer_interpolation,
 )
 
 
@@ -113,7 +123,6 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "int": "i32",
         "i32": "i32",
         "short": "i32",
-        "long": "i32",
         "uint": "u32",
         "u32": "u32",
         "unsigned": "u32",
@@ -122,8 +131,6 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "f16": "f32",
         "float16": "f32",
         "half": "f32",
-        "double": "f32",
-        "f64": "f32",
     }
     BUILTIN_SEMANTICS = {
         "gl_position": "position",
@@ -131,12 +138,27 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "position_builtin": "position",
         "sv_position": "position",
         "frag_depth": "frag_depth",
+        "gl_fragdepth": "frag_depth",
         "sv_depth": "frag_depth",
+        "front_facing": "front_facing",
+        "gl_frontfacing": "front_facing",
+        "sv_isfrontface": "front_facing",
+        "sample_index": "sample_index",
+        "gl_sampleid": "sample_index",
+        "sv_sampleindex": "sample_index",
+        "sample_mask": "sample_mask",
+        "gl_samplemask": "sample_mask",
+        "gl_samplemaskin": "sample_mask",
+        "sv_coverage": "sample_mask",
         "vertex_index": "vertex_index",
         "vertexid": "vertex_index",
+        "gl_vertexid": "vertex_index",
+        "gl_vertexindex": "vertex_index",
         "sv_vertexid": "vertex_index",
         "instance_index": "instance_index",
         "instanceid": "instance_index",
+        "gl_instanceid": "instance_index",
+        "gl_instanceindex": "instance_index",
         "sv_instanceid": "instance_index",
         "global_invocation_id": "global_invocation_id",
         "gl_globalinvocationid": "global_invocation_id",
@@ -151,6 +173,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "gl_workgroupid": "workgroup_id",
         "sv_groupid": "workgroup_id",
         "num_workgroups": "num_workgroups",
+        "gl_numworkgroups": "num_workgroups",
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
@@ -690,6 +713,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._stage_interface_structs_by_name = {}
+        self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
@@ -752,6 +777,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._stage_interface_structs_by_name = {}
+        self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
@@ -777,10 +804,13 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                     for lowering in self._stage_output_lowerings.values()
                 ),
             ]
+        self._stage_interface_structs_by_name = {
+            getattr(struct, "name", ""): struct for struct in structs
+        }
         self._stage_interface_builtin_members = self.stage_interface_builtin_members(
             ast,
             target_stage,
-            {getattr(struct, "name", ""): struct for struct in structs},
+            self._stage_interface_structs_by_name,
         )
         self._stage_interface_member_locations = self.stage_interface_member_locations(
             ast, target_stage, structs
@@ -1044,6 +1074,10 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             self.push_pointer_identifier_scope(
                 self.buffer_pointer_parameter_names(entry_point)
             )
+            previous_parameter_locations = self._entry_parameter_locations
+            self._entry_parameter_locations = entry_parameter_locations(
+                self, entry_point, stage_name, stage_resource_parameter_ids
+            )
             plan_pushed = False
             try:
                 self.push_parameter_plan(entry_point, entry_point=True)
@@ -1063,6 +1097,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 body = self.generate_block(entry_point.body, indent=0)
                 body = self.prepend_parameter_copies(body, entry_point)
             finally:
+                self._entry_parameter_locations = previous_parameter_locations
                 if plan_pushed:
                     self.pop_parameter_plan()
                 self.pop_pointer_identifier_scope()
@@ -1176,6 +1211,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                     continue
                 if binding_kind == "builtin":
                     continue
+                refuse_unmapped_system_semantic(
+                    self, member, f"stage interface member {struct_name}.{member.name}"
+                )
                 unbound_members.append(member)
 
             next_location = 0
@@ -1546,6 +1584,19 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             if include_attributes
             else ""
         )
+        implicit_location = (
+            self._entry_parameter_locations.get(id(node))
+            if include_attributes
+            else None
+        )
+        if implicit_location is not None:
+            attributes = " ".join(
+                part for part in (f"@location({implicit_location})", attributes) if part
+            )
+        if "@location(" in attributes:
+            attributes = with_flat_integer_interpolation(
+                attributes, self.type_name_string(node.param_type)
+            )
         prefix = f"{attributes} " if attributes else ""
         parameter_name = self.identifier_name(node.name)
         if self.is_glsl_buffer_block_parameter(node):
@@ -1810,6 +1861,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                             )
                             if part
                         )
+                    field_attributes = with_flat_integer_interpolation(
+                        field_attributes, stage_array["element_type_name"]
+                    )
                     prefix = f"{field_attributes} " if field_attributes else ""
                     lines.append(
                         f"    {prefix}{field_name}: {stage_array['element_type_name']},"
@@ -1852,6 +1906,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 member_type_name = self.uniform_buffer_member_type_name(member_type)
             else:
                 member_type_name = self.type_name_string(member_type)
+            attributes = with_flat_integer_interpolation(attributes, member_type_name)
             prefix = f"{attributes} " if attributes else ""
             lines.append(f"    {prefix}{member_name}: {member_type_name},")
         lines.append("};")
@@ -4290,6 +4345,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if vtype is None:
             return "void"
         if isinstance(vtype, PrimitiveType):
+            refuse_unsupported_wgsl_numeric_type(vtype.name)
             return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name)
         if isinstance(vtype, VectorType):
             return f"vec{vtype.size}<{self.type_name_string(vtype.element_type)}>"
@@ -4646,6 +4702,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         lower = normalized.lower()
         if lower in self.PRIMITIVE_TYPE_MAP:
             return self.PRIMITIVE_TYPE_MAP[lower]
+        if normalized not in self._type_identifier_names:
+            refuse_unsupported_wgsl_numeric_type(normalized)
         if self.is_resource_type_name(lower):
             raise ValueError(
                 "WGSL target does not support CrossGL resource type "
@@ -6379,6 +6437,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             lower in self.PRIMITIVE_TYPE_MAP
             or self.TYPE_CONSTRUCTOR_RE.match(lower)
             or re.fullmatch(r"vec[234]<[^>]+>", lower)
+            # A conversion to a type WGSL lacks is refused when its type is mapped.
+            or unsupported_wgsl_numeric_family(name) is not None
         )
 
     def expression_name(self, expr):
@@ -6456,6 +6516,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         key = self.semantic_key(semantic)
         if key in {"gl_fragcolor", "sv_target", "color"}:
             return 0
+        if is_system_semantic_key(key):
+            # System values are built-ins or refused, never user locations.
+            return None
         semantic_bases = {
             "position": 0,
             "normal": 1,
