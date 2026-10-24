@@ -2683,6 +2683,272 @@ void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
 }
 
 namespace {
+constexpr uint64_t max_sort_elements = (uint64_t(1) << 28) - 1;
+
+// The value type names sort.metal instantiates; Booleans have no GPU sort.
+const char* sort_type(Dtype dtype) {
+  return dtype == bool_ ? nullptr : cast_type(dtype);
+}
+
+std::string sort_suffix(const char* dtype, const char* out_type, int bn) {
+  return std::string(dtype) + "_" + out_type + "_bn" + std::to_string(bn) + "_tn4";
+}
+
+void dispatch_sort_stage(
+    const std::string& entry, CrosstlMlxBuffer* buffers, uint32_t count,
+    uint64_t values, const CrosstlMlxLaunch& launch) {
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, count, values, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native sort failed: ") + error);
+  }
+}
+
+// Ports sort.cpp single_block_sort; the view's strides are nonnegative.
+void single_block_sort(
+    const array& in, array& out, int axis, int bn, bool argsort, const char* dtype) {
+  int n_rows = in.size() / in.shape(axis);
+  auto in_nc_str = in.strides();
+  in_nc_str.erase(in_nc_str.begin() + axis);
+  auto out_nc_str = out.strides();
+  out_nc_str.erase(out_nc_str.begin() + axis);
+  auto nc_shape = in.shape();
+  nc_shape.erase(nc_shape.begin() + axis);
+  int nc_dim = nc_shape.size();
+  int size_sorted_axis = in.shape(axis);
+  int in_stride_sorted_axis = in.strides()[axis];
+  int out_stride_sorted_axis = out.strides()[axis];
+  // The contiguous kernel requires the sorted axis to have the largest or
+  // smallest stride of a contiguous input.
+  bool contiguous = in.flags().contiguous;
+  auto check_strides = [](const array& x, int64_t sort_stride) {
+    const auto [low, high] = std::minmax_element(x.strides().begin(), x.strides().end());
+    return sort_stride == *low || sort_stride == *high;
+  };
+  contiguous &= check_strides(in, in_stride_sorted_axis);
+  contiguous &= check_strides(out, out_stride_sorted_axis);
+  const std::string entry = std::string(contiguous ? "c" : "nc") +
+      (argsort ? "arg" : "") + "_block_sort_" +
+      sort_suffix(dtype, argsort ? "uint32" : dtype, bn);
+  const char* out_type = argsort ? "uint32" : dtype;
+  const uint64_t span = gather_span(in, max_sort_elements);
+  int in_stride_segment_axis = INT32_MAX;
+  int out_stride_segment_axis = INT32_MAX;
+  if (contiguous) {
+    for (size_t i = 0; i < in_nc_str.size(); i++) {
+      if (nc_shape[i] == 1) {
+        continue;
+      }
+      if (in_nc_str[i] > INT32_MAX || out_nc_str[i] > INT32_MAX) {
+        throw std::runtime_error("[Sort::eval_gpu] Stride too large.");
+      }
+      in_stride_segment_axis =
+          std::min(in_stride_segment_axis, static_cast<int>(in_nc_str[i]));
+      out_stride_segment_axis =
+          std::min(out_stride_segment_axis, static_cast<int>(out_nc_str[i]));
+    }
+  } else if (nc_shape.empty()) {
+    // Upstream binds one zero placeholder per array for a rank-one input.
+    nc_shape.push_back(0);
+    in_nc_str.push_back(0);
+    out_nc_str.push_back(0);
+  }
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"inp", dtype, const_cast<void*>(in.data<void>()), span, 0},
+      {"out", out_type, out.data<void>(), out.size(), 1},
+      {"size_sorted_axis", "int32", &size_sorted_axis, 1, 0},
+      {"in_stride_sorted_axis", "int32", &in_stride_sorted_axis, 1, 0},
+      {"out_stride_sorted_axis", "int32", &out_stride_sorted_axis, 1, 0},
+  };
+  if (contiguous) {
+    buffers.push_back({"in_stride_segment_axis", "int32", &in_stride_segment_axis, 1, 0});
+    buffers.push_back({"out_stride_segment_axis", "int32", &out_stride_segment_axis, 1, 0});
+  } else {
+    buffers.push_back({"nc_dim", "int32", &nc_dim, 1, 0});
+    buffers.push_back({"nc_shape", "int32", nc_shape.data(), nc_shape.size(), 0});
+    buffers.push_back({"in_nc_strides", "int64", in_nc_str.data(), in_nc_str.size(), 0});
+    buffers.push_back({"out_nc_strides", "int64", out_nc_str.data(), out_nc_str.size(), 0});
+  }
+  const CrosstlMlxLaunch launch{{1, uint32_t(n_rows), 1}, {uint32_t(bn), 1, 1}, {0, 0, 0}};
+  dispatch_sort_stage(entry, buffers.data(), buffers.size(), in.size(), launch);
+}
+
+// Ports sort.cpp multi_block_sort: tiles are sorted, then tile pairs are
+// partitioned and merged until one run remains, then copied into ``out``.
+void multi_block_sort(
+    const array& in, array& out, int axis, int bn, int n_blocks, bool argsort,
+    const char* dtype) {
+  int n_rows = in.size() / in.shape(axis);
+  auto nc_str = in.strides();
+  nc_str.erase(nc_str.begin() + axis);
+  auto nc_shape = in.shape();
+  nc_shape.erase(nc_shape.begin() + axis);
+  int nc_dim = nc_shape.size();
+  if (nc_dim == 0) {
+    nc_shape = {0};
+    nc_str = {1};
+  }
+  int size_sorted_axis = in.shape(axis);
+  int stride_sorted_axis = in.strides()[axis];
+  if (n_rows > 1 && n_blocks + 1 > 1024) {
+    // partition_mbsort strides rows by its threadgroup width while
+    // merge_mbsort reads n_blocks + 1 partitions per row.
+    throw std::invalid_argument(
+        "CrossTL multi-block sorts of several rows support at most 1023 tiles per row.");
+  }
+  array dev_vals_0({n_rows, size_sorted_axis}, in.dtype(), nullptr, {});
+  array dev_vals_1({n_rows, size_sorted_axis}, in.dtype(), nullptr, {});
+  array dev_idxs_0({n_rows, size_sorted_axis}, uint32, nullptr, {});
+  array dev_idxs_1({n_rows, size_sorted_axis}, uint32, nullptr, {});
+  array block_partitions({n_rows, n_blocks + 1}, uint32, nullptr, {});
+  for (auto* temporary :
+       {&dev_vals_0, &dev_vals_1, &dev_idxs_0, &dev_idxs_1, &block_partitions}) {
+    temporary->set_data(allocator::malloc(temporary->nbytes()));
+  }
+  const uint64_t values = uint64_t(n_rows) * uint64_t(size_sorted_axis);
+  const uint64_t partitions = block_partitions.size();
+  const std::string suffix = sort_suffix(dtype, "uint32", bn);
+  {
+    const uint64_t span = gather_span(in, max_sort_elements);
+    CrosstlMlxBuffer buffers[] = {
+        {"inp", dtype, const_cast<void*>(in.data<void>()), span, 0},
+        {"out_vals", dtype, dev_vals_0.data<void>(), values, 1},
+        {"out_idxs", "uint32", dev_idxs_0.data<void>(), values, 1},
+        {"size_sorted_axis", "int32", &size_sorted_axis, 1, 0},
+        {"stride_sorted_axis", "int32", &stride_sorted_axis, 1, 0},
+        {"nc_dim", "int32", &nc_dim, 1, 0},
+        {"nc_shape", "int32", nc_shape.data(), nc_shape.size(), 0},
+        {"nc_strides", "int64", nc_str.data(), nc_str.size(), 0},
+    };
+    const CrosstlMlxLaunch launch{
+        {uint32_t(n_blocks), uint32_t(n_rows), 1}, {uint32_t(bn), 1, 1}, {0, 0, 0}};
+    dispatch_sort_stage("sort_mbsort_" + suffix, buffers, 8, values, launch);
+  }
+  bool ping = false;
+  array* vals_out = &dev_vals_1;
+  array* idxs_out = &dev_idxs_1;
+  uint32_t n_thr_per_group = std::min(n_blocks + 1, 1024);
+  for (int merge_tiles = 2; (merge_tiles / 2) < n_blocks; merge_tiles *= 2) {
+    array* vals_in = ping ? &dev_vals_1 : &dev_vals_0;
+    array* idxs_in = ping ? &dev_idxs_1 : &dev_idxs_0;
+    vals_out = ping ? &dev_vals_0 : &dev_vals_1;
+    idxs_out = ping ? &dev_idxs_0 : &dev_idxs_1;
+    ping = !ping;
+    {
+      CrosstlMlxBuffer buffers[] = {
+          {"block_partitions", "uint32", block_partitions.data<void>(), partitions, 1},
+          {"dev_vals", dtype, vals_in->data<void>(), values, 0},
+          {"dev_idxs", "uint32", idxs_in->data<void>(), values, 0},
+          {"size_sorted_axis", "int32", &size_sorted_axis, 1, 0},
+          {"merge_tiles", "int32", &merge_tiles, 1, 0},
+          {"n_blocks", "int32", &n_blocks, 1, 0},
+      };
+      const CrosstlMlxLaunch launch{
+          {1, uint32_t(n_rows), 1}, {n_thr_per_group, 1, 1}, {0, 0, 0}};
+      dispatch_sort_stage("partition_mbsort_" + suffix, buffers, 6, values, launch);
+    }
+    {
+      CrosstlMlxBuffer buffers[] = {
+          {"block_partitions", "uint32", block_partitions.data<void>(), partitions, 0},
+          {"dev_vals_in", dtype, vals_in->data<void>(), values, 0},
+          {"dev_idxs_in", "uint32", idxs_in->data<void>(), values, 0},
+          {"dev_vals_out", dtype, vals_out->data<void>(), values, 1},
+          {"dev_idxs_out", "uint32", idxs_out->data<void>(), values, 1},
+          {"size_sorted_axis", "int32", &size_sorted_axis, 1, 0},
+          {"merge_tiles", "int32", &merge_tiles, 1, 0},
+          {"num_tiles", "int32", &n_blocks, 1, 0},
+      };
+      const CrosstlMlxLaunch launch{
+          {uint32_t(n_blocks), uint32_t(n_rows), 1}, {uint32_t(bn), 1, 1}, {0, 0, 0}};
+      dispatch_sort_stage("merge_mbsort_" + suffix, buffers, 8, values, launch);
+    }
+  }
+  // Copy outputs with appropriate strides.
+  auto strides = out.strides();
+  for (size_t ax = axis + 1; ax < strides.size(); ax++) {
+    strides[ax] *= out.shape(axis);
+  }
+  strides[axis] = 1;
+  const array& sorted = argsort ? *idxs_out : *vals_out;
+  const bool last = axis == static_cast<int>(in.ndim()) - 1;
+  array view(out.shape(), sorted.dtype(), nullptr, {});
+  view.copy_shared_buffer(sorted, strides, {true, last, false}, sorted.size());
+  dispatch_copy_into(
+      view, out, std::vector<int64_t>(out.strides().begin(), out.strides().end()), 0,
+      false);
+}
+
+// Ports sort.cpp gpu_merge_sort; a view with a negative stride is sorted
+// from a dense copy, whose order along every axis is the view's.
+void gpu_merge_sort(const std::vector<array>& inputs, array& out, int axis_, bool argsort) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL sorts require one input.");
+  }
+  const char* dtype = sort_type(inputs[0].dtype());
+  if (!dtype || out.dtype() != (argsort ? uint32 : inputs[0].dtype()) ||
+      out.shape() != inputs[0].shape()) {
+    throw std::invalid_argument("CrossTL sorts do not support this dtype or output.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  if (out.size() == 0) {
+    return;
+  }
+  const array in = gather_input(inputs[0]);
+  int axis = axis_ < 0 ? axis_ + in.ndim() : axis_;
+  if (axis < 0 || axis >= static_cast<int>(in.ndim()) ||
+      uint64_t(in.size()) > max_sort_elements ||
+      uint64_t(in.size() / in.shape(axis)) > 65535) {
+    throw std::invalid_argument("CrossTL sorts support at most 65535 bounded rows.");
+  }
+  int size_sorted_axis = in.shape(axis);
+  int tn = 4;
+  int potential_bn = (size_sorted_axis + tn - 1) / tn;
+  int bn;
+  if (potential_bn > 256) {
+    bn = 512;
+  } else if (potential_bn > 128) {
+    bn = 256;
+  } else if (potential_bn > 64) {
+    bn = 128;
+  } else if (potential_bn > 32) {
+    bn = 64;
+  } else {
+    bn = 32;
+  }
+  if (bn == 512 && size_of(in.dtype()) > 4) {
+    bn = 256;
+  }
+  int n_per_block = bn * tn;
+  int n_blocks = (size_sorted_axis + n_per_block - 1) / n_per_block;
+  if (n_blocks > 1) {
+    multi_block_sort(in, out, axis, bn, n_blocks, argsort, dtype);
+  } else {
+    single_block_sort(in, out, axis, bn, argsort, dtype);
+  }
+}
+} // namespace
+
+void ArgSort::eval_gpu(const std::vector<array>& inputs, array& out) {
+  gpu_merge_sort(inputs, out, axis_, true);
+}
+
+void Sort::eval_gpu(const std::vector<array>& inputs, array& out) {
+  gpu_merge_sort(inputs, out, axis_, false);
+}
+
+// Upstream directs partitions to the full sort.
+void ArgPartition::eval_gpu(const std::vector<array>& inputs, array& out) {
+  gpu_merge_sort(inputs, out, axis_, true);
+}
+
+void Partition::eval_gpu(const std::vector<array>& inputs, array& out) {
+  gpu_merge_sort(inputs, out, axis_, false);
+}
+
+namespace {
 constexpr uint64_t max_matmul_elements = (uint64_t(1) << 28) - 1;
 
 // quantized.cpp ensure_row_contiguous_matrix, plus nonnegative batch strides.

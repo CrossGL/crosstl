@@ -41,6 +41,10 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "ArgReduce",
                     "LogSumExp",
                     "Softmax",
+                    "ArgPartition",
+                    "ArgSort",
+                    "Partition",
+                    "Sort",
                     "RandomBits",
                     "Scan",
                     "Quantize",
@@ -58,7 +62,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "DivMod",
                     "Power",
                     "ArcTan2",
-                    "Sort",
+                    "Convolution",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
@@ -105,7 +109,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" in (backend / "primitives.cpp").read_text()
-    for name in ("LogSumExp", "Softmax"):
+    for name in ("LogSumExp", "Softmax", "ArgPartition", "ArgSort", "Partition", "Sort"):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()
@@ -138,7 +142,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     for name in ("Power", "ArcTan2"):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
-    assert "NO_GPU(Sort)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Convolution)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2

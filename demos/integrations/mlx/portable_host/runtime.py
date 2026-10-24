@@ -61,6 +61,8 @@ from demos.integrations.mlx.portable_host import (
     slice_update_layout,
     softmax_dispatch,
     softmax_layout,
+    sort_dispatch,
+    sort_layout,
     wide_column_dispatch,
     wide_reduction_dispatch,
     wide_reduction_packages,
@@ -207,6 +209,10 @@ from demos.integrations.mlx.portable_host.softmax_packages import (
     CACHE_DIRECTORY as SOFTMAX_CACHE,
 )
 from demos.integrations.mlx.portable_host.softmax_packages import SoftmaxPackageCache
+from demos.integrations.mlx.portable_host.sort_packages import (
+    CACHE_DIRECTORY as SORT_CACHE,
+)
+from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
@@ -412,6 +418,12 @@ class HostRuntime:
         # Softmax and logsumexp rows translate each entry at its width.
         self.softmaxes = (
             SoftmaxPackageCache(mlx_root, self.directory / SOFTMAX_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Merge-sort stages translate each entry at its launch width.
+        self.sorts = (
+            SortPackageCache(mlx_root, self.directory / SORT_CACHE, self.target)
             if mlx_root is not None
             else None
         )
@@ -665,6 +677,8 @@ class HostRuntime:
                 return 1
             if name in softmax_layout.ENTRIES and self.softmaxes is not None:
                 return 1
+            if name in sort_layout.ENTRIES and self.sorts is not None:
+                return 1
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -822,6 +836,8 @@ class HostRuntime:
             return softmax_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
+        if entry in sort_layout.ENTRIES:
+            return sort_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_copy(entry):
             return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_elementwise(entry):

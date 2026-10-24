@@ -1807,8 +1807,8 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 94 more unchanged `test_ops`, `test_reduce` and
-`test_bf16` tests on all three platforms (91 on OpenGL; see below):
+A dedicated job then runs 99 more unchanged `test_ops`, `test_reduce` and
+`test_bf16` tests on all three platforms (96 on OpenGL; see below):
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
@@ -1860,7 +1860,15 @@ simdgroup but the first before its final shuffles (CrossGL/crosstl#2207);
 its host refuses those launches and the job excludes the three tests there.
 `test_softmax`, `test_logsumexp` and `test_logsumexp_shape` reach the block
 and looped rows of `softmax.metal` and `logsumexp.metal`, one package per
-threadgroup width.
+threadgroup width. `test_sort`, `test_partition`, `test_argpartition`,
+`test_sort_nan` and `test_argsort_nan` reach every `sort.metal` stage the
+`Sort`, `ArgSort`, `Partition` and `ArgPartition` primitives launch: contiguous
+and strided single-block sorts and argsorts, and the multi-block tile sort,
+partition and merge passes up to a 2^22-element row. Every sort stage that
+sorts at most 65,536 values is recomputed exactly from its retained inputs
+(MLX sorts stably, with NaN after every ordered value); larger stages keep
+their extents and digests, and the tests compare their sorted results. A view
+with a negative stride is sorted from a dense copy.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the

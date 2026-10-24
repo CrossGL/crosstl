@@ -53,6 +53,9 @@ from demos.integrations.mlx.portable_host import (
     scatter_evidence,
     softmax_evidence,
     softmax_layout,
+    sort_dispatch,
+    sort_evidence,
+    sort_layout,
     wide_column_dispatch,
     wide_column_evidence,
     wide_reduction_evidence,
@@ -106,6 +109,10 @@ from demos.integrations.mlx.portable_host.softmax_packages import (
     CACHE_DIRECTORY as SOFTMAX_CACHE,
 )
 from demos.integrations.mlx.portable_host.softmax_packages import SoftmaxPackageCache
+from demos.integrations.mlx.portable_host.sort_packages import (
+    CACHE_DIRECTORY as SORT_CACHE,
+)
+from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -225,6 +232,15 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_softmax",
         "test_ops.TestOps.test_logsumexp",
         "test_ops.TestOps.test_logsumexp_shape",
+    ) + (
+        # These reach lazily translated single-block sorts and argsorts of
+        # contiguous, strided, broadcast and reversed views, and multi-block
+        # tile sorts, partitions and merges up to a 2^22-element row.
+        "test_ops.TestOps.test_sort",
+        "test_ops.TestOps.test_partition",
+        "test_ops.TestOps.test_argpartition",
+        "test_ops.TestOps.test_sort_nan",
+        "test_ops.TestOps.test_argsort_nan",
     )
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
@@ -256,6 +272,7 @@ RETAINED_VALUES = (
     *ENTRIES,
     *arg_reduce_layout.OPERATIONS,
     *softmax_layout.PREFIXES,
+    *sort_dispatch.PREFIXES,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     "all_reduce_",
@@ -563,6 +580,17 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Derives the cached package again and checks the uploads, guards and
         # native modules; the upstream tests compare the values.
         softmax_evidence.audit_event(event, softmaxes)
+        lazy_checked.add(i)
+        owners[i] += 1
+    sorts = SortPackageCache(args.mlx_root, args.packages / SORT_CACHE, target)
+    for i, event in enumerate(trace):
+        if event["entry"] not in sort_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op sort targets another backend")
+        # Derives the cached package again, checks the uploads, guards and
+        # native modules, and recomputes every retained stage's outputs.
+        sort_evidence.audit_event(event, sorts)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
