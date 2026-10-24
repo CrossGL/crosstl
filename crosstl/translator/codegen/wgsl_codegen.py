@@ -65,9 +65,13 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_parameter_lowering import (
+    WGSLParameterLoweringMixin,
+    reference_parameter_qualifier,
+)
 
 
-class WGSLCodeGen:
+class WGSLCodeGen(WGSLParameterLoweringMixin):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
     SUPPORTED_STAGE_NAMES = {"vertex", "fragment", "compute"}
@@ -623,6 +627,7 @@ class WGSLCodeGen:
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
+        self._parameter_plan_stack = []
         self._value_type_scopes = []
         self._resource_alias_scopes = []
         self._module_identifier_names = {}
@@ -680,6 +685,7 @@ class WGSLCodeGen:
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
+        self._parameter_plan_stack = []
         self._value_type_scopes = []
         self._resource_alias_scopes = []
         self._function_return_types = {}
@@ -1013,7 +1019,10 @@ class WGSLCodeGen:
             self.push_pointer_identifier_scope(
                 self.buffer_pointer_parameter_names(entry_point)
             )
+            plan_pushed = False
             try:
+                self.push_parameter_plan(entry_point, entry_point=True)
+                plan_pushed = True
                 signature = self.generate_function_signature(
                     entry_point,
                     name=entry_name or f"{stage_name}_main",
@@ -1027,7 +1036,10 @@ class WGSLCodeGen:
                     parameter_attributes=True,
                 )
                 body = self.generate_block(entry_point.body, indent=0)
+                body = self.prepend_parameter_copies(body, entry_point)
             finally:
+                if plan_pushed:
+                    self.pop_parameter_plan()
                 self.pop_pointer_identifier_scope()
                 self.pop_identifier_scope()
             return "\n".join(attributes + [f"{signature} {body}"])
@@ -1405,11 +1417,18 @@ class WGSLCodeGen:
         self.register_parameter_value_types(func)
         self.push_pointer_identifier_scope(self.buffer_pointer_parameter_names(func))
         try:
-            signature = self.generate_function_signature(func)
-            body = self.generate_block(func.body, indent=0)
-            body = self.add_generated_match_fallback_return(
-                body, getattr(func, "body", None), getattr(func, "return_type", None)
-            )
+            self.push_parameter_plan(func)
+            try:
+                signature = self.generate_function_signature(func)
+                body = self.generate_block(func.body, indent=0)
+                body = self.add_generated_match_fallback_return(
+                    body,
+                    getattr(func, "body", None),
+                    getattr(func, "return_type", None),
+                )
+                body = self.prepend_parameter_copies(body, func)
+            finally:
+                self.pop_parameter_plan()
         finally:
             self.pop_pointer_identifier_scope()
             self.pop_identifier_scope()
@@ -1483,7 +1502,7 @@ class WGSLCodeGen:
         parameters = ", ".join(
             list(leading_parameters)
             + [
-                self.generate_parameter(param, include_attributes=parameter_attributes)
+                self.generate_planned_parameter(param, parameter_attributes)
                 for param in func.parameters
                 if id(param) not in skip_parameter_ids
             ]
@@ -2880,6 +2899,8 @@ class WGSLCodeGen:
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
             if mapped_builtin:
                 return mapped_builtin
+            if self.is_reference_parameter_name(expr.name):
+                return self.reference_parameter_expression(expr.name)
             if not self.is_local_identifier(expr.name):
                 cbuffer_access = self._cbuffer_member_accesses.get(expr.name)
                 if cbuffer_access:
@@ -3303,10 +3324,19 @@ class WGSLCodeGen:
             metadata_key,
             self._function_resource_member_parameters.get(function_name, {}),
         )
+        parameters = list(getattr(function, "parameters", []) or [])
+        reference_parameters = {
+            index: parameter
+            for index, parameter in enumerate(parameters)
+            if reference_parameter_qualifier(parameter) is not None
+        }
+        if reference_parameters:
+            self.validate_reference_argument_aliasing(function, arguments)
         if (
             not texture_parameter_indices
             and not pointer_parameter_indices
             and not resource_member_parameters
+            and not reference_parameters
         ):
             parameter_types = [
                 getattr(parameter, "param_type", None)
@@ -3329,7 +3359,13 @@ class WGSLCodeGen:
         ]
         rendered = []
         for index, arg in enumerate(arguments):
-            if index in pointer_parameter_indices:
+            if index in reference_parameters:
+                rendered.append(
+                    self.reference_argument_expression(
+                        arg, reference_parameters[index], function
+                    )
+                )
+            elif index in pointer_parameter_indices:
                 rendered.append(self.pointer_argument_expression(arg))
             else:
                 rendered.append(
