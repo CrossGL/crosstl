@@ -9846,7 +9846,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "hitDistance",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "customAttributeToken",
@@ -9881,7 +9881,7 @@ class TestVulkanSPIRVCodeGen:
             "IntersectionKHR stages"
         ) in spv_code
         assert "Proceed yet" in spv_code
-        assert "CandidateRayT yet" in spv_code
+        assert "CandidateTriangleRayT yet" in spv_code
         assert "CommittedTriangleCustomAttribute yet" in spv_code
         assert "SetMeshOutputCounts yet" in spv_code
         assert (
@@ -11911,7 +11911,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "candidateT",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "committedT",
@@ -11953,7 +11953,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed();
-                    float candidateT = rq.CandidateRayT();
+                    float candidateT = rq.CandidateTriangleRayT();
                     float committedT = rq.CommittedRayT();
                 }
             }
@@ -12068,10 +12068,10 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort();
-                    rq.Terminate();
-                    rq.GenerateIntersection(1.0);
+                    rq.Abort();
+                    rq.CommitProceduralPrimitiveHit(1.0);
                     rq.CommitProceduralPrimitiveHit(2.0);
-                    rq.ConfirmIntersection();
+                    rq.CommitNonOpaqueTriangleHit();
                     rq.CommitNonOpaqueTriangleHit();
                 }
             }
@@ -12087,7 +12087,9 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpRayQueryGenerateIntersectionKHR") == 2
         assert spv_code.count("OpRayQueryConfirmIntersectionKHR") == 2
         assert "RayQuery.Abort yet; using a default" not in spv_code
-        assert "RayQuery.GenerateIntersection yet; using a default" not in spv_code
+        assert (
+            "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
+        )
         assert (
             "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
         )
@@ -12104,7 +12106,7 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort(1);
                     rq.CommitNonOpaqueTriangleHit(1.0);
-                    rq.GenerateIntersection(vec3(0.0, 1.0, 2.0));
+                    rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                     rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                 }
             }
@@ -12120,7 +12122,7 @@ class TestVulkanSPIRVCodeGen:
             "SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 " "arguments"
         ) in spv_code_refused
         assert (
-            "SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance argument "
             "must be a 32-bit floating-point scalar"
         ) in spv_code_refused
         assert (
@@ -12137,11 +12139,11 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     uint candidateType = rq.CandidateType();
-                    uint committedType = rq.CommittedType();
+                    uint committedType = rq.CommittedStatus();
                     uint candidatePrimitive = rq.CandidatePrimitiveIndex();
                     uint committedPrimitive = rq.CommittedPrimitiveIndex();
-                    uint candidateInstance = rq.CandidateInstanceID();
-                    uint committedInstance = rq.CommittedInstanceID();
+                    uint candidateInstance = rq.CandidateInstanceIndex();
+                    uint committedInstance = rq.CommittedInstanceIndex();
                     uint candidateGeometry = rq.CandidateGeometryIndex();
                     uint committedGeometry = rq.CommittedGeometryIndex();
                     vec2 candidateBarycentrics = rq.CandidateTriangleBarycentrics();
@@ -12213,12 +12215,12 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin();
                     uint rayFlags = rq.RayFlags();
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex();
-                    uint committedCustomIndex = rq.CommittedInstanceCustomIndex();
+                    uint candidateCustomIndex = rq.CandidateInstanceID();
+                    uint committedCustomIndex = rq.CommittedInstanceID();
                     uint candidateSbt =
-                        rq.CandidateInstanceShaderBindingTableRecordOffset();
+                        rq.CandidateInstanceContributionToHitGroupIndex();
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset();
+                        rq.CommittedInstanceContributionToHitGroupIndex();
                 }
             }
         }
@@ -12240,7 +12242,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "RayTMin yet; using a default" not in spv_code
         assert "RayFlags yet; using a default" not in spv_code
-        assert "CandidateInstanceCustomIndex yet; using a default" not in spv_code
+        assert "CandidateInstanceID yet; using a default" not in spv_code
         assert (
             "CommittedInstanceShaderBindingTableRecordOffset yet; using a default"
             not in spv_code
@@ -12256,9 +12258,9 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin(1);
                     uint rayFlags = rq.RayFlags(1);
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex(1);
+                    uint candidateCustomIndex = rq.CandidateInstanceID(1);
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset(1);
+                        rq.CommittedInstanceContributionToHitGroupIndex(1);
                 }
             }
         }
@@ -12271,11 +12273,11 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code_refused
         assert "SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code_refused
         assert (
-            "SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 " "arguments"
+            "SPIR-V RayQuery.CandidateInstanceID requires 0 " "arguments"
         ) in spv_code_refused
         assert (
             "SPIR-V "
-            "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
+            "RayQuery.CommittedInstanceContributionToHitGroupIndex requires 0 "
             "arguments"
         ) in spv_code_refused
 
@@ -12437,7 +12439,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque();
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 }
             }
         }
@@ -12449,7 +12451,11 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCapability RayQueryKHR" in spv_code
         assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
         assert spv_code.count("OpRayQueryGetIntersectionCandidateAABBOpaqueKHR") == 1
-        assert "CandidateAABBOpaque yet; using a default" not in spv_code
+        # DXR asks whether the candidate is non-opaque: the opaque bit is negated.
+        assert spv_code.count("OpLogicalNot") == 1
+        assert (
+            "CandidateProceduralPrimitiveNonOpaque yet; using a default" not in spv_code
+        )
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -12459,7 +12465,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque(1);
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque(1);
                 }
             }
         }
@@ -12470,7 +12476,7 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert (
-            "SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            "SPIR-V RayQuery.CandidateProceduralPrimitiveNonOpaque requires 0 arguments"
             in spv_code_refused
         )
 
@@ -12730,7 +12736,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed(1);
-                    float candidateT = rq.CandidateRayT(2);
+                    float candidateT = rq.CandidateTriangleRayT(2);
                 }
             }
         }
@@ -12741,7 +12747,10 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert "SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code_refused
-        assert "SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code_refused
+        assert (
+            "SPIR-V RayQuery.CandidateTriangleRayT requires 0 arguments"
+            in spv_code_refused
+        )
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
@@ -23282,20 +23291,20 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpBranchConditional" in spv_code
+        # Only the selected arm's call runs; the merge block joins the two results.
         assert re.search(
-            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
-            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpSelectionMerge (?P<merge>%\d+) None\n"
             r"OpBranchConditional %\d+ (?P<true_label>%\d+) (?P<false_label>%\d+)\n"
             r"(?P=true_label) = OpLabel\n"
-            r"OpStore (?P<result>%\d+) (?P=true_value)\n"
+            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=false_label) = OpLabel\n"
-            r"OpStore (?P=result) (?P=false_value)\n"
+            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=merge) = OpLabel\n"
-            r"(?P<loaded>%\d+) = OpLoad %\d+ (?P=result)\n"
-            r"OpReturnValue (?P=loaded)",
+            r"(?P<selected>%\d+) = OpPhi %\d+ (?P=true_value) (?P=true_label) "
+            r"(?P=false_value) (?P=false_label)\n"
+            r"OpReturnValue (?P=selected)",
             spv_code,
         )
         assert not re.search(r"=\s+OpSelect\b", spv_code)
@@ -25651,37 +25660,26 @@ class TestVulkanSPIRVCodeGen:
         assert not re.search(r"OpConstant %\d+ true", spv_code)
 
         def has_composite_selection_flow():
-            lines = spv_code.splitlines()
-            for index in range(len(lines) - 10):
-                merge = re.match(r"OpSelectionMerge (%\d+) None", lines[index])
-                branch = re.match(
-                    r"OpBranchConditional %\d+ (%\d+) (%\d+)",
-                    lines[index + 1],
+            # Each arm calls its constructor in its own block and the merge block joins the
+            # two struct values, so only the selected payload is built.
+            return (
+                re.search(
+                    r"OpSelectionMerge (?P<merge>%\d+) None\n"
+                    r"OpBranchConditional %\d+ (?P<then>%\d+) (?P<else>%\d+)\n"
+                    r"(?P=then) = OpLabel\n"
+                    r"(?P<first>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=else) = OpLabel\n"
+                    r"(?P<second>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=merge) = OpLabel\n"
+                    r"(?P<selected>%\d+) = OpPhi %\d+ (?P=first) (?P=then) "
+                    r"(?P=second) (?P=else)\n"
+                    r"OpReturnValue (?P=selected)\n",
+                    spv_code,
                 )
-                then_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 3])
-                else_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 6])
-                load = re.match(
-                    r"(%\d+) = OpLoad %\d+ (%\d+)",
-                    lines[index + 9],
-                )
-                if not all([merge, branch, then_store, else_store, load]):
-                    continue
-
-                merge_label = merge.group(1)
-                then_label = branch.group(1)
-                else_label = branch.group(2)
-                selected_value = load.group(1)
-                return (
-                    lines[index + 2] == f"{then_label} = OpLabel"
-                    and lines[index + 4] == f"OpBranch {merge_label}"
-                    and lines[index + 5] == f"{else_label} = OpLabel"
-                    and lines[index + 7] == f"OpBranch {merge_label}"
-                    and lines[index + 8] == f"{merge_label} = OpLabel"
-                    and then_store.group(1) == else_store.group(1)
-                    and load.group(2) == then_store.group(1)
-                    and lines[index + 10] == f"OpReturnValue {selected_value}"
-                )
-            return False
+                is not None
+            )
 
         assert has_composite_selection_flow()
 
@@ -28500,10 +28498,18 @@ class TestVulkanSPIRVCodeGen:
         )
         assert u64_runtime_array is not None
         assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        # Each arm reads only its own buffer, so the unselected index is never dereferenced.
         assert re.search(
-            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            r"OpBranchConditional %\d+ (?P<left>%\d+) (?P<right>%\d+)\n"
+            r"(?P=left) = OpLabel\n(?:[^\n]+\n)*?"
+            r"(?P<left_value>%\d+) = OpLoad [^\n]+\nOpBranch (?P<merge>%\d+)\n"
+            r"(?P=right) = OpLabel\n(?:[^\n]+\n)*?OpBranch (?P=merge)\n"
+            r"(?P=merge) = OpLabel\n"
+            rf"%\d+ = OpPhi {re.escape(u64_type.group(1))} (?P=left_value) (?P=left) "
+            r"%\d+ %\d+\n",
             spv_code,
         )
+        assert not re.search(r"= OpSelect\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -32183,7 +32189,7 @@ class TestSpirvShaderValidation:
                     VariableNode(
                         "status",
                         uint_type,
-                        RayQueryOpNode("CommittedType", "rq", []),
+                        RayQueryOpNode("CommittedStatus", "rq", []),
                     ),
                 ]
             ),

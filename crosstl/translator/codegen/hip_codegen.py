@@ -9953,7 +9953,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             operation = getattr(node, "operation", "")
             if operation == "Proceed":
                 return "bool"
-            if operation in {"CandidateRayT", "CommittedRayT"}:
+            if operation in {"CandidateTriangleRayT", "CommittedRayT"}:
                 return "float"
             return "uint"
         if isinstance(node, FunctionCallNode):

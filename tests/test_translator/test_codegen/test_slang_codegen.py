@@ -6546,8 +6546,10 @@ def test_ray_stage_builtins_lower_to_slang_intrinsics():
     )
     assert "float range = RayTCurrent() - RayTMin() + RayTCurrent();" in generated_code
     assert "uint hitKind = HitKind();" in generated_code
-    assert "uint customInstance = InstanceIndex();" in generated_code
-    assert "uint instance = InstanceID();" in generated_code
+    # gl_InstanceCustomIndexEXT is the application-defined value (DXR
+    # InstanceID); gl_InstanceID in ray stages is the index (InstanceIndex).
+    assert "uint customInstance = InstanceID();" in generated_code
+    assert "uint instance = InstanceIndex();" in generated_code
     assert "uint primitive = PrimitiveIndex();" in generated_code
     assert "uint geometryIndex = GeometryIndex();" in generated_code
     assert "gl_LaunchIDEXT" not in generated_code
@@ -7806,9 +7808,9 @@ def test_slang_ray_query_methods_validate_target_result_types():
                 vec3 validOrigin = rq.CandidateObjectRayOrigin();
                 float proceedFloat = rq.Proceed();
                 bool statusBool = rq.CommittedStatus();
-                vec3 rayTVector = rq.CandidateRayT();
+                vec3 rayTVector = rq.CandidateTriangleRayT();
                 float originScalar = rq.CandidateObjectRayOrigin();
-                acceptVector(rq.CandidateRayT());
+                acceptVector(rq.CandidateTriangleRayT());
                 acceptFloat(rq.CommittedObjectRayDirection());
             }
         }
@@ -7833,7 +7835,7 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "float3 rayTVector = float3(0.0);" in generated_code
     assert (
-        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        "Slang RayQuery: CandidateTriangleRayT returns float but target expects float3"
         in refused.reasons
     )
     assert "float originScalar = 0;" in generated_code
@@ -7843,7 +7845,7 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "acceptVector(float3(0.0));" in generated_code
     assert (
-        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        "Slang RayQuery: CandidateTriangleRayT returns float but target expects float3"
         in refused.reasons
     )
     assert "acceptFloat(0);" in generated_code
@@ -7853,9 +7855,9 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "float proceedFloat = rq.Proceed();" not in generated_code
     assert "bool statusBool = rq.CommittedStatus();" not in generated_code
-    assert "float3 rayTVector = rq.CandidateRayT();" not in generated_code
+    assert "float3 rayTVector = rq.CandidateTriangleRayT();" not in generated_code
     assert "float originScalar = rq.CandidateObjectRayOrigin();" not in generated_code
-    assert "acceptVector(rq.CandidateRayT());" not in generated_code
+    assert "acceptVector(rq.CandidateTriangleRayT());" not in generated_code
     assert "acceptFloat(rq.CommittedObjectRayDirection());" not in generated_code
     assert "RayQueryOpNode" not in generated_code
 

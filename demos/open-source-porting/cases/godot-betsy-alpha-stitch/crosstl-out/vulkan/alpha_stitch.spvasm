@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 70
+; Bound: 68
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
@@ -84,14 +84,12 @@ OpStore %41 %52
 %59 = OpBitcast %4 %58
 %60 = OpCompositeConstruct %30 %57 %59
 %61 = OpLoad %21 %23
-%62 = OpVectorShuffle %21 %61 %61 0 1
-%63 = OpLoad %21 %41
-%64 = OpVectorShuffle %21 %63 %63 0 1
+%62 = OpLoad %21 %41
+%63 = OpCompositeExtract %9 %61 0
+%64 = OpCompositeExtract %9 %61 1
 %65 = OpCompositeExtract %9 %62 0
 %66 = OpCompositeExtract %9 %62 1
-%67 = OpCompositeExtract %9 %64 0
-%68 = OpCompositeExtract %9 %64 1
-%69 = OpCompositeConstruct %37 %65 %66 %67 %68
-OpImageWrite %53 %60 %69
+%67 = OpCompositeConstruct %37 %63 %64 %65 %66
+OpImageWrite %53 %60 %67
 OpReturn
 OpFunctionEnd

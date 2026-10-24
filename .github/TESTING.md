@@ -9,7 +9,7 @@ touches Metal or Direct3D.
 
 - **Pull request tier.** Runs on every push.
   - Translator and backend tests for every component on Python 3.11 and
-    3.15 on Ubuntu, plus one job each on macOS and Windows that runs every
+    3.15 on Ubuntu, plus sharded macOS and Windows jobs that run every
     component on Python 3.13.
   - The complete core suite.
   - Shader validators and runtime parity on all three platforms.
@@ -60,9 +60,9 @@ A gating workflow runs on every pull request and uses a planning job, not a
 
 | Workflow | Checks |
 |---|---|
-| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each |
+| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each, and every test on macOS in two |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into six shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite, split by test id into eight shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
@@ -76,6 +76,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
+| `orphaned-runs.yml` | Every 20 minutes: cancels the runs of merge groups the queue has discarded (`tools/orphaned_runs.py`), so they stop holding runners |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.

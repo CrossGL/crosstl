@@ -28529,7 +28529,7 @@ def test_directx_ray_query_result_methods_infer_all_hlsl_result_types():
         ("CandidateObjectRayDirection", "float3"),
         ("CommittedObjectRayOrigin", "float3"),
         ("CommittedObjectRayDirection", "float3"),
-        ("CandidateRayT", "float"),
+        ("CandidateTriangleRayT", "float"),
         ("CandidateObjectRayTMin", "float"),
         ("CommittedTriangleBarycentrics", "float2"),
         ("CandidateTriangleFrontFace", "bool"),
@@ -46661,7 +46661,7 @@ def test_directx_ray_query_inline_tracing():
                 RayQuery rq;
                 rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 rq.Abort();
                 rq.CommitNonOpaqueTriangleHit();
             }
@@ -46675,7 +46675,7 @@ def test_directx_ray_query_inline_tracing():
     assert "RayQuery" in generated
     assert "rq.Proceed()" in generated
     assert "rq.CandidateType()" in generated
-    assert "rq.CommittedType()" in generated
+    assert "rq.CommittedStatus()" in generated
     assert "rq.Abort()" in generated
     assert "rq.CommitNonOpaqueTriangleHit()" in generated
 

@@ -63,11 +63,15 @@ Once the change is on `main`, it closes the `coverage` issues whose probes now
 pass. Each of those issues gives the command that reproduces it, for example:
 
 ```bash
-python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum
+python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum --keep probes
 python -m tools.coverage tools    # which reference tools are installed
 ```
 
-A language whose reference tool is not installed comes out untested.
+`--keep` writes the probe and CrossTL's translations of it to
+`probes/<language>-<direction>/<feature>/`. A language whose reference tool is
+not installed comes out untested. With `--execute`, the Metal, GLSL and SPIR-V
+compute probes also run on a local GPU or Mesa runtime through the conformance
+harness, as CI does; a result the native probe does not compute is wrong.
 
 ## Picking an issue
 

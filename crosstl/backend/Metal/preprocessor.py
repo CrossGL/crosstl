@@ -61,6 +61,13 @@ from .static_member_constants import (
 )
 from .template_constants import unresolved_constant_references
 from .template_overloads import declared_type_names, select_instantiated_overload
+from .text_scanners import (
+    function_parameter_start,
+    split_top_level_assignment,
+    split_top_level_commas,
+    strip_comments_outside_strings,
+    strip_top_level_default_value,
+)
 from .type_layout import metal_type_layout, metal_type_size
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
@@ -6204,43 +6211,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # `==`/`<=`/`>=`/`!=` or a compound operator), returning (lhs, rhs) with
         # rhs None when there is no such assignment. Used to peel a data member's
         # default initializer from its declarator.
-        paren = bracket = brace = angle = 0
-        i = 0
-        while i < len(text):
-            ch = text[i]
-            if ch in "\"'":
-                _literal, consumed = self._read_string(text, i)
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                break
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                i = len(text) if end == -1 else end + 2
-                continue
-            if ch == "(":
-                paren += 1
-            elif ch == ")":
-                paren = max(0, paren - 1)
-            elif ch == "[":
-                bracket += 1
-            elif ch == "]":
-                bracket = max(0, bracket - 1)
-            elif ch == "{":
-                brace += 1
-            elif ch == "}":
-                brace = max(0, brace - 1)
-            elif ch == "<":
-                angle += 1
-            elif ch == ">":
-                angle = max(0, angle - 1)
-            elif ch == "=" and paren == bracket == brace == angle == 0:
-                nxt = text[i + 1] if i + 1 < len(text) else ""
-                prv = text[i - 1] if i > 0 else ""
-                if nxt != "=" and prv not in "=<>!+-*/%&|^~":
-                    return text[:i].strip(), text[i + 1 :].strip()
-            i += 1
-        return text.strip(), None
+        return split_top_level_assignment(text, self._read_string)
 
     def _parse_struct_constructor(
         self,
@@ -26193,52 +26164,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return result
 
     def _strip_top_level_default_value(self, text: str) -> str:
-        paren_depth = 0
-        bracket_depth = 0
-        brace_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(text):
-            if text[i] in "\"'":
-                _literal, consumed = self._read_string(text, i)
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                break
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                if end == -1:
-                    break
-                i = end + 2
-                continue
-
-            ch = text[i]
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "{":
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth = max(0, brace_depth - 1)
-            elif ch == "<":
-                angle_depth += 1
-            elif ch == ">":
-                angle_depth = max(0, angle_depth - 1)
-            elif (
-                ch == "="
-                and paren_depth == 0
-                and bracket_depth == 0
-                and brace_depth == 0
-                and angle_depth == 0
-            ):
-                return text[:i].strip()
-            i += 1
-        return text.strip()
+        return strip_top_level_default_value(text, self._read_string)
 
     def _infer_template_parameter_bindings_from_type(
         self,
@@ -27765,29 +27691,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return resolved
 
     def _strip_template_argument_comments(self, value: str) -> str:
-        result = ""
-        i = 0
-        while i < len(value):
-            if value[i] in "\"'":
-                literal, consumed = self._read_string(value, i)
-                result += literal
-                i += consumed
-                continue
-            if value.startswith("//", i):
-                end = value.find("\n", i)
-                if end == -1:
-                    break
-                i = end + 1
-                continue
-            if value.startswith("/*", i):
-                end = value.find("*/", i + 2)
-                if end == -1:
-                    break
-                i = end + 2
-                continue
-            result += value[i]
-            i += 1
-        return result
+        return strip_comments_outside_strings(value, self._read_string)
 
     # ------------------------------------------------------------------ #
     # `<` disambiguation for template-PARAMETER lists.                    #
@@ -28987,50 +28891,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return tokens[-2], tokens[-1]
 
     def _function_parameter_start(self, header: str) -> Optional[int]:
-        paren_depth = 0
-        bracket_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(header):
-            if header[i] in "\"'":
-                _literal, consumed = self._read_string(header, i)
-                i += consumed
-                continue
-            if header.startswith("//", i):
-                end = header.find("\n", i)
-                if end == -1:
-                    return None
-                i = end + 1
-                continue
-            if header.startswith("/*", i):
-                end = header.find("*/", i + 2)
-                if end == -1:
-                    return None
-                i = end + 2
-                continue
-
-            ch = header[i]
-            if (
-                ch == "("
-                and paren_depth == 0
-                and bracket_depth == 0
-                and angle_depth == 0
-            ):
-                return i
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "<":
-                angle_depth += 1
-            elif ch == ">":
-                angle_depth = max(0, angle_depth - 1)
-            i += 1
-        return None
+        return function_parameter_start(header, self._read_string)
 
     def _function_parameter_list_span(self, header: str) -> Optional[Tuple[int, int]]:
         # Locate the (open, close) offsets of a function header's REAL parameter
@@ -29154,73 +29015,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return bytes(value, "utf-8").decode("unicode_escape")
 
     def _split_top_level_commas(self, text: str) -> List[str]:
-        parts: List[str] = []
-        current = ""
-        paren_depth = 0
-        bracket_depth = 0
-        brace_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(text):
-            if text[i] in "\"'":
-                literal, consumed = self._read_string(text, i)
-                current += literal
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                end = text.find("\n", i)
-                if end == -1:
-                    current += text[i:]
-                    break
-                current += text[i:end]
-                i = end
-                continue
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                if end == -1:
-                    current += text[i:]
-                    break
-                current += text[i : end + 2]
-                i = end + 2
-                continue
-
-            ch = text[i]
-            if text.startswith("<<", i):
-                current += "<<"
-                i += 2
-                continue
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "{":
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth = max(0, brace_depth - 1)
-            elif ch == "<" and not (paren_depth or bracket_depth or brace_depth):
-                angle_depth += 1
-            elif ch == ">" and not (paren_depth or bracket_depth or brace_depth):
-                angle_depth = max(0, angle_depth - 1)
-            elif (
-                ch == ","
-                and paren_depth == 0
-                and bracket_depth == 0
-                and brace_depth == 0
-                and angle_depth == 0
-            ):
-                parts.append(current.strip())
-                current = ""
-                i += 1
-                continue
-            current += ch
-            i += 1
-        if current.strip():
-            parts.append(current.strip())
-        return parts
+        return split_top_level_commas(text, self._read_string)
 
     def _replace_identifiers(self, text: str, replacements: Dict[str, str]) -> str:
         result = ""
