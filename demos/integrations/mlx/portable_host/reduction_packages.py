@@ -71,6 +71,11 @@ HALF_ROW_ENTRIES = {
     for entry, dtype in HALF_FLOAT_ENTRIES.items()
 }
 ALL_ROW_ENTRIES = {**ROW_ENTRIES, **HALF_ROW_ENTRIES}
+# The largest input span, logical size or output a row launch binds: the
+# column passes' bound, far below the INT32_MAX at which reduce.cpp selects its
+# 64-bit index kernels. Static GLSL row packages assert their rebased indexes
+# inside it.
+ROW_MAX_ELEMENTS = 2**28 - 1
 COLUMN_ENTRIES = {
     f"col_reduce_{mode}_{dimension}_32_32_reduce_" + entry.removeprefix(
         "all_reduce_"
@@ -299,16 +304,17 @@ def build_packages(
         if family == "row" and target == "opengl":
             # row_reduction_layout.validate_metadata requires rows >= 32,
             # input_count == rows * row_size and
-            # input_count + 4 * group_width <= 131071 before dispatch. Every
-            # row_reduce_simple thread clamps out_idx to [0, rows - 4], so the
-            # rebased bases in_ + out_idx * row_size, inputs[] and
-            # out_ + out_idx stay below that bound, every inputs[j][i] read is
-            # below input_count and every out[i] write is below rows.
+            # input_count + 4 * group_width <= ROW_MAX_ELEMENTS before
+            # dispatch. Every row_reduce_simple thread clamps out_idx to
+            # [0, rows - 4], so the rebased bases in_ + out_idx * row_size,
+            # inputs[] and out_ + out_idx stay below that bound, every
+            # inputs[j][i] read is below input_count and every out[i] write
+            # is below rows.
             options += "".join(
                 "[[project.index_range_assertions]]\n"
                 f'source = "{SOURCE}"\n'
                 f'expression = "{expression}"\n'
-                "minimum = 0\nmaximum = 131071\n"
+                f"minimum = 0\nmaximum = {ROW_MAX_ELEMENTS}\n"
                 for expression in (
                     "inputs_offsets[(i - 1)] + reduction_size",
                     "in_ + out_idx * int64(reduction_size)",

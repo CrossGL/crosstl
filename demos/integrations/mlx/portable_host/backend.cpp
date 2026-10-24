@@ -563,6 +563,13 @@ void dispatch_all_reduce(
   }
 }
 
+// The largest input or output a column pass binds, as for matrix products; far
+// below the INT32_MAX at which reduce.cpp selects its 64-bit index kernels.
+constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;
+// Row passes share that bound for their source spans, logical sizes and
+// strides (row_reduction_layout.MAX_ELEMENTS).
+constexpr uint64_t max_row_elements = max_column_elements;
+
 void dispatch_row_reduce(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -590,7 +597,8 @@ void dispatch_row_reduce(
   int64_t span = row_size;
   auto accumulate_span = [&](const auto& sizes, const auto& steps) {
     for (size_t axis = 0; axis < sizes.size(); ++axis) {
-      if (sizes[axis] < 1 || sizes[axis] > 65535 || steps[axis] < 0 || steps[axis] > 65535) {
+      if (sizes[axis] < 1 || sizes[axis] > 65535 || steps[axis] < 0 ||
+          uint64_t(steps[axis]) > max_row_elements) {
         throw std::invalid_argument("CrossTL row reduction shape or stride exceeds its bounds.");
       }
       span += (int64_t(sizes[axis]) - 1) * steps[axis];
@@ -598,14 +606,29 @@ void dispatch_row_reduce(
   };
   accumulate_span(shape, strides);
   accumulate_span(reduce_shape, reduce_strides);
-  if (ndim > 64 || reduce_ndim > 64 || span < 1 || span > 65535 ||
+  const bool simple = !small && plan.type == ContiguousReduce && reduce_ndim == 0 &&
+      in.size() / row_size >= 32;
+  // A simple pass's inactive lanes form source indexes up to four values per
+  // lane past its span; static GLSL packages assert them inside the bound.
+  if (ndim > 64 || reduce_ndim > 64 || span < 1 || uint64_t(span) > max_row_elements ||
+      (simple && uint64_t(span) + uint64_t(width) * 4 > max_row_elements) ||
       in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
       uint64_t(span) * in.itemsize() > in.buffer_size() - uint64_t(in.offset()) ||
       uint64_t(row_size * non_rows) * out.size() != in.size()) {
     throw std::invalid_argument("CrossTL row reduction source view exceeds its bounds.");
   }
-  const bool simple = !small && plan.type == ContiguousReduce && reduce_ndim == 0 &&
-      in.size() / row_size >= 32;
+  // Every launch axis carries at most 65535 workgroups: four rows per simple
+  // workgroup, one per looped or small-row workgroup, and up to 1024 per
+  // scalar small-row workgroup.
+  const uint64_t rows = out.size();
+  const bool scalar_rows = small && ((non_rows < 32 && row_size <= 8) || non_rows <= 8);
+  const uint64_t scalar_width = std::min<uint64_t>(rows, 1024);
+  const uint64_t row_groups = simple ? (rows + 3) / 4
+      : scalar_rows ? (rows + scalar_width - 1) / scalar_width
+                    : rows;
+  if (row_groups > 65535) {
+    throw std::invalid_argument("CrossTL row reduction launch exceeds 65535 workgroups.");
+  }
   out.set_data(allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   char error[2048] = {};
   int status;
@@ -643,8 +666,7 @@ void dispatch_row_reduce(
     if (small) {
       // The current bounded output fits upstream get_2d_grid_dims' first axis.
       const uint32_t rows = static_cast<uint32_t>(out.size());
-      const bool scalar = (non_rows < 32 && row_size <= 8) || non_rows <= 8;
-      if (scalar) {
+      if (scalar_rows) {
         width = std::min<uint32_t>(rows, 1024);
         launch = {{(rows + width - 1) / width, 1, 1}, {width, 1, 1}, {rows, 1, 1}};
       } else {
@@ -671,10 +693,6 @@ uint64_t column_shape_size(const mlx::core::Shape& shape) {
 }
 
 enum class ColumnPass { Small, Looped, TwoPass };
-
-// The largest input or output a column pass binds, as for matrix products; far
-// below the INT32_MAX at which reduce.cpp selects its 64-bit index kernels.
-constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;
 
 void dispatch_column_pass(
     const mlx::core::array& in,
@@ -1420,7 +1438,8 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
     in = dense_input(in);
   }
   auto scan_type = [](Dtype dtype) {
-    return dtype == float16 ? "float16" : dtype == bfloat16 ? "bfloat16" : storage_type(dtype);
+    return dtype == float16 ? "float16" : dtype == bfloat16 ? "bfloat16" :
+        dtype == complex64 ? "complex64" : storage_type(dtype);
   };
   const char* source_type = scan_type(in.dtype());
   const char* output_type = scan_type(out.dtype());
@@ -1434,7 +1453,9 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument("CrossTL scan input exceeds its allocation.");
   }
   uint64_t axis_size = in.shape(axis_);
-  const auto source_stride = in.strides()[axis_];
+  // A size-one axis may carry any stride while the array stays contiguous, and
+  // its scan is elementwise: run it as one-element contiguous rows.
+  const auto source_stride = axis_size == 1 ? 1 : in.strides()[axis_];
   if (source_stride < 1 || source_stride > 65535 ||
       !axis_size || !in.data_size() || in.data_size() > 65535) {
     throw std::invalid_argument("CrossTL scan storage metadata exceeds its bounds.");
@@ -2014,12 +2035,12 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   auto plan = get_reduction_plan(in, axes_);
   // Column passes bound their own views; every other plan that is not a
-  // whole-array reduction binds at most 65535 elements, checked before a
-  // general plan's dense copy.
+  // whole-array reduction binds at most max_row_elements elements, checked
+  // before a general plan's dense copy.
   const bool column_plan =
       plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce;
-  if (out.size() != 1 && in.size() > 65535 && !column_plan) {
-    throw std::invalid_argument("CrossTL row reductions support at most 65535 elements.");
+  if (out.size() != 1 && in.size() > max_row_elements && !column_plan) {
+    throw std::invalid_argument("CrossTL row reductions support at most 268435455 elements.");
   }
   if (plan.type == GeneralReduce) {
     in = dense_input(in);
@@ -2372,11 +2393,10 @@ void Concatenate::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   int64_t axis_size = 0;
   for (const auto& in : inputs) {
-    if (in.dtype() != out.dtype() ||
-        (in.dtype() != float32 && in.dtype() != int32 &&
-         in.dtype() != uint32 && in.dtype() != bool_)) {
+    // Every GPU dtype copies through the base or lazily translated copies.
+    if (in.dtype() != out.dtype() || !cast_type(in.dtype())) {
       throw std::invalid_argument(
-          "CrossTL concatenate requires matching float32/int32/uint32/bool arrays.");
+          "CrossTL concatenate requires matching arrays of a GPU dtype.");
     }
     if (in.ndim() != out.ndim() || in.size() > 65535) {
       throw std::invalid_argument(
@@ -2948,6 +2968,75 @@ void ArgPartition::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void Partition::eval_gpu(const std::vector<array>& inputs, array& out) {
   gpu_merge_sort(inputs, out, axis_, false);
+}
+
+// Ports sort.cpp SearchSorted::eval_gpu. Each pass launches at most 65535
+// one-thread groups, so its grid is exactly its value count, the grid
+// get_2d_grid_dims gives a row-contiguous output; v and out advance between
+// passes. A sequence with a negative stride is searched in a dense copy.
+void SearchSorted::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 2 || inputs[0].ndim() != 1 || out.dtype() != uint32 ||
+      inputs[1].dtype() != inputs[0].dtype() || inputs[1].shape() != out.shape() ||
+      !cast_type(inputs[0].dtype())) {
+    throw std::invalid_argument(
+        "CrossTL searchsorted requires a 1-D sequence and values of one GPU dtype.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(out.nbytes()));
+    return;
+  }
+  auto a = inputs[0];
+  if (a.size() == 0) {
+    array zero(0, uint32);
+    array zeros(out.shape(), uint32, nullptr, {});
+    const bool single = out.size() == 1;
+    zeros.copy_shared_buffer(zero, Strides(out.ndim(), 0), {single, single, single}, 1);
+    dispatch_copy(zeros, out);
+    return;
+  }
+  if (a.size() > 1 && a.strides()[0] < 1) {
+    a = dense_input(a);
+  }
+  const uint32_t n = static_cast<uint32_t>(a.size());
+  const int64_t a_stride = a.size() > 1 ? a.strides()[0] : 1;
+  const uint64_t span = 1 + uint64_t(n - 1) * uint64_t(a_stride);
+  if (span > (uint64_t(1) << 28) - 1 || a.offset() < 0 ||
+      uint64_t(a.offset()) > a.buffer_size() ||
+      span > (a.buffer_size() - uint64_t(a.offset())) / a.itemsize()) {
+    throw std::invalid_argument("CrossTL searchsorted sequence exceeds its bounds.");
+  }
+  auto v = inputs[1];
+  if (!v.flags().row_contiguous) {
+    array dense(v.shape(), v.dtype(), nullptr, {});
+    dispatch_copy(v, dense);
+    v = std::move(dense);
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  const char* dtype = cast_type(a.dtype());
+  const std::string entry = std::string("searchsorted_") + dtype + (right_ ? "_right" : "_left");
+  require_entry(entry);
+  for (uint64_t first = 0; first < out.size();) {
+    const uint32_t count = static_cast<uint32_t>(std::min<uint64_t>(out.size() - first, 65535));
+    uint32_t sequence_length = n;
+    int64_t stride = a_stride;
+    CrosstlMlxBuffer buffers[] = {
+        {"a", dtype, const_cast<void*>(a.data<void>()), span, 0},
+        {"v", dtype, const_cast<uint8_t*>(v.data<uint8_t>()) + first * v.itemsize(), count, 0},
+        {"out", "uint32", out.data<uint32_t>() + first, count, 1},
+        {"n", "uint32", &sequence_length, 1, 0},
+        {"a_stride", "int64", &stride, 1, 0},
+    };
+    const CrosstlMlxLaunch launch{{count, 1, 1}, {1, 1, 1}};
+    char error[2048] = {};
+    const int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 5, count, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native searchsorted failed: ") + error);
+    }
+    first += count;
+  }
 }
 
 namespace {
@@ -3963,3 +4052,6 @@ void Quantize::eval_gpu(
 }
 
 } // namespace mlx::core::fast
+
+// The normalization ports use this translation unit's dispatch helpers.
+#include "mlx/backend/no_gpu/crosstl_normalization.inc"

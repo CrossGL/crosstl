@@ -28,6 +28,18 @@ from demos.integrations.mlx.portable_host import (
 from tests.ci_helpers import assert_paths_covered
 
 
+def declaration_macro(name):
+    """The no_gpu/primitives.cpp macro that declares ``name``."""
+    if name in prepare.FALLBACK_PRIMITIVES:
+        return "NO_GPU_USE_FALLBACK"
+    multi = {"DivMod", "Quantize", *prepare.NORMALIZATION_PRIMITIVES}
+    return (
+        "NO_GPU_MULTI"
+        if name in prepare.MULTI_OUTPUT_VIEWS or name in multi
+        else "NO_GPU"
+    )
+
+
 def checkout(root, monkeypatch, newline=b"\n"):
     backend = root / "mlx/backend/no_gpu"
     backend.mkdir(parents=True)
@@ -35,7 +47,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
         "primitives.cpp": (
             "\n".join(
-                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name in {'DivMod', 'Quantize'} else 'NO_GPU'}({name})"
+                f"{declaration_macro(name)}({name})"
                 for name in (
                     "Arange",
                     "ArgReduce",
@@ -45,6 +57,8 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "ArgSort",
                     "Partition",
                     "Sort",
+                    "SearchSorted",
+                    *prepare.NORMALIZATION_PRIMITIVES,
                     "RandomBits",
                     "Scan",
                     "Quantize",
@@ -105,11 +119,26 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 6
+    for name in prepare.NORMALIZATION_PRIMITIVES:
+        declared = f"{declaration_macro(name)}({name})"
+        assert declared not in (backend / "crosstl_primitives.cpp").read_text()
+        assert declared in (backend / "primitives.cpp").read_text()
+    assert (backend / "crosstl_normalization.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("normalization.inc").read_bytes()
+    )
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" in (backend / "primitives.cpp").read_text()
-    for name in ("LogSumExp", "Softmax", "ArgPartition", "ArgSort", "Partition", "Sort"):
+    for name in (
+        "LogSumExp",
+        "Softmax",
+        "ArgPartition",
+        "ArgSort",
+        "Partition",
+        "Sort",
+        "SearchSorted",
+    ):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()

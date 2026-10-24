@@ -7,6 +7,7 @@ from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host import (
     bfloat_storage,
+    element_storage,
     half_storage,
     scan_layout,
 )
@@ -15,6 +16,8 @@ from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
 def guard(dtype):
+    if dtype == element_storage.COMPLEX:
+        return element_storage.guard_words(dtype)
     if dtype in {"float16", "bfloat16"}:
         return [0x3555] * 32
     if dtype == "bool_":
@@ -25,6 +28,9 @@ def guard(dtype):
 def packet(dtype, target, words):
     from demos.integrations.mlx.portable_host.runtime import physical_dtype
 
+    if dtype == element_storage.COMPLEX:
+        # Every target reflects complex64_t as a packed {real, imag} pair.
+        return element_storage.packet(dtype, target, words)
     encoding = None
     if dtype in {"float16", "bfloat16"}:
         storage = half_storage if dtype == "float16" else bfloat_storage
@@ -44,6 +50,8 @@ def packet(dtype, target, words):
 
 
 def unpack(dtype, target, words):
+    if dtype == element_storage.COMPLEX:
+        return element_storage.unpack(dtype, target, words)
     if dtype in {"float16", "bfloat16"}:
         storage = half_storage if dtype == "float16" else bfloat_storage
         return storage.unpack(words, target)
@@ -56,6 +64,25 @@ def unpack(dtype, target, words):
     if any(type(word) is not int or ctype(word).value != word for word in words):
         raise ValueError("Native scan returned invalid scalar storage")
     return list(words)
+
+
+def _reflected(scalar, value, dtype):
+    """Whether the reflected element carries ``value``'s exact storage."""
+    if dtype == element_storage.COMPLEX or "structMembers" in scalar:
+        return element_storage.reflected_layout_matches(scalar, value, dtype)
+    physical_size = (
+        1
+        if value["dtype"] == "bool"
+        else (
+            2
+            if value["dtype"] == "uint16"
+            else ctypes.sizeof(scan_layout.TYPES[value["dtype"]])
+        )
+    )
+    return (
+        scalar["elementType"] == value["dtype"]
+        and scalar["elementStrideBytes"] == physical_size
+    )
 
 
 def dispatch(host, entry, buffers, count, size, launch):
@@ -104,20 +131,7 @@ def dispatch(host, entry, buffers, count, size, launch):
         if name in {"in", "out"}:
             words += guard(dtype)
         value = packet(dtype, host.target, words)
-        scalar = binding["scalarLayout"]
-        physical_size = (
-            1
-            if value["dtype"] == "bool"
-            else (
-                2
-                if value["dtype"] == "uint16"
-                else ctypes.sizeof(scan_layout.TYPES[value["dtype"]])
-            )
-        )
-        if (
-            scalar["elementType"] != value["dtype"]
-            or scalar["elementStrideBytes"] != physical_size
-        ):
+        if not _reflected(binding["scalarLayout"], value, dtype):
             raise ValueError("Reflected scan storage differs from the native buffer")
         inputs[binding["name"]] = value
         if name == "out":
@@ -148,9 +162,11 @@ def dispatch(host, entry, buffers, count, size, launch):
     ):
         raise RuntimeError("Native scan output layout differs")
     words = output.get("values")
-    if not isinstance(words, list) or len(words) != size + 32:
+    if not isinstance(words, list):
         raise RuntimeError("Native scan output extent differs")
     words = unpack(destination, host.target, words)
+    if len(words) != size + 32:
+        raise RuntimeError("Native scan output extent differs")
     if words[size:] != guard(destination):
         raise RuntimeError("Native scan changed its output guard")
     storage = (scan_layout.TYPES[destination] * size)(*words[:size])

@@ -25,7 +25,13 @@ from the retained input; OpenGL does not run the arg reduction tests yet
 (``TARGET_EXCLUSIONS``). Softmax and logsumexp rows are translated per
 threadgroup width on first use; each dispatch must name its cached package,
 upload its retained input and keep its output guard, and the upstream tests
-compare its values. Every other dispatch
+compare its values. Merge-sort stages are translated per launch width on
+first use and every retained stage is recomputed. RMS and layer
+normalization rows and their gradients are translated per threadgroup width
+on first use; each dispatch must name its cached package, upload its
+retained operands, keep its output guards and leave an absent weight's
+gradient placeholder unwritten, and the upstream tests compare their values
+with MLX's composed normalization. Every other dispatch
 must come from one of those indexes, so a test that reaches an uninstalled
 family fails the trace instead of passing on an unchecked package.
 """
@@ -48,9 +54,14 @@ from demos.integrations.mlx.portable_host import (
     elementwise_evidence,
     gather_evidence,
     lazy_package_evidence,
+    norm_evidence,
+    norm_layout,
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
+    searchsorted_dispatch,
+    searchsorted_evidence,
+    searchsorted_layout,
     softmax_evidence,
     softmax_layout,
     sort_dispatch,
@@ -92,6 +103,10 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     ElementwisePackageCache,
 )
+from demos.integrations.mlx.portable_host.norm_packages import (
+    CACHE_DIRECTORY as NORM_CACHE,
+)
+from demos.integrations.mlx.portable_host.norm_packages import NormPackageCache
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.random_packages import (
     ENTRIES,
@@ -104,6 +119,12 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 )
 from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    CACHE_DIRECTORY as SEARCHSORTED_CACHE,
+)
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    SearchSortedPackageCache,
+)
 from demos.integrations.mlx.portable_host.small_row_packages import SmallRowPackageCache
 from demos.integrations.mlx.portable_host.softmax_packages import (
     CACHE_DIRECTORY as SOFTMAX_CACHE,
@@ -241,6 +262,34 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_argpartition",
         "test_ops.TestOps.test_sort_nan",
         "test_ops.TestOps.test_argsort_nan",
+    ) + (
+        # This reaches lazily translated binary searches of contiguous,
+        # strided, reversed and empty sequences, and of transposed, sliced
+        # and broadcast values, through searchsorted.metal.
+        "test_ops.TestOps.test_searchsorted",
+        # This reaches concatenations of int64 arrays through lazy copies.
+        "test_ops.TestOps.test_unstack",
+    ) + (
+        # These reach lazily translated contiguous and strided, forward and
+        # reverse, inclusive and exclusive scans of float32, int32, int64 and
+        # complex64, log-add-exp scans, and size-one axes of any stride.
+        "test_ops.TestOps.test_scans",
+        "test_ops.TestOps.test_logcumsumexp",
+        "test_ops.TestOps.test_scans_complex_exclusive",
+        "test_ops.TestOps.test_scan_size_one_axis",
+    ) + (
+        # These reach lazily translated single-row and looped RMS and layer
+        # normalization of every float dtype, their gradient kernels with and
+        # without a weight, and the column sums of the weight gradients.
+        "test_fast.TestFast.test_rms_norm",
+        "test_fast.TestFast.test_rms_norm_grad",
+        "test_fast.TestFast.test_layer_norm_dim_check",
+        "test_fast.TestFast.test_layer_norm",
+        "test_fast.TestFast.test_slice_into_layer_norm",
+        "test_fast.TestFast.test_layer_norm_grad",
+        "test_fast.TestFast.test_layer_norm_grad_no_bias",
+        "test_fast.TestFast.test_layer_norm_grad_no_params",
+        "test_fast.TestFast.test_layer_norm_grad_params",
     )
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
@@ -250,6 +299,9 @@ TARGET_EXCLUSIONS = {
         "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2207",
         "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2207",
         "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2207",
+        # Reverse scans read through wrapped unsigned pointer offsets.
+        "test_ops.TestOps.test_scans": "CrossGL/crosstl#2905",
+        "test_ops.TestOps.test_scans_complex_exclusive": "CrossGL/crosstl#2905",
     }
 }
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
@@ -273,6 +325,8 @@ RETAINED_VALUES = (
     *arg_reduce_layout.OPERATIONS,
     *softmax_layout.PREFIXES,
     *sort_dispatch.PREFIXES,
+    searchsorted_dispatch.PREFIX,
+    *norm_layout.PREFIXES,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     "all_reduce_",
@@ -595,6 +649,31 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Derives the cached package again, checks the uploads, guards and
         # native modules, and recomputes every retained stage's outputs.
         sort_evidence.audit_event(event, sorts)
+        lazy_checked.add(i)
+        owners[i] += 1
+    searches = SearchSortedPackageCache(
+        args.mlx_root, args.packages / SEARCHSORTED_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in searchsorted_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op searchsorted targets another backend")
+        # Derives the cached package again, checks the uploads, guards and
+        # native modules, and recomputes every retained pass's binary searches.
+        searchsorted_evidence.audit_event(event, searches)
+        lazy_checked.add(i)
+        owners[i] += 1
+    norms = NormPackageCache(args.mlx_root, args.packages / NORM_CACHE, target)
+    for i, event in enumerate(trace):
+        if event["entry"] not in norm_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op normalization targets another backend")
+        # Derives the cached package again and checks the uploads, guards,
+        # weight placeholders and native modules; the upstream tests compare
+        # the values with MLX's composed normalization.
+        norm_evidence.audit_event(event, norms)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

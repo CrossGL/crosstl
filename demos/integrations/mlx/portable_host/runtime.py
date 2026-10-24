@@ -49,6 +49,8 @@ from demos.integrations.mlx.portable_host import (
     half_storage,
     matmul_dispatch,
     matmul_layout,
+    norm_dispatch,
+    norm_layout,
     qmm_layout,
     quantization_dispatch,
     quantization_layout,
@@ -58,6 +60,8 @@ from demos.integrations.mlx.portable_host import (
     row_reduction_layout,
     scan_dispatch,
     scan_layout,
+    searchsorted_dispatch,
+    searchsorted_layout,
     slice_update_layout,
     softmax_dispatch,
     softmax_layout,
@@ -135,6 +139,10 @@ from demos.integrations.mlx.portable_host.matmul_packages import (
 from demos.integrations.mlx.portable_host.matmul_packages import (
     QuantizedMatmulPackageCache,
 )
+from demos.integrations.mlx.portable_host.norm_packages import (
+    CACHE_DIRECTORY as NORM_CACHE,
+)
+from demos.integrations.mlx.portable_host.norm_packages import NormPackageCache
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
     ARANGE_ENTRIES,
@@ -191,8 +199,8 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ALL_ENTRIES as REDUCTION_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
-    COLUMN_ENTRIES,
     ALL_ROW_ENTRIES,
+    COLUMN_ENTRIES,
     HALF_COLUMN_ENTRIES,
     INIT_ENTRIES,
 )
@@ -201,6 +209,12 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 )
 from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    CACHE_DIRECTORY as SEARCHSORTED_CACHE,
+)
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    SearchSortedPackageCache,
+)
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
@@ -424,6 +438,20 @@ class HostRuntime:
         # Merge-sort stages translate each entry at its launch width.
         self.sorts = (
             SortPackageCache(mlx_root, self.directory / SORT_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Binary searches translate each entry at its pass size.
+        self.searchsorted = (
+            SearchSortedPackageCache(
+                mlx_root, self.directory / SEARCHSORTED_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # RMS and layer normalization rows translate each entry at its width.
+        self.norms = (
+            NormPackageCache(mlx_root, self.directory / NORM_CACHE, self.target)
             if mlx_root is not None
             else None
         )
@@ -679,6 +707,10 @@ class HostRuntime:
                 return 1
             if name in sort_layout.ENTRIES and self.sorts is not None:
                 return 1
+            if name in searchsorted_layout.ENTRIES and self.searchsorted is not None:
+                return 1
+            if name in norm_layout.ENTRIES and self.norms is not None:
+                return 1
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -838,6 +870,12 @@ class HostRuntime:
             )
         if entry in sort_layout.ENTRIES:
             return sort_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry in searchsorted_layout.ENTRIES:
+            return searchsorted_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in norm_layout.ENTRIES:
+            return norm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_copy(entry):
             return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_elementwise(entry):
@@ -965,7 +1003,11 @@ class HostRuntime:
                     else (
                         column_reduction_layout.MAX_ELEMENTS
                         if column_reduction
-                        else 65535
+                        else (
+                            row_reduction_layout.MAX_ELEMENTS
+                            if row_reduction
+                            else 65535
+                        )
                     )
                 )
             )

@@ -134,7 +134,8 @@ NEGATIVE_CHECKS = {
 REDUCTION_NEGATIVE_CHECKS = {
     "reduce-dtype": "matching float32/int32/uint32",
     "reduce-large-allocation": "storage does not match",
-    "reduce-row-limit": "row reductions support at most 65535",
+    "reduce-row-limit": "row reductions support at most 268435455",
+    "reduce-row-launch": "row reduction launch exceeds 65535 workgroups",
     "reduce-allocation": "storage does not match",
     "reduce-empty": "No translated reduction variant",
     "reduce-row": "Small-row dispatch requires the pinned MLX source root",
@@ -232,7 +233,15 @@ def worker(args):
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (65536,), (1,), 2)
                 value = mx.sum(source)
             elif args.worker == "reduce-row-limit":
-                value = mx.sum(mx.array(np.ones((256, 256), dtype=np.float32)), axis=1)
+                # 2^28 + 2^14 broadcast elements, refused before the dense copy.
+                source = mx.broadcast_to(mx.array(1.0), (16384, 16385))
+                value = mx.sum(source, axis=1)
+            elif args.worker == "reduce-row-launch":
+                # 65,536 looped output rows exceed one launch axis's workgroups.
+                source = mx.as_strided(
+                    mx.array(np.ones(130, dtype=np.float32)), (2, 65536, 65), (65, 0, 1)
+                )
+                value = mx.sum(source, axis=(0, 2))
             elif args.worker == "reduce-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (5,), (1,), 2)
                 value = mx.sum(source)
@@ -254,6 +263,7 @@ def worker(args):
             guarded_rejection = args.worker in {
                 "reduce-large-allocation",
                 "reduce-row-limit",
+                "reduce-row-launch",
                 "reduce-allocation",
             }
             if guarded_rejection and runtime.dispatch_count:
@@ -483,6 +493,7 @@ def verify(args):
                 mode in {
                     "reduce-large-allocation",
                     "reduce-row-limit",
+                    "reduce-row-launch",
                     "reduce-allocation",
                 }
                 and (

@@ -180,6 +180,134 @@ def test_simple_row_preconditions_are_required(fault):
         row_reduction_layout.validate(entry, buffers, count, execution)
 
 
+def _wide_metadata(simple, rows, row_size, *, stride=None, reductions=2):
+    """Detached row metadata over ``rows`` rows of ``row_size`` elements."""
+    if simple:
+        metadata = {"reduction_size": [row_size], "out_size": [rows]}
+        span, logical = rows * row_size, rows * row_size
+        entry, grid = "row_reduce_simple_sumfloat32", [1, (rows + 3) // 4, 1]
+    else:
+        stride = row_size if stride is None else stride
+        reduce_stride = rows * stride
+        # Each shape axis stays below 65,536, so more rows take two axes.
+        shape, strides = (
+            ([rows], [stride])
+            if rows <= 65535
+            else ([2, rows // 2], [rows // 2 * stride, stride])
+        )
+        metadata = {
+            "row_size": [row_size],
+            "non_row_reductions": [reductions],
+            "shape": shape,
+            "strides": strides,
+            "ndim": [len(shape)],
+            "reduce_shape": [reductions],
+            "reduce_strides": [reduce_stride],
+            "reduce_ndim": [1],
+        }
+        span = row_size + (rows - 1) * stride + (reductions - 1) * reduce_stride
+        logical = rows * row_size * reductions
+        entry, grid = "row_reduce_looped_1_reduce_sumfloat32", [1, rows, 1]
+    execution = {
+        "workgroupCount": grid,
+        "workgroupSize": [row_reduction_layout.width(row_size), 1, 1],
+    }
+    return entry, metadata, logical, span, rows, execution
+
+
+@pytest.mark.parametrize("simple", [True, False])
+def test_row_plans_bind_more_than_65535_elements(simple):
+    # 2,048-element rows over 81,920 and 163,840 elements, with a non-row
+    # reduction stride of 81,920 for the looped plan.
+    entry, metadata, logical, span, rows, execution = _wide_metadata(simple, 40, 2048)
+    assert logical > 65535 and span > 65535
+    assert row_reduction_layout.validate_metadata(
+        entry, metadata, logical, span, rows, execution
+    )
+    assert row_reduction_layout.MAX_ELEMENTS == 2**28 - 1
+    assert reduction_packages.ROW_MAX_ELEMENTS == row_reduction_layout.MAX_ELEMENTS
+
+
+def test_sliced_row_views_bind_spans_beyond_their_logical_size():
+    # Every other 2,048-element row: a 161,792-element span for 81,920 values.
+    entry, metadata, logical, span, rows, execution = _wide_metadata(
+        False, 40, 2048, stride=4096, reductions=1
+    )
+    assert span == 2048 + 39 * 4096 and logical == 40 * 2048
+    assert row_reduction_layout.validate_metadata(
+        entry, metadata, logical, span, rows, execution
+    )
+
+
+@pytest.mark.parametrize("simple", [True, False])
+def test_row_launch_axes_are_bounded_by_65535_workgroups(simple):
+    # 65,535 workgroups fit one launch axis; one more row is refused.
+    rows = 4 * 65535 if simple else 65535
+    entry, metadata, logical, span, rows, execution = _wide_metadata(
+        simple, rows, 65, reductions=1
+    )
+    assert row_reduction_layout.validate_metadata(
+        entry, metadata, logical, span, rows, execution
+    )
+    entry, metadata, logical, span, rows, execution = _wide_metadata(
+        simple, rows + (4 if simple else 1), 65, reductions=1
+    )
+    assert execution["workgroupCount"][1] == 65536
+    with pytest.raises(ValueError, match="launch exceeds 65535 workgroups"):
+        row_reduction_layout.validate_metadata(
+            entry, metadata, logical, span, rows, execution
+        )
+
+
+@pytest.mark.parametrize("fault", ["span", "logical-size", "simple-lanes", "stride"])
+def test_row_spans_are_bounded_by_the_row_element_limit(fault):
+    maximum = row_reduction_layout.MAX_ELEMENTS
+    simple = fault == "simple-lanes"
+    entry, metadata, logical, span, rows, execution = _wide_metadata(simple, 40, 2048)
+    if fault == "span":
+        span = maximum + 1
+    elif fault == "logical-size":
+        logical = maximum + 1
+    elif fault == "simple-lanes":
+        # The final workgroup's inactive lanes form indexes four values per
+        # lane past the span, which static GLSL packages assert below MAX.
+        entry, metadata, logical, span, rows, execution = _wide_metadata(
+            True, 4096, 65535
+        )
+        assert span <= maximum < span + 4 * 1024
+    else:
+        metadata["strides"] = [maximum + 1]
+    with pytest.raises(ValueError):
+        row_reduction_layout.validate_metadata(
+            entry, metadata, logical, span, rows, execution
+        )
+
+
+def test_static_glsl_row_packages_assert_the_row_element_limit():
+    source = Path(reduction_packages.__file__).read_text()
+    start = source.index('if family == "row" and target == "opengl":')
+    body = source[start : source.index("config.write_text(", start)]
+    assert "maximum = {ROW_MAX_ELEMENTS}" in body
+    assert "131071" not in body
+
+
+def test_backend_bounds_row_passes_by_elements_and_workgroups():
+    source = Path(row_reduction_layout.__file__).with_name("backend.cpp").read_text()
+    assert "constexpr uint64_t max_row_elements = max_column_elements;" in source
+    start = source.index("void dispatch_row_reduce(")
+    body = source[start : source.index("\n}\n", start)]
+    for text in (
+        "uint64_t(steps[axis]) > max_row_elements",
+        "uint64_t(span) > max_row_elements",
+        "(simple && uint64_t(span) + uint64_t(width) * 4 > max_row_elements)",
+        "if (row_groups > 65535) {",
+    ):
+        assert text in body, text
+    assert "span > 65535" not in body
+    # The launch bound is checked before the output allocation and dispatch.
+    assert body.index("if (row_groups > 65535) {") < body.index("out.set_data(")
+
+
 def test_rank_mismatch_is_rejected_before_metadata_array_read(monkeypatch):
     entry, buffers, count, execution, memory = _buffers()
     buffers["shape"].count = 2

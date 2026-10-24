@@ -279,11 +279,12 @@ def test_backend_bounds_column_passes_by_elements_and_workgroups():
         "dispatch_callback.load()"
     )
     assert column_reduction_layout.MAX_ELEMENTS == 2**28 - 1
-    # MLX's reductions refuse row plans over 65,535 elements before a general
+    # MLX's reductions refuse row plans over 2^28 - 1 elements before a general
     # plan's dense copy, and leave column plans to their passes' bounds.
     start = source.index("void Reduce::eval_gpu(")
     body = source[start : source.index("\n}\n", start)]
-    refusal = body.index("row reductions support at most 65535 elements")
+    refusal = body.index("row reductions support at most 268435455 elements")
+    assert "in.size() > max_row_elements && !column_plan" in body
     assert body.index("const bool column_plan =") < refusal
     assert refusal < body.index("in = dense_input(in);")
     assert "row and column reductions support" not in source

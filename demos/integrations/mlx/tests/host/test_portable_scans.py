@@ -55,7 +55,9 @@ def buffers(dtype="float32", axis=129, stride=1, rows=3):
     )
 
 
-@pytest.mark.parametrize("dtype", ("float32", "float16", "bfloat16", "int64"))
+@pytest.mark.parametrize(
+    "dtype", ("float32", "float16", "bfloat16", "int64", "complex64")
+)
 @pytest.mark.parametrize(
     "axis",
     (1, 31, 32, 33, 127, 128, 129, 1023, 1024, 1025, 2048, 4096, 4097, 8192, 8193),
@@ -65,7 +67,7 @@ def test_scan_geometry_follows_source_item_width(dtype, axis):
     metadata = scan_layout.validate(entry, supplied, size, launch)
     assert metadata["axisSize"] == axis
     assert launch["workgroupCount"] == [1, 3, 1]
-    reads = 2 if dtype == "int64" else 4
+    reads = 2 if dtype in {"int64", "complex64"} else 4
     # Independent form of the two source thresholds and subgroup rounding.
     units = axis if axis <= reads * 1024 else axis // 2
     width = min(1024, ((units + reads * 32 - 1) // (reads * 32)) * 32)
@@ -75,7 +77,8 @@ def test_scan_geometry_follows_source_item_width(dtype, axis):
 
 
 @pytest.mark.parametrize(
-    "dtype,width", (("float32", 256), ("bfloat16", 256), ("int64", 512))
+    "dtype,width",
+    (("float32", 256), ("bfloat16", 256), ("int64", 512), ("complex64", 512)),
 )
 @pytest.mark.parametrize("stride", (2, 31, 32, 33, 65))
 @pytest.mark.parametrize("axis", (1, 31, 32, 33))
@@ -158,7 +161,9 @@ def test_scan_signature_preserves_boolean_sum_promotion(entry):
     (
         "contig_scan_inclusive_sum_bool__bool_",
         "contig_scan_inclusive_logaddexp_int32_int32",
-        "contig_scan_inclusive_sum_complex64_complex64",
+        "contig_scan_inclusive_sum_int8_int8",
+        "strided_scan_inclusive_max_uint16_uint16",
+        "contig_scan_inclusive_sum_complex64_float32",
         "other",
         None,
     ),
@@ -178,17 +183,26 @@ def test_unimplemented_host_scalar_types_remain_explicit(entry):
         ("bool_", [0, 1, 1, 0]),
         ("int32", [-(1 << 31), -1, 0, (1 << 31) - 1]),
         ("uint64", [0, (1 << 64) - 1]),
+        ("complex64", [0, 0x8000000000000000, 0x3F80000080000000, (1 << 64) - 1]),
     ),
 )
 def test_scan_transport_preserves_source_words(target, dtype, words):
     value = scan_dispatch.packet(dtype, target, words)
     assert scan_dispatch.unpack(dtype, target, value["values"]) == words
-    assert value["shape"] == [len(words)]
+    # complex64 travels as its packed {real, imag} float32 bits.
+    parts = 2 if dtype == "complex64" else 1
+    assert value["shape"] == [parts * len(words)]
 
 
 @pytest.mark.parametrize(
     "dtype,word",
-    (("float32", -1), ("int32", 1 << 31), ("bool_", 2), ("uint64", 1 << 64)),
+    (
+        ("float32", -1),
+        ("int32", 1 << 31),
+        ("bool_", 2),
+        ("uint64", 1 << 64),
+        ("complex64", 1 << 32),
+    ),
 )
 def test_scan_readback_rejects_out_of_range_words(dtype, word):
     with pytest.raises(ValueError):
@@ -310,6 +324,85 @@ def test_scan_dispatch_validates_readback_before_writing_host_storage(
         assert list(memory["out"]) == [1] * size
         assert host.dispatch_count == 1 and host.trace.is_file()
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("fault", (None, "layout", "count", "guard", "range"))
+def test_complex_scan_dispatch_carries_packed_pairs(
+    tmp_path, monkeypatch, target, fault
+):
+    entry, supplied, memory, size, geometry = buffers("complex64", axis=5, rows=2)
+    words = [index * 0x100000001 for index in range(size)]
+    memory["in"][:] = words
+    memory["out"][:] = [7] * size
+    complex_layout = dict(scan_dispatch.element_storage.COMPLEX_LAYOUT)
+    if fault == "layout":
+        complex_layout["elementStrideBytes"] = 16
+    descriptor = {
+        "artifact": {},
+        "bindings": [
+            {
+                "name": name,
+                "provenance": {"sourceResource": {"parameter": name}},
+                "scalarLayout": (
+                    complex_layout
+                    if name in {"in", "out"}
+                    else {"elementType": "uint64", "elementStrideBytes": 8}
+                ),
+            }
+            for name in supplied
+        ],
+    }
+    uploads = []
+
+    def request(descriptor, directory, inputs, outputs, *args, **kwargs):
+        uploads.append(inputs)
+        return {}
+
+    monkeypatch.setattr(scan_dispatch, "build_native_loader_dispatch_request", request)
+    # The kernel's identity result: packed {real, imag} float32 bits and guards.
+    returned = words + scan_dispatch.guard("complex64")
+    values = [part for word in returned for part in (word & 0xFFFFFFFF, word >> 32)]
+    if fault == "count":
+        values = values[:-2]
+    elif fault == "guard":
+        values[-1] ^= 1
+    elif fault == "range":
+        values[0] = 1 << 32
+    output = {
+        "dtype": "float32",
+        "shape": [2 * (size + 32)],
+        "encoding": scan_dispatch.FLOAT32_BITS,
+        "values": values,
+    }
+    result = SimpleNamespace(status="ok", outputs={"out": output}, details={})
+    monkeypatch.setattr(scan_dispatch, "execute", lambda *args: result)
+    host = SimpleNamespace(
+        scans=SimpleNamespace(get=lambda *args: (descriptor, tmp_path)),
+        target=target,
+        trace=tmp_path / "trace.jsonl",
+        dispatch_count=0,
+    )
+    batch = (runtime.Buffer * 3)(*supplied.values())
+    launch = runtime.Launch(
+        tuple(geometry["workgroupCount"]), tuple(geometry["workgroupSize"])
+    )
+    if fault:
+        with pytest.raises((RuntimeError, ValueError)):
+            scan_dispatch.dispatch(host, entry, batch, 3, size, launch)
+        assert list(memory["out"]) == [7] * size
+        assert host.dispatch_count == 0 and not host.trace.exists()
+        return
+    scan_dispatch.dispatch(host, entry, batch, 3, size, launch)
+    assert list(memory["out"]) == words
+    assert host.dispatch_count == 1 and host.trace.is_file()
+    (inputs,) = uploads
+    assert inputs["in"]["shape"] == [2 * (size + 32)]
+    assert inputs["in"]["values"][2:4] == [1, 1]
+    assert inputs["out"]["values"][:2] == [
+        scan_dispatch.guard("complex64")[0] & 0xFFFFFFFF,
+        scan_dispatch.guard("complex64")[0] >> 32,
+    ]
 
 
 def test_scan_cache_keys_bind_launch_source_and_implementation(tmp_path, monkeypatch):

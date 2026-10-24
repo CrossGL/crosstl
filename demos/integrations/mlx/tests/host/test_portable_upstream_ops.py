@@ -33,13 +33,14 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 99
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 114
     assert all(
         name.startswith(
             (
                 "test_ops.TestOps.test_",
                 "test_reduce.TestReduce.test_",
                 "test_bf16.TestBF16.test_",
+                "test_fast.TestFast.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
@@ -54,15 +55,20 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
 
 def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     # Only OpenGL excludes tests: its software subgroups cannot run an arg
-    # reduction wider than one simdgroup yet.
+    # reduction wider than one simdgroup yet, and its reverse scans cannot
+    # prove their wrapped pointer offsets yet.
     assert set(ops.TARGET_EXCLUSIONS) == {"opengl"}
     excluded = ops.TARGET_EXCLUSIONS["opengl"]
     assert set(excluded) <= set(ops.UPSTREAM_TESTS)
-    assert set(excluded.values()) == {"CrossGL/crosstl#2207"}
+    assert set(excluded.values()) == {"CrossGL/crosstl#2207", "CrossGL/crosstl#2905"}
+    assert [name for name, issue in excluded.items() if issue.endswith("2905")] == [
+        "test_ops.TestOps.test_scans",
+        "test_ops.TestOps.test_scans_complex_exclusive",
+    ]
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 96 and not set(opengl) & set(excluded)
+    assert len(opengl) == 109 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -440,6 +446,8 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "row_reduce_small_2_reduce_prodint64",
         "col_reduce_small_1_reduce_maxfloat16",
         "col_reduce_small_1_reduce_sumcomplex64",
+        "rms_loopedfloat32",
+        "vjp_layer_normbfloat16_now",
     ):
         assert entry.startswith(retained), entry
     for entry in (

@@ -38,6 +38,10 @@ COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View"
 CAST_PRIMITIVES = ("AsType",)
 # Unary primitives MLX instantiates only for complex64 operands.
 COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
+# Fast primitives normalization.inc ports; the forward ones keep MLX's CPU
+# fallback, and every one of them is a multi-output primitive.
+FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm")
+NORMALIZATION_PRIMITIVES = (*FALLBACK_PRIMITIVES, "LayerNormVJP", "RMSNormVJP")
 
 
 def replace_once(text, before, after):
@@ -57,6 +61,8 @@ def adapted_sources(original, primitives, events):
         "ArgSort",
         "Partition",
         "Sort",
+        "SearchSorted",
+        *NORMALIZATION_PRIMITIVES,
         "RandomBits",
         "Scan",
         "Quantize",
@@ -87,9 +93,14 @@ def adapted_sources(original, primitives, events):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
         macro = (
-            "NO_GPU_MULTI"
-            if primitive in MULTI_OUTPUT_VIEWS or primitive in {"DivMod", "Quantize"}
-            else "NO_GPU"
+            "NO_GPU_USE_FALLBACK"
+            if primitive in FALLBACK_PRIMITIVES
+            else (
+                "NO_GPU_MULTI"
+                if primitive in MULTI_OUTPUT_VIEWS
+                or primitive in {"DivMod", "Quantize", *NORMALIZATION_PRIMITIVES}
+                else "NO_GPU"
+            )
         )
         primitives = replace_once(
             primitives,
@@ -135,6 +146,7 @@ else()
         "crosstl_event.cpp": events.encode("utf-8"),
         "crosstl_backend.cpp": (HERE / "backend.cpp").read_bytes(),
         "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
+        "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
     }
 
 

@@ -154,18 +154,48 @@ This route remains bounded to 65,535 logical and stored elements. It uses the
 pinned source planner with an explicit 1,024-thread source pipeline limit;
 larger native widths require their own qualification. Empty arrays do not
 dispatch. Stored-contiguous layouts and eligible donation are retained;
-other layouts require the existing translated-copy path. Unsupported complex
-and narrow-integer host storage is rejected explicitly.
+other layouts require the existing translated-copy path. A size-one axis may
+carry any stride while its array stays contiguous; its scan is elementwise, so
+it runs as one-element contiguous rows. complex64 scans carry each element as
+its packed `{real, imag}` float32 pair, checked against the reflected
+two-member layout of every target. Narrow-integer host storage is rejected
+explicitly.
 
-This is not complete cumulative-operation coverage. Reverse scans currently
-encounter unproved wide pointer offsets on OpenGL. Forward strided entries use
-checked scalar and dispatch bounds for the software-subgroup path; their
-qualification is limited to the cases above.
-Product, log-add-exp, additional scalar types and full unchanged upstream scan
-tests require separate numerical qualification. The independently captured
+The unchanged upstream `test_scans`, `test_logcumsumexp`,
+`test_scans_complex_exclusive` and `test_scan_size_one_axis` run natively in
+the upstream-op host verification. They cover sums, products, extrema and
+log-add-exp of float32, int32, int64 and complex64, forward and reverse,
+inclusive and exclusive, along every axis of contiguous and strided views.
+OpenGL does not run `test_scans` or `test_scans_complex_exclusive` yet: reverse
+scans read through wrapped unsigned pointer offsets that its index proofs cannot
+bound ([#2905](https://github.com/CrossGL/crosstl/issues/2905)). Forward
+strided entries use checked scalar and dispatch bounds for the software-subgroup
+path. The independently captured
 original bfloat16 scan-versus-reduction failure in
 [`METAL_HOST.md`](../METAL_HOST.md#captured-scan-replay) remains unresolved; this
 host proof does not change its input, assertion or required outcome.
+
+## Binary Searches
+
+`SearchSorted::eval_gpu` reaches the translated-package callback for every
+dtype `searchsorted.metal` instantiates, left and right. Each pass launches at
+most 65,535 one-thread groups, so its thread grid is exactly its value count,
+the grid upstream's `get_2d_grid_dims` gives the row-contiguous output; the
+values and output advance between passes. Values that are not row-contiguous
+are searched in a translated dense copy, as upstream's `contiguous_copy_gpu`
+does, and so is a sequence read through a negative stride. An empty sequence
+fills the output with zeros through the translated copy, as `fill_gpu` does.
+
+Packages are translated on first use for one entry and pass size
+(`searchsorted_packages`). Direct3D and OpenGL packages carry an
+artifact-owned dispatch region for the pass, which defines the kernel's
+`threads_per_grid`. OpenGL is translated with the host precondition that every
+sequence index `mid * a_stride` is below 2^28 - 1; the host checks the
+sequence span against it and against the allocation before dispatch. The
+audit (`searchsorted_evidence`) derives each package again, checks the
+uploads, guard and native modules, and recomputes every retained pass with
+`searchsorted_impl`'s binary search under MLX's `LessThan`, NaN after every
+ordered value and complex values by real then imaginary part.
 
 ## Batched Casts
 
@@ -1236,9 +1266,9 @@ rows followed by a 32-thread final reduction; larger inputs use 4,096 partial
 rows followed by a 1,024-thread final reduction. The threshold uses MLX's logical
 item size, including one byte for Boolean values, independently of widened target
 storage. Whole-array inputs must fit their backing allocation and the signed
-32-bit buffer-index range; native device buffer limits also apply. Row
-reductions retain their 65,535-element bound; column reductions are bounded as
-described under Column Reductions. Intermediate values are staged synchronously, not
+32-bit buffer-index range; native device buffer limits also apply. Row and
+column reductions are bounded as described under Row Reductions and Column
+Reductions. Intermediate values are staged synchronously, not
 kept in persistent GPU allocations. Unsupported column plans still produce
 explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
@@ -1343,10 +1373,16 @@ The source width is 32 for rows through 512 elements, 128 through 1,024, and
 then a multiple of 32 capped at 1,024. The default row build includes all 26
 reachable widths and all 56 entries, producing 1,456 packages per target.
 Runtime checks reject invalid ranks, mismatched metadata arrays, out-of-range
-source spans and incorrect launch dimensions before device execution. The GLSL
-simple-row index assertion covers 0 through 131,071; every dispatch checks the
-source span plus four values per lane against that bound. This assertion does
-not enlarge an allocation or permit an out-of-bounds memory access.
+source spans and incorrect launch dimensions before device execution. Source
+spans, logical sizes and outputs hold at most 2^28 - 1 elements, the column
+passes' bound; every shape axis stays below 65,536, every stride inside that
+bound and every launch axis at most 65,535 workgroups (four rows per simple
+workgroup). The GLSL simple-row index assertion covers 0 through 2^28 - 1;
+every dispatch checks the source span plus four values per lane against that
+bound. This assertion does not enlarge an allocation or permit an
+out-of-bounds memory access. Wide workloads run simple, looped and sliced plans
+of 2,048-element rows over 81,920 to 163,840 elements, the sliced view
+spanning 161,792 elements.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family row --jobs 2 --output-dir row-packages
@@ -1407,8 +1443,8 @@ slices, transposes, early/late NaNs, infinities and signed zeros. CPU and
 generated-native results are compared with NumPy references. The verifier
 requires the exact source entry, launch geometry,
 one native reduction per case and intact output guards. Not every packaged
-entry/width pair is executable within the current 65,535-element host limit.
-The maintained 1,870 standalone cases execute 896 distinct entry/width pairs;
+entry/width pair is executable within the workloads' 65,535-element shapes.
+The maintained 1,876 standalone cases execute 896 distinct entry/width pairs;
 the other 560 receive compilation coverage, not numerical coverage. The retained
 case list identifies precisely which combinations execute. `--require-all-widths`
 rejects diagnostic subsets in CI; single-directory packages remain supported
@@ -1461,8 +1497,8 @@ NumPy, checks unchanged host inputs and output guards, and retains package ident
 and DirectX/OpenGL region module evidence. These are additional integration
 workloads, not 34 additional upstream unit tests. The existing upstream-test
 gate remains required. Every operation has distinguishable row results to reject
-constant-output and wrong-row errors. Negative-stride row views, additional storage types,
-the 65,535-element bound and full upstream-suite parity remain open work;
+constant-output and wrong-row errors. Negative-stride row views, additional storage types
+and full upstream-suite parity remain open work;
 partial-workgroup coverage is tracked in
 [#2011](https://github.com/CrossGL/crosstl/issues/2011).
 
@@ -1482,7 +1518,7 @@ the second native dispatch consumes those actual results without host reduction
 arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
 below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
 and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
-Row plans, unlike column plans, retain the 65,535-element bound. The workloads
+Row plans share this element bound. The workloads
 include small, looped and two-pass plans over 76,800 to 131,072 elements.
 
 ```sh
@@ -1807,8 +1843,9 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 99 more unchanged `test_ops`, `test_reduce` and
-`test_bf16` tests on all three platforms (96 on OpenGL; see below):
+A dedicated job then runs 114 more unchanged `test_ops`, `test_reduce`,
+`test_bf16` and `test_fast` tests on all three platforms (109 on OpenGL; see
+below):
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
@@ -1869,6 +1906,29 @@ sorts at most 65,536 values is recomputed exactly from its retained inputs
 (MLX sorts stably, with NaN after every ordered value); larger stages keep
 their extents and digests, and the tests compare their sorted results. A view
 with a negative stride is sorted from a dense copy.
+`test_scans`, `test_logcumsumexp`, `test_scans_complex_exclusive` and
+`test_scan_size_one_axis` reach contiguous and strided, forward and reverse,
+inclusive and exclusive `scan.metal` entries of float32, int32, int64 and
+complex64 (see "Cumulative Operations"); OpenGL excludes the first and third,
+whose reverse scans it cannot bound yet (CrossGL/crosstl#2905).
+`test_searchsorted` reaches every searchsorted pass shape above: contiguous,
+strided, reversed and empty sequences, and transposed, sliced and broadcast
+values. `test_unstack` concatenates int64 arrays through lazy copies.
+`test_fast`'s `test_rms_norm`, `test_rms_norm_grad`, `test_layer_norm`,
+`test_layer_norm_dim_check`, `test_slice_into_layer_norm` and the four
+`test_layer_norm_grad*` tests reach `rms_norm.metal` and `layer_norm.metal`:
+the single-row and looped forward kernels of every float dtype, and the
+gradient kernels with (`_w`) and without (`_now`) a weight, which freeze the
+`has_w` function constant normalization.cpp specializes. The ports live in
+`normalization.inc`, which the prepared `crosstl_backend.cpp` includes; the
+forward primitives keep MLX's composed fallback on the CPU, as the Metal
+backend does. Weight and bias gradients sum the kernels' per-row (or, for
+RMS rows, per-threadgroup) partials through the translated column reductions,
+as `strided_reduce_general_dispatch` does. Every dispatch must name its cached
+package, upload its retained operands and keep its output guards, and a
+gradient without a weight must leave its `gw` placeholder unwritten; launches
+over more than 65,536 row elements keep their extents and digests. The tests
+compare the values with MLX's composed normalization.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
