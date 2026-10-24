@@ -1,6 +1,6 @@
 """Shader Model 6.9 hit objects, refused for the targets whose generators cannot declare them.
 
-CrossGL spells the hit object of HLSL Shader Model 6.9 (DirectX Raytracing 1.3, "Shader Execution Reordering") the
+CrossGL spells the hit object of HLSL Shader Model 6.9 (DirectX Raytracing 1.2, "Shader Execution Reordering") the
 way HLSL does, ``dx::HitObject``, and the DirectX generator writes the type and its static methods
 (``dx::HitObject::MakeNop()``) back unchanged. No other generator lowers them: each copied the HLSL spelling into
 the target verbatim, which no other target compiler accepts. :func:`refuse_hit_objects` refuses those targets with
@@ -36,30 +36,6 @@ class HitObjectUnsupportedError(TranslationDiagnostic):
         )
 
 
-def _nodes(node, seen):
-    """Every AST node under ``node``, type nodes included, each once."""
-    if id(node) in seen:
-        return
-    seen.add(id(node))
-    if isinstance(node, A.StageMap):
-        items = [stage for key in node for stage in node.all_for_stage(key)]
-    elif isinstance(node, dict):
-        items = list(node.values())
-    elif isinstance(node, (list, tuple)):
-        items = node
-    elif isinstance(node, A.ASTNode):
-        yield node
-        items = [
-            value
-            for key, value in vars(node).items()
-            if key not in {"parent", "annotations", "source_location"}
-        ]
-    else:
-        return
-    for item in items:
-        yield from _nodes(item, seen)
-
-
 def _names_hit_object(node):
     if isinstance(node, A.NamedType):
         return node.name == HIT_OBJECT_TYPE
@@ -73,7 +49,7 @@ def refuse_hit_objects(program, target) -> None:
     target = str(target or "").lower()
     if target in HIT_OBJECT_TARGETS or not isinstance(program, A.ShaderNode):
         return
-    for node in _nodes(program, set()):
+    for node in program.walk():
         if _names_hit_object(node):
             raise HitObjectUnsupportedError(
                 target, source_location=getattr(node, "source_location", None)

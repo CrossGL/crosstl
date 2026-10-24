@@ -27,7 +27,7 @@ shader HitObjects {
 }
 """
 
-TARGETS = ["metal", "opengl", "vulkan", "slang", "cuda", "hip", "rust", "mojo"]
+TARGETS = ["metal", "opengl", "vulkan", "slang", "wgsl", "cuda", "hip", "rust", "mojo"]
 
 
 def _write(tmp_path, name, source):
