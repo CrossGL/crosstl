@@ -247,6 +247,7 @@ from .image_access_contracts import (
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
+    is_texel_fetch_operation,
     is_texture_compare_basic_operation,
     is_texture_compare_grad_offset_operation,
     is_texture_compare_grad_operation,
@@ -10306,7 +10307,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if descriptor is not None:
                     return descriptor["return_type"]
-            if is_texture_sampling_operation(func_name) and args:
+            if (
+                is_texture_sampling_operation(func_name)
+                or is_texel_fetch_operation(func_name)
+            ) and args:
+                if self.is_plain_depth_read(func_name, args):
+                    # generate_texture_call widens the scalar MSL depth read to (d, 0, 0, 1).
+                    return "float4"
                 return self.texture_sample_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
