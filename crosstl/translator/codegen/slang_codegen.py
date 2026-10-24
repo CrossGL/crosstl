@@ -4674,7 +4674,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return f"uvec{type_node.size}"
             if element_type == "bool":
                 return f"bvec{type_node.size}"
-            if element_type in {"i8", "u8", "i16", "u16"}:
+            if element_type in {"i8", "u8", "i16", "u16", "i64", "u64"}:
                 return f"vec{type_node.size}<{element_type}>"
             return f"{element_type}{type_node.size}"
         return str(type_node)
@@ -10683,10 +10683,16 @@ class SlangCodeGen(LoweringRefusalMixin):
             "f64": "double",
             "i8": "int8_t",
             "u8": "uint8_t",
+            "int8": "int8_t",
+            "uint8": "uint8_t",
             "i16": "int16_t",
             "u16": "uint16_t",
             "i32": "int",
             "u32": "uint",
+            "i64": "int64_t",
+            "u64": "uint64_t",
+            "int64": "int64_t",
+            "uint64": "uint64_t",
             "half": "half",
             "half2": "half2",
             "half3": "half3",
@@ -10715,6 +10721,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             "vec2<u16>": "vector<uint16_t, 2>",
             "vec3<u16>": "vector<uint16_t, 3>",
             "vec4<u16>": "vector<uint16_t, 4>",
+            "vec2<i64>": "vector<int64_t, 2>",
+            "vec3<i64>": "vector<int64_t, 3>",
+            "vec4<i64>": "vector<int64_t, 4>",
+            "vec2<u64>": "vector<uint64_t, 2>",
+            "vec3<u64>": "vector<uint64_t, 3>",
+            "vec4<u64>": "vector<uint64_t, 4>",
             "vec2<i32>": "int2",
             "vec3<i32>": "int3",
             "vec4<i32>": "int4",
@@ -10739,6 +10751,18 @@ class SlangCodeGen(LoweringRefusalMixin):
             "bvec2": "bool2",
             "bvec3": "bool3",
             "bvec4": "bool4",
+            "i8vec2": "vector<int8_t, 2>",
+            "i8vec3": "vector<int8_t, 3>",
+            "i8vec4": "vector<int8_t, 4>",
+            "u8vec2": "vector<uint8_t, 2>",
+            "u8vec3": "vector<uint8_t, 3>",
+            "u8vec4": "vector<uint8_t, 4>",
+            "i64vec2": "vector<int64_t, 2>",
+            "i64vec3": "vector<int64_t, 3>",
+            "i64vec4": "vector<int64_t, 4>",
+            "u64vec2": "vector<uint64_t, 2>",
+            "u64vec3": "vector<uint64_t, 3>",
+            "u64vec4": "vector<uint64_t, 4>",
             "mat2": "float2x2",
             "mat3": "float3x3",
             "mat4": "float4x4",
