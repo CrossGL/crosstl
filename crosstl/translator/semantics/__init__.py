@@ -97,7 +97,7 @@ from .tessellation_patches import (
     lower_tessellation_patches,
 )
 from .texture_lod_clamp import refuse_texture_lod_clamp
-from .texture_residency import refuse_texture_residency
+from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
@@ -278,6 +278,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
+    declare_hlsl_residency_status(program, report.target)
     fold_array_lengths(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     annotate_hlsl_ray_payloads(program, report.target)

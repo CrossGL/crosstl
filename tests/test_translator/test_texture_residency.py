@@ -201,7 +201,6 @@ def test_crossgl_residency_lowers_to_arb_sparse_texture2(tmp_path):
         ("wgsl", "WGSL has no sparse textures"),
         ("cuda", "CUDA texture fetches report no tile residency"),
         ("hip", "HIP texture fetches report no tile residency"),
-        ("directx", "no lowering for texture residency feedback"),
         ("vulkan", "no lowering for texture residency feedback"),
         ("slang", "no lowering for texture residency feedback"),
         ("rust", "no lowering for texture residency feedback"),
@@ -241,7 +240,7 @@ def test_resident_test_takes_one_code(tmp_path):
     source = CROSSGL_FRAGMENT.replace(
         "textureResident(code)", "textureResident(code, 1)"
     )
-    for backend in ("metal", "opengl"):
+    for backend in ("metal", "opengl", "directx"):
         with pytest.raises(
             TextureResidencyUnsupportedError, match="one residency code"
         ):

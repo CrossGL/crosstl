@@ -253,6 +253,10 @@ from .hlsl_texel_buffers import (
     HLSLTexelBuffers,
     texel_buffer_base_type,
 )
+from .hlsl_texture_residency import (
+    hlsl_texture_residency_call,
+    hlsl_texture_resident_call,
+)
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
@@ -502,6 +506,10 @@ from .subgroup_control_flow import (
 from .texture_lod_clamp import (
     hlsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
+)
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
@@ -53969,6 +53977,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return texel_buffer_call
         if is_texture_lod_clamp_operation(func_name):
             return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
+        if func_name == TEXTURE_RESIDENCY_OPERATION:
+            return hlsl_texture_residency_call(self, args, call_node)
+        if func_name == TEXTURE_RESIDENT_OPERATION:
+            return hlsl_texture_resident_call(self, args, call_node)
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:

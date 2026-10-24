@@ -177,12 +177,41 @@ def test_sparse_reads_translate_to_arb_sparse_texture2(tmp_path):
         _run(["glslangValidator", "-S", "frag", str(path)])
 
 
-@pytest.mark.parametrize("backend", ["directx", "vulkan"])
-def test_targets_without_a_residency_lowering_refuse_it(tmp_path, backend):
+def test_sparse_reads_translate_to_hlsl_status_overloads(tmp_path):
+    # HLSL compares through a SamplerComparisonState, so the depth reads take a sampler of their own.
+    source = (
+        FRAGMENT.replace(
+            "sampler linear [[sampler(0)]]",
+            "sampler linear [[sampler(0)]], sampler shadow [[sampler(1)]]",
+        )
+        .replace(
+            "depth.sparse_sample_compare(linear", "depth.sparse_sample_compare(shadow"
+        )
+        .replace(
+            "depth.sparse_gather_compare(linear", "depth.sparse_gather_compare(shadow"
+        )
+    )
+    code = _translate(tmp_path, source, "directx")
+    compact = _compact(code)
+    for read in (
+        "image.SampleLevel(linear_, in_.uv, 1.0, int2(0, 0), crosstl_residency_status_0)",
+        "image.Load(int3(uint2(in_.position.xy), 0), int2(0, 0), crosstl_residency_status_1)",
+        "depth.SampleCmp(shadow, in_.uv, 0.5, int2(0, 0), 0.0f, crosstl_residency_status_3)",
+        "CheckAccessFullyMapped(crosstl_residency_status_0)) ? 0 : 1)",
+    ):
+        assert read in compact
+    dxc = shutil.which("dxc")
+    if dxc:
+        path = tmp_path / "out.hlsl"
+        path.write_text(code)
+        _run([dxc, "-T", "ps_6_0", "-E", "PSMain", str(path)])
+
+
+def test_vulkan_refuses_residency_queries(tmp_path):
     with pytest.raises(TextureResidencyUnsupportedError) as raised:
-        _translate(tmp_path, HALF_FRAGMENT, backend)
+        _translate(tmp_path, HALF_FRAGMENT, "vulkan")
     assert raised.value.project_diagnostic_code == (
-        f"project.translate.{backend}-texture-residency-unsupported"
+        "project.translate.vulkan-texture-residency-unsupported"
     )
 
 

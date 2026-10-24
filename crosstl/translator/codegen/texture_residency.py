@@ -38,6 +38,7 @@ from .texture_lod_clamp import join_call_text, split_call_text
 
 __all__ = [
     "GLSL_RESIDENCY_EXTENSION",
+    "HLSL_RESIDENCY_STATUS_ATTRIBUTE",
     "GLSL_SPARSE_FUNCTIONS",
     "TEXTURE_RESIDENCY_OPERATION",
     "TEXTURE_RESIDENCY_READS",
@@ -54,6 +55,8 @@ __all__ = [
 
 TEXTURE_RESIDENCY_OPERATION = "textureResidency"
 TEXTURE_RESIDENT_OPERATION = "textureResident"
+# The ``textureResidency`` call attribute naming the ``uint`` local that receives an HLSL read's Status operand.
+HLSL_RESIDENCY_STATUS_ATTRIBUTE = "hlsl_residency_status"
 
 # The CrossGL texture reads a residency query may wrap: those GL_ARB_sparse_texture2, MSL, HLSL and SPIR-V all have
 # a residency-reporting form of. Projected reads, size and level queries and image stores have none.
