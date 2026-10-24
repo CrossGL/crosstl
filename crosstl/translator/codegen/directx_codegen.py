@@ -1948,6 +1948,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
         "ddy_coarse": "ddy_coarse",
         "ddy_fine": "ddy_fine",
         "fwidth": "fwidth",
+        "fwidthCoarse": "ddx_coarse/ddy_coarse",
+        "fwidthFine": "ddx_fine/ddy_fine",
     }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
@@ -27921,6 +27923,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "asfloat(0x7fc00000)"
         if not args and func_name == "infinity":
             return "asfloat(0x7f800000)"
+        if func_name in {"fwidthFine", "fwidthCoarse"} and len(args) == 1:
+            # HLSL has no fine or coarse fwidth; GLSL 4.60 section 8.14
+            # defines fwidthFine(p) as abs(dFdxFine(p)) + abs(dFdyFine(p)).
+            granularity = "fine" if func_name == "fwidthFine" else "coarse"
+            targets = ("abs", f"ddx_{granularity}", f"ddy_{granularity}")
+            if not any(
+                self.hlsl_function_name_is_shadowed(target) for target in targets
+            ):
+                arg = self.generate_expression(args[0])
+                return (
+                    f"(abs(ddx_{granularity}({arg})) + "
+                    f"abs(ddy_{granularity}({arg})))"
+                )
+
         if (
             func_name in {"frac", "fract"}
             and len(args) == 1
