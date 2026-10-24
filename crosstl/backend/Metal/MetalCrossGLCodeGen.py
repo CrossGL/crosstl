@@ -70,6 +70,7 @@ from .texture_types import (
     combined_texture_type,
 )
 from .type_layout import metal_type_layout
+from .unscoped_enums import unscoped_enumerator_owners
 
 # MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
 METAL_SPARSE_TEXTURE_METHODS = frozenset(
@@ -2205,7 +2206,22 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         static_member = self.render_static_struct_member_identifier(name)
         if static_member is not None:
             return static_member
+        enum_owner = (getattr(self, "unscoped_enumerator_owners", None) or {}).get(name)
+        if enum_owner is not None and not self.unscoped_enumerator_is_shadowed(name):
+            return f"{enum_owner}::{self.sanitize_identifier(name)}"
+        scoped = str(name).rsplit("::", 1)
+        if len(scoped) == 2 and tuple(scoped) in (
+            getattr(self, "enumerator_names", None) or ()
+        ):
+            # E::A of a declared enum is CrossGL's own spelling.
+            return f"{scoped[0]}::{self.sanitize_identifier(scoped[1])}"
         return self.sanitize_identifier(name)
+
+    def unscoped_enumerator_is_shadowed(self, name):
+        """Whether a variable of the program declares ``name``, which then hides the enumerator."""
+        return name in (
+            getattr(self, "current_variable_types", None) or {}
+        ) or name in (getattr(self, "global_variable_types", None) or {})
 
     def constructor_identifier_is_shadowed(self, name):
         if self.current_constructor_scope_index is None:
@@ -3553,6 +3569,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 enum.name for enum in enums if isinstance(enum, EnumNode) and enum.name
             }
             anonymous_enum_index = 0
+            emitted_enums = []
             for enum in enums:
                 if isinstance(enum, EnumNode):
                     enum_name = enum.name
@@ -3564,14 +3581,23 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                                 enum_name = candidate
                                 used_enum_names.add(candidate)
                                 break
-                    code += f"    enum {enum_name} {{\n"
-                    for member_name, member_value in enum.members:
-                        if member_value is not None:
-                            value = self.generate_expression(member_value, False)
-                            code += f"        {member_name} = {value},\n"
-                        else:
-                            code += f"        {member_name},\n"
-                    code += "    };\n\n"
+                    emitted_enums.append((enum, enum_name))
+            # Unscoped enumerators are names of the enclosing scope; CrossGL spells them E::A.
+            self.unscoped_enumerator_owners = unscoped_enumerator_owners(emitted_enums)
+            self.enumerator_names = {
+                (enum_name, member)
+                for enum, enum_name in emitted_enums
+                for member, _value in enum.members
+            }
+            for enum, enum_name in emitted_enums:
+                code += f"    enum {enum_name} {{\n"
+                for member_name, member_value in enum.members:
+                    if member_value is not None:
+                        value = self.generate_expression(member_value, False)
+                        code += f"        {member_name} = {value},\n"
+                    else:
+                        code += f"        {member_name},\n"
+                code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
                 previous_type_resolution_context = self.current_type_resolution_context

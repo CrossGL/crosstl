@@ -35,6 +35,7 @@ from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
 )
+from .enum_values import lower_enum_values
 from .fixed_samplers import bind_fixed_samplers
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
@@ -235,6 +236,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_binding_constants(program)
     rename_colliding_functions(program)
     lower_metal_math_spellings(program, report.target)
+    lower_enum_values(program, report.target)
     canonicalize_texture_swizzles(program)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
