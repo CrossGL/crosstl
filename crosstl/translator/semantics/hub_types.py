@@ -483,7 +483,8 @@ class TypeScope:
 
         GLSL 4.60 sections 8.9 and 8.12: reads return a ``gvec4`` of the
         resource's component type; a depth comparison returns a ``float``, a texel fetch from a depth texture its
-        stored texel.
+        stored texel. Only a combined ``sampler*Shadow`` compares: a separate ``texture*Shadow`` read through a
+        sampler argument returns the stored depth as a texel, and CrossGL spells its comparisons ``textureCompare``.
         """
         if name not in _TEXEL_READ_CALLS or not arguments:
             return None
@@ -491,7 +492,11 @@ class TypeScope:
         match = _TEXEL_RESOURCE.fullmatch(str(getattr(resource, "name", "") or ""))
         if match is None:
             return None
-        if match.group(3) and name not in _SHADOW_GATHER_CALLS:
+        if (
+            match.group(3)
+            and match.group(2) != "texture"
+            and name not in _SHADOW_GATHER_CALLS
+        ):
             return FLOAT32
         return _TEXEL_KINDS[match.group(1)].with_lanes(4)
 

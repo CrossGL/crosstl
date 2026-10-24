@@ -153,3 +153,27 @@ def test_identity_swizzle_stores_reach_metal_as_whole_stores(tmp_path):
     assert not re.search(r"\.xy\s*=", code)
     assert ".xyz" not in code
     assert "q.xy" in code
+
+
+SEPARATE_DEPTH_READS = """
+shader DepthReads {
+    fragment {
+        texture2DShadow depth @texture(0);
+        sampler s @sampler(0);
+
+        vec4 main(vec4 p @gl_FragCoord) @gl_FragColor {
+            float sampled = texture(depth, s, p.xy).x;
+            float level0 = textureLod(depth, s, p.xy, 0.0).r;
+            float compared = textureCompare(depth, s, p.xy, 0.5);
+            return vec4(sampled + level0 + compared);
+        }
+    }
+}
+"""
+
+
+def test_separate_depth_texture_reads_keep_their_component_swizzle():
+    # A texture*Shadow read through a sampler argument returns the stored depth as a texel; only a combined
+    # sampler*Shadow (or textureCompare) compares to a float, so .x and .r here select a component.
+    program = Parser(Lexer(SEPARATE_DEPTH_READS).get_tokens()).parse()
+    assert expand_scalar_swizzles(program) == 0
