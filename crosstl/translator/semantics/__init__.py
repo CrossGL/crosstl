@@ -86,6 +86,7 @@ from .structured_layouts import (
     StructuredLayoutUnsupportedError,
     legalize_structured_layouts,
 )
+from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -126,6 +127,7 @@ __all__ = [
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "SubpassInputUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "UndeclaredTypeError",
@@ -199,6 +201,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
+    (:mod:`.subpass_inputs`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -222,6 +226,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
+    lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
