@@ -42,7 +42,12 @@ from .text_scanners import (
     strip_top_level_default_value,
 )
 from .type_layout import metal_type_layout, metal_type_size
-from .value_traits import struct_value_trait_definitions
+from .value_traits import (
+    complete_template_arguments,
+    enable_if_parts,
+    simdgroup_type_trait,
+    struct_value_trait_definitions,
+)
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 # Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
@@ -447,6 +452,8 @@ class _MetalBooleanVariableTemplate:
     namespace: str
     # ``value`` for a struct template read as a trait (``Name<T>::value``).
     member: str = ""
+    # Every declared template parameter as ``(name or "", default or None)``.
+    parameter_slots: Tuple[Tuple[str, Optional[str]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -7070,6 +7077,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     member=member.group(1) if member else "",
                 )
 
+        simdgroup_trait = simdgroup_type_trait(
+            self,
+            expr,
+            lambda operand: self._canonical_type_trait_operand(
+                operand,
+                lambda text: self._canonicalize_type_aliases_at(
+                    self._resolve_constraint_type(text, bindings),
+                    type_aliases or {},
+                    position if lookup_position is None else lookup_position,
+                ),
+            ),
+            {struct.name for struct in structs or ()},
+        )
+        if simdgroup_trait is not None:
+            if simdgroup_trait[0] is None:
+                raise self._UnrecognizedConstraint(expression)
+            return simdgroup_trait[0]
+
         parsed_trait = self._parse_metal_type_trait_expression(expr)
         if parsed_trait is not None:
             trait, operands = parsed_trait
@@ -9458,9 +9483,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 raise self._UnrecognizedConstraint(name)
             return normalized
 
+        concrete_arguments = complete_template_arguments(
+            self,
+            visible[0],
+            [
+                canonical(self._replace_identifiers(argument, bindings), position)
+                for argument in arguments
+            ],
+        )
+        if concrete_arguments is None:
+            raise self._UnrecognizedConstraint(name)
         concrete_arguments = tuple(
-            canonical(self._replace_identifiers(argument, bindings), position)
-            for argument in arguments
+            canonical(argument, position) for argument in concrete_arguments
         )
         qualified_name = f"{visible[0].namespace}::{visible[0].name}"
         key = (qualified_name, concrete_arguments)
@@ -9468,19 +9502,30 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             raise self._UnrecognizedConstraint(name)
         candidates = []
         for definition in visible:
-            if len(definition.argument_patterns) != len(concrete_arguments):
+            patterns = complete_template_arguments(
+                self, visible[0], definition.argument_patterns
+            )
+            if patterns is None or len(patterns) != len(concrete_arguments):
                 continue
             local_bindings: Dict[str, str] = {}
+            constraints: List[Tuple[Tuple[str, str], str]] = []
             matched = True
             score = (
                 2
                 if not definition.template_parameters
                 else 1 if definition.is_partial_specialization else 0
             )
-            for pattern, concrete in zip(
-                definition.argument_patterns, concrete_arguments
-            ):
+            for pattern, concrete in zip(patterns, concrete_arguments):
                 normalized_pattern = self._normalize_template_argument_text(pattern)
+                constraint = (
+                    enable_if_parts(self, normalized_pattern)
+                    if definition.is_partial_specialization
+                    else None
+                )
+                if constraint is not None:
+                    # Decided once the other arguments have bound the parameters.
+                    constraints.append((constraint, concrete))
+                    continue
                 if normalized_pattern in definition.template_parameters:
                     existing = local_bindings.get(normalized_pattern)
                     if existing is not None and existing != concrete:
@@ -9513,7 +9558,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 parameter in local_bindings
                 for parameter in definition.template_parameters
             ):
-                candidates.append((score, definition, local_bindings))
+                for (condition, result_type), concrete in constraints:
+                    enabled = self._evaluate_boolean_constraint(
+                        condition,
+                        local_bindings,
+                        boolean_templates=definitions,
+                        variable_stack=(*stack, key),
+                        structs=structs,
+                        type_aliases=type_aliases,
+                        position=position,
+                        namespace_visibility=namespace_visibility,
+                        lookup_position=definition.span[0],
+                    )
+                    if not enabled or canonical(
+                        self._replace_identifiers(result_type, local_bindings),
+                        definition.span[0],
+                    ) != canonical(concrete, position):
+                        matched = False
+                        break
+                if matched:
+                    candidates.append((score, definition, local_bindings))
         if not candidates:
             raise self._UnrecognizedConstraint(name)
         best_score = max(candidate[0] for candidate in candidates)
