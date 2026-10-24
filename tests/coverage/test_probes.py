@@ -27,6 +27,26 @@ def test_crossgl_probe_reads_buffers_and_stores_the_result():
     assert "outp[i] = r;" in source
 
 
+@pytest.mark.parametrize("language", ["glsl", "hlsl", "metal", "slang", "wgsl", "cuda"])
+def test_a_call_without_arguments_declares_the_input_the_harness_binds(language):
+    # The conformance harness binds an input buffer at slot 0, so where it runs the feature's language, the probe
+    # declares one that the call never reads.
+    lane = Feature(
+        language,
+        "function",
+        "WaveGetLaneIndex",
+        Signature(Type("uint"), ()),
+        crossgl="WaveGetLaneIndex",
+    )
+    native = probes.build(lane, language).source
+    crossgl = probes.build(lane, "crossgl").source
+    if language == "cuda":
+        assert "fin" not in native + crossgl
+        return
+    assert native.count("fin") == 1 and native.index("fin") < native.index("outp")
+    assert "buffer float* fin;\n        buffer uint* outp;" in crossgl
+
+
 def test_probe_binds_inout_parameters_to_the_output_buffer():
     source = probes.build(
         feature("atomicAdd", Type("uint"), Param(Type("uint"), "inout"), Type("uint")),

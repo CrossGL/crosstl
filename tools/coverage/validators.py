@@ -544,6 +544,9 @@ SPIRV_COMPILERS = {
     # rust-gpu names the module after the crate, which is named after the file.
     "rust": ("rust-gpu", ("{source}", "--out-dir", ".")),
 }
+# The flags that make a compiler keep the resources a shader declares but never reads, so its SPIR-V keeps the
+# bindings the source gives them. glslang and naga keep them without one.
+KEEP_BINDINGS = {"hlsl": ("-fspv-preserve-bindings",), "slang": ("-preserve-params",)}
 
 
 def can_lower(language: str) -> bool:
@@ -596,11 +599,13 @@ def lower(
     stage: str = "compute",
     *,
     raw_ids: bool = True,
+    keep_bindings: bool = False,
 ) -> tuple[str, str]:
     """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
 
     ``raw_ids`` numbers every id instead of naming it after its debug name, so assemblies compare by instruction.
-    Call only when :func:`can_lower` is true.
+    ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`). Call only when
+    :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
     name = "probe" + (
@@ -618,6 +623,8 @@ def lower(
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)
         filled = [a.format(**fields) for a in arguments]
+        if keep_bindings:
+            filled += KEEP_BINDINGS.get(language, ())
         compiler = (
             rustgpu.command(rustgpu.target(stage))
             if tool == "rust-gpu"

@@ -9,10 +9,14 @@ HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run a
 reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
 same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
 validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
+The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
+one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not accept.
 
-The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that read one
-input buffer run. The other probes keep their validation result. Integer inputs are small and non-negative, so no
-probe shifts, extracts or inserts bits outside what every language defines.
+The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that declare one
+input buffer run; a probe whose call takes no argument declares one it never reads. The other probes keep their
+validation result, and so does one that reads a clock or queries a ray query, because two runs of it need not agree.
+Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
+defines.
 """
 
 from __future__ import annotations
@@ -44,6 +48,14 @@ _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
 _FLOAT16 = re.compile(r"\bOpTypeFloat 16\b")
+# The SPIR-V version spirv-dis prints in an assembly's header, and the highest minor version each Vulkan environment
+# of the harness accepts (Vulkan 1.1 takes SPIR-V 1.3, Vulkan 1.2 takes 1.5, Vulkan 1.3 takes 1.6).
+_SPIRV_VERSION = re.compile(r"^; Version: 1\.(\d+)$", re.M)
+_ENVIRONMENTS = ((3, "vulkan1.1"), (5, "vulkan1.2"), (6, "vulkan1.3"))
+# Two runs of a probe need not agree when it reads a clock, or queries a ray query: the harness binds no acceleration
+# structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
+# keep their validation result.
+_UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
@@ -61,7 +73,7 @@ def found(detail: str) -> bool:
 
 
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation read one input buffer."""
+    """Whether ``result`` is a supported compute probe whose native probe and translation declare one input buffer."""
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
     buffers = [set(_INPUT.findall(source)) for source in result.sources]
@@ -90,8 +102,24 @@ def as_spirv(language: str, source: str) -> str:
     it rejects the source."""
     # naga takes no entry point; HLSL and Slang name theirs after [numthreads(...)].
     entry = "main" if language == "wgsl" else validators.hlsl_entry(source, "compute")
-    assembly, _ = validators.lower(language, source, entry)
+    assembly, _ = validators.lower(language, source, entry, keep_bindings=True)
     return assembly
+
+
+def environment(assemblies: list[str]) -> str:
+    """The oldest Vulkan environment that accepts every one of ``assemblies``, by the SPIR-V version each declares."""
+    minor = max(
+        (
+            int(found.group(1))
+            for found in map(_SPIRV_VERSION.search, assemblies)
+            if found
+        ),
+        default=0,
+    )
+    return next(
+        (name for highest, name in _ENVIRONMENTS if minor <= highest),
+        _ENVIRONMENTS[-1][1],
+    )
 
 
 def inputs(buffer: str):
@@ -158,6 +186,7 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
 
     runs_as = target(language)
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
+    assemblies = []
     for index, result in chunk:
         [buffer] = set(_INPUT.findall(result.sources[0]))
         data = inputs(buffer)
@@ -168,8 +197,12 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
                 continue
         elif texts[1] != result.sources[1]:
             lowered.add(index)
-        if runs_as == "spirv" and any(_FLOAT16.search(text) for text in texts):
+        if runs_as == "spirv" and any(
+            _FLOAT16.search(text) or _UNREPEATABLE.search(text) for text in texts
+        ):
             continue
+        if language in VIA_SPIRV:
+            assemblies += texts
         for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,8 +210,16 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
             cases.append(_case(f"{index:05d}-{role}", path, runs_as, data, outputs))
     if not cases:
         return {}
+    # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
+    # which declares none, for Vulkan 1.1 as the validators check it.
     records = runner.run_suite(
-        cases, [runs_as], ["strict"], selection, root, reference=True
+        cases,
+        [runs_as],
+        ["strict"],
+        selection,
+        root,
+        reference=True,
+        environment=environment(assemblies),
     )
     found = {}
     for record in records:
@@ -260,11 +301,11 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     return results, sorted(used)
 
 
-def idle(results: list[Result], used: list[str]) -> list[str]:
-    """The languages with :func:`executable` results that none of the runtimes ``used`` runs."""
-    from tests.conformance.runtimes import RUNTIMES
+def idle(results: list[Result]) -> list[str]:
+    """The languages with :func:`executable` results of which none ran.
 
-    ran = {RUNTIMES[runtime].target for runtime in used}
-    if "spirv" in ran:
-        ran |= {language for language in VIA_SPIRV if validators.can_lower(language)}
+    A runtime that rejects every native probe of a language, as one does for SPIR-V newer than it is told to accept,
+    runs none of them, just as a missing runtime does.
+    """
+    ran = {r.feature.language for r in results if r.runtime}
     return sorted({r.feature.language for r in results if executable(r)} - ran)
