@@ -75,7 +75,7 @@ METAL_FUNC T simd_shuffle(T data METAL_MAYBE_UNDEF, ushort simd_lane_id)
 def test_metal_header_parse_drops_attribute_macros():
     # METAL_MAYBE_UNDEF follows the parameter name; it is neither part of the type nor the name.
     assert list(metal.declarations("metal_simdgroup", METAL_SIMDGROUP_HEADER)) == [
-        ("simd_shuffle", "float", ["float", "uint"])
+        ("simd_shuffle", "float", ["float", "uint"], "")
     ]
 
 
@@ -93,8 +93,8 @@ METAL_FUNC float frexp(float x, thread int &exp)
 def test_metal_header_parse_reads_const_references_as_values():
     # MSL 4.1 passes determinant's matrix by const reference; only a reference the function may write is out.
     assert list(metal.declarations("metal_matrix", METAL_REFERENCE_HEADER)) == [
-        ("determinant", "float", ["float3x3"]),
-        ("frexp", "float", ["float", "out int"]),
+        ("determinant", "float", ["float3x3"], ""),
+        ("frexp", "float", ["float", "out int"], ""),
     ]
 
 
@@ -122,8 +122,46 @@ METAL_FUNC matrix<T, Rows, Cols> transpose(matrix<T, Cols, Rows> x)
 def test_metal_header_parse_skips_operators_and_helpers():
     # Neither operator* nor an underscore helper is read as a function named after a parameter's coherent(device).
     assert list(metal.declarations("metal_matrix", METAL_MATRIX_HEADER)) == [
-        ("transpose", "float3x3", ["float3x3"])
+        ("transpose", "float3x3", ["float3x3"], "")
     ]
+
+
+METAL_FILLED_MATRIX_HEADER = """
+template <typename T, int Cols, int Rows = Cols, typename U, typename _E = typename enable_if<is_convertible<U, T>::value>::type>
+METAL_FUNC METAL_CONSTEXPR_SINCE_MTL_410 matrix<T, Cols, Rows> make_filled_matrix(U value)
+{
+  return _make_filled_matrix_impl<T, Cols, Rows>(T(value), _make_integer_sequence<int, Cols>());
+}
+template <typename T, typename R>
+METAL_FUNC R convert_to(T value)
+{
+}
+"""
+
+
+def test_metal_template_arguments_no_parameter_fixes_are_spelled(tmp_path):
+    # No argument fixes T or Cols, so the probe spells them up to the last one; Rows has a default, and U, which the
+    # declaration converts to T, is deduced from the argument.
+    assert list(metal.declarations("metal_matrix", METAL_FILLED_MATRIX_HEADER)) == [
+        ("make_filled_matrix", "float3x3", ["float"], "<float,3>"),
+        # A free template parameter with no probe value leaves the overload unusable.
+        ("convert_to", "R", ["float"], None),
+    ]
+    for header in metal.HEADERS:
+        (tmp_path / header).write_text("")
+    (tmp_path / "metal_matrix").write_text(METAL_FILLED_MATRIX_HEADER)
+    lines = metal.generate(tmp_path, "test", "9.9").splitlines()
+    assert "metal_matrix make_filled_matrix<float,3> float3x3(float)" in lines
+    assert "metal_matrix convert_to -" in lines
+    filled = by_name(metal.parse("\n".join(lines)))["make_filled_matrix"]
+    assert filled.signature == Signature(Type("float", (3, 3)), (Param(Type("float")),))
+    # CrossGL calls the function by Metal's name, with the same template arguments.
+    assert filled.spelling == filled.crossgl == "make_filled_matrix<float, 3>"
+    assert (
+        "float3x3 r = make_filled_matrix<float, 3>(a0);" in probes.build(
+            filled, "metal"
+        ).source
+    )
 
 
 METAL_ATOMIC_HEADER = """
@@ -162,23 +200,25 @@ def test_metal_header_parse_reads_atomic_functions():
     # The atomic object is the probe's output buffer element; trailing attribute macros and defaulted parameters are
     # not parameters, and enable_if_t without a type is void.
     assert list(metal.declarations("metal_atomic", METAL_ATOMIC_HEADER)) == [
-        ("atomic_fetch_add_explicit", "int", ["inout int", "int", "memory_order"]),
+        ("atomic_fetch_add_explicit", "int", ["inout int", "int", "memory_order"], ""),
         (
             "atomic_store_explicit",
             "void",
             ["inout int", "int", "memory_order", "mem_flags"],
+            "",
         ),
         # Metal declares the atomic max and min without a fetch for 64-bit unsigned integers only.
-        ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"]),
+        ("atomic_max_explicit", "void", ["inout ulong", "ulong", "memory_order"], ""),
         # A pointer to a thread-local value takes the address of a local.
         (
             "atomic_compare_exchange_weak_explicit",
             "bool",
             ["inout int", "address int", "int"],
+            "",
         ),
-        ("atomic_thread_fence", "void", ["mem_flags", "memory_order"]),
+        ("atomic_thread_fence", "void", ["mem_flags", "memory_order"], ""),
         # A pointer to anything else is not probed.
-        ("prefetch", "void", ["float*"]),
+        ("prefetch", "void", ["float*"], ""),
     ]
 
 
@@ -732,6 +772,19 @@ internal void enableVMMDeviceScopeCapabilityIfNeeded(constexpr MemoryScope memor
     assert "coopVecLoadCoherent<4, float>(a0, a1, MemoryScope.Device)" in coherent
     with pytest.raises(probes.ProbeError, match="device pointer"):
         probes.build(load, "hlsl")
+
+
+def test_slang_floating_point_cooperative_elements_are_probed_as_float():
+    text = """
+//@public:
+__intrinsic_op($(kIROp_FloatCast))
+T floatCast<T:IFloatingPointCoopElement, U:IFloatingPointCoopElement>(U val);
+"""
+    cast = by_name(slang.parse(text, ""))["floatCast"]
+    assert cast.signature == Signature(Type("float"), (Param(Type("float")),))
+    # No argument fixes the result type, so the probe names it.
+    assert cast.spelling == "floatCast<float>"
+    assert "float r = floatCast<float>(a0);" in probes.build(cast, "slang").source
 
 
 MOJO_MATH_INIT = """
