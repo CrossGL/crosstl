@@ -18152,6 +18152,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if product_type is not None:
                     return product_type
+            if mapped_operator in {"+", "-", "/"}:
+                matrix_type = self.hlsl_matrix_orientation.componentwise_type(
+                    left_type, right_type
+                )
+                if matrix_type is not None:
+                    return matrix_type
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -18429,6 +18435,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return signbit_result_type
             if func_name == "inverse" and args:
                 return self.expression_result_type(args[0])
+            matrix_builtin_type = self.hlsl_matrix_orientation.builtin_result_type(
+                func_name, args
+            )
+            if matrix_builtin_type is not None:
+                return matrix_builtin_type
             if func_name == "transpose" and args:
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
