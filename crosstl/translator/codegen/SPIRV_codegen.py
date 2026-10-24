@@ -90,6 +90,7 @@ from .extended_arithmetic_builtins import (
     EXTENDED_ARITHMETIC_FUNCTIONS,
     spirv_extended_arithmetic_call,
 )
+from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_samplers
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -31835,6 +31836,7 @@ class VulkanSPIRVCodeGen(
                 f"SPIR-V generation needs a ShaderNode, got {type(ast).__name__}"
             )
 
+        source_ast, fixed_samplers = ast, fixed_sampler_records(ast)
         validate_recursion_free(ast, "vulkan")
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
@@ -31863,7 +31865,7 @@ class VulkanSPIRVCodeGen(
             self.refusals.raise_pending(cause=error)
             raise
         self.refusals.raise_pending()
-        return module
+        return with_spirv_fixed_samplers(module, fixed_samplers, source_ast)
 
     def _generate_module(self, ast):
         self.emit("; SPIR-V")

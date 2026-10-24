@@ -188,6 +188,7 @@ from .extended_arithmetic_builtins import (
     emit_hlsl_extended_arithmetic_helpers,
     hlsl_extended_arithmetic_call,
 )
+from .fixed_sampler_contracts import fixed_sampler_records, with_hlsl_fixed_samplers
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -3407,7 +3408,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
+        fixed_samplers = fixed_sampler_records(ast)
         code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
+        code = with_hlsl_fixed_samplers(code, fixed_samplers, ast)
         if records:
             code = with_metadata_precondition_header(code, records)
         return with_dispatch_region_header(code, region)
