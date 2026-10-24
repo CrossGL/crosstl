@@ -15,13 +15,16 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
+from .buffer_strides import materialize_buffer_strides
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
+from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -30,6 +33,7 @@ from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
 )
+from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_geometry_streams import (
@@ -52,6 +56,10 @@ from .intrinsic_named_functions import (
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .metal_ray_dispatch import (
+    MetalRayDispatchUnsupportedError,
+    lower_metal_ray_dispatch,
+)
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -108,6 +116,7 @@ __all__ = [
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
+    "MetalRayDispatchUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -119,6 +128,7 @@ __all__ = [
     "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "apply_rule_carrying",
 ]
@@ -173,7 +183,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
-    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), and constant
+    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
+    ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
+    (:mod:`.buffer_strides`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -186,6 +198,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -205,7 +218,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    refuse_undeclared_types(program, report.target)
     resolve_intrinsic_named_functions(program)
+    rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
@@ -221,14 +236,17 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
+    lower_metal_ray_dispatch(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
+    materialize_buffer_strides(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
+    refuse_colour_attachment_inputs(program, report.target)
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
