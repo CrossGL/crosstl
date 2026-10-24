@@ -3870,6 +3870,72 @@ def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignment
     cgl_translator.parse(generated_code)
 
 
+def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
+    # Slang accepts the HLSL barrier intrinsics; they must lower to the same
+    # CrossGL barriers the HLSL importer emits instead of passing through.
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        GroupMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+        DeviceMemoryBarrier();
+        AllMemoryBarrier();
+        DeviceMemoryBarrierWithGroupSync();
+        AllMemoryBarrierWithGroupSync();
+        if (id.x == 0u) {
+            hlsl::DeviceMemoryBarrierWithGroupSync();
+        }
+        outp[id.x] = 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+    barrier_lines = [line for line in lines if "arrier" in line]
+
+    assert barrier_lines == [
+        "workgroupBarrier();",
+        "memoryBarrierShared();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "workgroupBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+    ]
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
+    code = """
+    void AllMemoryBarrierWithGroupSync() {}
+    void GroupMemoryBarrier() {}
+
+    void main() {
+        AllMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "allMemoryBarrier" not in generated_code
+    assert "workgroupBarrier" not in generated_code
+    assert "memoryBarrierShared" not in generated_code
+
+
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
     # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
     # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,
