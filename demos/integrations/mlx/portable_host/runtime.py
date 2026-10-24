@@ -28,6 +28,8 @@ from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
     arange_dispatch,
     arange_packages,
+    arg_reduce_dispatch,
+    arg_reduce_layout,
     bfloat_storage,
     column_reduction_layout,
     column_small_layout,
@@ -61,6 +63,12 @@ from demos.integrations.mlx.portable_host import (
     wide_reduction_dispatch,
     wide_reduction_packages,
     wide_row_dispatch,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    CACHE_DIRECTORY as ARG_REDUCE_CACHE,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    ArgReducePackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -387,6 +395,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # Arg reductions translate each entry at its threadgroup width.
+        self.arg_reductions = (
+            ArgReducePackageCache(
+                mlx_root, self.directory / ARG_REDUCE_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gathers = (
             GatherPackageCache(mlx_root, self.directory / "gather", self.target)
             if mlx_root is not None
@@ -633,6 +649,8 @@ class HostRuntime:
                 return 1
             if name in arange_packages.ENTRIES and self.aranges is not None:
                 return 1
+            if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
+                return 1
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -780,6 +798,10 @@ class HostRuntime:
             )
         if self.lazy_arange(entry):
             return arange_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in arg_reduce_layout.ENTRIES:
+            return arg_reduce_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_copy(entry):

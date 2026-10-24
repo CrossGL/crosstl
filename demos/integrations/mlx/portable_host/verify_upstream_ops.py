@@ -19,7 +19,10 @@ and the 64-bit bitwise operations) translate from ``unary.metal`` and
 modules, and integer and Boolean ones are recomputed from their operands.
 Scans and small row and column
 reductions are also translated on first use; each of their dispatches must
-name the package its cache derives again from the event. Every other dispatch
+name the package its cache derives again from the event. Arg reductions are
+translated per threadgroup width on first use and every index is recomputed
+from the retained input; OpenGL does not run the arg reduction tests yet
+(``TARGET_EXCLUSIONS``). Every other dispatch
 must come from one of those indexes, so a test that reaches an uninstalled
 family fails the trace instead of passing on an unchecked package.
 """
@@ -35,6 +38,8 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import (
     arange_evidence,
     arange_packages,
+    arg_reduce_evidence,
+    arg_reduce_layout,
     copy_evidence,
     divmod_evidence,
     elementwise_evidence,
@@ -49,6 +54,12 @@ from demos.integrations.mlx.portable_host import (
     wide_reduction_packages,
     wide_row_dispatch,
     wide_row_evidence,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    CACHE_DIRECTORY as ARG_REDUCE_CACHE,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    ArgReducePackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -192,7 +203,22 @@ UPSTREAM_TESTS = tuple(
         # This also reaches row_reduce_looped through the on-demand row index.
         "test_sum",
     )
+) + (
+    # These reach lazily translated arg reductions of every real dtype, and
+    # of the flattened array in a threadgroup of thirteen simdgroups.
+    "test_ops.TestOps.test_argmin_argmax",
+    "test_reduce.TestReduce.test_arg_reduce",
+    "test_bf16.TestBF16.test_arg_reduction_ops",
 )
+# Tests a target cannot run yet, with the issue that tracks each. OpenGL's
+# software subgroups cannot run an arg reduction wider than one simdgroup.
+TARGET_EXCLUSIONS = {
+    "opengl": {
+        "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2207",
+        "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2207",
+        "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2207",
+    }
+}
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
 INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")
 # Entry-keyed package families; reductions are keyed by width and entry.
@@ -211,6 +237,7 @@ NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
 # Dispatches whose trace records keep their long values for the audits.
 RETAINED_VALUES = (
     *ENTRIES,
+    *arg_reduce_layout.OPERATIONS,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     "all_reduce_",
@@ -219,6 +246,16 @@ RETAINED_VALUES = (
 # The CI step bounds the three workers and the audit at 5,000 seconds; a cold
 # native run also translates about a hundred lazy vectors.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
+
+
+def upstream_tests(target):
+    """The upstream tests ``target`` runs, in inventory order."""
+    excluded = TARGET_EXCLUSIONS.get(target, {})
+    return tuple(name for name in UPSTREAM_TESTS if name not in excluded)
+
+
+def package_target(packages):
+    return json.loads((Path(packages) / "index.json").read_text())["target"]
 
 
 def write_json(path, value):
@@ -301,8 +338,9 @@ def worker(args):
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
+    tests = upstream_tests(package_target(args.packages))
     records = []
-    for name in UPSTREAM_TESTS:
+    for name in tests:
         start = host.dispatch_count if host else 0
         result = unittest.TextTestRunner(verbosity=2).run(
             unittest.defaultTestLoader.loadTestsFromName(name)
@@ -318,12 +356,12 @@ def worker(args):
             }
         )
         write_json(output / "upstream.json", {"tests": records})
-    validate_upstream({"tests": records}, native=host is not None)
+    validate_upstream({"tests": records}, native=host is not None, inventory=tests)
 
 
-def validate_upstream(record, *, native):
+def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
     tests = record.get("tests", [])
-    if [item.get("test") for item in tests] != list(UPSTREAM_TESTS):
+    if [item.get("test") for item in tests] != list(inventory):
         raise ValueError("Upstream op test inventory is incomplete")
     for item in tests:
         expected = {"testsRun": 1, "failures": 0, "errors": 0, "skips": 0}
@@ -483,6 +521,19 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         wide_column_evidence.audit_event(event, wide_columns)
         lazy_checked.add(i)
         owners[i] += 1
+    arg_reductions = ArgReducePackageCache(
+        args.mlx_root, args.packages / ARG_REDUCE_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in arg_reduce_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op arg reduction targets another backend")
+        # Derives the cached package again, checks the native modules and
+        # recomputes every index from the retained input.
+        arg_reduce_evidence.audit_event(event, arg_reductions)
+        lazy_checked.add(i)
+        owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
     modules = Path(args.output_dir) / "native/native-modules"
     executed = set()
@@ -581,7 +632,9 @@ def verify(args):
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
-    sources = upstream_test_sources(args.mlx_root, UPSTREAM_TESTS)
+    target = package_target(args.packages)
+    tests = upstream_tests(target)
+    sources = upstream_test_sources(args.mlx_root, tests)
     write_json(output / "adaptation-before.json", before)
     target, indexes, reductions = load_indexes(args)
     evidence = {
@@ -590,7 +643,8 @@ def verify(args):
         "passed": False,
         "adaptation": before,
         "upstreamTestSources": sources,
-        "upstreamTests": list(UPSTREAM_TESTS),
+        "upstreamTests": list(tests),
+        "excludedUpstreamTests": dict(TARGET_EXCLUSIONS.get(target, {})),
         "workers": {},
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -604,7 +658,7 @@ def verify(args):
         upstream = {}
         for mode in ("cpu", "native"):
             upstream[mode] = json.loads((output / mode / "upstream.json").read_text())
-            validate_upstream(upstream[mode], native=mode == "native")
+            validate_upstream(upstream[mode], native=mode == "native", inventory=tests)
         trace = [
             json.loads(line)
             for line in (output / "native/dispatch.jsonl").read_text().splitlines()
@@ -625,7 +679,7 @@ def verify(args):
                 raise ValueError("Upstream op rejection evidence is incomplete")
             rejections[mode] = item
         if before != verify_prepared(args.mlx_root) or sources != upstream_test_sources(
-            args.mlx_root, UPSTREAM_TESTS
+            args.mlx_root, tests
         ):
             raise ValueError("MLX source changed during upstream op verification")
         evidence.update(

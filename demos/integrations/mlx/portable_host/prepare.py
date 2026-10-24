@@ -50,6 +50,7 @@ def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
     for primitive in (
         "Arange",
+        "ArgReduce",
         "RandomBits",
         "Scan",
         "Quantize",

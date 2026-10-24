@@ -1807,8 +1807,8 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 88 more unchanged `test_ops` tests on all three
-platforms:
+A dedicated job then runs 91 more unchanged `test_ops`, `test_reduce` and
+`test_bf16` tests on all three platforms (88 on OpenGL; see below):
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
@@ -1848,7 +1848,14 @@ translated. The tests are `test_trunc`, `test_erfinv`,
 which reach lazy selections of every GPU dtype; `test_round`, which also
 reaches lazy aranges; `test_std`, `test_trace`, `test_var` and `test_vecdot`,
 which reach wide whole-array, small-row and small-column reductions; and
-`test_sum`, which also reaches looped float32 rows.
+`test_sum`, which also reaches looped float32 rows; and `test_argmin_argmax`,
+`test_reduce.test_arg_reduce` and `test_bf16.test_arg_reduction_ops`, which
+reach `arg_reduce.metal` for every real dtype, one package per threadgroup
+width. Every arg reduction index is recomputed from its retained input.
+OpenGL runs simdgroups as 32-lane software subgroups and cannot yet run an
+arg reduction wider than one simdgroup, because the kernel returns every
+simdgroup but the first before its final shuffles (CrossGL/crosstl#2207);
+its host refuses those launches and the job excludes the three tests there.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the
@@ -1870,9 +1877,9 @@ column reductions with a static index, therefore fails instead of running an
 unchecked package. Only the recomputed dispatches keep their long values in
 the trace; the others keep a length and SHA-256. A separate process checks
 that a missing comparison package is refused before dispatch. On Metal the
-native run dispatches 9,864 translated kernels, 29 of them indexing kernels and
-6 steel GEMM kernels; the whole verification takes about 23 minutes on a
-loaded machine.
+native run dispatches 10,074 translated kernels, 29 of them indexing kernels,
+192 arg reductions and 6 steel GEMM kernels; the whole verification takes about
+17 minutes.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share

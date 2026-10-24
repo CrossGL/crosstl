@@ -33,14 +33,42 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 88
-    assert all(name.startswith("test_ops.TestOps.test_") for name in ops.UPSTREAM_TESTS)
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 91
+    assert all(
+        name.startswith(
+            (
+                "test_ops.TestOps.test_",
+                "test_reduce.TestReduce.test_",
+                "test_bf16.TestBF16.test_",
+            )
+        )
+        for name in ops.UPSTREAM_TESTS
+    )
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
         | set(verify_random.UPSTREAM_TESTS)
         | {verify_selection.UPSTREAM_TEST}
     )
     assert not elsewhere & set(ops.UPSTREAM_TESTS)
+
+
+def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
+    # Only OpenGL excludes tests: its software subgroups cannot run an arg
+    # reduction wider than one simdgroup yet.
+    assert set(ops.TARGET_EXCLUSIONS) == {"opengl"}
+    excluded = ops.TARGET_EXCLUSIONS["opengl"]
+    assert set(excluded) <= set(ops.UPSTREAM_TESTS)
+    assert set(excluded.values()) == {"CrossGL/crosstl#2207"}
+    assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
+    assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
+    opengl = ops.upstream_tests("opengl")
+    assert len(opengl) == 88 and not set(opengl) & set(excluded)
+    assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
+    record = {"tests": records(native=True)["tests"]}
+    with pytest.raises(ValueError, match="inventory"):
+        ops.validate_upstream(record, native=True, inventory=opengl)
+    record["tests"] = [item for item in record["tests"] if item["test"] in opengl]
+    ops.validate_upstream(record, native=True, inventory=opengl)
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -403,6 +431,8 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "vv_DivModint32",
         "all_reduce_andbool_",
         "init_reduce_sumint32",
+        "argmin_bfloat16",
+        "argmax_uint64",
     ):
         assert entry.startswith(retained), entry
     for entry in (

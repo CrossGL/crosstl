@@ -2466,6 +2466,83 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 
+// Ports mlx/backend/metal/primitives.cpp ArgReduce::eval_gpu: one threadgroup
+// per output row of min(ceil(axis_size / 4), 1024) threads, rounded up to a
+// multiple of 32, over the input view without the reduced axis.
+void ArgReduce::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || out.dtype() != uint32) {
+    throw std::invalid_argument("CrossTL arg reductions require one input and a uint32 output.");
+  }
+  // arg_reduce.metal instantiates argmin and argmax for every real dtype.
+  const char* dtype = cast_type(inputs[0].dtype());
+  if (!dtype || inputs[0].dtype() == complex64) {
+    throw std::invalid_argument("CrossTL arg reductions do not support this dtype.");
+  }
+  out.set_data(allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
+  if (out.size() == 0) {
+    return;
+  }
+  // A view with a negative stride reduces a dense copy; the indices along the
+  // axis are logical, so they are unchanged.
+  const array in = gather_input(inputs[0]);
+  if (axis_ < 0 || axis_ >= static_cast<int>(in.ndim()) || in.shape(axis_) < 1) {
+    throw std::invalid_argument("CrossTL arg reduction axis is empty or out of range.");
+  }
+  constexpr uint64_t max_elements = (uint64_t(1) << 28) - 1;
+  const uint64_t span = gather_span(in, max_elements);
+  auto in_strides = in.strides();
+  auto shape = in.shape();
+  auto out_strides = out.strides();
+  int64_t axis_stride = in_strides[axis_];
+  uint64_t axis_size = shape[axis_];
+  if (out_strides.size() == in_strides.size()) {
+    out_strides.erase(out_strides.begin() + axis_);
+  }
+  in_strides.erase(in_strides.begin() + axis_);
+  shape.erase(shape.begin() + axis_);
+  uint64_t ndim = shape.size();
+  uint64_t rows = 1;
+  for (auto extent : shape) {
+    if (extent < 1 || extent > 65535 || rows * uint64_t(extent) > 65535) {
+      throw std::invalid_argument("CrossTL arg reductions support at most 65535 rows.");
+    }
+    rows *= extent;
+  }
+  if (rows != out.size() || out_strides.size() != ndim ||
+      uint64_t(in.size()) != rows * axis_size) {
+    throw std::invalid_argument("CrossTL arg reduction output does not match its rows.");
+  }
+  uint32_t width = static_cast<uint32_t>(std::min<uint64_t>((axis_size + 3) / 4, 1024));
+  width = (width + 31) / 32 * 32;
+  // Upstream passes one placeholder per array for a rank-zero row shape.
+  if (ndim == 0) {
+    shape.push_back(0);
+    in_strides.push_back(0);
+    out_strides.push_back(0);
+  }
+  const std::string entry =
+      std::string(reduce_type_ == ArgReduce::ArgMin ? "argmin_" : "argmax_") + dtype;
+  CrosstlMlxBuffer buffers[] = {
+      {"in", dtype, const_cast<void*>(in.data<void>()), span, 0},
+      {"out", "uint32", out.data<void>(), out.size(), 1},
+      {"shape", "int32", shape.data(), shape.size(), 0},
+      {"in_strides", "int64", in_strides.data(), in_strides.size(), 0},
+      {"out_strides", "int64", out_strides.data(), out_strides.size(), 0},
+      {"ndim", "uint64", &ndim, 1, 0},
+      {"axis_stride", "int64", &axis_stride, 1, 0},
+      {"axis_size", "uint64", &axis_size, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{1, uint32_t(rows), 1}, {width, 1, 1}, {0, 0, 0}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 8, in.size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native arg reduction failed: ") + error);
+  }
+}
+
 namespace {
 constexpr uint64_t max_matmul_elements = (uint64_t(1) << 28) - 1;
 

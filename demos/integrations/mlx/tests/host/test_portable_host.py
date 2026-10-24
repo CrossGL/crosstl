@@ -38,6 +38,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name in {'DivMod', 'Quantize'} else 'NO_GPU'}({name})"
                 for name in (
                     "Arange",
+                    "ArgReduce",
                     "RandomBits",
                     "Scan",
                     "Quantize",
@@ -100,6 +101,8 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(ArgReduce)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Scan)" not in (backend / "crosstl_primitives.cpp").read_text()
