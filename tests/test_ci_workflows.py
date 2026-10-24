@@ -125,6 +125,39 @@ def test_the_coverage_comment_job_runs_no_pull_request_code():
     assert not re.search(r"\b(?:python|pip)\b", script)
 
 
+STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\)")
+
+
+def _needs(job):
+    needs = job.get("needs", [])
+    return [needs] if isinstance(needs, str) else needs
+
+
+def _ancestors(jobs, name):
+    found, pending = set(), list(_needs(jobs[name]))
+    while pending:
+        need = pending.pop()
+        if need not in found:
+            found.add(need)
+            pending.extend(_needs(jobs[need]))
+    return found
+
+
+def test_jobs_after_a_skippable_leg_check_their_own_status():
+    # A condition without a status function implies `success()`, which is false when any job up the `needs` chain
+    # was skipped, even if the direct dependency ran because it calls `always()`. Such a job is then skipped too,
+    # as the coverage comment was on every pull request that planned out a leg.
+    for filename, workflow in _workflows().items():
+        jobs = workflow["jobs"]
+        for name, job in jobs.items():
+            if STATUS_FUNCTION.search(str(job.get("if", ""))):
+                continue
+            for need in _needs(job):
+                runs_anyway = STATUS_FUNCTION.search(str(jobs[need].get("if", "")))
+                skippable = [a for a in _ancestors(jobs, need) if "if" in jobs[a]]
+                assert not (runs_anyway and skippable), (filename, name, need)
+
+
 @pytest.mark.parametrize(
     "filename",
     [

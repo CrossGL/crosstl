@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -128,6 +129,7 @@ from ..validation import (
     texture_sample_index_argument_index,
 )
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
+from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     _UnsignedLiteralInt,
@@ -216,9 +218,15 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_interface_block_io import (
+    block_declared_stage_io,
+    block_member_location_type,
+    stage_block_member_layout,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
+    input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
@@ -234,6 +242,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
     flattened_stage_output_assignment,
@@ -1553,6 +1562,8 @@ class GLSLCodeGen(
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
@@ -1993,11 +2004,6 @@ class GLSLCodeGen(
         "signbit",
         "metal::signbit",
         "metal_u3a_u3asignbit",
-    }
-    GLSL_STANDARD_IDENTIFIER_CONSTANTS = {
-        # GLSL does not define the C/Metal NAN macro.  Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        "NAN": "uintBitsToFloat(0x7fc00000u)",
     }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
@@ -3918,6 +3924,8 @@ class GLSLCodeGen(
             return True
 
         include_target = stripped[len("#include") :].strip()
+        if include_target.startswith("<") and is_apple_sdk_include(include_target):
+            return False
         return not include_target.lower().startswith(("<metal", '"metal'))
 
     def should_emit_glsl_preprocessor_directive(self, directive):
@@ -3932,6 +3940,8 @@ class GLSLCodeGen(
         match = re.match(r'^[<"]([^>"]+)[>"]', content)
         include_name = match.group(1) if match else content.split()[0]
         normalized = include_name.strip().replace("\\", "/").lower()
+        if content.startswith("<") and is_apple_sdk_include(normalized):
+            return False
         return normalized not in self.METAL_ONLY_SYSTEM_INCLUDES
 
     def glsl_extension_enabled(self, extension_name):
@@ -8952,6 +8962,10 @@ class GLSLCodeGen(
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        for node in all_global_vars:
+            input_attachment_reason = input_attachment_refusal_reason(node)
+            if input_attachment_reason is not None:
+                self.refuse_lowering(input_attachment_reason)
         specialization_global_ids = {
             id(node) for node in self.glsl_global_specialization_constants
         }
@@ -18195,11 +18209,6 @@ class GLSLCodeGen(
         used_names = collect_stage_entry_reserved_function_names(
             ast, None, stage_entry_types
         )
-        if (
-            self.should_emit_stage_guards(ast, target_stage)
-            and "main" not in used_names
-        ):
-            return {entry_id: "main" for entry_id, _stage_name, _func in entries}
 
         def target_names(assigned_names):
             return {
@@ -18212,6 +18221,31 @@ class GLSLCodeGen(
                 )
                 for entry_id, name in assigned_names.items()
             }
+
+        if (
+            self.should_emit_stage_guards(ast, target_stage)
+            and "main" not in used_names
+        ):
+            # Each stage's guarded section declares one main: the stage's first entry. Later entries of the
+            # same stage stay ordinary functions, as for a single-stage program.
+            first_of_stage, later = {}, []
+            for entry_id, stage_name, func in entries:
+                if stage_name in first_of_stage.values():
+                    later.append((entry_id, stage_name, func))
+                else:
+                    first_of_stage[entry_id] = stage_name
+            names = {entry_id: "main" for entry_id in first_of_stage}
+            if later:
+                names.update(
+                    target_names(
+                        assign_stage_entry_names(
+                            later,
+                            used_names | {"main"},
+                            lambda stage_name, _func: f"{stage_name}_main",
+                        )
+                    )
+                )
+            return names
 
         stage_names = {stage_name for _entry_id, stage_name, _func in entries}
         if len(entries) > 1 and len(stage_names) == 1 and "main" not in used_names:
@@ -21001,6 +21035,8 @@ class GLSLCodeGen(
             func, shader_type
         ):
             code += f"    {declaration}\n"
+        for declaration in stage_input_struct_value_declarations(self, func):
+            code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
             code += self.generate_glsl_hlsl_cbuffer_loads(1)
             code += self.generate_glsl_runtime_global_initializers(func, 1)
@@ -23037,14 +23073,22 @@ class GLSLCodeGen(
                 continue
 
             layout = self.stage_io_layout_for_node(member)
+            block = block_declared_stage_io(self, "out", member, output_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
                 "output",
                 layout,
-                self.member_type_name(member),
+                (
+                    self.member_type_name(member)
+                    if block is None
+                    else block_member_location_type(self, member, block)
+                ),
                 output_name,
             )
+            if block is not None:
+                # Declared by the output interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "out", stage_name="vertex"
             )
@@ -23067,18 +23111,26 @@ class GLSLCodeGen(
 
             layout = self.stage_io_layout_for_node(member)
             member_type = self.member_type_name(member)
+            block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
                 "input",
                 layout,
                 (
-                    self.stage_io_per_vertex_element_type(member_type)
-                    if self.is_pervertex_stage_io(member, "")
-                    else member_type
+                    block_member_location_type(self, member, block)
+                    if block is not None
+                    else (
+                        self.stage_io_per_vertex_element_type(member_type)
+                        if self.is_pervertex_stage_io(member, "")
+                        else member_type
+                    )
                 ),
                 input_name,
             )
+            if block is not None:
+                # Declared by the input interface block itself.
+                continue
             prefix = self.stage_io_declaration_prefix(
                 member, "in", stage_name="fragment"
             )
@@ -31244,6 +31296,8 @@ class GLSLCodeGen(
                     )
                 if name and render_standard_math_constant(name, "opengl") is not None:
                     return False, False
+                if name and render_float_limit_constant(name, "opengl") is not None:
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -39193,9 +39247,11 @@ complex64_t crossgl_complex64_mod_assign(
         if target_name != name or self.glsl_identifier_is_resolved(name):
             return target_name
 
-        special_constant = self.GLSL_STANDARD_IDENTIFIER_CONSTANTS.get(name)
-        if special_constant is not None:
-            return special_constant
+        # GLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        limit_constant = render_float_limit_constant(name, "opengl")
+        if limit_constant is not None:
+            return limit_constant
         standard_constant = render_standard_math_constant(name, "opengl")
         return standard_constant if standard_constant is not None else target_name
 
@@ -57843,7 +57899,7 @@ complex64_t crossgl_complex64_mod_assign(
         instance_suffix = self.glsl_interface_block_instance_suffix(node)
         code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
-            code += self.generate_glsl_interface_block_member_declaration(
+            declaration = self.generate_glsl_interface_block_member_declaration(
                 member,
                 struct_name=node.name,
                 members_are_global=not instance_suffix,
@@ -57851,6 +57907,10 @@ complex64_t crossgl_complex64_mod_assign(
                     source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
                 ),
             )
+            member_layout = stage_block_member_layout(self, node, member)
+            if member_layout:
+                declaration = f"    {member_layout}{declaration[4:]}"
+            code += declaration
         code += f"}}{instance_suffix};\n"
         return code
 

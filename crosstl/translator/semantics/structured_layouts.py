@@ -27,6 +27,14 @@ and every access to it into word accesses at the declared offsets:
 * an atomic on an ``int`` or ``uint`` scalar operates on its word;
 * ``buffer_dimensions`` reports elements and the declared stride.
 
+An append or consume buffer cannot be indexed, and its hidden counter counts elements, so it keeps its kind and
+holds a struct of the element's words instead (``struct __cgl_words3 { uint w[3]; }``, which every rule set lays
+out as 12 tightly packed bytes): ``buffer_append(b, v)`` appends ``__cgl_pack_hlsl_vec3(v)`` and
+``buffer_consume(b)`` becomes ``__cgl_unpack_hlsl_vec3(buffer_consume(b))``.
+
+An array of buffers (``RWStructuredBuffer<T> b[N]``) becomes an array of word buffers; an access ``b[k][i]`` reads
+the words of ``b[k]``, and a helper function takes ``k`` before the first word.
+
 The element type may be built from 32-bit ``float``, ``int`` and ``uint`` scalars, vectors, structs and arrays of
 those. Any other element type the target lays out differently (matrices, MSL's one-byte booleans, 16- or 64-bit
 values), and any access the rewrite cannot carry (the buffer passed to a function, a compound assignment whose index
@@ -49,6 +57,7 @@ from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 __all__ = [
     "TARGETS",
     "StructuredLayoutUnsupportedError",
+    "element_stride",
     "legalize_structured_layouts",
 ]
 
@@ -65,6 +74,12 @@ _RULE_NAMES = {
 # (glsl_hlsl_structured); buffer parameters are lowered here.
 _GENERATOR_LOWERS_STRUCTS = frozenset({"opengl", "glsl"})
 _WRAPPERS = frozenset({"StructuredBuffer", "RWStructuredBuffer"})
+# Buffers reached only through buffer_append, buffer_consume and buffer_dimensions, whose counter counts elements.
+_QUEUES = frozenset({"AppendStructuredBuffer", "ConsumeStructuredBuffer"})
+_QUEUE_CALLS = {
+    "buffer_append": "AppendStructuredBuffer",
+    "buffer_consume": "ConsumeStructuredBuffer",
+}
 _KINDS = {"f": "float", "i": "int", "u": "uint", "b": "bool"}
 _VECTOR_PREFIX = {"f": "vec", "i": "ivec", "u": "uvec", "b": "bvec"}
 _READ = {"f": "asfloat", "i": "asint"}
@@ -347,6 +362,21 @@ class _Shapes:
         return self.cache[name]
 
 
+def element_stride(program, type_node, rules, context, cache=None) -> int:
+    """The array stride in bytes of ``type_node`` under ``rules`` (``hlsl``, ``std430`` or ``metal``).
+
+    ``cache`` maps rules to the :class:`_Shapes` of ``program`` already built for them. Raises
+    :class:`StructuredLayoutUnsupportedError` for a type without a layout (an unsized array member, an unknown
+    struct).
+    """
+    cache = {} if cache is None else cache
+    source = "metal" if rules == "metal" else "hlsl"
+    if source not in cache:
+        cache[source] = _Shapes(program, source)
+    size, alignment, _leaves = _layout(cache[source].of(type_node, context), rules)
+    return _round(size, alignment)
+
+
 def _packed_shape(shape, context):
     """``shape`` stored as MSL packed vectors: a vector, or an array of vectors, of a ``@ packed`` member."""
     if shape.form == "vector":
@@ -385,6 +415,8 @@ class _Buffer:
     shape: _Shape
     readonly: bool
     inline: bool = False  # a parameter, which generated helper functions cannot name
+    queue: str = ""  # AppendStructuredBuffer or ConsumeStructuredBuffer: elements are word structs
+    array: bool = False  # an array of buffers, whose elements are selected before they are indexed
 
 
 @dataclass
@@ -397,9 +429,16 @@ class _Access:
     offset: int = 0
     terms: list = field(default_factory=list)  # (expression, words per step)
     swizzle: tuple | None = None  # word offsets of a multi-component swizzle
+    selector: object = None  # the index of the buffer in an array of buffers
+    rewritten_selector: object = None
 
     def dynamic(self):
-        return [self.index, *(expression for expression, _words in self.terms)]
+        selector = [] if self.selector is None else [self.selector]
+        return [
+            *selector,
+            self.index,
+            *(expression for expression, _words in self.terms),
+        ]
 
 
 def _uint(expression):
@@ -448,20 +487,59 @@ class _Rewriter:
                 steps.append(("member", node.components))
                 node = node.vector_expr
             elif isinstance(node, A.ArrayAccessNode):
+                selected = self.selected_buffer(node.array_expr)
+                if selected is not None:
+                    buffer, selector = selected
+                    break
                 if (
                     isinstance(node.array_expr, A.IdentifierNode)
                     and node.array_expr.name in self.buffers
                 ):
+                    buffer, selector = self.buffers[node.array_expr.name], None
+                    if buffer.array:
+                        # One buffer of an array of buffers, not an element.
+                        return None
                     break
                 steps.append(("index", node.index_expr))
                 node = node.array_expr
             else:
                 return None
-        buffer = self.buffers[node.array_expr.name]
-        place = _Access(buffer, node.index_expr, buffer.shape)
+        if buffer.queue:
+            self.refuse(f"the {buffer.queue} {buffer.name} cannot be indexed")
+        place = _Access(buffer, node.index_expr, buffer.shape, selector=selector)
         for step, value in reversed(steps):
             self.step(place, step, value)
         return place
+
+    def selected_buffer(self, node):
+        """``(buffer, selector)`` when ``node`` is ``b[k]`` for a lowered array of buffers ``b``, else ``None``."""
+        if (
+            isinstance(node, A.ArrayAccessNode)
+            and isinstance(node.array_expr, A.IdentifierNode)
+            and node.array_expr.name in self.buffers
+            and self.buffers[node.array_expr.name].array
+        ):
+            return self.buffers[node.array_expr.name], node.index_expr
+        return None
+
+    def place_selector(self, place):
+        """The rewritten selector of ``place``'s buffer, or ``None`` outside an array of buffers."""
+        if place.selector is None:
+            return None
+        if place.rewritten_selector is None:
+            place.rewritten_selector = self.expression(place.selector)
+            return place.rewritten_selector
+        return clone(place.rewritten_selector)
+
+    def buffer_reference(self, place):
+        name = A.IdentifierNode(place.buffer.name)
+        selector = self.place_selector(place)
+        return name if selector is None else A.ArrayAccessNode(name, selector)
+
+    def helper_arguments(self, place, base, *rest):
+        selector = self.place_selector(place)
+        leading = [] if selector is None else [_uint(selector)]
+        return [*leading, base, *rest]
 
     def step(self, place, step, value):
         shape = place.shape
@@ -531,7 +609,7 @@ class _Rewriter:
 
     def word(self, place, base, offset=0):
         index = base if not offset else _sum(base, _literal(offset))
-        return A.ArrayAccessNode(A.IdentifierNode(place.buffer.name), index)
+        return A.ArrayAccessNode(self.buffer_reference(place), index)
 
     def read(self, place):
         base = self.place_base(place)
@@ -539,7 +617,7 @@ class _Rewriter:
             return _from_word(place.shape.kind, self.word(place, base))
         if place.buffer.inline:
             return self.inline_read(place, base)
-        return call(self.load_helper(place), [base])
+        return call(self.load_helper(place), self.helper_arguments(place, base))
 
     def write(self, place, value):
         """The assignment, helper call or (for a parameter) block statement that stores ``value``."""
@@ -552,7 +630,7 @@ class _Rewriter:
             )
         if place.buffer.inline:
             return self.inline_write(place, base, value)
-        return call(self.store_helper(place), [base, value])
+        return call(self.store_helper(place), self.helper_arguments(place, base, value))
 
     # A helper function cannot name a buffer parameter, so parameter accesses are expanded in place: a read repeats
     # its (side-effect free) first-word index, and a write becomes a block that evaluates the index and the value
@@ -608,12 +686,13 @@ class _Rewriter:
     def load_helper(self, place):
         name = self.helper_name("load", place)
         if name not in self.helpers:
+            buffer, selector = _helper_buffer(place.buffer)
             if place.swizzle is not None:
-                body = f"return {place.shape.type_text()}({_word_reads(place.buffer.name, place.shape.kind, place.swizzle)});"
+                body = f"return {place.shape.type_text()}({_word_reads(buffer, place.shape.kind, place.swizzle)});"
             else:
-                body = f"return {_value_text(place.buffer.name, place.shape, 0)};"
+                body = f"return {_value_text(buffer, place.shape, 0)};"
             self.helpers[name] = (
-                f"{place.shape.type_text()} {name}(uint base) {{ {body} }}"
+                f"{place.shape.type_text()} {name}({selector}uint base) {{ {body} }}"
             )
         return name
 
@@ -622,14 +701,15 @@ class _Rewriter:
             self.refuse(f"{place.buffer.name} is a read-only structured buffer")
         name = self.helper_name("store", place)
         if name not in self.helpers:
+            buffer, selector = _helper_buffer(place.buffer)
             if place.swizzle is not None:
                 lines = [
-                    f"{place.buffer.name}[base + {offset}u] = {_word_write(place.shape.kind, f'value[{lane}]')};"
+                    f"{buffer}[base + {offset}u] = {_word_write(place.shape.kind, f'value[{lane}]')};"
                     for lane, offset in enumerate(place.swizzle)
                 ]
             else:
-                lines = _store_lines(place.buffer.name, place.shape, 0, "value")
-            self.helpers[name] = f"void {name}(uint base, {place.shape.type_text()} value) {{ {' '.join(lines)} }}"
+                lines = _store_lines(buffer, place.shape, 0, "value")
+            self.helpers[name] = f"void {name}({selector}uint base, {place.shape.type_text()} value) {{ {' '.join(lines)} }}"
         return name
 
     # Traversal ---------------------------------------------------------------------------
@@ -751,13 +831,21 @@ class _Rewriter:
         name = call_name(node)
         arguments = list(node.arguments or [])
         if (
-            name == "buffer_dimensions"
+            name in _QUEUE_CALLS
             and arguments
             and isinstance(arguments[0], A.IdentifierNode)
+            and arguments[0].name in self.buffers
         ):
-            buffer = self.buffers.get(arguments[0].name)
-            if buffer is not None:
-                return self.dimensions(buffer, arguments)
+            return self.queue_call(node, name, self.buffers[arguments[0].name])
+        if name == "buffer_dimensions" and arguments:
+            selected = self.selected_buffer(arguments[0])
+            if selected is not None:
+                buffer, selector = selected
+                return self.dimensions(buffer, arguments, self.expression(selector))
+            if isinstance(arguments[0], A.IdentifierNode):
+                buffer = self.buffers.get(arguments[0].name)
+                if buffer is not None and not buffer.array:
+                    return self.dimensions(buffer, arguments)
         if name in _ATOMICS and arguments:
             place = self.access(arguments[0])
             if place is not None:
@@ -841,12 +929,46 @@ class _Rewriter:
         result = call(name, [target, *values])
         return call("int", [result]) if kind == "i" else result
 
-    def dimensions(self, buffer, arguments):
-        count = A.BinaryOpNode(
-            _uint(call("buffer_dimensions", [A.IdentifierNode(buffer.name)])),
-            "/",
-            _literal(buffer.shape.words),
-        )
+    def queue_call(self, node, name, buffer):
+        """``buffer_append(b, v)`` with ``v`` packed into words, or ``buffer_consume(b)`` unpacked from words."""
+        arguments = node.arguments
+        if buffer.queue != _QUEUE_CALLS[name]:
+            self.refuse(
+                f"{name} cannot take {buffer.name}, which is declared as {buffer.queue}"
+            )
+        if len(arguments) != (2 if name == "buffer_append" else 1):
+            self.refuse(f"{name} on {buffer.name} takes the wrong number of arguments")
+        words = _words_struct_name(buffer.shape.words)
+        type_text = buffer.shape.type_text()
+        suffix = f"{buffer.shape.source}_{buffer.shape.key()}"
+        if name == "buffer_append":
+            helper = f"__cgl_pack_{suffix}"
+            if helper not in self.helpers:
+                lines = _store_lines("words.w", buffer.shape, 0, "value", "0u")
+                if len(lines) != buffer.shape.words:
+                    # Padding words are stored as zero rather than left undefined.
+                    lines[0:0] = [
+                        f"words.w[{word}] = 0u;" for word in range(buffer.shape.words)
+                    ]
+                self.helpers[helper] = f"{words} {helper}({type_text} value) {{ {words} words; {' '.join(lines)} return words; }}"
+            node.arguments[1] = call(helper, [self.expression(arguments[1])])
+            return node
+        helper = f"__cgl_unpack_{suffix}"
+        if helper not in self.helpers:
+            value = _value_text("words.w", buffer.shape, 0, "0u")
+            self.helpers[helper] = (
+                f"{type_text} {helper}({words} words) {{ return {value}; }}"
+            )
+        return call(helper, [node])
+
+    def dimensions(self, buffer, arguments, selector=None):
+        reference = A.IdentifierNode(buffer.name)
+        if selector is not None:
+            reference = A.ArrayAccessNode(reference, selector)
+        count = _uint(call("buffer_dimensions", [reference]))
+        if not buffer.queue:
+            # A queue's elements are word structs, so its length already counts elements.
+            count = A.BinaryOpNode(count, "/", _literal(buffer.shape.words))
         if len(arguments) == 1:
             return count
         if len(arguments) == 3 and buffer.inline:
@@ -859,15 +981,29 @@ class _Rewriter:
             )
         name = f"__cgl_{buffer.name}_dimensions"
         if name not in self.helpers:
+            text, leading = _helper_buffer(buffer)
+            per_element = "" if buffer.queue else f" / {buffer.shape.words}u"
             self.helpers[name] = (
-                f"void {name}(out uint count, out uint stride) {{ count = uint(buffer_dimensions({buffer.name})) "
-                f"/ {buffer.shape.words}u; stride = {4 * buffer.shape.words}u; }}"
+                f"void {name}({leading}out uint count, out uint stride) {{ count = uint(buffer_dimensions({text}))"
+                f"{per_element}; stride = {4 * buffer.shape.words}u; }}"
             )
         if len(arguments) == 3:
-            return call(name, arguments[1:])
+            leading = [] if selector is None else [_uint(clone(selector))]
+            return call(name, [*leading, *arguments[1:]])
         if len(arguments) == 2:
             return A.AssignmentNode(arguments[1], count)
         self.refuse("buffer_dimensions takes one to three arguments")
+
+
+def _words_struct_name(words):
+    return f"__cgl_words{words}"
+
+
+def _helper_buffer(buffer):
+    """How a helper function names ``buffer``'s words, and the parameter that selects them in an array of buffers."""
+    if buffer.array:
+        return f"{buffer.name}[selector]", "uint selector, "
+    return buffer.name, ""
 
 
 def _from_word(kind, word):
@@ -993,17 +1129,34 @@ def _buffer_type(declaration):
         and var_type.size is None
     ):
         return slot, var_type, var_type.element_type, source
+    if _is_buffer_array(slot, var_type):
+        return slot, var_type, var_type.element_type.generic_args[0], source
     if (
         not isinstance(var_type, A.NamedType)
-        or var_type.name not in _WRAPPERS
+        or var_type.name not in _WRAPPERS | _QUEUES
         or len(var_type.generic_args) != 1
     ):
         return None
     return slot, var_type, var_type.generic_args[0], source
 
 
+def _is_buffer_array(slot, var_type):
+    """Whether a declaration of ``var_type`` declares an array of structured buffers."""
+    element = getattr(var_type, "element_type", None)
+    return (
+        slot == "var_type"
+        and isinstance(var_type, A.ArrayType)
+        and isinstance(element, A.NamedType)
+        and element.name in _WRAPPERS
+        and len(element.generic_args) == 1
+    )
+
+
 def _word_type(var_type):
     """``var_type`` with ``uint`` elements, and whether it is read-only."""
+    if _is_buffer_array("var_type", var_type):
+        word, readonly = _word_type(var_type.element_type)
+        return A.ArrayType(word, var_type.size), readonly
     if isinstance(var_type, A.PointerType):
         word = A.PointerType(
             A.PrimitiveType("uint"),
@@ -1040,12 +1193,21 @@ def _plan_buffer(declaration, shapes, target, inline, passed=False):
         target_rules == "std430" and _holds_bool(shape)
     ):
         return None
+    queue = (
+        var_type.name
+        if isinstance(var_type, A.NamedType) and var_type.name in _QUEUES
+        else ""
+    )
+    array = _is_buffer_array(slot, var_type)
+    # The generator's own struct copies cover single indexed buffers only, so queues and arrays are lowered here.
     if (
         source == "hlsl"
         and shape.form == "struct"
         and target in _GENERATOR_LOWERS_STRUCTS
         and not inline
         and not passed
+        and not queue
+        and not array
     ):
         return False
     if not shape.lowerable:
@@ -1055,9 +1217,20 @@ def _plan_buffer(declaration, shapes, target, inline, passed=False):
             "split into 32-bit words",
             target=target,
         )
-    new_type, readonly = _word_type(var_type)
+    if queue:
+        new_type = A.NamedType(queue, [A.NamedType(_words_struct_name(shape.words))])
+        readonly = False
+    else:
+        new_type, readonly = _word_type(var_type)
     qualifiers = {str(q) for q in getattr(declaration, "qualifiers", None) or []}
-    buffer = _Buffer(declaration.name, shape, readonly or "const" in qualifiers, inline)
+    buffer = _Buffer(
+        declaration.name,
+        shape,
+        readonly or "const" in qualifiers,
+        inline,
+        queue=queue,
+        array=array,
+    )
     setattr(declaration, slot, new_type)
     if slot == "var_type":
         declaration.vtype = new_type
@@ -1173,12 +1346,36 @@ def _substitute(node, replacements):
     return node
 
 
-def _parse_helpers(texts):
+def _parse(texts):
     from ..source_registry import SOURCE_REGISTRY, register_default_sources
 
     register_default_sources()
     source = "shader __cgl_structured_layouts {\n" + "\n".join(texts) + "\n}\n"
-    return list(SOURCE_REGISTRY.get("cgl").parse(source).functions)
+    return SOURCE_REGISTRY.get("cgl").parse(source)
+
+
+def _parse_helpers(texts):
+    return list(_parse(texts).functions)
+
+
+def _add_words_structs(program, buffers, scopes, target):
+    """Declare the word struct of every lowered append or consume buffer and buffer parameter."""
+    plans = list(buffers.values())
+    for parameters, _names in scopes.values():
+        plans.extend(plan for plan in parameters.values() if plan)
+    counts = sorted({plan.shape.words for plan in plans if plan.queue})
+    if not counts:
+        return
+    structs = getattr(program, "structs", None)
+    if not isinstance(structs, list):
+        raise StructuredLayoutUnsupportedError(
+            "the program has no struct list to receive the append and consume buffer elements",
+            target=target,
+        )
+    texts = [
+        f"struct {_words_struct_name(count)} {{ uint w[{count}]; }}" for count in counts
+    ]
+    structs[0:0] = list(_parse(texts).structs)
 
 
 def legalize_structured_layouts(program, target) -> int:
@@ -1199,6 +1396,7 @@ def legalize_structured_layouts(program, target) -> int:
                 for parameter in getattr(function, "parameters", None) or []
             ]
         )
+    _add_words_structs(program, buffers, scopes, target)
     rewriter = _Rewriter(program, {}, target, parameter_plans)
     count = len(buffers)
     for function in list(iter_functions(program)):

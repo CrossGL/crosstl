@@ -4938,6 +4938,23 @@ class Parser:
 
         return self.parse_postfix_expression()
 
+    # Keywords that continue an expression (``(a) as T``, ``x in r``) rather
+    # than start an operand.
+    EXPRESSION_CONTINUATION_KEYWORDS = frozenset({"AS", "IN", "WHERE", "MATCH"})
+
+    def current_token_is_keyword_spelled_operand(self):
+        """Whether the current keyword token is a name used as a cast operand.
+
+        Source languages without CrossGL's keywords use names such as ``from``,
+        which the expression parser reads as identifiers: ``(uint8)from``.
+        """
+        token_type = self.current_token[0]
+        return (
+            token_type != "IDENTIFIER"
+            and token_type not in self.EXPRESSION_CONTINUATION_KEYWORDS
+            and self.current_token_is_binding_identifier()
+        )
+
     def try_parse_c_style_cast(self, stop_at_generic_close=False):
         """Parse a C-style cast ``(type)operand`` into a constructor call.
 
@@ -5043,6 +5060,7 @@ class Parser:
         if (
             self.current_token[0] not in allowed_operand_starts
             and not self.is_type_token()
+            and not self.current_token_is_keyword_spelled_operand()
         ):
             if not unambiguous_target:
                 restore()

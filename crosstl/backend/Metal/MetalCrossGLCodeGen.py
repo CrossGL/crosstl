@@ -44,6 +44,12 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
 from .comparison_samplers import collect_comparison_sampler_ids
+from .dependent_builtins import (
+    NOT_DEPENDENT,
+    dependent_builtin_result_type,
+    unbound_template_type_names,
+)
+from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -52,12 +58,28 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .simd_header_types import SIMD_HEADER_TYPES
+from .texture_method_results import (
+    is_depth_texture_name,
+    texture_method_result_shape,
+)
 from .texture_types import (
     METAL_DEPTH_TEXTURE_TYPES,
     METAL_SAMPLED_TEXTURE_TYPES,
     combined_texture_type,
 )
 from .type_layout import metal_type_layout
+
+# MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
+METAL_SPARSE_TEXTURE_METHODS = frozenset(
+    {
+        "sparse_sample",
+        "sparse_sample_compare",
+        "sparse_read",
+        "sparse_gather",
+        "sparse_gather_compare",
+    }
+)
 
 
 class MetalCallableAliasLoweringError(ValueError):
@@ -1076,6 +1098,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
+        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
+        *SIMD_HEADER_TYPES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1177,6 +1201,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "tan",
         "tanh",
         "trunc",
+        "saturate",
+        "cross",
+        "faceforward",
     }
     materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
@@ -1224,6 +1251,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "normalize": ("same", "floating_vector", 1),
         "pow": ("same", "floating", 2),
         "reflect": ("same", "floating_vector", 2),
+        "faceforward": ("same", "floating_vector", 3),
+        "cross": ("same", "floating_vector", 2),
+        "saturate": ("same", "floating", 1),
         "rint": ("same", "floating", 1),
         "round": ("same", "floating", 1),
         "rsqrt": ("same", "floating", 1),
@@ -1749,11 +1779,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "simd_uint3": "uvec3",
             "simd_uint4": "uvec4",
             # simd.h aliases commonly found in shared Metal headers
-            "vector_float2": "vec2",
-            "vector_float3": "vec3",
-            "vector_float4": "vec4",
-            "matrix_float3x3": "mat3",
-            "matrix_float4x4": "mat4",
+            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -2045,20 +2071,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "host_name",
         }
 
+        # [[attribute(n)]] is the vertex input at location n: see map_semantic.
         self.map_semantics = {
-            # Vertex attributes
-            "attribute(0)": "POSITION",
-            "attribute(1)": "NORMAL",
-            "attribute(2)": "TANGENT",
-            "attribute(3)": "BINORMAL",
-            "attribute(4)": "TEXCOORD",
-            "attribute(5)": "TEXCOORD0",
-            "attribute(6)": "TEXCOORD1",
-            "attribute(7)": "TEXCOORD2",
-            "attribute(8)": "TEXCOORD3",
-            "attribute(9)": "COLOR",
-            "attribute(10)": "COLOR0",
-            "attribute(11)": "COLOR1",
             "vertex_id": "gl_VertexID",
             "instance_id": "gl_InstanceID",
             "base_vertex": "gl_BaseVertex",
@@ -9964,16 +9978,24 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         # restricting these to `uint3` wrongly denied them the explicit
         # stage-entry path and collapsed every materialized kernel to an unnamed
         # "main" entry point (invalid SPIR-V: duplicate entry-point names).
-        positional_builtin_types = {"uint", "uint2", "uint3"}
+        positional_builtin_types = {
+            "uint",
+            "uint2",
+            "uint3",
+            "ushort",
+            "ushort2",
+            "ushort3",
+        }
+        index_builtin_types = {"uint", "ushort"}
         expected_types = {
             "thread_position_in_grid": positional_builtin_types,
             "thread_position_in_threadgroup": positional_builtin_types,
             "threadgroup_position_in_grid": positional_builtin_types,
-            "thread_index_in_threadgroup": {"uint"},
+            "thread_index_in_threadgroup": index_builtin_types,
             "threads_per_threadgroup": positional_builtin_types,
             "threadgroups_per_grid": positional_builtin_types,
-            "thread_index_in_simdgroup": {"uint"},
-            "threads_per_simdgroup": {"uint"},
+            "thread_index_in_simdgroup": index_builtin_types,
+            "threads_per_simdgroup": index_builtin_types,
         }
         for param in getattr(func, "params", []) or []:
             semantic = self.compute_builtin_attribute_name(param)
@@ -12396,6 +12418,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             method = expr.method
+            if method in METAL_SPARSE_TEXTURE_METHODS:
+                # A sparse read returns sparse_color<T>: the texel and whether its tile is resident.
+                return self.refuse_import(
+                    f"sparse texture {method}: CrossGL has no texture read that reports tile residency "
+                    "(the texel and residency pair MSL returns as sparse_color<T>)"
+                )
             resource_size_expr = self.resource_size_method_expression(expr, is_main)
             if resource_size_expr is not None:
                 return resource_size_expr
@@ -12434,7 +12462,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     expr.object, expr.args, is_main
                 )
                 if sampled_read is not None:
-                    return sampled_read
+                    return self.metal_depth_texel_component(expr.object, sampled_read)
                 return (
                     f"{descriptor['function']}({obj}, {args})"
                     if args
@@ -12761,13 +12789,17 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     options, sample_args, is_main
                 )
                 if option_call is not None:
-                    return option_call
+                    return self.metal_depth_texel_component(expr.texture, option_call)
 
                 lod_expr = self.unwrap_texture_option_argument(expr.lod, "level")
                 lod = self.generate_expression(lod_expr, is_main)
-                return f"textureLod({', '.join(sample_args + [lod])})"
+                return self.metal_depth_texel_component(
+                    expr.texture, f"textureLod({', '.join(sample_args + [lod])})"
+                )
 
-            return f"texture({', '.join(sample_args)})"
+            return self.metal_depth_texel_component(
+                expr.texture, f"texture({', '.join(sample_args)})"
+            )
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:
@@ -13891,8 +13923,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             self.scalar_alias_needs_inline(alias)
             for alias in self.scalar_alias_declarations(target_name)
         )
-        if alias_name is not None or (
-            inline_alias and self.crossgl_typedef_source_type(mapped_type) is not None
+        # Metal long and ulong keep 64-bit components, while targets read the
+        # bare spellings as 32-bit aliases. Carry the fixed-width CrossGL type.
+        wide_alias = re.fullmatch(r"u?long[234]?", target_type) is not None
+        if (
+            alias_name is not None
+            or wide_alias
+            or (
+                inline_alias
+                and self.crossgl_typedef_source_type(mapped_type) is not None
+            )
         ):
             return f"as_type<{mapped_type}>"
         return name
@@ -18111,6 +18151,17 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        dependent = dependent_builtin_result_type(
+            result_kind,
+            argument_types,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+        )
+        if dependent is not NOT_DEPENDENT:
+            # An uninstantiated template resolves the overload per instantiation.
+            return dependent
         diagnostic_argument_types = [
             argument_type or "<unknown>" for argument_type in argument_types
         ]
@@ -21790,6 +21841,9 @@ float {scalar}(float value) {{
                 return wide_type["source_type"]
             return None
 
+        matrix_type = self.metal_matrix_arithmetic_type(expr.op, left_type, right_type)
+        if matrix_type is not NOT_MATRIX:
+            return matrix_type
         left_vector = self.metal_small_vector_type_parts(left_type)
         right_vector = self.metal_small_vector_type_parts(right_type)
         if left_vector is not None or right_vector is not None:
@@ -21817,6 +21871,42 @@ float {scalar}(float value) {{
             return self.metal_vector_type_from_element(result_element, vector[1])
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
+
+    def metal_matrix_arithmetic_type(self, op, left_type, right_type):
+        """The type of MSL arithmetic with a matrix operand, or ``NOT_MATRIX`` without one."""
+        left_matrix = self.metal_matrix_type_parts(left_type)
+        right_matrix = self.metal_matrix_type_parts(right_type)
+        if left_matrix is None and right_matrix is None:
+            return NOT_MATRIX
+
+        def operand(matrix, metal_type):
+            if matrix is not None:
+                return matrix[0], (matrix[1], matrix[2]), None
+            vector = self.metal_small_vector_type_parts(metal_type)
+            if vector is not None:
+                return vector[0], None, vector[1]
+            if self.metal_scalar_arithmetic_type_info(metal_type) is not None:
+                return metal_type, None, 0
+            return None, None, None
+
+        left_element, left_shape, left_lanes = operand(left_matrix, left_type)
+        right_element, right_shape, right_lanes = operand(right_matrix, right_type)
+        shape = matrix_arithmetic_shape(
+            op, left_shape, right_shape, left_lanes, right_lanes
+        )
+        if shape is None:
+            return None
+        element = self.resolve_type_alias((left_matrix or right_matrix)[0])
+        other = right_element if left_matrix is not None else left_element
+        scalar_operand = 0 in (left_lanes, right_lanes)
+        # A vector or second matrix must share the matrix's element type; a scalar converts to it.
+        if not scalar_operand and self.normalized_metal_type(
+            self.resolve_type_alias(other)
+        ) != self.normalized_metal_type(element):
+            return None
+        if shape[0] == "vector":
+            return self.metal_vector_type_from_element(element, shape[1])
+        return f"{element}{shape[1]}x{shape[2]}"
 
     def metal_pointer_arithmetic_operand_type(self, metal_type):
         element = self.split_outer_metal_declarator_array_type(metal_type)
@@ -22379,6 +22469,10 @@ float {scalar}(float value) {{
             return self.resolve_type_alias(expr.target_type)
         if isinstance(expr, VectorConstructorNode):
             return self.resolve_type_alias(expr.type_name)
+        if isinstance(expr, TextureSampleNode):
+            return self.metal_texture_method_result_type(expr.texture, "sample")
+        if isinstance(expr, MethodCallNode):
+            return self.metal_texture_method_result_type(expr.object, expr.method)
         if isinstance(expr, FunctionCallNode):
             if str(expr.name) == "sizeof" and len(expr.args) == 1:
                 return "size_t"
@@ -22438,6 +22532,42 @@ float {scalar}(float value) {{
             ) and expr.args:
                 return self.expression_metal_type(expr.args[0])
         return None
+
+    def metal_depth_texel_component(self, texture_expr, call):
+        """Select the depth of a CrossGL texel read on an MSL depth texture.
+
+        ``depthNd<T>::sample`` and ``read`` return the scalar ``T`` (MSL 3.2 section 6.12.7 onwards), while the
+        CrossGL ``texture``/``texelFetch`` family returns ``vec4(depth, 0, 0, 1)`` for every texture, so the
+        import keeps the source type by reading component ``x``.
+        """
+        texture_type = self.expression_metal_type(texture_expr)
+        if not texture_type:
+            return call
+        base_name, _generic_args = self.generic_type_parts(
+            self.resolve_type_alias(texture_type)
+        )
+        if is_depth_texture_name(base_name):
+            return f"{call}.x"
+        return call
+
+    def metal_texture_method_result_type(self, texture_expr, method):
+        """The MSL type of ``texture.method(...)`` when the texture's type fixes it, else ``None``."""
+        texture_type = self.expression_metal_type(texture_expr)
+        if not texture_type:
+            return None
+        base_name, generic_args = self.generic_type_parts(
+            self.resolve_type_alias(texture_type)
+        )
+        if base_name is None:
+            return None
+        shape = texture_method_result_shape(base_name, generic_args, method)
+        if shape is None:
+            return None
+        element_type, width = shape
+        element_type = self.resolve_type_alias(element_type)
+        if width == 1:
+            return element_type
+        return self.metal_vector_type_from_element(element_type, width)
 
     def metal_constructor_result_type(self, name):
         type_name = self.normalized_metal_type(self.resolve_type_alias(str(name)))
@@ -22896,6 +23026,9 @@ float {scalar}(float value) {{
                 continue
             elif context_kind == "parameter" and name == "sample_mask":
                 out = "gl_SampleMaskIn"
+            elif name == "attribute" and len(args) == 1:
+                # A vertex attribute index is the input location every target binds by.
+                out = f"location({args[0]})"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:

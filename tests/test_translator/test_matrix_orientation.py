@@ -175,6 +175,9 @@ def test_metal_spreads_mixed_constructor_components_over_the_columns():
 def test_metal_resizes_constant_buffer_matrices_column_by_column():
     metal = MetalCodeGen().generate(parse(METAL_CONSTRUCTORS))
 
-    assert [
-        line for line in lines(metal, "resized =") if "[0], " in line and "[2])" in line
-    ]
+    # The helper takes the matrix by value and keeps its first three columns.
+    assert (
+        "inline float3x4 __crossgl_resize_float4x4_to_float3x4(float4x4 m) {\n"
+        "    return float3x4(m[0], m[1], m[2]);\n}\n"
+    ) in metal
+    assert lines(metal, "resized = __crossgl_resize_float4x4_to_float3x4(frame.world);")

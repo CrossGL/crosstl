@@ -273,7 +273,15 @@ def test_native_instances_reuse_helper_and_execute_independent_requests(
         calls.append((list(command), kwargs.get("input_text")))
         return run(command, **kwargs)
 
+    exchanges = []
+
+    class ObservedServer(module.MetalWorkerServer):
+        def exchange(self, request_text, timeout_seconds):
+            exchanges.append((list(self.command), self.process.pid))
+            return super().exchange(request_text, timeout_seconds)
+
     monkeypatch.setattr(module, "run_metal_command", observe)
+    monkeypatch.setattr(module, "MetalWorkerServer", ObservedServer)
     for index in range(3):
         root = tmp_path / str(index)
         root.mkdir()
@@ -318,7 +326,13 @@ def test_native_instances_reuse_helper_and_execute_independent_requests(
     assert len([call for call in calls if "metal" in call[0]]) == 3
     assert len([call for call in calls if "metallib" in call[0]]) == 3
     assert len([call for call in calls if "--probe" in call[0]]) >= 3
-    assert len([call for call in calls if call[1] is not None]) == 3
+    # Each dispatch goes to a serve-mode worker of the one shared helper; none
+    # starts a one-shot worker.
+    assert not [call for call in calls if call[1] is not None]
+    assert len(exchanges) == 3
+    assert {tuple(command) for command, _ in exchanges} == {
+        (records[0]["worker"], "--serve")
+    }
 
 
 @pytest.mark.parametrize("failure", ("empty", "nonzero"))
