@@ -644,11 +644,20 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "sample_no_perspective": "sample_no_perspective",
         "sample_perspective": "sample_perspective",
     }
+    # MSL has only dfdx, dfdy and fwidth and does not let a shader pick fine or
+    # coarse derivatives, so the GLSL fine and coarse forms lower to the plain
+    # functions, whose granularity GLSL also leaves to the implementation.
     METAL_DERIVATIVE_FUNCTION_ALIASES = {
         "ddx": "dfdx",
         "dFdx": "dfdx",
+        "dFdxCoarse": "dfdx",
+        "dFdxFine": "dfdx",
         "ddy": "dfdy",
         "dFdy": "dfdy",
+        "dFdyCoarse": "dfdy",
+        "dFdyFine": "dfdy",
+        "fwidthCoarse": "fwidth",
+        "fwidthFine": "fwidth",
     }
     # Metal's native `abs` overload set does not accept bfloat directly: the
     # simultaneous half/float/integer conversions are ambiguous.  Promote only
