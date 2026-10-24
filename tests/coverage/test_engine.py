@@ -133,6 +133,88 @@ def test_output_probe_end_to_end():
     ), result.detail
 
 
+# The shape of slangc 2026.9's log for an undefined name: the header names the kind of error, the label the name.
+SLANGC_LOG = """error[E30015]: undefined identifier
+  --> probe.slang:10:15
+   |
+10 | uint2 r = {name}(a0);
+   |           ^^^^^^^^ undefined identifier '{name}'.
+---'
+error[E30019]: type mismatch in expression
+  --> probe.slang:11:5
+   |
+11 | outp[i] = r;
+   |     ^ expected an expression of type 'float', got 'uint2'
+---'"""
+
+
+@pytest.mark.parametrize(
+    ("language", "log", "expected"),
+    [
+        (
+            "slang",
+            SLANGC_LOG.format(name="bitCount"),
+            "error[E30015]: undefined identifier 'bitCount'",
+        ),
+        (
+            "slang",
+            "error[E30011]: left of '=' is not an l-value\n --> probe.slang:9:5\n"
+            "  |\n9 | f(a0) = r;\n  | ^ left of '=' is not an l-value.",
+            "error[E30011]: left of '=' is not an l-value",
+        ),
+        (
+            "slang",
+            SLANGC_LOG.split("---'\n", 1)[1],
+            "error[E30019]: type mismatch in expression: expected an expression of type"
+            " 'float', got 'uint2'",
+        ),
+        (
+            "slang",
+            "error[E30015]: undefined identifier",
+            "error[E30015]: undefined identifier",
+        ),
+        # Other tools' first error line already carries the particulars.
+        ("rust", SLANGC_LOG.format(name="x"), "error[E30015]: undefined identifier"),
+        (
+            "glsl",
+            "note: x\nERROR: 0:4: 'f' : no matching function",
+            "ERROR: 0:4: 'f' : no matching function",
+        ),
+        ("glsl", "nothing to report", "nothing to report"),
+    ],
+)
+def test_first_error_joins_slangc_headers_with_their_label(language, log, expected):
+    assert validators.first_error(log, language) == expected
+
+
+def test_slang_probes_failing_on_different_names_have_different_causes(monkeypatch):
+    from tools.coverage import causes
+
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, *args: validators.Verdict(
+            False, SLANGC_LOG.format(name=source)
+        ),
+    )
+    names = ("bitCount", "findMSB", "gl_NumWorkGroups")
+    details = [runner._validated("slang", name, "compute").log for name in names]
+    features = [
+        {"name": feature, "crossgl": crossgl, "detail": detail}
+        for (feature, crossgl), detail in zip(
+            [
+                ("countbits", "bitCount"),
+                ("firstbithigh", "findMSB"),
+                ("num-workgroups", None),
+            ],
+            details,
+        )
+    ]
+    found = [causes.cause(feature, "slang") for feature in features]
+    assert found[0] == found[1] == "error[E30015]: undefined identifier '<feature>'"
+    assert found[2] == "error[E30015]: undefined identifier 'gl_NumWorkGroups'"
+
+
 def test_a_run_validates_each_distinct_source_once(monkeypatch):
     calls = []
 
@@ -152,6 +234,60 @@ def test_a_run_validates_each_distinct_source_once(monkeypatch):
     runner.run(["good"], workers=1)
     assert calls == ["good", "bad", "good"]
     assert runner._verdicts is None
+
+
+def test_kept_folders_are_file_names_that_two_features_never_share():
+    from tools.coverage.model import kept_folder
+
+    assert kept_folder("glsl", "input", "abs") == "glsl-input/abs"
+    rust = kept_folder("rust", "output", "Float::abs")
+    assert (
+        rust.startswith("rust-output/Float_abs-")
+        and len(rust) == len("rust-output/Float_abs-") + 8
+    )
+    assert rust != kept_folder("rust", "output", "Float:abs")
+
+
+def test_a_kept_run_writes_each_probe_and_its_translations(monkeypatch, tmp_path):
+    from tools.coverage.model import Param
+
+    vec3 = Type("float", (3,))
+    feature = Feature(
+        "glsl", "function", "abs", Signature(vec3, (Param(vec3),)), crossgl="abs"
+    )
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, stage="compute", entry="", target="": validators.Verdict(
+            True, ""
+        ),
+    )
+    stale = tmp_path / "glsl-output" / "abs" / "translated.frag"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("from an earlier run")
+    results = runner.run(
+        [(feature, "output", "glsl"), (feature, "input", "glsl")],
+        workers=1,
+        keep=tmp_path,
+    )
+    assert [r.outcome for r in results] == ["supported", "supported"]
+    kept = {
+        str(path.relative_to(tmp_path)): path.read_text()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert sorted(kept) == [
+        "glsl-input/abs/crossgl.cgl",
+        "glsl-input/abs/probe.comp",
+        "glsl-input/abs/translated.comp",
+        "glsl-output/abs/native.comp",
+        "glsl-output/abs/probe.cgl",
+        "glsl-output/abs/translated.comp",
+    ]
+    assert "abs(" in kept["glsl-output/abs/probe.cgl"]
+    assert "#version" in kept["glsl-output/abs/translated.comp"]
+    assert runner._kept is None
 
 
 def test_fetch_rejects_a_changed_upstream_file(monkeypatch, tmp_path):
@@ -241,7 +377,7 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(validators, "can_lower", lambda language, target="": True)
     measured = []
 
-    def run(jobs, workers=None):
+    def run(jobs, workers=None, keep=None):
         measured.extend((f.name, direction) for f, direction, _ in jobs)
         return [Result(f, direction, "supported") for f, direction, _ in jobs]
 

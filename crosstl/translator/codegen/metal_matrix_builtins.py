@@ -1,4 +1,4 @@
-"""GLSL's matrix built-ins ``matrixCompMult`` and ``outerProduct`` for MSL.
+"""GLSL's matrix built-ins ``matrixCompMult`` and ``outerProduct``, and matrix shape conversions, for MSL.
 
 CrossGL spells its built-ins as GLSL does (GLSL 4.60 section 8.6). MSL has neither function: ``*`` on two MSL
 matrices is the linear-algebra product. :class:`MetalMatrixBuiltins` lowers both to one helper per matrix shape;
@@ -139,6 +139,43 @@ class MetalMatrixBuiltins:
             generator.generate_expression_with_expected(arg, None) for arg in args
         )
         return f"{name}({rendered})"
+
+    def resize(self, target, source):
+        """The helper converting a matrix of shape ``source`` to shape ``target``, each a ``(scalar, columns, rows)``.
+
+        GLSL and HLSL matrix conversions to another shape keep the overlapping columns and rows, and fill the rest
+        from the identity matrix (GLSL 4.60 section 5.4.2). MSL has no such conversion.
+        """
+        scalar, columns, rows = target
+        source_scalar, source_columns, source_rows = source
+        matrix = f"{scalar}{columns}x{rows}"
+        source_matrix = f"{source_scalar}{source_columns}x{source_rows}"
+        name = f"__crossgl_resize_{source_matrix}_to_{matrix}"
+        if name not in self.helpers:
+            swizzle = "xyzw"[:rows]
+            column_texts = []
+            for column in range(columns):
+                if column >= source_columns:
+                    values = ["1.0" if row == column else "0.0" for row in range(rows)]
+                    column_texts.append(f"{scalar}{rows}({', '.join(values)})")
+                elif rows == source_rows:
+                    column_texts.append(f"m[{column}]")
+                elif rows < source_rows:
+                    column_texts.append(f"m[{column}].{swizzle}")
+                else:
+                    fill = [
+                        "1.0" if row == column else "0.0"
+                        for row in range(source_rows, rows)
+                    ]
+                    column_texts.append(
+                        f"{scalar}{rows}(m[{column}], {', '.join(fill)})"
+                    )
+            self.helpers[name] = (
+                f"inline {matrix} {name}({source_matrix} m) {{\n"
+                f"    return {matrix}({', '.join(column_texts)});\n"
+                "}\n"
+            )
+        return name
 
     def code(self):
         return "".join(self.helpers[name] for name in sorted(self.helpers))

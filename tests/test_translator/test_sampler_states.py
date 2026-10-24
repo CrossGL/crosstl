@@ -1,4 +1,4 @@
-"""Fixed sampler state: decoded and validated, kept for Metal, refused where a target cannot declare it.
+"""Fixed sampler state: decoded and validated, kept for Metal, refused where a target cannot declare or bind it.
 
 Metal's ``constexpr sampler`` used to lose its state on the way through CrossGL: program-scope samplers were dropped
 and their sample calls fell back to a default sampler, GLSL sampled with whatever sampler object the host bound, and
@@ -152,12 +152,12 @@ def test_metal_round_trip_compiles(tmp_path):
     assert compiled.returncode == 0, compiled.stderr
 
 
+# Direct3D and Vulkan bind fixed state as host samplers instead (test_fixed_sampler_bindings.py).
 @pytest.mark.parametrize(
     ("backend", "code", "cites"),
     [
         ("opengl", "opengl", "GLSL 4.60 section 4.1.7"),
-        ("vulkan", "vulkan", "immutable samplers"),
-        ("directx", "directx", "root-signature static samplers"),
+        ("webgl", "webgl", "GLSL 4.60 section 4.1.7"),
     ],
 )
 def test_targets_without_shader_declared_sampler_state_refuse_it(

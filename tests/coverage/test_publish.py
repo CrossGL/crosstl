@@ -2,9 +2,11 @@ import csv
 import io
 import json
 import xml.etree.ElementTree as ElementTree
+from urllib.parse import unquote
 
 from tools.coverage import __main__ as cli
-from tools.coverage import chart, publish
+from tools.coverage import chart, issues, publish
+from tools.coverage.causes import grouped
 
 SVG = "{http://www.w3.org/2000/svg}"
 
@@ -123,8 +125,8 @@ def test_markdown_lists_scores_sources_and_gaps():
     # A second list for a language is listed under the language's name, not its key.
     assert "| GLSL | [GLSL atomic float extension](" in text
     assert "glsl-extensions" not in text
-    # A gap's detail stays on one line and cannot break the list or a table.
-    assert "- `fwrong0` wrong: wrong \\| detail second line" in text
+    # A gap's diagnostic is its first line, in a code span, followed by the features that give it.
+    assert "- `wrong | detail`: `fwrong0`" in text
     assert "Untested, by category: function 2." in text
     # The trend chart is published next to COVERAGE.md and embedded with a relative link.
     assert "](trend.svg)" in text
@@ -152,7 +154,79 @@ def test_markdown_truncates_long_details():
     line = next(
         line for line in publish.markdown(data).splitlines() if "`fwrong0`" in line
     )
-    assert line.endswith("…") and len(line) < publish.DETAIL_LIMIT + 40
+    assert "…`: `fwrong0`" in line and len(line) < publish.CAUSE_LIMIT + 40
+
+
+def _gap(name, outcome, detail, category="function"):
+    return {
+        "name": name,
+        "category": category,
+        "group": "g",
+        "outcome": outcome,
+        "detail": detail,
+    }
+
+
+def test_markdown_groups_gaps_by_cause_as_the_bug_issues_do():
+    data = _report()
+    row = data["backends"][0]
+    row["features"] = [
+        _gap("abs", "wrong", 'probe.cu(12): error: identifier "outp" is undefined'),
+        _gap("acos", "wrong", 'probe.cu(14): error: identifier "outp" is undefined'),
+        _gap(
+            "vertex",
+            "wrong",
+            'probe.cu(9): error: identifier "outp" is undefined',
+            "stage",
+        ),
+        _gap("ldexp", "wrong", "probe.cu(3): error: no instance of ldexp matches"),
+        _gap("fma", "refused", "CrossGL has no fused multiply-add"),
+        _gap("fmaf", "refused", "CrossGL has no fused multiply-add"),
+    ]
+    row["counts"] = {"supported": 0, "refused": 2, "wrong": 4, "untested": 0}
+    lines = publish.markdown(data).splitlines()
+    # One item per cause, across categories, with the probe's variables kept visible in the code span.
+    assert '- `identifier "<probe>" is undefined` (3): `abs`, `acos`, `vertex`' in lines
+    # A cause of one feature shows that feature's own diagnostic, which names it.
+    assert "- `no instance of ldexp matches`: `ldexp`" in lines
+    assert "- `CrossGL has no fused multiply-add` (2): `fma`, `fmaf`" in lines
+    assert lines.index("Refused, by diagnostic:") > lines.index(
+        "- `no instance of ldexp matches`: `ldexp`"
+    )
+    # The causes are the bug issues' causes, and the link finds the issues by the labels issues.py gives them.
+    assert [len(f) for _, f in grouped(row)] == [3, 1]
+    link = next(line for line in lines if line.startswith("Wrong, by cause"))
+    query = unquote(link.split("issues?q=", 1)[1].split(")", 1)[0])
+    labels = {
+        word.removeprefix("label:")
+        for word in query.split()
+        if word.startswith("label:")
+    }
+    assert labels == set(issues.bug_labels(row)) - {issues.AREA[row["direction"]]}
+
+
+def test_markdown_ir_gaps_keep_their_language_and_link_no_bugs():
+    data = _report()
+    row = data["backends"][3]
+    row["features"] = [
+        _gap(
+            "cuda/abs",
+            "wrong",
+            'cuda: probe.cu(12): error: identifier "outp" is undefined',
+        ),
+        _gap(
+            "cuda/acos",
+            "wrong",
+            'cuda: probe.cu(13): error: identifier "outp" is undefined',
+        ),
+    ]
+    row["counts"] = {"supported": 0, "refused": 0, "wrong": 2, "untested": 0}
+    lines = publish.markdown(data).splitlines()
+    assert (
+        '- `cuda: identifier "<probe>" is undefined` (2): `cuda/abs`, `cuda/acos`'
+        in lines
+    )
+    assert "Wrong, by cause:" in lines
 
 
 def _history_rows(text):

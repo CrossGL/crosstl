@@ -1817,6 +1817,18 @@ CASES = [
         control_flow_cases.structured_control_flow_reference,
     ),
     Case(
+        "g_short_circuit",
+        "control",
+        "&&, || and ?: whose unselected operands call a function that writes its inout argument, in "
+        "straight-line code, a while condition and a do-while condition, and an index guarded by a bounds test",
+        "GLSL 4.60 section 5.9: && and || evaluate the right operand only when the left one leaves the "
+        "result open; ?: evaluates only the selected expression",
+        control_flow_cases.short_circuit_inputs(),
+        np.int32,
+        control_flow_cases.short_circuit_reference,
+        threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
         "u_atomic_add",
         "atomics",
         "atomicAdd(&out[0], 1) by 256 threads",

@@ -73,59 +73,103 @@ func emit(_ value: [String: Any]) throws {
   FileHandle.standardOutput.write(Data([10]))
 }
 
+// A long-lived worker keeps its device, queue, libraries and pipelines; every
+// request still gets fresh zeroed allocations and its own command buffer.
 @available(macOS 13.0, *)
-func run() throws {
-  let device = MTLCreateSystemDefaultDevice()
-  if CommandLine.arguments.dropFirst().first == "--probe" {
-    try emit(["available": device != nil, "device": device?.name ?? ""])
-    return
-  }
-  guard let device = device else { throw RuntimeFailure("No Metal device is available.") }
-  let request = try JSONDecoder().decode(
-    Request.self, from: FileHandle.standardInput.readDataToEndOfFile())
-  let library = try device.makeLibrary(URL: URL(fileURLWithPath: request.library))
-  let constants = MTLFunctionConstantValues()
-  var constantIds = Set<Int>()
-  for constant in request.constants {
-    let type: MTLDataType
-    let length: Int
-    switch constant.dtype {
-    case "bool":
-      type = .bool
-      length = 1
-    case "float32":
-      type = .float
-      length = 4
-    case "int32":
-      type = .int
-      length = 4
-    case "uint32":
-      type = .uint
-      length = 4
-    default: throw RuntimeFailure("Unsupported function constant type.")
+final class Session {
+  // Bounds the libraries and pipelines one worker retains.
+  static let cacheLimit = 256
+  let device: MTLDevice
+  let queue: MTLCommandQueue
+  private var libraries: [String: MTLLibrary] = [:]
+  private var pipelines: [String: (MTLComputePipelineState, MTLComputePipelineReflection)] = [:]
+
+  init(device: MTLDevice) throws {
+    guard let queue = device.makeCommandQueue() else {
+      throw RuntimeFailure("Metal command setup failed.")
     }
-    try require(
-      constant.id >= 0 && constantIds.insert(constant.id).inserted && constant.data.count == length,
-      "Invalid function constant.")
-    constant.data.withUnsafeBytes { bytes in
-      constants.setConstantValue(bytes.baseAddress!, type: type, index: constant.id)
+    self.device = device
+    self.queue = queue
+  }
+
+  // A library is reused only while its file keeps the same identity.
+  func library(_ path: String) throws -> (MTLLibrary, String) {
+    var info = stat()
+    try require(stat(path, &info) == 0, "Metal library is unavailable.")
+    let modified = info.st_mtimespec
+    let key = "\(info.st_dev):\(info.st_ino):\(info.st_size):\(modified.tv_sec):\(modified.tv_nsec):\(path)"
+    if let cached = libraries[key] { return (cached, key) }
+    let library = try device.makeLibrary(URL: URL(fileURLWithPath: path))
+    if libraries.count >= Session.cacheLimit {
+      libraries.removeAll()
+      pipelines.removeAll()
     }
+    libraries[key] = library
+    return (library, key)
   }
-  let function: MTLFunction
-  if request.constants.isEmpty {
-    guard let selected = library.makeFunction(name: request.entryPoint) else {
-      throw RuntimeFailure("Metal entry point is missing.")
+
+  func pipeline(_ request: Request) throws -> (
+    MTLComputePipelineState, MTLComputePipelineReflection
+  ) {
+    let (library, libraryKey) = try library(request.library)
+    var key = libraryKey + "\u{0}" + request.entryPoint
+    for constant in request.constants {
+      key += "\u{0}\(constant.id):\(constant.dtype):\(constant.data.base64EncodedString())"
     }
-    function = selected
-  } else {
-    function = try library.makeFunction(name: request.entryPoint, constantValues: constants)
+    if let cached = pipelines[key] { return cached }
+    let constants = MTLFunctionConstantValues()
+    var constantIds = Set<Int>()
+    for constant in request.constants {
+      let type: MTLDataType
+      let length: Int
+      switch constant.dtype {
+      case "bool":
+        type = .bool
+        length = 1
+      case "float32":
+        type = .float
+        length = 4
+      case "int32":
+        type = .int
+        length = 4
+      case "uint32":
+        type = .uint
+        length = 4
+      default: throw RuntimeFailure("Unsupported function constant type.")
+      }
+      try require(
+        constant.id >= 0 && constantIds.insert(constant.id).inserted
+          && constant.data.count == length,
+        "Invalid function constant.")
+      constant.data.withUnsafeBytes { bytes in
+        constants.setConstantValue(bytes.baseAddress!, type: type, index: constant.id)
+      }
+    }
+    let function: MTLFunction
+    if request.constants.isEmpty {
+      guard let selected = library.makeFunction(name: request.entryPoint) else {
+        throw RuntimeFailure("Metal entry point is missing.")
+      }
+      function = selected
+    } else {
+      function = try library.makeFunction(name: request.entryPoint, constantValues: constants)
+    }
+    var reflection: MTLComputePipelineReflection?
+    let pipeline = try device.makeComputePipelineState(
+      function: function, options: [.bindingInfo, .bufferTypeInfo], reflection: &reflection)
+    guard let reflection = reflection else {
+      throw RuntimeFailure("Metal binding reflection is unavailable.")
+    }
+    if pipelines.count >= Session.cacheLimit { pipelines.removeAll() }
+    pipelines[key] = (pipeline, reflection)
+    return (pipeline, reflection)
   }
-  var reflection: MTLComputePipelineReflection?
-  let pipeline = try device.makeComputePipelineState(
-    function: function, options: [.bindingInfo, .bufferTypeInfo], reflection: &reflection)
-  guard let reflection = reflection else {
-    throw RuntimeFailure("Metal binding reflection is unavailable.")
-  }
+}
+
+@available(macOS 13.0, *)
+func execute(_ request: Request, _ session: Session) throws -> [String: Any] {
+  let device = session.device
+  let (pipeline, reflection) = try session.pipeline(request)
   for argument in reflection.bindings where argument.isUsed && argument.isArgument {
     guard argument.type == .buffer, let reflected = argument as? MTLBufferBinding else {
       throw RuntimeFailure("Metal runtime supports buffer arguments only.")
@@ -208,7 +252,7 @@ func run() throws {
     }
     allocations[allocation.id] = buffer
   }
-  guard let queue = device.makeCommandQueue(), let command = queue.makeCommandBuffer(),
+  guard let command = session.queue.makeCommandBuffer(),
     let encoder = command.makeComputeCommandEncoder()
   else {
     throw RuntimeFailure("Metal command setup failed.")
@@ -256,10 +300,51 @@ func run() throws {
       ).base64EncodedString()
     }
   }
-  try emit([
+  return [
     "device": device.name, "outputs": outputs,
     "threadExecutionWidth": pipeline.threadExecutionWidth,
-  ])
+  ]
+}
+
+// Serve mode reads one JSON request per line until end of input. Each reply
+// is one line: "+" and the response, or "-" and {"failure", "error"?}.
+@available(macOS 13.0, *)
+func serve(_ session: Session) throws {
+  while let line = readLine(strippingNewline: true) {
+    var reply: [String: Any]
+    var status = "+"
+    do {
+      let request = try JSONDecoder().decode(Request.self, from: Data(line.utf8))
+      reply = try autoreleasepool { try execute(request, session) }
+    } catch let failure as DispatchLimitFailure {
+      status = "-"
+      reply = ["failure": failure.description, "error": failure.details]
+    } catch {
+      status = "-"
+      reply = ["failure": "\(error)"]
+    }
+    let data = try JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
+    FileHandle.standardOutput.write(Data(status.utf8) + data + Data([10]))
+  }
+}
+
+@available(macOS 13.0, *)
+func run() throws {
+  let device = MTLCreateSystemDefaultDevice()
+  let mode = CommandLine.arguments.dropFirst().first
+  if mode == "--probe" {
+    try emit(["available": device != nil, "device": device?.name ?? ""])
+    return
+  }
+  guard let device = device else { throw RuntimeFailure("No Metal device is available.") }
+  let session = try Session(device: device)
+  if mode == "--serve" {
+    try serve(session)
+    return
+  }
+  let request = try JSONDecoder().decode(
+    Request.self, from: FileHandle.standardInput.readDataToEndOfFile())
+  try emit(try execute(request, session))
 }
 
 do {

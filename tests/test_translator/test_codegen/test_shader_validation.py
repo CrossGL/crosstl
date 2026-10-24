@@ -9271,9 +9271,9 @@ def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3(tmp_
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool active = rq.Proceed();
-                uint hitType = rq.CommittedType();
+                uint hitType = rq.CommittedStatus();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }

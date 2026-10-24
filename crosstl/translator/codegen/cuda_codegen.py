@@ -151,6 +151,22 @@ CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
     "firstbithigh": "findMSB",
 }
 
+# CrossGL's sized scalar constructors have no CUDA spelling, and several map to multi-word C++ types
+# (``unsigned int``, ``long long``) that cannot take the functional-cast form ``T(x)``, so they lower to
+# ``static_cast<T>(x)`` as the HIP generator's do.
+CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "u64",
+    "f32",
+    "f64",
+}
+
 CUDA_FP16_VECTOR_TYPES = {
     "cgl_half3": 3,
     "cgl_half4": 4,
@@ -3155,8 +3171,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if half_constructor is not None:
             return half_constructor
 
+        scalar_alias_constructor = self.cuda_scalar_alias_constructor_expression(
+            constructor_type, args
+        )
+        if scalar_alias_constructor is not None:
+            return scalar_alias_constructor
+
         mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
         return f"{mapped_type}({', '.join(args)})"
+
+    def cuda_scalar_alias_constructor_expression(self, constructor_type, args):
+        """Lower a sized scalar constructor such as ``f64(x)`` or ``u32(x)`` to ``static_cast``."""
+        if constructor_type not in CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES:
+            return None
+        if len(args) > 1:
+            return None
+
+        mapped_type = self.map_type(constructor_type)
+        value = args[0] if args else "0"
+        return f"static_cast<{mapped_type}>({value})"
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
@@ -3309,6 +3342,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.generate_mesh_task_call_expression(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            scalar_alias_constructor = self.cuda_scalar_alias_constructor_expression(
+                func_name, args
+            )
+            if scalar_alias_constructor is not None:
+                return scalar_alias_constructor
         if not is_user_function:
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, raw_args
@@ -7363,7 +7402,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             operation = getattr(node, "operation", "")
             if operation == "Proceed":
                 return "bool"
-            if operation in {"CandidateRayT", "CommittedRayT"}:
+            if operation in {"CandidateTriangleRayT", "CommittedRayT"}:
                 return "float"
             return "uint"
         if isinstance(node, MemberAccessNode):

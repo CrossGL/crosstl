@@ -115,13 +115,57 @@ def _walk_with_parents(root):
         yield node, parent, field
         children = []
         for name, value in vars(node).items():
-            if name in AST_CHILD_FIELD_EXCLUSIONS:
-                continue
-            values = value if isinstance(value, (list, tuple)) else (value,)
-            for child in values:
-                if isinstance(child, ASTNode):
-                    children.append((child, node, name))
-        stack.extend(reversed(children))
+            if isinstance(value, ASTNode):
+                if name not in AST_CHILD_FIELD_EXCLUSIONS:
+                    children.append((value, node, name))
+            elif isinstance(value, (list, tuple)):
+                if name not in AST_CHILD_FIELD_EXCLUSIONS:
+                    children.extend(
+                        (child, node, name)
+                        for child in value
+                        if isinstance(child, ASTNode)
+                    )
+        children.reverse()
+        stack.extend(children)
+
+
+class _BodyIndex:
+    """One structural walk of a function body, shared by every analysis query.
+
+    The analysis asks the same body about each of its buffer parameters and
+    then for its call sites; a single walk answers all of those questions.
+    The index is only valid until the body is rewritten.
+    """
+
+    __slots__ = (
+        "parents",
+        "statement_calls",
+        "nested_scope",
+        "variables",
+        "uses",
+        "calls",
+    )
+
+    def __init__(self, body):
+        self.parents = {}
+        self.statement_calls = set()
+        self.nested_scope = False
+        self.variables = set()
+        # Identifier name -> [(node, parent, field)] in walk order.
+        self.uses = {}
+        self.calls = []
+        for node, parent, field in _walk_with_parents(body):
+            self.parents[id(node)] = (parent, field)
+            if isinstance(node, ExpressionStatementNode):
+                self.statement_calls.add(id(node.expression))
+            if isinstance(node, (LambdaNode, FunctionNode)):
+                self.nested_scope = True
+            if isinstance(node, VariableNode):
+                self.variables.add(node.name)
+            if isinstance(node, IdentifierNode):
+                self.uses.setdefault(node.name, []).append((node, parent, field))
+            if isinstance(node, FunctionCallNode):
+                self.calls.append(node)
 
 
 class _HelperBufferParameters:
@@ -139,6 +183,7 @@ class _HelperBufferParameters:
             if id(function) not in seen:
                 seen.add(id(function))
                 self.functions.append(function)
+        self.body_indexes = {}
         self.by_name = {}
         for function in self.functions:
             self.by_name.setdefault(function.name, []).append(function)
@@ -165,6 +210,13 @@ class _HelperBufferParameters:
         for _stage_type, stage in getattr(self.ast, "stages", {}).items():
             yield from getattr(stage, "local_variables", []) or []
 
+    def body_index(self, function):
+        index = self.body_indexes.get(id(function))
+        if index is None:
+            index = _BodyIndex(function.body)
+            self.body_indexes[id(function)] = index
+        return index
+
     def unique_function(self, name):
         candidates = self.by_name.get(name, ())
         return candidates[0] if len(candidates) == 1 else None
@@ -187,19 +239,12 @@ class _HelperBufferParameters:
     def body_uses(self, function, name):
         """Classify every use of ``name``; return ``None`` for unsupported forms."""
         uses = {"forwarded": []}
-        parents = {}
-        statement_calls = set()
-        for node, parent, field in _walk_with_parents(function.body):
-            parents[id(node)] = (parent, field)
-            if isinstance(node, ExpressionStatementNode):
-                statement_calls.add(id(node.expression))
-            if isinstance(node, (LambdaNode, FunctionNode)) or (
-                isinstance(node, VariableNode) and node.name == name
-            ):
-                return None
-        for node, parent, field in _walk_with_parents(function.body):
-            if _identifier_name(node) != name:
-                continue
+        index = self.body_index(function)
+        if index.nested_scope or name in index.variables:
+            return None
+        parents = index.parents
+        statement_calls = index.statement_calls
+        for node, parent, field in index.uses.get(name, ()):
             if isinstance(parent, AssignmentNode) and field == "target":
                 if parent.operator in _POINTER_UPDATE_OPERATORS:
                     continue
@@ -247,9 +292,7 @@ class _HelperBufferParameters:
         for caller in self.functions:
             if caller.body is None:
                 continue
-            for node, _parent, _field in _walk_with_parents(caller.body):
-                if not isinstance(node, FunctionCallNode):
-                    continue
+            for node in self.body_index(caller).calls:
                 callee = self.unique_function(_call_name(node))
                 if callee is not None:
                     sites.append((caller, callee, list(node.arguments or [])))
@@ -279,7 +322,9 @@ class _HelperBufferParameters:
             if classified is not None:
                 uses[key] = classified
         valid = set(uses)
-        sites = self.call_sites()
+        sites = {}
+        for caller, callee, arguments in self.call_sites():
+            sites.setdefault(id(callee), []).append((caller, arguments))
         changed = True
         while changed:
             changed = False
@@ -291,21 +336,28 @@ class _HelperBufferParameters:
                     for callee, position in uses[key]["forwarded"]
                 )
                 index = key[1]
-                for caller, callee, arguments in sites:
-                    if callee is not function or not supported:
-                        continue
+                for caller, arguments in sites.get(id(function), ()):
+                    if not supported:
+                        break
                     supported = len(arguments) == len(
                         function.parameters
                     ) and self.argument_supported(caller, arguments[index], valid)
                 if not supported:
                     valid.discard(key)
                     changed = True
+        rewrites = {}
         for key in sorted(valid):
             function, parameter, contract = candidates[key]
-            self.rewrite(function, parameter, contract)
+            rewrites.setdefault(key[0], (function, []))[1].append((parameter, contract))
+        for function, parameters in rewrites.values():
+            for parameter, contract in parameters:
+                self.retype(parameter, contract)
+            self.rewrite_accesses(
+                function, {parameter.name for parameter, _contract in parameters}
+            )
         return self.ast
 
-    def rewrite(self, function, parameter, contract):
+    def retype(self, parameter, contract):
         element_type, read_only, address_space = contract
         parameter.param_type = PointerType(
             element_type,
@@ -327,31 +379,37 @@ class _HelperBufferParameters:
             not in {"buffer", "constant"}
         ]
 
+    def rewrite_accesses(self, function, names):
+        """Turn ``buffer_load``/``buffer_store`` of ``names`` into indexing."""
         replacements = {}
+        # Every node built here holds original arguments that may themselves be
+        # replaced, so each one is patched along with the original body.
+        created = []
         for node, _parent, _field in _walk_with_parents(function.body):
             if not isinstance(node, FunctionCallNode):
                 continue
             arguments = list(node.arguments or [])
-            if not arguments or _pointer_root_name(arguments[0]) != parameter.name:
+            if not arguments or _pointer_root_name(arguments[0]) not in names:
                 continue
             location = getattr(node, "source_location", None)
             call_name = _call_name(node)
             if call_name == "buffer_load":
-                replacements[id(node)] = ArrayAccessNode(
+                access = ArrayAccessNode(
                     arguments[0], arguments[1], source_location=location
                 )
+                replacements[id(node)] = access
+                created.append(access)
             elif call_name == "buffer_store":
-                replacements[id(node)] = AssignmentNode(
-                    ArrayAccessNode(
-                        arguments[0], arguments[1], source_location=location
-                    ),
-                    arguments[2],
-                    source_location=location,
+                access = ArrayAccessNode(
+                    arguments[0], arguments[1], source_location=location
                 )
+                store = AssignmentNode(access, arguments[2], source_location=location)
+                replacements[id(node)] = store
+                created.extend((access, store))
         if not replacements:
             return
         nodes = [node for node, _parent, _field in _walk_with_parents(function.body)]
-        nodes.extend(replacements.values())
+        nodes.extend(created)
         for node in nodes:
             for name, value in list(vars(node).items()):
                 if name in AST_CHILD_FIELD_EXCLUSIONS:

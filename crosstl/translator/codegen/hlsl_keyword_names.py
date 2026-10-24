@@ -569,4 +569,10 @@ def legalize_hlsl_keyword_names(ast):
     renamer = _Renamer(ast, _Declarations(ast))
     for node in _iter_nodes(ast):
         renamer.rename(node)
+    # Fixed-sampler records name module-scope samplers; they must follow the
+    # rename, or the generator no longer finds the sampler and drops its record.
+    annotations = getattr(ast, "annotations", None) or {}
+    for record in annotations.get("fixed_samplers") or ():
+        if record["name"] in renamer.values:
+            record["name"] = renamer.values[record["name"]]
     return ast

@@ -1,8 +1,11 @@
-"""Make the repository's labels match ``.github/labels.yml``.
+"""Make the repository's labels match ``.github/labels.yml``, and label new pull requests by path.
 
 ``python -m tools.labels`` prints the changes; ``--apply`` makes them. Labels missing from the file are deleted,
 which removes them from their issues, so ``renamed-from`` lists the old names whose issues should keep the label.
 GitHub compares label names without regard to case, and so does this module.
+
+``--pull-requests`` instead labels every open pull request that has no labels with the labels whose ``paths``
+match one of its files. It reads file names through the API and never fetches a pull request's code.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from urllib.parse import quote
 
@@ -31,6 +35,8 @@ class Label:
     color: str
     description: str = ""
     renamed_from: tuple[str, ...] = ()
+    # fnmatch patterns over lower-cased repository paths; a pull request that changes a match gets the label.
+    paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,7 @@ def load(path: Path = CONFIG) -> list[Label]:
             str(entry["color"]).lower(),
             str(entry.get("description", "")),
             tuple(str(old) for old in entry.get("renamed-from", ())),
+            tuple(str(pattern) for pattern in entry.get("paths", ())),
         )
         if not COLOR.match(label.color):
             raise ValueError(
@@ -73,6 +80,11 @@ def load(path: Path = CONFIG) -> list[Label]:
             raise ValueError(
                 f"{label.name}: GitHub allows 100 characters of description"
             )
+        for pattern in label.paths:
+            if pattern != pattern.lower():
+                raise ValueError(
+                    f"{label.name}: path {pattern!r} would never match a lower-cased path"
+                )
         for name in (label.name, *label.renamed_from):
             if name.lower() in seen:
                 raise ValueError(f"{name!r} appears twice in {path.name}")
@@ -112,6 +124,16 @@ def plan(wanted: Iterable[Label], existing: Iterable[Label]) -> list[Change]:
         for name in sorted(label.name for label in current.values())
     )
     return changes
+
+
+def labels_for(files: Iterable[str], labels: Iterable[Label]) -> list[str]:
+    """The names, in file order, of the labels with a ``paths`` pattern that matches one of ``files``."""
+    files = [name.lower() for name in files]
+    return [
+        label.name
+        for label in labels
+        if any(fnmatchcase(name, pattern) for name in files for pattern in label.paths)
+    ]
 
 
 class GitHub:
@@ -157,6 +179,25 @@ class GitHub:
             Label(item["name"], item["color"].lower(), item.get("description") or "")
             for item in self._pages("labels")
         ]
+
+    def unlabelled_pull_requests(self) -> list[int]:
+        return [
+            item["number"]
+            for item in self._pages("pulls?state=open")
+            if not item["labels"]
+        ]
+
+    def pull_request_files(self, number: int) -> list[str]:
+        """The paths a pull request changes, with the old path of each rename."""
+        files = []
+        for item in self._pages(f"pulls/{number}/files"):
+            files.append(item["filename"])
+            if item.get("previous_filename"):
+                files.append(item["previous_filename"])
+        return files
+
+    def add_labels(self, number: int, names: list[str]) -> None:
+        self._api("POST", f"issues/{number}/labels", {"labels": names})
 
     def apply(self, change: Change) -> None:
         label = change.label
@@ -204,9 +245,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--apply", action="store_true", help="make the changes instead of printing them"
     )
+    parser.add_argument(
+        "--pull-requests",
+        action="store_true",
+        help="label open pull requests that have no labels from the paths they change",
+    )
     args = parser.parse_args(argv)
 
     github = GitHub(args.repo)
+    if args.pull_requests:
+        return label_pull_requests(github, load(args.config), args.apply)
     changes = plan(load(args.config), github.labels())
     for change in changes:
         print(("" if args.apply else "would ") + change.describe())
@@ -214,6 +262,22 @@ def main(argv: list[str] | None = None) -> int:
             github.apply(change)
     print(
         f"{len(changes)} label change{'' if len(changes) == 1 else 's'}{'' if args.apply else ' planned'}"
+    )
+    return 0
+
+
+def label_pull_requests(github: GitHub, labels: list[Label], apply: bool) -> int:
+    count = 0
+    for number in github.unlabelled_pull_requests():
+        names = labels_for(github.pull_request_files(number), labels)
+        if not names:
+            continue
+        print(f"{'' if apply else 'would '}label #{number}: {', '.join(names)}")
+        if apply:
+            github.add_labels(number, names)
+        count += 1
+    print(
+        f"{count} pull request{'' if count == 1 else 's'} {'labelled' if apply else 'to label'}"
     )
     return 0
 

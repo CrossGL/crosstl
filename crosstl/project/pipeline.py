@@ -38,6 +38,7 @@ from crosstl.backend.Metal.function_specialization import (
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
 )
+from crosstl.backend.Metal.text_scanners import mask_comments_and_literals
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -3084,7 +3085,7 @@ DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
 }
 DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE = {"cs": "cs_6_6"}
 DIRECTX_HLSL_FUNCTION_RE = re.compile(
-    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
+    r"(?P<attributes>(?:(?:\s*+\[[^\]]+\])+\s*+)?)"
     r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
     r"(?P<name>[A-Za-z_]\w*)\s*"
     r"\((?P<parameters>[^;{}]*)\)"
@@ -17016,7 +17017,15 @@ def _metal_local_using_alias(
 def _metal_rewrite_identifier_tokens(
     text: str,
     replacements: Mapping[str, str],
+    *,
+    skip_template_names: bool = False,
 ) -> tuple[str, bool]:
+    """Replace identifier tokens outside member and scope contexts.
+
+    With ``skip_template_names``, a token followed by ``<`` is kept: a plain
+    alias cannot take template arguments, so such a token names the template an
+    alias like ``using Op = Op<T>;`` refers to.
+    """
     if not replacements:
         return text, False
 
@@ -17041,6 +17050,12 @@ def _metal_rewrite_identifier_tokens(
                     "->",
                 }
             replacement = None if member_context else replacements.get(token)
+            if replacement is not None and skip_template_names:
+                following = j
+                while following < len(text) and text[following].isspace():
+                    following += 1
+                if following < len(text) and text[following] == "<":
+                    replacement = None
             if replacement is None:
                 parts.append(token)
             else:
@@ -17078,9 +17093,20 @@ def _metal_rewrite_embedded_identifier_parts(
                 i = j
                 continue
             embedded_parts = token.split("_")
-            rewritten_parts = [
-                str(replacements.get(part, part)) for part in embedded_parts
-            ]
+            rewritten_parts = []
+            for index, part in enumerate(embedded_parts):
+                replacement = str(replacements.get(part, part))
+                replacement_parts = replacement.split("_")
+                if (
+                    len(replacement_parts) > 1
+                    and replacement_parts[0] == part
+                    and embedded_parts[index : index + len(replacement_parts)]
+                    == replacement_parts
+                ):
+                    # ``using Op = Op<T>;`` mangles to ``Op_T``: a part already
+                    # followed by its replacement's arguments is resolved.
+                    replacement = part
+                rewritten_parts.append(replacement)
             rewritten = "_".join(rewritten_parts)
             parts.append(rewritten)
             changed = changed or rewritten != token
@@ -17195,7 +17221,11 @@ def _metal_resolve_type_identifiers(
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, alias_changed = _metal_rewrite_identifier_tokens(
+            text,
+            alias_values,
+            skip_template_names=True,
+        )
         text, constant_changed = _metal_rewrite_identifier_tokens(
             text,
             constant_values,
@@ -20997,43 +21027,7 @@ def _template_materialization_unsupported_location(
 
 @functools.lru_cache(maxsize=8)
 def _masked_metal_non_code_text(source: str) -> str:
-    chars = list(source)
-    i = 0
-    while i < len(chars):
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                end = len(chars)
-            for index in range(i, end):
-                chars[index] = " "
-            i = end
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                end = len(chars) - 2
-            for index in range(i, min(end + 2, len(chars))):
-                if chars[index] != "\n":
-                    chars[index] = " "
-            i = end + 2
-            continue
-        if chars[i] in {"'", '"'}:
-            quote = chars[i]
-            chars[i] = " "
-            i += 1
-            while i < len(chars):
-                current = chars[i]
-                if current != "\n":
-                    chars[i] = " "
-                if current == "\\":
-                    i += 2
-                    continue
-                i += 1
-                if current == quote:
-                    break
-            continue
-        i += 1
-    return "".join(chars)
+    return mask_comments_and_literals(source)
 
 
 def _metal_template_type_declarations(
@@ -21322,22 +21316,30 @@ def _unresolved_metal_template_placeholders_in_type(
     type_text: str,
     template_parameter_names: set[str],
     concrete_type_names: set[str] | None = None,
+    template_type_names: set[str] | None = None,
 ) -> list[str]:
     normalized = _strip_metal_type_qualifiers(type_text)
     if "." in normalized or "->" in normalized:
         return []
 
     concrete_names = concrete_type_names or set()
+    # A declared struct or template name is a type, whatever its spelling
+    # (``MD<float>``, ``RGB``), not a placeholder for a template argument.
+    declared_names = concrete_names | (template_type_names or set())
+
+    def looks_like_placeholder(identifier: str) -> bool:
+        return (
+            identifier not in declared_names
+            and _metal_looks_like_template_placeholder_identifier(identifier)
+        )
+
     missing: list[str] = []
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
         if token in concrete_names:
             embedded_missing = [
                 part
                 for part in token.split("_")[1:]
-                if (
-                    part in template_parameter_names
-                    or _metal_looks_like_template_placeholder_identifier(part)
-                )
+                if (part in template_parameter_names or looks_like_placeholder(part))
             ]
             for part in embedded_missing:
                 if part not in missing:
@@ -21345,8 +21347,7 @@ def _unresolved_metal_template_placeholders_in_type(
             if not embedded_missing:
                 continue
         if (
-            token in template_parameter_names
-            or _metal_looks_like_template_placeholder_identifier(token)
+            token in template_parameter_names or looks_like_placeholder(token)
         ) and token not in missing:
             missing.append(token)
     return missing
@@ -21585,6 +21586,7 @@ def _unresolved_metal_standalone_template_type_records(
             type_text,
             template_parameter_names,
             concrete_type_names,
+            declared_template_type_names,
         )
         if not missing:
             return
@@ -30010,6 +30012,19 @@ def _tool_status(target: str) -> dict[str, Any]:
     }
 
 
+def _toolchain_unavailable_message(toolchain: Mapping[str, Any]) -> str:
+    """Name every tool an unavailable validation toolchain is missing from ``PATH``."""
+    missing_tools = [
+        str(tool["name"])
+        for tool in toolchain.get("tools", ())
+        if isinstance(tool, Mapping) and tool.get("name") and not tool.get("available")
+    ]
+    if not missing_tools:
+        return f"No validation toolchain is available for target {toolchain['target']}"
+    verb = "is" if len(missing_tools) == 1 else "are"
+    return f"{', '.join(missing_tools)} {verb} not on PATH"
+
+
 def _status_counts(
     records: Sequence[Any], field_name: str, statuses: frozenset[str]
 ) -> dict[str, int]:
@@ -31498,7 +31513,7 @@ def _validate_artifacts(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
-                    message=f"No validation toolchain is available for target {toolchain['target']}",
+                    message=_toolchain_unavailable_message(toolchain),
                     location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],

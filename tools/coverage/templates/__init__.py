@@ -13,7 +13,7 @@ yet.
 from __future__ import annotations
 
 from .base import ABSENT, C_FAMILY, Template
-from .compute import CUDA, HIP, MOJO, RUST
+from .compute import CUDA, HIP, MOJO, OPENCL, RUST
 from .graphics import GLSL, HLSL, METAL, SLANG, WGSL
 from .webgl import WEBGL
 
@@ -23,6 +23,7 @@ TEMPLATES = {
     "cuda": CUDA,
     "hip": HIP,
     "mojo": MOJO,
+    "opencl": OPENCL,
     "rust": RUST,
     "glsl": GLSL,
     "hlsl": HLSL,

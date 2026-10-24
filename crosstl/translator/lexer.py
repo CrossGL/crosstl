@@ -5,6 +5,8 @@ import re
 from collections import OrderedDict
 from pathlib import Path
 
+from .token_dispatch import alternation_dispatch
+
 TOKENS = OrderedDict(
     [
         ("COMMENT_SINGLE", r"//.*"),
@@ -859,6 +861,7 @@ class Lexer:
         self.tokens = []
         self.token_cache = {}
         self.regex_cache = self._compile_patterns()
+        self.token_dispatch = alternation_dispatch(TOKENS)
         self.tokenize()
 
     @staticmethod
@@ -866,10 +869,7 @@ class Lexer:
         return re.sub(r"\\(?:\r\n|\n|\r)", "", code)
 
     def _compile_patterns(self):
-        combined_pattern = "|".join(
-            f"(?P<{name}>{pattern})" for name, pattern in TOKENS.items()
-        )
-        return re.compile(combined_pattern)
+        return alternation_dispatch(TOKENS).full
 
     def _get_cached_token(self, text, token_type):
         """Return a stable tuple object for repeated token text/type pairs."""
@@ -880,10 +880,15 @@ class Lexer:
 
     def tokenize(self):
         pos = 0
-        length = len(self.code)
+        code = self.code
+        length = len(code)
+        # Only the token patterns that can begin with the current character
+        # are tried, in table order, so the first match is unchanged.
+        pattern_for = self.token_dispatch.pattern_for
 
         while pos < length:
-            match = self.regex_cache.match(self.code, pos)
+            pattern = pattern_for(code[pos])
+            match = pattern.match(code, pos) if pattern is not None else None
             if match:
                 token_type = match.lastgroup
                 text = match.group(token_type)
