@@ -22,7 +22,10 @@ reductions are also translated on first use; each of their dispatches must
 name the package its cache derives again from the event. Arg reductions are
 translated per threadgroup width on first use and every index is recomputed
 from the retained input; OpenGL does not run the arg reduction tests yet
-(``TARGET_EXCLUSIONS``). Every other dispatch
+(``TARGET_EXCLUSIONS``). Softmax and logsumexp rows are translated per
+threadgroup width on first use; each dispatch must name its cached package,
+upload its retained input and keep its output guard, and the upstream tests
+compare its values. Every other dispatch
 must come from one of those indexes, so a test that reaches an uninstalled
 family fails the trace instead of passing on an unchecked package.
 """
@@ -48,6 +51,8 @@ from demos.integrations.mlx.portable_host import (
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
+    softmax_evidence,
+    softmax_layout,
     wide_column_dispatch,
     wide_column_evidence,
     wide_reduction_evidence,
@@ -97,118 +102,130 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.small_row_packages import SmallRowPackageCache
+from demos.integrations.mlx.portable_host.softmax_packages import (
+    CACHE_DIRECTORY as SOFTMAX_CACHE,
+)
+from demos.integrations.mlx.portable_host.softmax_packages import SoftmaxPackageCache
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
-UPSTREAM_TESTS = tuple(
-    "test_ops.TestOps." + name
-    for name in (
-        "test_trunc",
-        "test_erfinv",
-        "test_logical_and",
-        "test_logical_or",
-        "test_full_ones_zeros",
-        "test_atleast_1d",
-        "test_atleast_2d",
-        "test_atleast_3d",
-        "test_tile",
-        "test_repeat",
-        "test_roll",
-        "test_roll_errors",
-        "test_tri",
-        "test_tril",
-        "test_triu",
-        "test_as_strided",
-        "test_view",
-        "test_depends",
-        "test_eye",
-        "test_diag",
-        "test_diagonal",
-        "test_divmod",
-        # Base families only.
-        "test_all",
-        "test_cummax_cummin_nan",
-        "test_empty_matmuls",
-        "test_irregular_alignments",
-        "test_scan_invalid_axis",
-        "test_scan_strided_bool",
-        "test_slice_with_negative_stride",
-        "test_take_along_axis",
-        "test_unary_ops_from_non_array",
-        # These also reach the 64-bit integer family.
-        "test_add",
-        "test_any",
-        "test_bitwise_grad",
-        "test_count_nonzero",
-        "test_irregular_binary_ops",
-        "test_linspace",
-        "test_linspace_endpoint",
-        "test_mean",
-        "test_min_and_max",
-        "test_prod",
-        # This also reaches lazily translated casts.
-        "test_subnormal_bool_cast",
-        # These reach lazily translated unary and binary vectors.
-        "test_binary_ops",
-        "test_bitwise_ops",
-        "test_divide",
-        "test_floor_divide",
-        "test_integer_power",
-        "test_remainder",
-        "test_scalar_inputs",
-        "test_sigmoid",
-        "test_tensordot",
-        "test_unary_ops",
-        "test_zeros_ones_empty_like_dtype",
-        # These also reach lazily translated complex64 kernels.
-        "test_array_equal",
-        "test_complex_ops",
-        "test_complex_power",
-        "test_conjugate",
-        "test_diag_zero_size",
-        "test_isfinite",
-        "test_isinf",
-        "test_isnan",
-        "test_isneginf",
-        "test_isposinf",
-        "test_log",
-        "test_log10",
-        "test_log1p",
-        "test_log2",
-        "test_logaddexp",
-        "test_maximum",
-        "test_minimum",
-        "test_outer",
-        "test_real_imag",
-        "test_sign",
-        "test_trig_ops",
-        # These reach lazily translated selections of every GPU dtype.
-        "test_clip",
-        "test_concatenate",
-        "test_meshgrid",
-        "test_nan_to_num",
-        "test_pad",
-        "test_pad_reflect_symmetric",
-        "test_slice_update_reversed",
-        "test_take",
-        # This also reaches lazily translated aranges.
-        "test_round",
-        # These reach lazily translated wide whole-array, small-row and
-        # small-column reductions.
-        "test_std",
-        "test_trace",
-        "test_var",
-        "test_vecdot",
-        # This also reaches row_reduce_looped through the on-demand row index.
-        "test_sum",
+UPSTREAM_TESTS = (
+    tuple(
+        "test_ops.TestOps." + name
+        for name in (
+            "test_trunc",
+            "test_erfinv",
+            "test_logical_and",
+            "test_logical_or",
+            "test_full_ones_zeros",
+            "test_atleast_1d",
+            "test_atleast_2d",
+            "test_atleast_3d",
+            "test_tile",
+            "test_repeat",
+            "test_roll",
+            "test_roll_errors",
+            "test_tri",
+            "test_tril",
+            "test_triu",
+            "test_as_strided",
+            "test_view",
+            "test_depends",
+            "test_eye",
+            "test_diag",
+            "test_diagonal",
+            "test_divmod",
+            # Base families only.
+            "test_all",
+            "test_cummax_cummin_nan",
+            "test_empty_matmuls",
+            "test_irregular_alignments",
+            "test_scan_invalid_axis",
+            "test_scan_strided_bool",
+            "test_slice_with_negative_stride",
+            "test_take_along_axis",
+            "test_unary_ops_from_non_array",
+            # These also reach the 64-bit integer family.
+            "test_add",
+            "test_any",
+            "test_bitwise_grad",
+            "test_count_nonzero",
+            "test_irregular_binary_ops",
+            "test_linspace",
+            "test_linspace_endpoint",
+            "test_mean",
+            "test_min_and_max",
+            "test_prod",
+            # This also reaches lazily translated casts.
+            "test_subnormal_bool_cast",
+            # These reach lazily translated unary and binary vectors.
+            "test_binary_ops",
+            "test_bitwise_ops",
+            "test_divide",
+            "test_floor_divide",
+            "test_integer_power",
+            "test_remainder",
+            "test_scalar_inputs",
+            "test_sigmoid",
+            "test_tensordot",
+            "test_unary_ops",
+            "test_zeros_ones_empty_like_dtype",
+            # These also reach lazily translated complex64 kernels.
+            "test_array_equal",
+            "test_complex_ops",
+            "test_complex_power",
+            "test_conjugate",
+            "test_diag_zero_size",
+            "test_isfinite",
+            "test_isinf",
+            "test_isnan",
+            "test_isneginf",
+            "test_isposinf",
+            "test_log",
+            "test_log10",
+            "test_log1p",
+            "test_log2",
+            "test_logaddexp",
+            "test_maximum",
+            "test_minimum",
+            "test_outer",
+            "test_real_imag",
+            "test_sign",
+            "test_trig_ops",
+            # These reach lazily translated selections of every GPU dtype.
+            "test_clip",
+            "test_concatenate",
+            "test_meshgrid",
+            "test_nan_to_num",
+            "test_pad",
+            "test_pad_reflect_symmetric",
+            "test_slice_update_reversed",
+            "test_take",
+            # This also reaches lazily translated aranges.
+            "test_round",
+            # These reach lazily translated wide whole-array, small-row and
+            # small-column reductions.
+            "test_std",
+            "test_trace",
+            "test_var",
+            "test_vecdot",
+            # This also reaches row_reduce_looped through the on-demand row index.
+            "test_sum",
+        )
+    ) + (
+        # These reach lazily translated arg reductions of every real dtype, and
+        # of the flattened array in a threadgroup of thirteen simdgroups.
+        "test_ops.TestOps.test_argmin_argmax",
+        "test_reduce.TestReduce.test_arg_reduce",
+        "test_bf16.TestBF16.test_arg_reduction_ops",
+    ) + (
+        # These reach lazily translated block and looped softmax and logsumexp
+        # rows, precise 16-bit softmax, and transposed and broadcast inputs.
+        "test_ops.TestOps.test_softmax",
+        "test_ops.TestOps.test_logsumexp",
+        "test_ops.TestOps.test_logsumexp_shape",
     )
-) + (
-    # These reach lazily translated arg reductions of every real dtype, and
-    # of the flattened array in a threadgroup of thirteen simdgroups.
-    "test_ops.TestOps.test_argmin_argmax",
-    "test_reduce.TestReduce.test_arg_reduce",
-    "test_bf16.TestBF16.test_arg_reduction_ops",
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -238,6 +255,7 @@ NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
 RETAINED_VALUES = (
     *ENTRIES,
     *arg_reduce_layout.OPERATIONS,
+    *softmax_layout.PREFIXES,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     "all_reduce_",
@@ -532,6 +550,19 @@ def audit_trace(np, args, trace, target, indexes, reductions):
         # Derives the cached package again, checks the native modules and
         # recomputes every index from the retained input.
         arg_reduce_evidence.audit_event(event, arg_reductions)
+        lazy_checked.add(i)
+        owners[i] += 1
+    softmaxes = SoftmaxPackageCache(
+        args.mlx_root, args.packages / SOFTMAX_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in softmax_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op softmax or logsumexp targets another backend")
+        # Derives the cached package again and checks the uploads, guards and
+        # native modules; the upstream tests compare the values.
+        softmax_evidence.audit_event(event, softmaxes)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

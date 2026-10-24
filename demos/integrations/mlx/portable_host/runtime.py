@@ -59,6 +59,8 @@ from demos.integrations.mlx.portable_host import (
     scan_dispatch,
     scan_layout,
     slice_update_layout,
+    softmax_dispatch,
+    softmax_layout,
     wide_column_dispatch,
     wide_reduction_dispatch,
     wide_reduction_packages,
@@ -201,6 +203,10 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
+from demos.integrations.mlx.portable_host.softmax_packages import (
+    CACHE_DIRECTORY as SOFTMAX_CACHE,
+)
+from demos.integrations.mlx.portable_host.softmax_packages import SoftmaxPackageCache
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
@@ -400,6 +406,12 @@ class HostRuntime:
             ArgReducePackageCache(
                 mlx_root, self.directory / ARG_REDUCE_CACHE, self.target
             )
+            if mlx_root is not None
+            else None
+        )
+        # Softmax and logsumexp rows translate each entry at its width.
+        self.softmaxes = (
+            SoftmaxPackageCache(mlx_root, self.directory / SOFTMAX_CACHE, self.target)
             if mlx_root is not None
             else None
         )
@@ -651,6 +663,8 @@ class HostRuntime:
                 return 1
             if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
                 return 1
+            if name in softmax_layout.ENTRIES and self.softmaxes is not None:
+                return 1
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -802,6 +816,10 @@ class HostRuntime:
             )
         if entry in arg_reduce_layout.ENTRIES:
             return arg_reduce_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in softmax_layout.ENTRIES:
+            return softmax_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_copy(entry):

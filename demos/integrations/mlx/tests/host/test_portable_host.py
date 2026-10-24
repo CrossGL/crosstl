@@ -39,6 +39,8 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 for name in (
                     "Arange",
                     "ArgReduce",
+                    "LogSumExp",
+                    "Softmax",
                     "RandomBits",
                     "Scan",
                     "Quantize",
@@ -103,6 +105,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" in (backend / "primitives.cpp").read_text()
+    for name in ("LogSumExp", "Softmax"):
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Scan)" not in (backend / "crosstl_primitives.cpp").read_text()

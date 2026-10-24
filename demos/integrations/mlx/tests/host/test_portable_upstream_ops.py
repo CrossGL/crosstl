@@ -33,7 +33,7 @@ def records(*, native):
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 91
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 94
     assert all(
         name.startswith(
             (
@@ -62,7 +62,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 88 and not set(opengl) & set(excluded)
+    assert len(opengl) == 91 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -361,6 +361,7 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
         ("--reductions", "init-packages"),
         ("--reductions", "all-reductions"),
         ("--reductions", "row-reductions"),
+        ("--reductions", "column-reductions"),
     ]
     for flag, directory in flags:
         assert f"{flag} {root}{directory}" in step["run"]
@@ -375,6 +376,8 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
     configure = job["steps"][names.index("Configure the upstream op reductions")]["run"]
     assert "--family all --on-demand" in configure
     assert "--family row --on-demand" in configure
+    # Softmax over a leading axis composes column maxima and sums.
+    assert "--family column" in configure
     retain = names.index("Retain upstream op execution evidence")
     assert names.index(step["name"]) < retain
 

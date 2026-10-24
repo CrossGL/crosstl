@@ -1807,8 +1807,8 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 91 more unchanged `test_ops`, `test_reduce` and
-`test_bf16` tests on all three platforms (88 on OpenGL; see below):
+A dedicated job then runs 94 more unchanged `test_ops`, `test_reduce` and
+`test_bf16` tests on all three platforms (91 on OpenGL; see below):
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
@@ -1816,13 +1816,15 @@ python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
   --bitwise bitwise-packages --selection selection-packages \
   --absolute absolute-packages --integer64 integer64-packages \
   --reductions init-packages --reductions all-reductions \
-  --reductions row-reductions --output-dir upstream-op-evidence
+  --reductions row-reductions --reductions column-reductions \
+  --output-dir upstream-op-evidence
 ```
 
 `all-reductions` and `row-reductions` are on-demand whole-array and row
 reduction indexes (`reduction_packages --family all --on-demand` and
 `--family row --on-demand`), so only the variants the tests reach are
-translated. The tests are `test_trunc`, `test_erfinv`,
+translated; `column-reductions` holds the column reductions
+(`--family column`) that softmax over a leading axis composes. The tests are `test_trunc`, `test_erfinv`,
 `test_logical_and`, `test_logical_or`, `test_full_ones_zeros`,
 `test_atleast_1d`/`2d`/`3d`, `test_tile`, `test_repeat`, `test_roll`,
 `test_roll_errors`, `test_tri`, `test_tril`, `test_triu`, `test_as_strided`,
@@ -1856,6 +1858,9 @@ OpenGL runs simdgroups as 32-lane software subgroups and cannot yet run an
 arg reduction wider than one simdgroup, because the kernel returns every
 simdgroup but the first before its final shuffles (CrossGL/crosstl#2207);
 its host refuses those launches and the job excludes the three tests there.
+`test_softmax`, `test_logsumexp` and `test_logsumexp_shape` reach the block
+and looped rows of `softmax.metal` and `logsumexp.metal`, one package per
+threadgroup width.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch. Every dispatch must belong to exactly one of the

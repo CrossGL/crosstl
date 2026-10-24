@@ -51,6 +51,8 @@ def adapted_sources(original, primitives, events):
     for primitive in (
         "Arange",
         "ArgReduce",
+        "LogSumExp",
+        "Softmax",
         "RandomBits",
         "Scan",
         "Quantize",

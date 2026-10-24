@@ -2544,6 +2544,145 @@ void ArgReduce::eval_gpu(const std::vector<array>& inputs, array& out) {
 }
 
 namespace {
+// The element type name softmax.metal and logsumexp.metal instantiate.
+const char* row_kernel_type(Dtype dtype) {
+  return dtype == float32 ? "float32" : dtype == float16 ? "float16" :
+      dtype == bfloat16 ? "bfloat16" : nullptr;
+}
+
+// Upstream's contiguous_copy_gpu: a fresh row-contiguous copy.
+array row_kernel_copy(const array& in) {
+  array dense(in.shape(), in.dtype(), nullptr, {});
+  dispatch_copy(in, dense);
+  return dense;
+}
+
+bool last_axis_contiguous(const array& in) {
+  return in.flags().contiguous && in.strides()[in.ndim() - 1] == 1;
+}
+
+// Dispatches block_* rows of at most 4096 elements in ceil(axis_size / 4)
+// threads rounded up to a simdgroup and looped_* rows in 1024 threads, one
+// threadgroup per row along x, as softmax.cpp and logsumexp.cpp launch them.
+void dispatch_row_kernel(
+    const std::string& operation, const std::string& qualifier, const array& in,
+    array& out, uint64_t output_count, const char* label) {
+  const char* dtype = row_kernel_type(in.dtype());
+  constexpr uint64_t max_elements = (uint64_t(1) << 28) - 1;
+  if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
+      in.data_size() > (in.buffer_size() - uint64_t(in.offset())) / in.itemsize() ||
+      in.data_size() > max_elements || in.shape().back() < 1) {
+    throw std::invalid_argument(std::string("CrossTL ") + label + " input exceeds its bounds.");
+  }
+  int axis_size = in.shape().back();
+  const uint64_t rows = in.data_size() / uint64_t(axis_size);
+  if (!rows || rows > 65535 || rows * uint64_t(axis_size) != in.data_size()) {
+    throw std::invalid_argument(std::string("CrossTL ") + label + " rows exceed the portable group limit.");
+  }
+  const bool looped = axis_size > 4096;
+  const uint32_t width = looped ? 1024 :
+      uint32_t(((uint64_t(axis_size) + 3) / 4 + 31) / 32 * 32);
+  const std::string entry = std::string(looped ? "looped_" : "block_") + operation +
+      "_" + qualifier + dtype;
+  CrosstlMlxBuffer buffers[] = {
+      {"in", dtype, const_cast<void*>(in.data<void>()), in.data_size(), 0},
+      {"out", dtype, out.data<void>(), output_count, 1},
+      {"axis_size", "int32", &axis_size, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{uint32_t(rows), 1, 1}, {width, 1, 1}, {0, 0, 0}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 3, in.data_size(), &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native ") + label + " failed: " + error);
+  }
+}
+} // namespace
+
+// Ports mlx/backend/metal/softmax.cpp Softmax::eval_gpu.
+void Softmax::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL softmax requires one input.");
+  }
+  if (!issubdtype(out.dtype(), floating)) {
+    throw std::runtime_error("[softmax] Does not support non-floating point types.");
+  }
+  if (!row_kernel_type(out.dtype()) || inputs[0].dtype() != out.dtype() ||
+      inputs[0].ndim() == 0) {
+    throw std::invalid_argument("CrossTL softmax requires float32, float16 or bfloat16 rows.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  array in = inputs[0];
+  if (last_axis_contiguous(in)) {
+    if (in.is_donatable()) {
+      out.copy_shared_buffer(in);
+    } else {
+      out.set_data(
+          allocator::malloc(in.data_size() * in.itemsize()),
+          in.data_size(),
+          in.strides(),
+          in.flags());
+    }
+  } else {
+    in = row_kernel_copy(in);
+    out.copy_shared_buffer(in);
+  }
+  const std::string qualifier = in.dtype() != float32 && precise_ ? "precise_" : "";
+  dispatch_row_kernel("softmax", qualifier, in, out, in.data_size(), "softmax");
+}
+
+// Ports mlx/backend/metal/logsumexp.cpp LogSumExp::eval_gpu.
+void LogSumExp::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL logsumexp requires one input.");
+  }
+  if (!issubdtype(out.dtype(), floating)) {
+    throw std::runtime_error("[logsumexp] Does not support non-floating point types.");
+  }
+  if (!row_kernel_type(out.dtype()) || inputs[0].dtype() != out.dtype() ||
+      inputs[0].ndim() == 0 || out.ndim() != inputs[0].ndim()) {
+    throw std::invalid_argument("CrossTL logsumexp requires float32, float16 or bfloat16 rows.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  if (inputs[0].size() == 0) {
+    throw std::invalid_argument("CrossTL logsumexp rows must be non-empty.");
+  }
+  array in = last_axis_contiguous(inputs[0]) ? inputs[0] : row_kernel_copy(inputs[0]);
+  if (in.flags().row_contiguous) {
+    out.set_data(allocator::malloc(out.nbytes()));
+  } else {
+    auto n = in.shape(-1);
+    auto flags = in.flags();
+    auto strides = in.strides();
+    for (auto& s : strides) {
+      s /= n;
+    }
+    bool col_contig = strides[0] == 1;
+    for (int i = 1; col_contig && i < strides.size(); ++i) {
+      col_contig &=
+          (out.shape(i) == 1 || strides[i - 1] == out.shape(i) * strides[i]);
+    }
+    flags.col_contiguous = col_contig;
+    out.set_data(
+        allocator::malloc(in.nbytes() / n),
+        in.data_size() / n,
+        std::move(strides),
+        flags);
+  }
+  dispatch_row_kernel(
+      "logsumexp", "", in, out, in.data_size() / uint64_t(in.shape(-1)), "logsumexp");
+}
+
+namespace {
 constexpr uint64_t max_matmul_elements = (uint64_t(1) << 28) - 1;
 
 // quantized.cpp ensure_row_contiguous_matrix, plus nonnegative batch strides.
