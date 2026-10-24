@@ -60,6 +60,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
@@ -9207,7 +9208,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression)
         elif isinstance(node, AssignmentNode):
-            return self.generate_assignment(node)
+            return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):
             hull_output_alias = self.slang_hull_output_array_alias(node)
             if hull_output_alias is not None:
