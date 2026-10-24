@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import probes, validators
+from tools.coverage import probes, spellings, validators
 from tools.coverage.features import cuda, hip, metal, mojo, slang
 from tools.coverage.model import (
     COOP_COLUMNS,
@@ -532,6 +532,15 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
     assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
     assert features["lerp"].crossgl == "mix"
     assert features["WorkgroupCount"].signature.result == Type("uint", (3,))
+
+
+def test_slang_spells_its_coarse_and_fine_fwidth_as_crossgl_does():
+    glsl_names = {"fwidthCoarse", "fwidthFine"}
+    assert spellings.spelling("slang", "fwidth_coarse", glsl_names) == "fwidthCoarse"
+    assert spellings.spelling("slang", "fwidth_fine", glsl_names) == "fwidthFine"
+    # HLSL has no coarse or fine fwidth, and Slang's additions leave its table alone.
+    assert "fwidth_coarse" not in spellings.RENAMES["hlsl"]
+    assert spellings.RENAMES["slang"]["lerp"] == "mix"
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():
