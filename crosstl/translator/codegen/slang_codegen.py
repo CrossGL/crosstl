@@ -86,6 +86,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -2935,6 +2936,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             ):
                 continue
             if hasattr(attr, "name"):
+                if attr.name == "gl_FragData":
+                    index = frag_data_attachment_index(node)
+                    if index is not None:
+                        return f"gl_FragData[{index}]"
                 return attr.name
         return None
 
@@ -3916,6 +3921,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             target_index = semantic_name[len("gl_FragColor") :]
             if target_index.isdigit():
                 return f"SV_Target{target_index}"
+        frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
+        if frag_data:
+            return f"SV_Target{frag_data.group(1)}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
     def slang_semantic_output_kind(self, semantic):
@@ -4178,6 +4186,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
             if semantic is None:
+                continue
+            # An ``out`` parameter carries a stage output, as in HLSL.
+            if "out" in {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", None) or []
+            }:
                 continue
             if (
                 self.slang_ray_semantic_role(parameter, shader_type)

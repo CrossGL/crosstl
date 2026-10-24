@@ -191,6 +191,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -32246,6 +32247,9 @@ class GLSLCodeGen(
         explicit_layout = self.glsl_variable_layout_prefix(node).strip()
         if explicit_layout:
             return explicit_layout
+        attachment = frag_data_attachment_index(node)
+        if attachment is not None:
+            return f"layout(location = {attachment})"
         return self.map_semantic(self.semantic_from_node(node))
 
     def stage_io_declaration_prefix(
