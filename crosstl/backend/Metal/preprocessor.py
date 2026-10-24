@@ -90,7 +90,8 @@ MSL_SOURCE_START_RE = re.compile(
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METAL_ANGLE_OPERATOR_RE = re.compile(
-    r"\boperator(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
+    r"\boperator"
+    r"(?>\s+|/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*(?:\n|$))*+"
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
@@ -186,6 +187,15 @@ METAL_RECEIVER_DECLARATOR_PREFIX_RE = re.compile(
     r"|constant))*\s*(?:\*+|&&|&)?"
     r"(?:\s*(?:const|volatile|restrict|__restrict|__restrict__)\b)*\s*"
 )
+
+
+# A `::` that opens a name (not `A::metal`), before `metal::`.
+_GLOBAL_METAL_QUALIFIER = re.compile(r"(?<![\w:])::\s*(?=metal\s*::)")
+
+
+def _strip_global_metal_qualifiers(text: str) -> str:
+    """Spell `::metal::name` as `metal::name`; both name the same declaration."""
+    return _GLOBAL_METAL_QUALIFIER.sub("", text)
 
 
 def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[int]:
@@ -6425,7 +6435,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # value type; otherwise (None, return_type) unchanged. Only a return type
         # that is EXACTLY an `enable_if_t<...>` template-id is unwrapped, so an
         # ordinary `T` / `float4` return is left intact (never guess).
-        text = return_type.strip()
+        text = _strip_global_metal_qualifiers(return_type.strip())
         match = re.match(r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text)
         if match is None:
             return None, return_type
@@ -7114,7 +7124,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # return whether the overload is ENABLED. Raises _UnrecognizedConstraint
         # for any constraint shape outside the recognized set so the caller can
         # clean-fail rather than guess.
-        text = constraint.strip()
+        text = _strip_global_metal_qualifiers(constraint.strip())
         # Unwrap an `[metal::]enable_if_t<COND, type>` enabler down to COND; a
         # bare `enable_if_t<COND>` (one argument) unwraps to COND too. The
         # presence of the alias means "enabled iff COND".
@@ -7170,7 +7180,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         lookup_position: Optional[int] = None,
         variable_stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
     ) -> bool:
-        expr = self._replace_identifiers(expression, bindings).strip()
+        expr = _strip_global_metal_qualifiers(
+            self._replace_identifiers(expression, bindings).strip()
+        )
         if not expr:
             raise self._UnrecognizedConstraint(expression)
 
@@ -7207,6 +7219,25 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         conjunction = self._split_top_level_boolean_constraint(expr, ("&&", "&"))
         if conjunction is not None:
             return all(evaluate(part) for part in conjunction)
+
+        # `a == b` and `a != b` over Boolean operands (`is_complex_v<T> ==
+        # is_complex_v<U>`). Equality binds tighter than `&&` and looser than
+        # `!`. Operands that are not Boolean constraints, such as
+        # `sizeof(T) == 4`, fall through to the integer comparisons below.
+        for equality_operator in ("==", "!="):
+            operands = self._split_top_level_boolean_constraint(
+                expr, (equality_operator,)
+            )
+            if operands is None or len(operands) != 2:
+                continue
+            try:
+                left_value = evaluate(operands[0])
+                right_value = evaluate(operands[1])
+            except self._UnrecognizedConstraint:
+                break
+            if equality_operator == "==":
+                return left_value == right_value
+            return left_value != right_value
 
         if expr.startswith("!"):
             return not evaluate(expr[1:])
@@ -9820,7 +9851,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
         lookup_position: Optional[int] = None,
     ) -> bool:
-        text = constraint.strip()
+        text = _strip_global_metal_qualifiers(constraint.strip())
         enable_match = re.match(
             r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text
         )
@@ -15206,8 +15237,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     ) -> _MetalReceiverContract:
         normalized = self._normalize_template_argument_text(type_text or struct_name)
         indirection_match = re.search(
-            r"(?P<indirection>\*+|&&|&)\s*"
-            r"(?:(?:const|volatile|restrict|__restrict|__restrict__)\s*)*$",
+            r"(?P<indirection>\*++|&&|&)\s*+"
+            r"(?:(?:__restrict__|__restrict|restrict|const|volatile)\s*+)*+$",
             normalized,
         )
         indirection = (
@@ -15683,12 +15714,36 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             argument_close=arg_close,
         )
 
+    # Keywords that may be followed by a parenthesized expression. In
+    # `return (float)(x)` the parentheses are a cast and its operand, not a
+    # temporary `return(float)` called with `(x)`.
+    _KEYWORDS_BEFORE_EXPRESSIONS = frozenset(
+        {
+            "case",
+            "co_return",
+            "co_yield",
+            "do",
+            "else",
+            "for",
+            "if",
+            "return",
+            "sizeof",
+            "alignof",
+            "switch",
+            "throw",
+            "while",
+        }
+    )
+
     def _temporary_functor_is_candidate(
         self,
         code: str,
         identifier_start: int,
         temporary: _MetalTemporaryFunctorCall,
     ) -> bool:
+        identifier, _consumed = self._read_identifier(code, identifier_start)
+        if identifier in self._KEYWORDS_BEFORE_EXPRESSIONS:
+            return False
         constructor_text = code[
             temporary.constructor_open + 1 : temporary.constructor_close
         ].strip()

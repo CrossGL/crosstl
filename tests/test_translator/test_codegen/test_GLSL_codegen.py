@@ -43016,6 +43016,45 @@ def test_opengl_explicit_as_type_rejects_mismatched_total_widths(
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+@pytest.mark.parametrize(
+    ("target_type", "packed"),
+    [
+        pytest.param("long", "packInt2x32(ivec2(words))", id="long"),
+        pytest.param("ulong", "packUint2x32(words)", id="ulong"),
+    ],
+)
+def test_opengl_metal_long_as_type_keeps_64_bit_payload(tmp_path, target_type, packed):
+    source = tmp_path / "bits.metal"
+    source.write_text(f"""#include <metal_stdlib>
+using namespace metal;
+kernel void bits(device {target_type}* outputs [[buffer(0)]],
+                 uint index [[thread_position_in_grid]]) {{
+    uint2 words = uint2(index, 0x12345678u);
+    outputs[index] = as_type<{target_type}>(words);
+}}
+""")
+
+    generated_code = crosstl.translate(
+        str(source), backend="opengl", format_output=False
+    )
+
+    assert packed in generated_code
+    assert "as_type<" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        shader_path = tmp_path / "bits.comp"
+        shader_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(shader_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_opengl_explicit_as_type_scalar_vector_bitcasts_validate_with_glslang(
     tmp_path,
 ):

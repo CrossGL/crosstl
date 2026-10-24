@@ -79,6 +79,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..immutable_storage import (
     checked_immutable_storage,
     codegen_immutable_storage_names,
@@ -238,6 +239,7 @@ from .glsl_interface_block_io import (
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_refusals import (
     OpenGLLoweringRefused,
+    input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
@@ -253,6 +255,7 @@ from .glsl_stage_distances import (
     distance_output_name,
     distance_private_output_declaration,
 )
+from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     builtin_output_value,
     flattened_stage_output_assignment,
@@ -1585,6 +1588,8 @@ class GLSLCodeGen(
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
@@ -2025,11 +2030,6 @@ class GLSLCodeGen(
         "signbit",
         "metal::signbit",
         "metal_u3a_u3asignbit",
-    }
-    GLSL_STANDARD_IDENTIFIER_CONSTANTS = {
-        # GLSL does not define the C/Metal NAN macro.  Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        "NAN": "uintBitsToFloat(0x7fc00000u)",
     }
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
@@ -9342,6 +9342,10 @@ class GLSLCodeGen(
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        for node in all_global_vars:
+            input_attachment_reason = input_attachment_refusal_reason(node)
+            if input_attachment_reason is not None:
+                self.refuse_lowering(input_attachment_reason)
         specialization_global_ids = {
             id(node) for node in self.glsl_global_specialization_constants
         }
@@ -21424,6 +21428,8 @@ class GLSLCodeGen(
             func, shader_type
         ):
             code += f"    {declaration}\n"
+        for declaration in stage_input_struct_value_declarations(self, func):
+            code += f"    {declaration}\n"
         if shader_type in stage_entry_types:
             code += self.generate_glsl_hlsl_cbuffer_loads(1)
             code += self.generate_glsl_runtime_global_initializers(func, 1)
@@ -31717,6 +31723,8 @@ class GLSLCodeGen(
                     )
                 if name and render_standard_math_constant(name, "opengl") is not None:
                     return False, False
+                if name and render_float_limit_constant(name, "opengl") is not None:
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -39678,9 +39686,11 @@ complex64_t crossgl_complex64_mod_assign(
         if target_name != name or self.glsl_identifier_is_resolved(name):
             return target_name
 
-        special_constant = self.GLSL_STANDARD_IDENTIFIER_CONSTANTS.get(name)
-        if special_constant is not None:
-            return special_constant
+        # GLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        limit_constant = render_float_limit_constant(name, "opengl")
+        if limit_constant is not None:
+            return limit_constant
         standard_constant = render_standard_math_constant(name, "opengl")
         return standard_constant if standard_constant is not None else target_name
 

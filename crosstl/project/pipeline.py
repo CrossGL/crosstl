@@ -3106,7 +3106,7 @@ DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
 }
 DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE = {"cs": "cs_6_6"}
 DIRECTX_HLSL_FUNCTION_RE = re.compile(
-    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
+    r"(?P<attributes>(?:(?:\s*+\[[^\]]+\])+\s*+)?)"
     r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
     r"(?P<name>[A-Za-z_]\w*)\s*"
     r"\((?P<parameters>[^;{}]*)\)"

@@ -289,7 +289,9 @@ class HLSLToCrossGLConverter(
             "TextureCubeArray": "textureCubeArray",
             "Texture2DMS": "texture2DMS",
             "Texture2DMSArray": "texture2DMSArray",
-            "SubpassInput": "sampler2d",
+            # Vulkan input attachments ([[vk::input_attachment_index]]).
+            "SubpassInput": "subpassInput",
+            "SubpassInputMS": "subpassInputMS",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
             # RW Texture Types (for compute shaders)
