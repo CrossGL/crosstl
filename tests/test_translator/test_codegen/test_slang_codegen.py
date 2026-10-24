@@ -6579,6 +6579,82 @@ def test_ray_stage_intrinsic_builtins_respect_local_shadowing():
     assert "HitKind()" not in generated_code
 
 
+def test_slang_codegen_lowers_compute_num_workgroups_to_workgroup_count():
+    code = """
+    shader NumWorkGroups {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                uvec3 groups = gl_NumWorkGroups;
+                outp[i] = float(gl_NumWorkGroups.x + groups.y);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 groups = WorkgroupCount();" in generated_code
+    assert "float(WorkgroupCount().x + groups.y)" in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "where"),
+    [
+        (
+            """
+            shader NumWorkGroupsVertex {
+                vertex {
+                    vec4 main() @gl_Position {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a vertex entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsFragment {
+                fragment {
+                    vec4 main() @gl_FragColor {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a fragment entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsHelper {
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    buffer float* outp;
+                    uint groupsX() { return gl_NumWorkGroups.x; }
+                    void main() {
+                        outp[gl_GlobalInvocationID.x] = float(groupsX());
+                    }
+                }
+            }
+            """,
+            "a helper function",
+        ),
+    ],
+    ids=["vertex", "fragment", "helper"],
+)
+def test_slang_codegen_refuses_num_workgroups_outside_a_compute_entry_point(
+    code, where
+):
+    # Slang declares no gl_NumWorkGroups; only a compute entry point reads it as WorkgroupCount().
+    with pytest.raises(
+        SlangLoweringRefused, match=f"gl_NumWorkGroups: .*not in {where}"
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_ray_stage_semantic_parameters_emit_slang_directions():
     code = """
     shader RayStageSemantics {
@@ -24200,27 +24276,6 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
     assert "mat4" not in generated_code
     assert "sampler2d" not in generated_code
     assert "uimage2D" not in generated_code
-
-
-def test_slang_codegen_lowers_compute_num_workgroups_to_workgroup_count():
-    code = """
-    shader NumWorkGroups {
-        compute {
-            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-            buffer float* outp;
-            void main() {
-                uint i = gl_GlobalInvocationID.x;
-                uvec3 groups = gl_NumWorkGroups;
-                outp[i] = float(gl_NumWorkGroups.x + groups.y);
-            }
-        }
-    }
-    """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "uint3 groups = WorkgroupCount();" in generated_code
-    assert "float(WorkgroupCount().x + groups.y)" in generated_code
-    assert "gl_NumWorkGroups" not in generated_code
 
 
 if __name__ == "__main__":
