@@ -21695,10 +21695,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             for arg in args[:2]
         )
         accumulator = self.generate_expression(args[2])
-        return (
-            f"({scalar_type}({accumulator}) + "
-            f"{scalar_type}(dot({left}, {right})))"
-        )
+        return f"({scalar_type}({accumulator}) + {scalar_type}(dot({left}, {right})))"
 
     def generate_function_call_arguments(self, func_name, call_args):
         call_args = list(call_args or [])

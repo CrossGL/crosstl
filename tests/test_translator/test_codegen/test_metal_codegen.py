@@ -1489,15 +1489,17 @@ def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
     )
 
     generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
 
     assert (
-        "(int(acc) + int(dot(float4(as_type<char4>(uint(a[id.x]))), "
+        "(int(acc)+int(dot(float4(as_type<char4>(uint(a[id.x]))),"
         "float4(as_type<char4>(uint(b[id.x]))))))"
-    ) in generated
+    ) in compact
     assert (
-        "(uint(0u) + uint(dot(float4(as_type<uchar4>(uint(a[id.x]))), "
+        "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"
         "float4(as_type<uchar4>(uint(b[id.x]))))))"
-    ) in generated
+    ) in compact
     assert "dot4add_" not in generated
 
 
