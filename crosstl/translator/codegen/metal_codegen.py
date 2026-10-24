@@ -11772,6 +11772,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 return metal_pack_call(
                     self, func_name, [self.generate_expression(a) for a in expr.args]
                 )
+            packed_dot = self.generate_packed_dot4add_call(func_name, expr.args)
+            if packed_dot is not None:
+                return packed_dot
             if (
                 func_name in BITFIELD_ARITIES
                 and func_name not in self.user_function_names
@@ -21663,6 +21666,39 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             ) in self.glsl_buffer_block_variables
             if getattr(buffer_variable, "name", None) in dependencies
         ]
+
+    # HLSL dot4add_i8packed(a, b, acc) and dot4add_u8packed(a, b, acc) add the
+    # dot product of the four 8-bit lanes packed in a and b to acc, with byte 0
+    # the least significant lane. Metal has no packed integer dot product, and
+    # its dot() takes only floating-point vectors, so each operand is
+    # reinterpreted as a char4 or uchar4 (byte 0 lands in .x on the
+    # little-endian Apple GPUs) and the lanes go through a float dot(). Every
+    # lane product and their sum stay below 2^24 in magnitude, so the float
+    # dot product is exact.
+    PACKED_DOT4ADD_LANES = {
+        "dot4add_i8packed": ("int", "char4"),
+        "dot4add_u8packed": ("uint", "uchar4"),
+    }
+
+    def generate_packed_dot4add_call(self, func_name, args):
+        lowering = self.PACKED_DOT4ADD_LANES.get(func_name)
+        if lowering is None or func_name in self.user_function_names:
+            return None
+        if len(args) != 3:
+            raise ValueError(
+                f"Metal {func_name} alias requires 3 arguments; got {len(args)}"
+            )
+
+        scalar_type, lane_type = lowering
+        left, right = (
+            f"float4(as_type<{lane_type}>(uint({self.generate_expression(arg)})))"
+            for arg in args[:2]
+        )
+        accumulator = self.generate_expression(args[2])
+        return (
+            f"({scalar_type}({accumulator}) + "
+            f"{scalar_type}(dot({left}, {right})))"
+        )
 
     def generate_function_call_arguments(self, func_name, call_args):
         call_args = list(call_args or [])
