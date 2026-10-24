@@ -78,6 +78,7 @@ from .shader_records import (
     refuse_shader_record_buffers,
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
+from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .stage_interface_structs import (
     StageInterfaceUnsupportedError,
     gather_stage_interface_variables,
@@ -134,6 +135,7 @@ __all__ = [
     "SOURCE_RULES",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
+    "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
     "SubpassInputUnsupportedError",
     "TARGET_ENTRIES",
@@ -177,7 +179,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
     declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
+    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
+    then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
+    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
@@ -244,6 +248,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     canonicalize_texture_swizzles(program)

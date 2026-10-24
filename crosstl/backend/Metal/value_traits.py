@@ -14,7 +14,7 @@ it stays unrecognized and the caller refuses the specialization.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 _STRUCT_HEAD = re.compile(r"\s*(?:struct|class)\s+(?P<name>[A-Za-z_]\w*)\b")
 _VALUE_MEMBER = re.compile(
@@ -150,6 +150,12 @@ def _scan(preprocessor, code: str, definition_type) -> Dict[str, List[object]]:
                 span=(template_start, body_end),
                 namespace=preprocessor._namespace_at(namespace_spans, template_start),
                 member="value",
+                parameter_slots=tuple(
+                    (parameter.name or "", parameter.default)
+                    for parameter in preprocessor._parse_template_parameter_list(
+                        parameter_text
+                    )
+                ),
             )
         )
     return definitions
@@ -170,3 +176,120 @@ def struct_value_trait_definitions(
     if len(cache) > _CACHE_LIMIT:
         del cache[next(iter(cache))]
     return {name: list(entries) for name, entries in definitions.items()}
+
+
+_ENABLE_IF_START = re.compile(
+    r"\s*(?:typename\s+)?(?:(?:::)?metal\s*::\s*)?enable_if(?P<alias>_t)?\s*<"
+)
+
+
+def enable_if_parts(preprocessor, pattern: str) -> Optional[Tuple[str, str]]:
+    """The condition and result type of an ``enable_if`` specialization argument, or None for any other argument."""
+    match = _ENABLE_IF_START.match(pattern)
+    if match is None:
+        return None
+    start = match.end() - 1
+    end = preprocessor._find_matching_template_param_angle(pattern, start)
+    if end is None:
+        return None
+    suffix = pattern[end + 1 :].strip()
+    if match.group("alias") and suffix:
+        return None
+    if not match.group("alias") and re.fullmatch(r"::\s*type", suffix) is None:
+        return None
+    arguments = preprocessor._split_template_parameter_list(pattern[start + 1 : end])
+    if not 1 <= len(arguments) <= 2:
+        return None
+    result = arguments[1].strip() if len(arguments) == 2 else "void"
+    return arguments[0].strip(), result
+
+
+def complete_template_arguments(
+    preprocessor, primary, arguments: Sequence[str]
+) -> Optional[Tuple[str, ...]]:
+    """``arguments`` followed by the primary's defaults for the parameters they omit.
+
+    Returns ``arguments`` unchanged when the primary records no parameter list, and None when an omitted parameter
+    has no default or there are too many arguments.
+    """
+    slots = getattr(primary, "parameter_slots", ())
+    if not slots:
+        return tuple(arguments)
+    if len(arguments) > len(slots):
+        return None
+    substitutions = {
+        name: argument for (name, _default), argument in zip(slots, arguments) if name
+    }
+    completed = list(arguments)
+    for name, default in slots[len(arguments) :]:
+        if default is None:
+            return None
+        value = preprocessor._normalize_template_argument_text(
+            preprocessor._replace_identifiers(default, substitutions)
+        )
+        if name:
+            substitutions[name] = value
+        completed.append(value)
+    return tuple(completed)
+
+
+# metal_simdgroup: ``__is_valid_simdgroup_type<T>`` holds when ``make_scalar_t<T>`` is one of these scalars (double
+# only with native doubles, which Apple GPUs lack) and T is a scalar or a 2-, 3- or 4-element vector.
+_SIMDGROUP_SCALARS = frozenset(
+    {
+        "half",
+        "float",
+        "char",
+        "uchar",
+        "short",
+        "ushort",
+        "int",
+        "uint",
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+        "int32_t",
+        "uint32_t",
+    }
+)
+_SIMDGROUP_TRAIT = re.compile(
+    r"(?:(?:::)?metal\s*::\s*)?__is_valid_simdgroup_type\s*<(?P<operand>.*)>\s*::\s*value",
+    re.DOTALL,
+)
+
+
+def simdgroup_type_trait(
+    preprocessor, expression: str, resolve, struct_names
+) -> Optional[Tuple[Optional[bool]]]:
+    """Evaluate Metal's internal ``__is_valid_simdgroup_type<T>::value``.
+
+    Returns None when ``expression`` is not that trait, otherwise a one-element tuple holding the value, or None as
+    the value when the operand's type is not known well enough to decide. ``resolve`` canonicalizes a type operand.
+    """
+    match = _SIMDGROUP_TRAIT.fullmatch(expression.strip())
+    if match is None:
+        return None
+    operand = resolve(match.group("operand"))
+    if operand is None:
+        return (None,)
+    operand = re.sub(r"^(?:const|volatile)\s+|\s+(?:const|volatile)$", "", operand)
+    packed = re.fullmatch(r"packed_([a-z]+)([234])", operand)
+    scalar = (
+        (packed.group(1), int(packed.group(2)))
+        if packed is not None
+        else preprocessor._scalar_and_width(operand)
+    )
+    if scalar is not None:
+        base, width = scalar
+        if width in (8, 16):
+            return (None,)
+        return (base in _SIMDGROUP_SCALARS and width in (1, 2, 3, 4),)
+    if (
+        re.fullmatch(r"[A-Za-z_][\w:]*\s*<.*>", operand, re.DOTALL)
+        or re.fullmatch(r"(?:half|float|bfloat)[234]x[234]", operand)
+        or operand in struct_names
+    ):
+        # A struct or matrix is its own make_scalar_t, which is none of the scalars.
+        return (False,)
+    return (None,)
