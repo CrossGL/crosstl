@@ -445,6 +445,10 @@ class SlangToCrossGLConverter:
             "uint2": "uvec2",
             "uint3": "uvec3",
             "uint4": "uvec4",
+            # Packed 8-bit vectors are plain 32-bit words in CrossGL, matching
+            # the HLSL importer and the uint results of pack_s8/pack_u8.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             "bool": "bool",
             "bool2": "bvec2",
             "bool3": "bvec3",

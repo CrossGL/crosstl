@@ -3870,6 +3870,32 @@ def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignment
     cgl_translator.parse(generated_code)
 
 
+def test_slang_packed_8bit_vector_types_map_to_uint_like_the_hlsl_importer():
+    # CrossGL has no int8_t4_packed/uint8_t4_packed; the HLSL importer maps
+    # both to uint, and pack_s8/pack_u8 return uint in CrossGL.
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        uint i = id.x;
+        int4 a0 = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+        int8_t4_packed r = pack_s8(a0);
+        uint8_t4_packed u = (uint8_t4_packed)outp[i];
+        outp[i] = (uint)r + (uint)u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int8_t4_packed" not in generated_code
+    assert "uint r = pack_s8(a0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
     # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
     # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,
