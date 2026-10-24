@@ -23,6 +23,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
 - An early `return;` in a GLSL `main` that writes stage outputs returns those outputs on every target.
 - CUDA output writes CrossGL scalar casts such as `f64(x)` with C type names.
+- CUDA output passes the address of the target to block- and system-scoped atomics such as `atomicAdd_block` and `atomicInc_system`, as it already did for `atomicAdd` and `atomicInc`.
 - A program with several stages of one kind, such as a Metal library with several vertex functions, has every stage rewritten, not only the first.
 - Translating a malformed shader no longer takes time that grows much faster than its length.
 
