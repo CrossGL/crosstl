@@ -34235,3 +34235,42 @@ def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_translate_hlsl_packed_byte_intrinsics_to_metal_byte_vectors(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    assert "uintr0=as_type<uint>(uchar4(uint4(a)));" in compact
+    assert "uintr1=as_type<uint>(uchar4(uint4(b)));" in compact
+    assert (
+        "uintr2=as_type<uint>(char4(clamp(int4(a),int4(-128),int4(127))));" in compact
+    )
+    assert "uintr3=as_type<uint>(uchar4(clamp(int4(a),int4(0),int4(255))));" in compact
+    assert "int4u0=int4(as_type<char4>(uint(r0)));" in compact
+    assert "uint4u1=uint4(as_type<uchar4>(uint(r1)));" in compact
+    for name in ("pack_s8", "pack_u8", "pack_clamp", "unpack_s8s32", "unpack_u8u32"):
+        assert f"{name}(" not in generated
