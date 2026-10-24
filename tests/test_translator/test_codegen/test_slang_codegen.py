@@ -7869,14 +7869,14 @@ def test_slang_ray_query_matrix_methods_validate_target_result_types():
             void acceptMatrix(mat4 value) {
             }
 
-            void acceptMatrix3x4(mat3x4 value) {
+            void acceptMatrix3x4(mat4x3 value) {
             }
 
             void main() {
                 RayDesc ray;
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(scene, 0, 0xFF, ray);
-                mat3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();
+                mat4x3 validObjectToWorld = rq.CommittedObjectToWorld3x4();
                 acceptMatrix3x4(rq.CommittedWorldToObject3x4());
                 float matrixScalar = rq.CommittedObjectToWorld3x4();
                 vec3 matrixVector = rq.CandidateWorldToObject3x4();
@@ -10752,16 +10752,130 @@ def test_matrix_and_non_float_vector_types_emit_slang_names():
     assert "bool3 flags;" in generated_code
     assert "bool2 mask = bool2(true, false);" in generated_code
     assert "float4 transformPosition(float4x4 m, float4 p)" in generated_code
-    assert "float4x4 model = float4x4(1.0);" in generated_code
-    assert "float2x3 nonSquare;" in generated_code
+    assert (
+        "float4x4 model = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "float3x2 nonSquare;" in generated_code
     assert "double2 preciseUV = double2(1.0, 2.0);" in generated_code
-    assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "double4x3 jacobian;" in generated_code
+    assert (
+        "double2x2 precise = transpose(double2x2(1.0, 0.0, 0.0, 1.0));"
+        in generated_code
+    )
+    assert "double3x4 jacobian;" in generated_code
     assert "return mul(m, p);" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "dmat2(" not in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_slang_matrix_constructors_match_hlsl_orientation():
+    """CrossGL matCxR is floatRxC in Slang; constructors fill columns like GLSL.
+
+    Fixes #2767: scalar args become diagonals (not splats), multi-arg constructors
+    are transposed into row-major HLSL/Slang layout, and non-square names swap.
+    """
+    code = """
+    shader Mat {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 a = mat2(2.0);
+                mat2 b = mat2(fin[i], 1.0, 2.0, 3.0);
+                mat4x3 c = mat4x3(1.0);
+                vec2 v = a * b * vec2(1.0, fin[i]);
+                outp[i] = v.y + c[0][0];
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2x2 a = float2x2(2.0, 0.0, 0.0, 2.0);" in generated_code
+    assert "float2x2 b = transpose(float2x2(fin[i], 1.0, 2.0, 3.0));" in generated_code
+    assert (
+        "float3x4 c = float3x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);"
+        in generated_code
+    )
+    assert "float4x3" not in generated_code
+    assert "float2x2(2.0);" not in generated_code
+
+
+def test_slang_matrix_column_access_matches_hlsl_orientation():
+    """Slang uses HLSL row indexing; rewrite CrossGL column access like DirectX.
+
+    Maintainer follow-up on #2780 / Fixes #2767: constant columns become
+    ``m._m0c_m1c...`` lvalues, ``m[i][j]`` swaps to ``m[j][i]``, and
+    ``mat * buffer_vec`` lowers to ``mul``.
+    """
+    code = """
+    shader Col {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 m = mat2(fin[i], 2.0, 3.0, 4.0);
+                vec2 c = m[0];
+                m[1] = vec2(5.0, 6.0);
+                outp[i] = c.y * 10.0 + m[1][0];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 c = m._m00_m10;" in generated_code
+    assert "m._m01_m11 = float2(5.0, 6.0);" in generated_code
+    assert "outp[i] = c.y * 10.0 + m[0][1];" in generated_code
+    assert "float2 c = m[0];" not in generated_code
+    assert "m[1] = float2(5.0, 6.0);" not in generated_code
+
+
+def test_slang_nonsquare_matrix_column_and_buffer_mul():
+    """Non-square column swizzles and pointer-buffer matrix mul (Fixes #2767)."""
+    nonsquare = """
+    shader NS {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat4x3 r = mat4x3(1.0);
+                outp[i] = r[0].x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(nonsquare)))
+    assert "float3x4 r =" in generated
+    assert "outp[i] = r._m00_m10_m20.x;" in generated
+    assert "r[0].x" not in generated
+
+    mul_code = """
+    shader Mul {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer vec4* fin;
+            buffer vec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat4 m = mat4(1.0);
+                outp[i] = m * fin[i];
+            }
+        }
+    }
+    """
+    mul_generated = generate_code(parse_code(tokenize_code(mul_code)))
+    assert "outp[i] = mul(m, fin[i]);" in mul_generated
+    assert "outp[i] = m * fin[i];" not in mul_generated
 
 
 def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
@@ -10801,7 +10915,7 @@ def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
         generated_code
     )
     assert (
-        "return mul(float2x2(cos(angle), -sin(angle), sin(angle), cos(angle)), "
+        "return mul(transpose(float2x2(cos(angle), -sin(angle), sin(angle), cos(angle))), "
         "direction);" in generated_code
     )
     assert "return mul(modelView, float4(position + normal, 1.0));" in generated_code
