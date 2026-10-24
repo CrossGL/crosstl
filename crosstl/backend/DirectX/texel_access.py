@@ -317,3 +317,29 @@ class HLSLTexelAccessMixin:
         if family == "int":
             return f"i{sampler_type}"
         return None
+
+    def integer_texel_operand(
+        self, expr, rendered=None, components=None, is_main=False
+    ):
+        """``expr`` as the integer texel location or level a CrossGL ``texelFetch`` takes.
+
+        HLSL ``Load`` takes an ``int`` location (``Texture2D.Load(int3)`` packs x, y and the mip level) and the
+        texture subscript operator a ``uint`` one; a floating-point or boolean operand converts implicitly, which
+        truncates toward zero. CrossGL ``texelFetch`` takes integer coordinates and level (GLSL 4.60 section 8.9.2)
+        as the MSL ``read`` methods do, so such an operand converts explicitly. ``rendered`` is ``expr`` already
+        rendered (a swizzle of it, for a split location) and ``components`` the operand's width; an operand of
+        unknown type is left as written.
+        """
+        raw_type = self.expression_value_raw_type(expr)
+        if rendered is None:
+            rendered = self.generate_expression(expr, is_main)
+        if raw_type is None:
+            return rendered
+        canonical = self.canonical_composite_type(raw_type)
+        base = self.raw_type_base(canonical) or ""
+        if self.numeric_type_family(canonical) != "float" and not base.startswith(
+            ("double", "bool")
+        ):
+            return rendered
+        width = components or self.numeric_vector_component_count(canonical) or 1
+        return f"int({rendered})" if width == 1 else f"ivec{width}({rendered})"
