@@ -7,12 +7,13 @@ type of the same spelling. :func:`refuse_undeclared_types` raises :class:`Undecl
 name, so the translation fails with a typed diagnostic instead.
 
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
-trait bounds of generic parameters are not types. Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
+trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
+``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
+other argument there is still read as a type, and :mod:`.feedback_textures` refuses one that is not a kind. Names
+with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
 (``metal::texture2d``, ``Outer.Inner``) and parenthesised parts are resource or library spellings the generators
 resolve themselves. The template argument of ``RayQuery<FLAGS>`` is a ray flag value, not a type (DXR, "RayQuery"),
-and the generators check it themselves. The argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``) is a
-value only when it is ``SAMPLER_FEEDBACK_MIN_MIP`` or ``SAMPLER_FEEDBACK_MIP_REGION_USED``; any other argument is still
-read as a type, and :mod:`.feedback_textures` refuses one that is not a kind.
+and the generators check it themselves.
 """
 
 from __future__ import annotations
