@@ -10999,6 +10999,41 @@ def test_narrow_generic_vector_constructors_emit_slang_vector_types():
         assert invalid_token not in generated_code
 
 
+def test_glsl_16bit_integer_spellings_emit_slang_vector_types():
+    # Slang has no u16vec2/i16vec4 or uint16/int16 spellings; its 16-bit
+    # integer types are uint16_t/int16_t and vector<uint16_t, N>.
+    code = """
+    shader Shorts {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u16vec2 a = u16vec2(uint16(uin[i]), uint16(uin[i + 1u]));
+                i16vec4 b = i16vec4(int16(1), int16(2), int16(3), int16(4));
+                u16vec3 c = u16vec3(a, uint16(5));
+                i16vec2 d = i16vec2(b.xy);
+                outp[i] = uvec4(uvec2(a), uint(c.z), uint(d.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vector<uint16_t, 2> a = vector<uint16_t, 2>(uint16_t(uin[i])" in (
+        generated_code
+    )
+    assert "vector<int16_t, 4> b = vector<int16_t, 4>(int16_t(1)" in generated_code
+    assert "vector<uint16_t, 3> c = vector<uint16_t, 3>(a, uint16_t(5));" in (
+        generated_code
+    )
+    assert "vector<int16_t, 2> d = vector<int16_t, 2>(b.xy);" in generated_code
+    for glsl_spelling in ("u16vec", "i16vec", "uint16(", "int16("):
+        assert glsl_spelling not in generated_code
+
+
 def test_scalar_aliases_emit_slang_fundamental_type_names():
     # Slang's fundamental scalar type names are float/int/uint/double
     # (with *_t aliases), not CrossGL's f32/i32/u32/f64 spellings.
