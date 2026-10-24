@@ -31,7 +31,10 @@ Use the project pipeline as an audit-first migration workflow:
    generated portability report with the translated artifacts.
 4. Run ``validate-project`` on the generated report. Use the JSON output for
    automation, text output for local triage, or SARIF output for code-scanning
-   systems.
+   systems. It checks each target's artifacts with that target's reference
+   tool when the tool is on ``PATH``; ``python -m crosstl doctor`` lists the
+   tools it looks for and which of them it finds, and ``--format json`` gives
+   the same list to scripts.
 5. Run ``inspect-report`` when the raw report is too large to review directly.
    The inspection output keeps bounded samples for diagnostics, failed
    artifacts, source maps, source remaps, validation records, external corpus
