@@ -40,6 +40,9 @@ The initial WGSL target surface covers common portable shader output:
 * deterministic diagnostics for CrossGL combined texture/sampler resources,
   and texture sampling calls that need explicit WebGPU binding lowering before
   they can emit valid WGSL
+* typed diagnostics (``project.translate.wgsl-numeric-type-unsupported``) for
+  64-bit floating-point, 64-bit integer and bfloat16 types, which WGSL cannot
+  represent; they are never narrowed to ``f32`` or ``i32``
 
 Implementation Notes
 --------------------
