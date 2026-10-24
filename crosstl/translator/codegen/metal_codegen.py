@@ -105,6 +105,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .barrier_peephole import merge_adjacent_metal_barriers
 from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
 from .boolean_mix import boolean_mix_selector, metal_boolean_mix
@@ -10736,6 +10737,8 @@ class MetalCodeGen(
 
     def generate_discarded_expression(self, expr):
         """Render an unused result without changing nested value expressions."""
+        if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
+            return self.generate_assignment(expr)
         rendered = self.generate_expression(expr)
         narrow_update = (
             isinstance(expr, UnaryOpNode)
@@ -11584,7 +11587,7 @@ class MetalCodeGen(
                 expr, operator, f"{left} {operator} {right}"
             )
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
-            return self.generate_assignment(expr)
+            return assignment_value_expression(self.generate_assignment(expr))
         elif isinstance(expr, ArrayLiteralNode):
             elements = ", ".join(
                 self.generate_expression_with_expected(element, None)

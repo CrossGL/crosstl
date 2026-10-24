@@ -126,6 +126,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .barrier_peephole import (
     HLSL_EXECUTION_BARRIER_PLACEHOLDER,
@@ -25142,11 +25143,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     update = node.update
                 elif isinstance(node.update, list):
                     update = ", ".join(
-                        self.generate_expression(expr).strip().rstrip(";")
+                        self.generate_discarded_expression(expr).strip().rstrip(";")
                         for expr in node.update
                     )
                 else:
-                    update = self.generate_expression(node.update).strip().rstrip(";")
+                    update = (
+                        self.generate_discarded_expression(node.update)
+                        .strip()
+                        .rstrip(";")
+                    )
 
             code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
 
@@ -26760,6 +26765,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }[operation]
         return f"({rendered[0]} {operator} {rendered[1]})"
 
+    def generate_discarded_expression(self, expr):
+        """Render an expression whose value is unused, such as a for update."""
+        if isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        return self.generate_expression(expr)
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         storage_read = self.hlsl_half_storage.read(expr)
@@ -27035,7 +27046,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return minimum_precision_integer
             return f"({left} {mapped_op} {right})"
         elif isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr)
+            return assignment_value_expression(self.generate_assignment(expr))
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             pointer_array_base_unary = (
                 self.generate_hlsl_resource_pointer_array_base_unary(
