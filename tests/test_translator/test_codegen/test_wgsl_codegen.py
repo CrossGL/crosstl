@@ -2670,6 +2670,84 @@ def test_wgsl_codegen_lowers_workgroup_execution_barrier():
     assert "workgroupExecutionBarrier();" not in generated
 
 
+WGSL_ALL_MEMORY_BARRIERS = [
+    "storageBarrier();",
+    "textureBarrier();",
+    "workgroupBarrier();",
+]
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        # groupMemoryBarrier orders buffer, image and shared memory.
+        ("groupMemoryBarrier", WGSL_ALL_MEMORY_BARRIERS),
+        ("memoryBarrierShared", ["workgroupBarrier();"]),
+        # deviceMemoryBarrier orders buffers and textures.
+        ("deviceMemoryBarrier", ["storageBarrier();", "textureBarrier();"]),
+        ("memoryBarrierBuffer", ["storageBarrier();"]),
+        ("memoryBarrierImage", ["textureBarrier();"]),
+        ("allMemoryBarrier", WGSL_ALL_MEMORY_BARRIERS),
+        ("memoryBarrier", WGSL_ALL_MEMORY_BARRIERS),
+    ],
+)
+def test_wgsl_codegen_lowers_memory_barriers_to_wgsl_barriers(
+    tmp_path, spelling, expected
+):
+    shader = """
+    shader WGSLMemoryBarriers {
+        compute {
+            layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                BARRIER();
+                return;
+            }
+        }
+    }
+    """.replace("BARRIER", spelling)
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    body = generated[generated.index("fn ") :]
+    calls = [line.strip() for line in body.splitlines() if "Barrier" in line]
+
+    assert calls == expected
+    assert f"{spelling}(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_translate_hlsl_memory_barriers_to_wgsl(tmp_path):
+    source = """
+    RWStructuredBuffer<float> outp;
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        outp[id.x] = 2.0;
+        GroupMemoryBarrier();
+        DeviceMemoryBarrierWithGroupSync();
+        AllMemoryBarrier();
+        outp[id.x] = 1.0;
+    }
+    """
+
+    source_path = tmp_path / "barrier.hlsl"
+    source_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(str(source_path), backend="wgsl")
+    body = generated[generated.index("fn ") :]
+    calls = [line.strip() for line in body.splitlines() if "Barrier" in line]
+
+    for name in ("memoryBarrierShared", "deviceMemoryBarrier", "allMemoryBarrier"):
+        assert name not in generated
+    device_fence = ["storageBarrier();", "textureBarrier();"]
+    assert calls == [
+        "workgroupBarrier();",
+        *device_fence,
+        "workgroupBarrier();",
+        *device_fence,
+        *WGSL_ALL_MEMORY_BARRIERS,
+    ]
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     shader = """
     shader WGSLPrefixUpdate {

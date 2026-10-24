@@ -433,6 +433,30 @@ class WGSLCodeGen:
         "groupmemorybarrierwithgroupsync",
         "workgroupbarrier",
         "workgroupexecutionbarrier",
+        "groupmemorybarrier",
+        "memorybarriershared",
+        "devicememorybarrier",
+        "memorybarrierbuffer",
+        "memorybarrierimage",
+        "allmemorybarrier",
+        "memorybarrier",
+    }
+    # WGSL has no memory-only barrier: workgroupBarrier, storageBarrier and
+    # textureBarrier each also synchronize execution across the workgroup and,
+    # like Metal's threadgroup_barrier, must be reached in uniform control flow.
+    # A CrossGL memory barrier therefore lowers to the WGSL barriers for every
+    # address space it orders; the extra execution synchronization is stronger
+    # than the source asks for but never weaker. groupMemoryBarrier orders
+    # buffer, image and shared memory (GLSL 4.60 section 8.16), and
+    # deviceMemoryBarrier orders buffers and textures (HLSL DeviceMemoryBarrier).
+    WGSL_MEMORY_BARRIER_LOWERING = {
+        "groupmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
+        "memorybarriershared": ("workgroupBarrier",),
+        "devicememorybarrier": ("storageBarrier", "textureBarrier"),
+        "memorybarrierbuffer": ("storageBarrier",),
+        "memorybarrierimage": ("textureBarrier",),
+        "allmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
+        "memorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
     }
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",
@@ -2490,7 +2514,10 @@ class WGSLCodeGen:
         if isinstance(stmt, ExpressionStatementNode):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment_statement(stmt.expression, indent)
-            return f"{pad}{self.generate_expression(stmt.expression)};"
+            expression = self.generate_expression(stmt.expression)
+            if self.is_multi_barrier_memory_lowering(stmt.expression):
+                return "\n".join(f"{pad}{call};" for call in expression.split("; "))
+            return f"{pad}{expression};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):
@@ -4085,6 +4112,17 @@ class WGSLCodeGen:
             return self.identifier_name(pointer_expr.name)
         return f"&{self.generate_expression(pointer_expr)}"
 
+    def is_multi_barrier_memory_lowering(self, expression):
+        if not isinstance(expression, FunctionCallNode):
+            return False
+        function_name = self.expression_name(expression.function)
+        if not isinstance(function_name, str):
+            return False
+        lowering = self.WGSL_MEMORY_BARRIER_LOWERING.get(
+            self.semantic_key(function_name)
+        )
+        return lowering is not None and len(lowering) > 1
+
     def generate_barrier_call(self, node, function_name):
         if node.arguments:
             raise ValueError(
@@ -4094,6 +4132,11 @@ class WGSLCodeGen:
             raise ValueError(
                 "WGSL target only supports barrier() inside compute stages"
             )
+        lowering = self.WGSL_MEMORY_BARRIER_LOWERING.get(
+            self.semantic_key(function_name)
+        )
+        if lowering is not None:
+            return "; ".join(f"{barrier}()" for barrier in lowering)
         return "workgroupBarrier()"
 
     def generate_constructor(self, node):
