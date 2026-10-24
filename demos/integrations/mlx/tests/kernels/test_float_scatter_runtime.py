@@ -206,7 +206,7 @@ def test_float_scatter_workload_preserves_guards_and_metadata(operation, layout)
 
 
 def test_float_scatter_requires_native_windows_and_metal_execution():
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -216,13 +216,13 @@ def test_float_scatter_requires_native_windows_and_metal_execution():
         "Validate float compare-exchange and scatter",
         "Validate indexed DirectX gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert "test_float_scatter_runtime.py" in step
         assert "--timeout-seconds 1200" in step and "-n auto" in step
         assert "--junitxml=" in step and "--basetemp=" in step
         assert "if:" not in step
-    opengl = ci_coverage.workflow_step_section(
+    opengl = workflow_text.workflow_step_section(
         workflow, "Validate indexed OpenGL gather and resource aggregates"
     )
     assert REQUIRE_ENV not in opengl

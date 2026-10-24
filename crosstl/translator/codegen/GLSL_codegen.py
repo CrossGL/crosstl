@@ -142,6 +142,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .bfloat_constants import bfloat16_constant_float, scalar_constant_value
 from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
@@ -156,6 +157,10 @@ from .call_effects import builtin_argument_write_indices
 from .clip_position_defaults import default_clip_position_member
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .entry_selection import entry_type_references
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -196,6 +201,7 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
@@ -224,6 +230,7 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -478,6 +485,7 @@ from .scalar_return_bounds import (
     scalar_return_interval,
     vector_return_intervals,
 )
+from .sizeof_calls import sizeof_call_bytes
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -1540,6 +1548,7 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
 
 
 class GLSLCodeGen(
+    GLSLNarrowVectorMixin,
     GLSLDescriptorSetBindingsMixin,
     LoweringRefusalMixin,
     GLSLEmulatedMatrices,
@@ -3085,17 +3094,17 @@ class GLSLCodeGen(
             "int32_t": "int",
             "int64": "int64_t",
             "int64_t": "int64_t",
-            "long": "int",
-            "signed long": "int",
-            "ptrdiff_t": "int",
+            "long": "int64_t",
+            "signed long": "int64_t",
+            "ptrdiff_t": "int64_t",
             "uint16": "uint",
             "uint16_t": "uint",
             "uint32_t": "uint",
             "uint64": "uint64_t",
             "uint64_t": "uint64_t",
-            "ulong": "uint",
-            "unsigned long": "uint",
-            "size_t": "uint",
+            "ulong": "uint64_t",
+            "unsigned long": "uint64_t",
+            "size_t": "uint64_t",
             "int2": "ivec2",
             "int3": "ivec3",
             "int4": "ivec4",
@@ -35062,6 +35071,7 @@ complex64_t crossgl_complex64_mod_assign(
             resolved = re.sub(r"\s+", " ", resolved).strip()
             if resolved.endswith("&"):
                 resolved = resolved[:-1].rstrip()
+            resolved = crossgl_named_vector_spelling(resolved)
             if resolved == type_name == alias_target:
                 return resolved
             type_name = resolved
@@ -35831,6 +35841,12 @@ complex64_t crossgl_complex64_mod_assign(
             return generated
 
         narrow = expected["narrow"]
+        if narrow is not None:
+            carried = self.glsl_narrow_vector_carrier_form(
+                generated, expected["source"]
+            )
+            if carried is not None:
+                return carried
         exact_source_type = self.glsl_source_type_signature(
             actual["source"]
         ) == self.glsl_source_type_signature(expected["source"])
@@ -39645,10 +39661,15 @@ complex64_t crossgl_complex64_mod_assign(
                 if ieee_arithmetic is not None:
                     return ieee_arithmetic
             return self.glsl_apply_narrow_float_contract(
-                f"({left} {op} {right})", self.glsl_source_expression_type(expr), expr
+                self.glsl_narrow_vector_wrap(expr, op, f"({left} {op} {right})"),
+                self.glsl_source_expression_type(expr),
+                expr,
             )
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
-            return self.generate_assignment(expr)
+            return assignment_value_expression(
+                self.generate_assignment(expr),
+                discarded=expr is self.current_discarded_expression,
+            )
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
             emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
@@ -39733,7 +39754,9 @@ complex64_t crossgl_complex64_mod_assign(
                 "POST_INCREMENT",
                 "POST_DECREMENT",
             }
-            return f"({operand}{op})" if is_postfix else f"({op}{operand})"
+            if is_postfix:
+                return f"({operand}{op})"
+            return self.glsl_narrow_vector_wrap(expr, op, f"({op}{operand})")
         elif isinstance(expr, WaveOpNode):
             return self.generate_glsl_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
@@ -40022,6 +40045,12 @@ complex64_t crossgl_complex64_mod_assign(
                 func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
+            sizeof_bytes = sizeof_call_bytes(
+                self, original_func_name, expr.args, "opengl"
+            )
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
+
             static_generic_call = generate_static_generic_numeric_call(
                 self,
                 original_func_name,
@@ -40084,9 +40113,17 @@ complex64_t crossgl_complex64_mod_assign(
                     original_func_name,
                     expr.args,
                 )
-            elif original_func_name in getattr(
-                self, "generic_function_definitions", {}
-            ) and getattr(self, "enforce_concrete_glsl_types", False):
+            else:
+                reject_unresolved_explicit_generic_call(
+                    self, original_func_name, "OpenGL"
+                )
+            if (
+                specialized_func_name is None
+                and original_func_name in getattr(
+                    self, "generic_function_definitions", {}
+                )
+                and getattr(self, "enforce_concrete_glsl_types", False)
+            ):
                 raise OpenGLTemplateTypeError(
                     "OpenGL codegen cannot infer concrete template arguments "
                     f"for generic function '{original_func_name}'; provide a "
@@ -56192,6 +56229,10 @@ complex64_t crossgl_complex64_mod_assign(
             if substituted_type != vtype_str:
                 return self.map_type(substituted_type)
 
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
+
         vector_base, vector_args = generic_type_parts(vtype_str)
         if (
             len(vector_args) == 2
@@ -57757,16 +57798,10 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
                 size = type_node.size
-                if element_type == "float":
-                    return f"vec{size}"
-                elif element_type == "int":
-                    return f"ivec{size}"
-                elif element_type == "uint":
-                    return f"uvec{size}"
-                elif element_type == "bool":
-                    return f"bvec{size}"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         elif hasattr(type_node, "operator") or hasattr(type_node, "identifier"):
             return self.expression_to_string(type_node)
         else:

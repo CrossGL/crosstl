@@ -229,3 +229,92 @@ def test_ray_query_flags_are_values_not_type_uses():
     # The flags of RayQuery<FLAGS> are values; other template arguments are still types.
     uses = undeclared_type_uses(_program(RAY_QUERIES))
     assert [name for name, _node in uses] == ["Missing"]
+
+
+# An importer keeps a generic structure next to the specialization it materialized; the template's member alias
+# (``Alias``) has no CrossGL declaration.
+TEMPLATE_BODY = """
+shader Templates {
+    struct Holder<T> {
+        T value;
+        Alias scratch;
+    }
+
+    struct Holder_float {
+        float value;
+    }
+
+    compute {
+        buffer float values[];
+
+        @compute @workgroup_size(1, 1, 1)
+        void main() {
+            %s h;
+            h.value = 2.0;
+            values[0] = h.value;
+        }
+    }
+}
+"""
+UNNAMED_TEMPLATE = TEMPLATE_BODY % "Holder_float"
+NAMED_TEMPLATE = TEMPLATE_BODY % "Holder<float>"
+INSTANTIATING = ["metal", "directx", "opengl"]
+# Generic structures reached only through another generic structure live code names are read too.
+NESTED_TEMPLATE = """
+shader Nested {
+    struct Inner<T> {
+        Alias scratch;
+    }
+
+    struct Outer<T> {
+        Inner<T> inner;
+        T value;
+    }
+
+    compute {
+        buffer float values[];
+
+        @compute @workgroup_size(1, 1, 1)
+        void main() {
+            Outer<float> o;
+            o.value = 1.0;
+            values[0] = o.value;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_generic_structures_no_live_code_names_are_not_checked(target):
+    assert undeclared_type_uses(_program(UNNAMED_TEMPLATE), target) == []
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_generic_structures_live_code_names_are_checked(target):
+    for source in (NAMED_TEMPLATE, NESTED_TEMPLATE):
+        uses = undeclared_type_uses(_program(source), target)
+        assert [name for name, _node in uses] == ["Alias"]
+
+
+@pytest.mark.parametrize("target", [None, "vulkan", "rust", "slang"])
+def test_generic_structures_are_checked_for_targets_that_emit_templates(target):
+    uses = undeclared_type_uses(_program(UNNAMED_TEMPLATE), target)
+    assert [name for name, _node in uses] == ["Alias"]
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_an_unnamed_generic_structure_does_not_block_translation(tmp_path, target):
+    path = _write(tmp_path, "template.cgl", UNNAMED_TEMPLATE)
+    generated = crosstl.translate(path, backend=target)
+    assert "Holder_float" in generated
+    assert "Alias" not in generated
+
+
+@pytest.mark.parametrize("target", INSTANTIATING + ["vulkan"])
+def test_a_named_generic_structure_with_an_undeclared_member_is_refused(
+    tmp_path, target
+):
+    path = _write(tmp_path, "template.cgl", NAMED_TEMPLATE)
+    with pytest.raises(UndeclaredTypeError, match="Alias"):
+        crosstl.translate(path, backend=target)

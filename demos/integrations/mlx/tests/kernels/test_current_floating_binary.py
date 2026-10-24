@@ -13,8 +13,8 @@ from demos.integrations.mlx.tests.kernels import (
 from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
     run_binary_cases,
 )
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_FLOATING_BINARY"
@@ -61,7 +61,7 @@ def test_current_floating_binary_native_parity(
 
 def test_ci_requires_floating_binary_once_per_native_target():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned native binary math"
     )
     assert_native_step_prerequisites(step, job="portable-host", pinned=True)

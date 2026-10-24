@@ -34,6 +34,7 @@ GATING_WORKFLOWS = {
 # The job that decides whether a push to main repeats a commit the merge queue
 # already tested, per workflow.
 QUEUE_TESTED_WORKFLOWS = {
+    "computesharp.yml": "plan",
     "backend-tests.yml": "python-versions",
     "translator-tests.yml": "python-versions",
     "full-tests.yml": "plan",
@@ -227,23 +228,134 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     planner = jobs[plan]
-    assert planner["permissions"] == {"actions": "read"}
+    assert planner["permissions"] == (
+        {"actions": "read", "contents": "read"}
+        if filename == "computesharp.yml"
+        else {"actions": "read"}
+    )
     assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
     (step,) = (step for step in planner["steps"] if step.get("id") == "queue")
     assert step["if"] == "github.event_name == 'push'"
-    assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
     # A failed lookup must run the tests rather than skip them.
     assert "|| echo 0)" in step["run"]
-    reference = yaml.safe_load(
-        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
-    assert step == reference
+    if filename == "computesharp.yml":
+        # Each merge group selects the port's jobs from its own change, so a push
+        # that lands several groups checks every pushed commit (after checkout).
+        assert "head_sha=$sha&event=merge_group&status=success" in step["run"]
+        assert 'git rev-list "$BEFORE..$GITHUB_SHA"' in step["run"]
+        assert planner["steps"][0]["with"]["fetch-depth"] == 0
+    else:
+        assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
+        reference = yaml.safe_load(
+            (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+        )["jobs"]["python-versions"]["steps"][0]
+        assert step == reference
     for name, job in jobs.items():
         if name in {plan, "result"}:
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
+        guard = f"needs.{plan}.outputs.tested != 'true'"
+        if filename == "computesharp.yml":
+            # Keep the port's independent run/execute filters and cancellation rule.
+            assert job["if"].startswith("${{ " + guard + " && "), (filename, name)
+        else:
+            assert job["if"] == guard, (filename, name)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not (shutil.which("bash") and shutil.which("git")),
+    reason="Bash and Git required",
+)
+@pytest.mark.parametrize(
+    "old_tip,passed,api_error,expected",
+    [
+        # One merge group landed, and its run passed.
+        (2, {3}, False, "true"),
+        # One push landed three merge groups, and every run passed.
+        (0, {1, 2, 3}, False, "true"),
+        # Only the newest group passed; an earlier one failed, was cancelled or is
+        # still running, and the newest run may have skipped the port.
+        (0, {3}, False, "false"),
+        # No group passed this commit: an admin merge that bypassed the queue, a
+        # failed or cancelled run, or a group that tested a different commit.
+        (2, set(), False, "false"),
+        # The API fails: gh prints the error body and exits non-zero.
+        (2, {3}, True, "false"),
+        # The old tip is not in the clone.
+        (None, {1, 2, 3}, False, "false"),
+    ],
+)
+def test_computesharp_queue_lookup_requires_every_pushed_commit_to_pass(
+    tmp_path, old_tip, passed, api_error, expected
+):
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "computesharp.yml").read_text(encoding="utf-8")
+    )
+    step = next(
+        step for step in workflow["jobs"]["plan"]["steps"] if step.get("id") == "queue"
+    )
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+
+    def git(*arguments):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        ).stdout.strip()
+
+    git("init", "-q")
+    commits = []
+    for index in range(4):
+        git("commit", "-q", "--allow-empty", "-m", f"merge group {index}")
+        commits.append(git("rev-parse", "HEAD"))
+    output = tmp_path / "output"
+    args = tmp_path / "args"
+    # Run the actual workflow shell with a local API substitute, without network access.
+    stub = textwrap.dedent("""\
+        gh() {
+          printf '%s\\n' "$*" >> "$LOOKUP_ARGS"
+          if [ -n "$API_ERROR" ]; then
+            printf '%s' '{"message":"Not Found","status":"404"}'
+            return 1
+          fi
+          local sha="${2#*head_sha=}"
+          case " $PASSED " in *" ${sha%%&*} "*) printf 1 ;; *) printf 0 ;; esac
+        }
+        """)
+    subprocess.run(
+        ["bash", "-e", "-c", stub + step["run"]],
+        check=True,
+        cwd=tmp_path,
+        env={
+            **env,
+            "API_ERROR": "1" if api_error else "",
+            "PASSED": " ".join(commits[index] for index in passed),
+            "BEFORE": "0" * 40 if old_tip is None else commits[old_tip],
+            "GITHUB_OUTPUT": str(output),
+            "LOOKUP_ARGS": str(args),
+            "GITHUB_REPOSITORY": "CrossGL/crosstl",
+            "GITHUB_SHA": commits[-1],
+            "GITHUB_WORKFLOW_REF": (
+                "CrossGL/crosstl/.github/workflows/computesharp.yml@refs/heads/main"
+            ),
+        },
+    )
+    assert output.read_text().strip() == f"tested={expected}"
+    if expected == "true":
+        assert args.read_text().splitlines() == [
+            "api repos/CrossGL/crosstl/actions/workflows/computesharp.yml/runs"
+            f"?head_sha={sha}&event=merge_group&status=success --jq .total_count"
+            for sha in reversed(commits[old_tip + 1 :])
+        ]
 
 
 def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
@@ -270,6 +382,68 @@ def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
             continue
         assert job["needs"] == "legs", name
         assert job["if"] == "needs.legs.outputs.run == 'true'", name
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"), reason="Bash required"
+)
+@pytest.mark.parametrize(
+    "response,status,expected",
+    [
+        # One merge-group run of this workflow passed on the pushed commit.
+        ("1", 0, "true"),
+        # A requeued group can pass the same commit twice.
+        ("2", 0, "true"),
+        # No run passed: an admin merge that bypassed the queue, or a failed,
+        # cancelled or still running group.
+        ("0", 0, "false"),
+        # The API fails: gh prints the error body and exits non-zero.
+        ('{"message":"Not Found","status":"404"}', 1, "false"),
+        # The API fails without a body.
+        ("", 1, "false"),
+    ],
+)
+def test_queue_lookup_skips_a_push_only_when_a_merge_group_run_passed(
+    tmp_path, response, status, expected
+):
+    # translator-tests.yml holds the step every other queue-tested workflow copies.
+    step = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    output = tmp_path / "output"
+    args = tmp_path / "args"
+    # Run the actual workflow shell with a local API substitute, without network access.
+    stub = textwrap.dedent("""\
+        gh() {
+          printf '%s\\n' "$*" >> "$LOOKUP_ARGS"
+          printf '%s' "$RESPONSE"
+          return "$STATUS"
+        }
+        """)
+    subprocess.run(
+        ["bash", "-e", "-c", stub + step["run"]],
+        check=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "RESPONSE": response,
+            "STATUS": str(status),
+            "GITHUB_OUTPUT": str(output),
+            "LOOKUP_ARGS": str(args),
+            "GITHUB_REPOSITORY": "CrossGL/crosstl",
+            "GITHUB_SHA": "0123abcd",
+            "GITHUB_WORKFLOW_REF": (
+                "CrossGL/crosstl/.github/workflows/backend-tests.yml@refs/heads/main"
+            ),
+        },
+        capture_output=True,
+    )
+    assert output.read_text().strip() == f"tested={expected}"
+    # The lookup asks about this workflow's runs only, not every workflow's.
+    assert args.read_text().splitlines() == [
+        "api repos/CrossGL/crosstl/actions/workflows/backend-tests.yml/runs"
+        "?head_sha=0123abcd&event=merge_group&status=success --jq .total_count"
+    ]
 
 
 def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
@@ -648,10 +822,3 @@ def _matrix_values(workflow_text, key):
         assert declared, f"run-time matrix key {key} must declare {name}"
         return _parse_matrix_values(declared.group(1))
     raise AssertionError(f"matrix key not found: {key}")
-
-
-def _load_ci_coverage_module():
-    """Return the workflow-text helpers under the name the MLX tests still import."""
-    from tools import ci_coverage
-
-    return ci_coverage
