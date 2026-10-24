@@ -8,33 +8,15 @@ emitted unchanged.
 
 from __future__ import annotations
 
-import re
+from .crossgl_vector_names import crossgl_named_vector_spelling
 
 __all__ = ["glsl_generic_vector_constructor_name"]
 
-_GENERIC_VECTOR = re.compile(r"^vec([234])\s*<\s*([A-Za-z0-9_]+)\s*>$")
-_PREFIXES = {
-    "f32": "",
-    "float": "",
-    "i32": "i",
-    "int": "i",
-    "u32": "u",
-    "uint": "u",
-    "f64": "d",
-    "double": "d",
-    "bool": "b",
-}
-
 
 def glsl_generic_vector_constructor_name(name):
-    """The GLSL constructor for a generic vector constructor name (``vec3<i32>`` -> ``ivec3``), else ``name``.
+    """The named constructor for a generic vector constructor name (``vec3<i32>`` -> ``ivec3``), else ``name``.
 
-    Component types without a core GLSL vector (16-bit and 8-bit values) keep their spelling for the generator's
-    narrow-type handling to accept or refuse.
+    16-bit, 8-bit and 64-bit components take their named CrossGL vector (``vec2<u16>`` -> ``u16vec2``), which the
+    generator's narrow-type handling then lowers or refuses like a constructor written by name.
     """
-    if not isinstance(name, str):
-        return name
-    match = _GENERIC_VECTOR.match(name)
-    if match is None or match.group(2) not in _PREFIXES:
-        return name
-    return f"{_PREFIXES[match.group(2)]}vec{match.group(1)}"
+    return crossgl_named_vector_spelling(name)

@@ -4,7 +4,8 @@ A generic function's specialization (:func:`.generic_function_utils._ensure_gene
 copy whose signature takes the concrete types of the call. Its body kept the type parameters, so
 ``generic<T> T twice(T x) { T y = x + x; return y; }`` specialized for ``float`` declared ``T y``: the Metal and HLSL
 generators emitted that undeclared type, and the GLSL and SPIR-V generators refused it.
-:func:`substitute_body_types` gives every declaration, cast and constructor call in the body its concrete type.
+:func:`substitute_body_types` gives every declaration, cast and constructor call in the body its concrete type, and
+every call with explicit generic arguments (``helper<T>(x)``) its concrete callee.
 """
 
 from __future__ import annotations
@@ -61,9 +62,14 @@ def substitute_body_types(generator, body, substitutions) -> int:
         if isinstance(node, FunctionCallNode):
             function = getattr(node, "function", None)
             name = function.name if isinstance(function, IdentifierNode) else None
-            if name in substitutions:
+            concrete = substitutions.get(name)
+            if concrete is None and name and "<" in name:
+                # ``helper<T>(x)`` names the concrete ``helper<float>``.
+                concrete = substitute_generic_type_name(name, substitutions)
+                concrete = None if concrete == name else concrete
+            if concrete is not None:
                 # ``T(0)`` constructs the concrete type.
-                function.name = substitutions[name]
-                function.identifier = substitutions[name]
+                function.name = concrete
+                function.identifier = concrete
                 changed += 1
     return changed

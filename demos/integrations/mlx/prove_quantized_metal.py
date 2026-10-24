@@ -442,7 +442,12 @@ def _check_readbacks(readback, inputs, expected):
     return {"errors": errors, "readbacks": identities}
 
 
-def prove(mlx_root, bundle_root, contract_path, output):
+def prove(mlx_root, bundle_root, contract_path, output, *, allow_drift=False):
+    """Run the bundle's affine kernels against MLX's originals on Metal.
+
+    With ``allow_drift`` (report pin mode) an entry whose bytes differ from its
+    pin is executed as exported and named in ``driftedEntries``.
+    """
     mlx_root, bundle_root, contract_path, output = (
         Path(path).resolve() for path in (mlx_root, bundle_root, contract_path, output)
     )
@@ -481,12 +486,17 @@ def prove(mlx_root, bundle_root, contract_path, output):
         entries = _selected_entries(contract)
         artifacts = {
             record["entryPoint"]: record
-            for record in _bundle_records(bundle_root, expected, contract_hash)
+            for record in _bundle_records(
+                bundle_root, expected, contract_hash, allow_drift=allow_drift
+            )
         }
         report.update(
             contractSha256=contract_hash,
             sourceSha256=SOURCE_SHA256,
             bundleArtifactCount=len(artifacts),
+            driftedEntries=sorted(
+                name for name, record in artifacts.items() if "pinnedSha256" in record
+            ),
             expectedEntryCount=len(entries),
         )
         runner = output / "metal-readback"
@@ -565,7 +575,7 @@ def prove(mlx_root, bundle_root, contract_path, output):
         _require(
             _sha256(contract_path) == contract_hash, "Contract changed during execution"
         )
-        _bundle_records(bundle_root, expected, contract_hash)
+        _bundle_records(bundle_root, expected, contract_hash, allow_drift=allow_drift)
         _require(not report["failures"], "Native affine results differ")
         report["status"] = "passed"
     except (
@@ -587,8 +597,19 @@ def main(argv=None):
     parser.add_argument("--bundle-root", type=Path, required=True)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--allow-drift",
+        action="store_true",
+        help="execute bundle entries whose bytes differ from their pins (report mode)",
+    )
     args = parser.parse_args(argv)
-    report = prove(args.mlx_root, args.bundle_root, args.contract, args.output_dir)
+    report = prove(
+        args.mlx_root,
+        args.bundle_root,
+        args.contract,
+        args.output_dir,
+        allow_drift=args.allow_drift,
+    )
     print(
         json.dumps(
             {

@@ -193,8 +193,28 @@ def _causes(row: dict, outcome: str) -> list[str]:
     return lines
 
 
+def _untested(row: dict) -> list[str]:
+    """One list item per reason ``row`` gives for leaving features untested, the reason shared by most first.
+
+    A reason is written by the engine or is the reference tool's verdict on the native probe, so it is kept as it
+    is: its numbers, such as a shader model, are the reason rather than a position in a probe.
+    """
+    found: dict[str, list[str]] = {}
+    for feature in sorted(row["features"], key=lambda f: f["name"]):
+        if feature["outcome"] == "untested":
+            reason = (feature.get("detail") or "no reason was recorded").splitlines()[0]
+            found.setdefault(reason.strip(), []).append(feature["name"])
+    lines = []
+    for reason, names in sorted(
+        found.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        count = f" ({len(names)})" if len(names) > 1 else ""
+        lines.append(f"- {_code(reason)}{count}: " + ", ".join(f"`{n}`" for n in names))
+    return lines
+
+
 def _gaps(row: dict, repository: str) -> list[str]:
-    """The refused and wrong features of one row grouped by cause, plus the untested count per category.
+    """The refused and wrong features of one row grouped by cause, and the untested ones grouped by reason.
 
     The wrong results are grouped as the bug issues are (:func:`.causes.grouped`), so each item is one bug.
     """
@@ -225,7 +245,15 @@ def _gaps(row: dict, repository: str) -> list[str]:
         lines += ["</details>", ""]
     if untested:
         tally = ", ".join(f"{category} {n}" for category, n in sorted(untested.items()))
-        lines += [f"Untested, by category: {tally}.", ""]
+        lines += [
+            "<details>",
+            f"<summary>{sum(untested.values())} untested: {tally}</summary>",
+            "",
+            *_untested(row),
+            "",
+            "</details>",
+            "",
+        ]
     return lines
 
 
@@ -279,7 +307,7 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "",
         "Each row's wrong and refused features are grouped by diagnostic. A diagnostic drops its line numbers and "
         "writes the probe's own variables as `<probe>`, and one that several features share writes each feature's "
-        "name as `<feature>`.",
+        "name as `<feature>`. Untested features are grouped by the reason no probe could measure them.",
         "",
     ]
     for row in report["backends"]:

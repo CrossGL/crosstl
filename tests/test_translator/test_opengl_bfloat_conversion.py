@@ -672,11 +672,7 @@ def test_inferred_bfloat_reference_requires_operand_and_intermediate_rounding():
 
 @pytest.mark.parametrize(
     "operation",
-    tuple(
-        operation
-        for operation in INFERRED_ARITHMETIC
-        if TARGET != "directx" or operation not in BFLOAT_VECTOR_ARITHMETIC
-    ),
+    tuple(INFERRED_ARITHMETIC),
 )
 def test_inferred_bfloat_arithmetic_executes_natively(tmp_path, operation):
     if os.environ.get(REQUIRE_ENV) != "1":
@@ -781,9 +777,8 @@ def test_bfloat_math_wrapper_boundaries_execute_natively(
 
 
 @pytest.mark.parametrize("operation", sorted(BFLOAT_VECTOR_ARITHMETIC))
-def test_inferred_bfloat_vector_arithmetic_keeps_directx_diagnostic(
-    tmp_path, operation
-):
+def test_inferred_bfloat_vector_arithmetic_lowers_lanes_on_directx(tmp_path, operation):
+    """bfloat2 lanes travel as uint2 payloads and round once per lane."""
     source = tmp_path / "vector.metal"
     source.write_text(
         _source(
@@ -791,10 +786,11 @@ def test_inferred_bfloat_vector_arithmetic_keeps_directx_diagnostic(
             f"auto y = {INFERRED_ARITHMETIC[operation]}; results[i] = float(y);"
         )
     )
-    with pytest.raises(DirectXBFloat16UnsupportedError) as error:
-        translate(str(source), backend="directx", format_output=False)
-    assert error.value.reason == "unsupported-bfloat16-builtin"
-    assert error.value.operation == "bfloat2"
+    hlsl = translate(str(source), backend="directx", format_output=False)
+    assert "bfloat2" not in hlsl
+    assert "uint2 __crossgl_bfloat16_from_float(float2 value)" in hlsl
+    assert "__crossgl_bfloat16_to_float(uint2(((uint2)(x))))" in hlsl
+    assert "__crossgl_bfloat16_from_int(int(257))" in hlsl
 
 
 def test_bfloat_random_finite_rounding_executes_natively(tmp_path):

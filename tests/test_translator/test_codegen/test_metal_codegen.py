@@ -5624,28 +5624,23 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(char(int(char(int(1)))));" in generated_code
+    assert "int one = int(char(int(1)));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
+    assert "uint one = uint(uchar(uint(1u)));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
-    )
+    assert "uint3 inc = uint3(uchar3(uint3(1u, 2u, 3u)));" in generated_code
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(short2(int2(1, 2)));" in generated_code
     assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
-        in generated_code
-    )
+    assert "uint3 inc = uint3(ushort3(uint3(1u, 2u, 3u)));" in generated_code
     assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
+    assert "int4 inc = int4(char4(int4(1, 2, 3, 4)));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(1u, 2u)));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -5667,7 +5662,7 @@ def test_metal_refuses_double_precision_vectors():
     """
 
     with pytest.raises(
-        MetalLoweringRefused, match=r"double-precision value: .*uses double2"
+        MetalLoweringRefused, match=r"double-precision value: .*uses dvec2"
     ):
         generate_code(parse_code(tokenize_code(shader)))
 
@@ -5722,19 +5717,14 @@ def test_metal_generic_vector_constructors_emit_metal_names():
     assert "half2 halfPair(half2 input)" in generated_code
     assert "half2 inc = half2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert (
-        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
-        in generated_code
-    )
+    assert "uint4 inc = uint4(uchar4(uint4(1u, 2u, 3u, 4u)));" in generated_code
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "int3 inc = int3(short3(int3(1, 2, 3)));" in generated_code
     assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert (
-        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
-    )
+    assert "uint2 inc = uint2(ushort2(uint2(1u, 2u)));" in generated_code
     assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
@@ -6715,7 +6705,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(1u)))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
