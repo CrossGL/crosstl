@@ -297,7 +297,8 @@ def test_unpadded_struct_buffer_arrays_become_structured_buffers(tmp_path):
     assert "readonly buffer seedsBuffer { Particle seeds[]; };" in glsl
     assert "} particles[]" not in glsl
     metal = translate(tmp_path, FLAT_STRUCT, "metal")
-    assert re.search(r"device Particle \*particles \[\[buffer\(0\)\]\]", metal)
+    # clang-format, when installed, moves the pointer star to the name.
+    assert re.search(r"device Particle\s*\*\s*particles \[\[buffer\(0\)\]\]", metal)
     spirv = translate(tmp_path, FLAT_STRUCT, "spirv")
     assert "RuntimeDescriptorArray" not in spirv
 
