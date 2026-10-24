@@ -237,6 +237,10 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_atomic_resources import HLSLAtomicResources
+from .hlsl_bfloat16_vectors import (
+    HLSLBfloat16Vectors,
+    hlsl_bfloat16_vector_helper_sources,
+)
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
@@ -1631,7 +1635,7 @@ class _DirectXResourceRegisterAllocator(dict):
         )
 
 
-class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
+class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin, HLSLBfloat16Vectors):
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = DirectXLoweringRefused
@@ -9669,6 +9673,7 @@ uint __crossgl_bfloat16_from_uint16({uint16_type} value) {{
 """
             ),
         }
+        helper_sources.update(hlsl_bfloat16_vector_helper_sources())
         code.extend(helper_sources[name] for name in sorted(required))
         return "".join(code) + "\n"
 
@@ -15481,6 +15486,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if registered_conversion is not None:
             return registered_conversion
 
+        vector_conversion = self.hlsl_bfloat16_vector_conversion_expression(
+            rendered, expected_type, source_type, source_location=source_location
+        )
+        if vector_conversion is not None:
+            return vector_conversion
+
         expected_is_bfloat = self.is_hlsl_bfloat16_type(expected_type)
         source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
         if not expected_is_bfloat and not source_is_bfloat:
@@ -15918,6 +15929,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def vector_component_type(self, vtype):
+        if self.hlsl_bfloat16_vector_lanes(vtype) is not None:
+            # Lanes of a bfloat16 vector are bfloat16 payloads, not uint values.
+            return "bfloat"
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("float16_t"):
             return "float16_t"
@@ -17498,6 +17512,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return None
 
+        vector_constructor = self.hlsl_bfloat16_vector_constructor_call(
+            func_name, args, source_location=source_location
+        )
+        if vector_constructor is not None:
+            return vector_constructor
+
         target_is_bfloat = self.is_hlsl_bfloat16_type(func_name)
         source_type = (
             self.hlsl_source_expression_type(args[0]) if len(args) == 1 else None
@@ -17773,6 +17793,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def hlsl_bfloat16_binary_expression(self, expr, left, right, op):
+        vector_binary = self.hlsl_bfloat16_vector_binary_expression(
+            expr, left, right, op
+        )
+        if vector_binary is not None:
+            return vector_binary
         left_type = self.hlsl_source_expression_type(getattr(expr, "left", None))
         right_type = self.hlsl_source_expression_type(getattr(expr, "right", None))
         left_is_bfloat = self.is_hlsl_bfloat16_type(left_type)
@@ -17819,6 +17844,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"__crossgl_complex64_negate({operand})"
 
     def hlsl_bfloat16_unary_expression(self, expr, operand, op):
+        vector_unary = self.hlsl_bfloat16_vector_unary_expression(expr, operand, op)
+        if vector_unary is not None:
+            return vector_unary
         operand_type = self.hlsl_source_expression_type(getattr(expr, "operand", None))
         if not self.is_hlsl_bfloat16_type(operand_type):
             return None
@@ -18093,6 +18121,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 right_type
             ):
                 return "complex64_t"
+            vector_result_type = self.hlsl_bfloat16_vector_binary_result_type(
+                left_type, right_type
+            )
+            if vector_result_type is not None:
+                return vector_result_type
             left_is_bfloat = self.is_hlsl_bfloat16_type(left_type)
             right_is_bfloat = self.is_hlsl_bfloat16_type(right_type)
             if left_is_bfloat or right_is_bfloat:
@@ -18322,6 +18355,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and func_name not in getattr(self, "function_return_types", {})
             ):
                 return HLSL_RAY_SYSTEM_VALUE_TYPES[func_name]
+            if (
+                isinstance(func_name, str)
+                and func_name not in getattr(self, "function_return_types", {})
+                and self.hlsl_bfloat16_vector_lanes(func_name) is not None
+            ):
+                return func_name
             if isinstance(func_expr, MemberAccessNode) or (
                 hasattr(func_expr, "__class__")
                 and "MemberAccess" in str(func_expr.__class__)
@@ -18360,6 +18399,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             bfloat_argument_types = [
                 self.hlsl_source_expression_type(argument) for argument in args
             ]
+            vector_builtin_type = self.hlsl_bfloat16_vector_builtin_result_type(
+                func_name, bfloat_argument_types
+            )
+            if vector_builtin_type is not None:
+                return vector_builtin_type
             if any(
                 self.is_hlsl_bfloat16_type(argument_type)
                 for argument_type in bfloat_argument_types
@@ -18503,7 +18547,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_target_type = self.hlsl_metal_as_type_source_target_type(
                     func_name
                 )
-                if self.is_hlsl_bfloat16_type(source_target_type):
+                if self.hlsl_bfloat16_lanes(source_target_type) is not None:
                     return source_target_type
                 return explicit_bitcast_type
             bitcast_result_type = self.hlsl_bitcast_result_type(func_name, args)
@@ -24416,6 +24460,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     ):
         target_type = target_type or self.hlsl_source_expression_type(target)
         mapped_operator = self.map_operator(operator)
+        vector_assignment = self.hlsl_bfloat16_vector_compound_assignment(
+            node, target, value, mapped_operator, target_type=target_type, lhs=lhs
+        )
+        if vector_assignment is not None:
+            return vector_assignment
         if not self.is_hlsl_bfloat16_type(target_type):
             if mapped_operator not in {"+=", "-=", "*=", "/="}:
                 return None
@@ -27974,6 +28023,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         bfloat_argument_types = [
             self.hlsl_source_expression_type(argument) for argument in args
         ]
+        vector_builtin = self.generate_hlsl_bfloat16_vector_builtin_call(
+            func_name,
+            args,
+            bfloat_argument_types,
+            source_location=source_location,
+        )
+        if vector_builtin is not None:
+            return vector_builtin
         if any(
             self.is_hlsl_bfloat16_type(argument_type)
             for argument_type in bfloat_argument_types
@@ -29630,6 +29687,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         operation,
         source_location=None,
     ):
+        vector_bitcast = self.hlsl_bfloat16_vector_bitcast_expression(
+            target_type,
+            source_type,
+            argument_code,
+            operation=operation,
+            source_location=source_location,
+        )
+        if vector_bitcast is not None:
+            return vector_bitcast
         target_is_bfloat = self.is_hlsl_bfloat16_type(target_type)
         source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
         target_name = str(self.type_name_string(target_type) or "").strip()
@@ -39992,6 +40058,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expression, FunctionCallNode):
             function_name = self.function_call_name(expression)
             if self.hlsl_type_constructor_name(function_name) is not None:
+                return function_name
+            if (
+                function_name not in getattr(self, "function_return_types", {})
+                and self.hlsl_bfloat16_vector_lanes(function_name) is not None
+            ):
                 return function_name
             resolved = self.resolve_hlsl_function_overload(
                 function_name,
@@ -54730,6 +54801,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ray_query_type = hlsl_ray_query_type(vtype_str)
         if ray_query_type is not None:
             return ray_query_type
+
+        bfloat16_vector_payload = self.hlsl_bfloat16_vector_payload_type(vtype_str)
+        if bfloat16_vector_payload is not None:
+            return bfloat16_vector_payload
 
         aliases = getattr(self, "hlsl_type_aliases", {})
         if vtype_str in aliases:
