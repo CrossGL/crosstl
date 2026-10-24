@@ -1,4 +1,11 @@
-"""Validate axis-scatter allocations, indices and launch geometry."""
+"""Validate axis-scatter allocations, indices and launch geometry.
+
+The pinned ``indexing.cpp`` instantiates ``scatter_axis`` for every MLX dtype
+with replacement and additive updates. The host runs the 32-bit types whose
+atomics every target provides: int32, uint32 and float32. Float32 outputs
+are raw binary32 words; OpenGL keeps them in uint32 atomics
+(``scatter_layout.atomic_storage_dtype``).
+"""
 
 import ctypes
 import itertools
@@ -25,7 +32,8 @@ METADATA = {
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter_axis(int32|uint32)(int32|uint32|int64|uint64)_(none|sum)_int(c|nc)(c|nc)",
+        r"scatter_axis(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum)_int"
+        r"(c|nc)(c|nc)",
         entry,
     )
     if match is None:

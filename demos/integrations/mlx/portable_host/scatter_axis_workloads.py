@@ -41,13 +41,36 @@ def cases():
                         {**case, "id": case["id"] + "-signed", "values": "signed"}
                     )
     yield from signed
+    yield from float_cases()
+
+
+def float_cases():
+    """Float32 replacements and sums of quarter-step values.
+
+    Every partial sum of these values is exact, so additive updates agree in
+    any atomic order.
+    """
+    for operation in ("none", "sum"):
+        for i, layout in enumerate(LAYOUTS):
+            yield {
+                "id": f"float32-{operation}-{layout}",
+                "dtype": "float32",
+                "operation": operation,
+                "layout": layout,
+                "axis": (
+                    None
+                    if layout == "flattened"
+                    else (-1 if layout == "alias" else i % 3)
+                ),
+                "index_dtype": ("int32", "uint32", "int64", "uint64")[(i + 1) % 4],
+            }
 
 
 def arrays(xp, np, case):
     signed = case.get("values") == "signed"
-    source = xp.array(
-        (np.arange(48).reshape(4, 3, 4) - (24 if signed else 0)).astype(case["dtype"])
-    )
+    floating = case["dtype"] == "float32"
+    values = np.arange(48).reshape(4, 3, 4) - (24 if signed or floating else 0)
+    source = xp.array((values / 4 if floating else values).astype(case["dtype"]))
     layout = case["layout"]
     if layout == "transposed":
         source = xp.transpose(source, (1, 0, 2))
@@ -72,9 +95,11 @@ def arrays(xp, np, case):
     raw = np.arange(count).reshape(shape)
     indices = raw % source.shape[axis]
     # Duplicate replacements carry identical values for every possible ordering.
-    updates = (indices + 17 if case["operation"] == "none" else raw % 11 + 1).astype(
-        case["dtype"]
-    )
+    updates = indices + 17 if case["operation"] == "none" else raw % 11 + 1
+    if floating:
+        # Negative and fractional quarter steps; sums also cross zero.
+        updates = (updates - 6 if case["operation"] == "sum" else 5 - updates) / 4
+    updates = updates.astype(case["dtype"])
     if signed:
         updates = -updates
     if case["index_dtype"].startswith("int"):
@@ -84,7 +109,12 @@ def arrays(xp, np, case):
         updates = xp.array(np.repeat(updates, 2, axis=-1))[..., ::2]
     elif layout == "update-broadcast":
         updates = xp.broadcast_to(
-            xp.array(np.array(-23 if signed else 23, dtype=case["dtype"])), tuple(shape)
+            xp.array(
+                np.array(
+                    -5.75 if floating else -23 if signed else 23, dtype=case["dtype"]
+                )
+            ),
+            tuple(shape),
         )
     else:
         updates = xp.array(updates)

@@ -1960,13 +1960,15 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  if (inputs.size() != 3 || (out.dtype() != int32 && out.dtype() != uint32) ||
+  // The 32-bit types whose atomics every target provides.
+  if (inputs.size() != 3 ||
+      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
       inputs[0].dtype() != out.dtype() || inputs[2].dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       inputs[1].ndim() != out.ndim() || inputs[2].shape() != inputs[1].shape() ||
       axis_ < 0 || axis_ >= out.ndim() || out.size() > 65535 ||
       inputs[1].size() > 65535 || (reduce_type_ != None && reduce_type_ != Sum)) {
-    throw std::invalid_argument("CrossTL axis scatter requires bounded int32 or uint32 arrays.");
+    throw std::invalid_argument("CrossTL axis scatter requires bounded int32, uint32 or float32 arrays.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&

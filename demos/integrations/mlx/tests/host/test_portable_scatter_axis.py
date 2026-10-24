@@ -17,7 +17,7 @@ from demos.integrations.mlx.portable_host import (
 )
 from demos.integrations.mlx.portable_host import scatter_axis_layout as layout
 from demos.integrations.mlx.portable_host import scatter_axis_workloads as workloads
-from demos.integrations.mlx.portable_host import verify_scatter_axis
+from demos.integrations.mlx.portable_host import scatter_layout, verify_scatter_axis
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from tests.ci_helpers import assert_paths_covered
 
@@ -35,8 +35,21 @@ def test_axis_scatter_retains_existing_workloads_and_adds_signed_layouts():
     assert digest.hexdigest() == (
         "b45dd7465484e9604282442e9ce6ef87902be69d3a2a541c51d34c7a4020a64d"
     )
-    signed = cases[56:]
-    assert len(cases) == len({case["id"] for case in cases}) == 84
+    signed, floating = cases[56:84], cases[84:]
+    assert len(cases) == len({case["id"] for case in cases}) == 112
+    assert floating == list(workloads.float_cases())
+    assert {(case["operation"], case["layout"]) for case in floating} == {
+        (operation, layout)
+        for operation in ("none", "sum")
+        for layout in workloads.LAYOUTS
+    }
+    assert all(case["dtype"] == "float32" for case in floating)
+    for case in floating:
+        source, _, updates, expected = workloads.reference(np, case)
+        assert source.dtype == expected.dtype == np.float32
+        if case["layout"] != "empty":
+            # Negative and fractional values in every non-empty workload.
+            assert np.any(expected < 0) and np.any(expected % 1 != 0)
     assert all(
         case["dtype"] == "int32" and case["values"] == "signed" for case in signed
     )
@@ -68,7 +81,20 @@ def test_axis_scatter_reference_matches_independent_indexed_updates(case):
         np.add.at(independent, tuple(coordinates), updates)
         bounds = np.zeros_like(source, dtype=object)
         np.add.at(bounds, tuple(coordinates), np.abs(updates.astype(object)))
-        assert np.all(bounds <= np.iinfo(case["dtype"]).max)
+        if case["dtype"] == "float32":
+            # Quarter steps far below 2^24 sum exactly in any order.
+            assert np.all(bounds * 4 < 2**24)
+            assert np.all(np.asarray(updates) * 4 == np.round(np.asarray(updates) * 4))
+            assert scatter_axis_evidence.exact_float_sums(
+                np,
+                np.zeros_like(source),
+                indices,
+                updates,
+                axis,
+                source.shape[axis],
+            )
+        else:
+            assert np.all(bounds <= np.iinfo(case["dtype"]).max)
     assert np.array_equal(expected, independent)
     if case.get("values") == "signed":
         assert np.any(source < 0)
@@ -237,7 +263,8 @@ def test_axis_scatter_rejects_invalid_metadata_before_dispatch(fault):
 @pytest.mark.parametrize(
     "entry",
     (
-        "scatter_axisfloat32int32_none_intcc",
+        "scatter_axisfloat16int32_none_intcc",
+        "scatter_axisbfloat16int32_sum_intcc",
         "scatter_axisint64int32_none_intcc",
         "scatter_axisint32float32_none_intcc",
         "scatter_axisint32int32_prod_intcc",
@@ -421,7 +448,11 @@ def scatter_event(tmp_path, case, target="metal"):
     event["scatterMetadata"] = layout.validate(
         entry, supplied, expected.size, execution
     )
-    event["scatterValues"] = expected.reshape(-1).tolist()
+    event["scatterValues"] = (
+        words(np, expected)
+        if case["dtype"] == "float32"
+        else expected.reshape(-1).tolist()
+    )
     event["scatterGuardValues"] = runtime.COPY_GUARD.copy()
     event["scatterStorageType"] = case["dtype"]
     event["outputHash"] = hashlib.sha256(expected.tobytes()).hexdigest()
@@ -444,10 +475,17 @@ def scatter_event(tmp_path, case, target="metal"):
         },
     }
     for name, buffer in supplied.items():
-        dtype = buffer.dtype.decode()
+        kind = buffer.dtype.decode()
+        dtype = (
+            scatter_layout.atomic_storage_dtype(kind, target) if name == "out" else kind
+        )
         values = list(
             ctypes.cast(
-                buffer.data, ctypes.POINTER(runtime.TYPES[dtype] * buffer.count)
+                buffer.data,
+                ctypes.POINTER(
+                    (ctypes.c_uint32 if kind == "float32" else runtime.TYPES[kind])
+                    * buffer.count
+                ),
             ).contents
         )
         if name == "out":
@@ -457,6 +495,8 @@ def scatter_event(tmp_path, case, target="metal"):
             "shape": [len(values), 1] if name == "out" else [len(values)],
             "values": values,
         }
+        if dtype == "float32":
+            value["encoding"] = runtime.FLOAT32_BITS
         event["inputs"][name] = value
         scalar = {"elementType": dtype, "elementStrideBytes": np.dtype(dtype).itemsize}
         if name == "out":
@@ -466,7 +506,7 @@ def scatter_event(tmp_path, case, target="metal"):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": "int" if dtype == "int32" else "uint",
+                        "physicalType": scatter_layout.ATOMIC_TYPES[dtype],
                     }
                 ],
             )
@@ -595,6 +635,60 @@ def test_axis_scatter_audit_reconstructs_every_workload(tmp_path, target, case):
     assert np.array_equal(indices, expected_indices)
     assert np.array_equal(updates, expected_updates)
     assert actual == words(np, expected)
+
+
+def test_axis_scatter_float_sums_are_exact_only_without_rounding():
+    zeros = np.zeros((2,), dtype=np.float32)
+    indices = np.array([0, 0, 0, 1], dtype=np.int32)
+    exact = np.array([0.25, -1.5, 3.0, -0.0], dtype=np.float32)
+    assert scatter_axis_evidence.exact_float_sums(np, zeros, indices, exact, 0, 2)
+    # 2^24 + 1 - 1 rounds in one order and not in the other.
+    rounding = np.array([2.0**24, 1.0, -1.0, 0.0], dtype=np.float32)
+    assert not scatter_axis_evidence.exact_float_sums(
+        np, zeros, indices, rounding, 0, 2
+    )
+    for value in (np.inf, np.nan):
+        special = np.array([value, 0.0, 0.0, 0.0], dtype=np.float32)
+        assert not scatter_axis_evidence.exact_float_sums(
+            np, zeros, indices, special, 0, 2
+        )
+    # Tiny steps are exact while their magnitudes fit in 24 bits of the step.
+    tiny = np.array([2.0**-140, 2.0**-149, -(2.0**-149), 0.0], dtype=np.float32)
+    assert scatter_axis_evidence.exact_float_sums(np, zeros, indices, tiny, 0, 2)
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+@pytest.mark.parametrize("fault", ("order", "float-word", "encoding", "storage"))
+def test_axis_scatter_audit_requires_exact_raw_float32_evidence(
+    tmp_path, target, fault
+):
+    case = next(
+        case
+        for case in workloads.float_cases()
+        if case["operation"] == "sum" and case["layout"] == "dense"
+    )
+    event = scatter_event(tmp_path, case, target)
+    scatter_axis_evidence.audit_event(np, event)
+    upload = next(
+        value for key, value in event["inputs"].items() if key.endswith("upd")
+    )
+    output = next(
+        value for key, value in event["inputs"].items() if key.endswith("out")
+    )
+    if fault == "order":
+        upload["values"][0] = words(np, np.array([2.0**30], dtype=np.float32))[0]
+        message = "update order"
+    elif fault == "float-word":
+        upload["values"][0] = float(upload["values"][0])
+        message = "raw binary32"
+    elif fault == "encoding":
+        del upload["encoding"]
+        message = "binding layout"
+    else:
+        output["dtype"] = "float32" if target == "opengl" else "uint32"
+        message = "binding layout|storage type"
+    with pytest.raises(ValueError, match=message):
+        scatter_axis_evidence.audit_event(np, event)
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))

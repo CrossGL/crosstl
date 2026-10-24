@@ -1075,7 +1075,10 @@ on the CPU by this adapter.
 ## Axis Scatter
 
 `ScatterAxis::eval_gpu` dispatches the unchanged pinned
-`indexing/scatter_axis.h` for int32 and uint32 replacement and addition. Public
+`indexing/scatter_axis.h` for int32, uint32 and float32 replacement and
+addition, the 32-bit types whose atomics every target provides. Float32
+outputs travel as raw binary32 words; OpenGL keeps them in uint32 atomics, as
+the general scatter does. Public
 `put_along_axis` operations use replacement; vector-Jacobian products of
 `take_along_axis` exercise additive scatter through MLX's own differentiation
 rules. Indices may be int32, uint32, int64 or uint64. Other output types and
@@ -1097,7 +1100,7 @@ python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
   --integer64 integer64-packages --output-dir scatter-axis-evidence
 ```
 
-The required three-OS CI step runs 84 workloads in separate CPU and native
+The required three-OS CI step runs 112 workloads in separate CPU and native
 processes. They cover both operations and storage types, all four index types,
 dense and transposed sources, strided and broadcast views, reversed views,
 negative indices, flattened inputs, aliasing updates and empty updates. Duplicate
@@ -1112,15 +1115,22 @@ numeric values; the verifier checks their declared storage range before deriving
 bit patterns for comparison. Unsigned substitutions, floating-point values,
 Booleans and incomplete readbacks are rejected.
 
+The last 28 workloads repeat both operations and every layout in float32 with
+negative and fractional quarter-step values. Native atomic additions land in
+an unspecified order and round after each one, so the verifier reconstructs a
+float32 sum only when no order can round: every destination's terms share a
+power-of-two step and their magnitudes sum to fewer than 2^24 of it. Any other
+float32 sum, and any non-finite term, fails verification instead of being
+compared approximately.
+
 The verifier reconstructs each result from retained uploads and checks the
 native readback against the final MLX result. It also checks source preservation,
 exact atomic storage layout, compiled modules, artifact identity, dispatch
 accounting and 32 trailing output guards. Missing execution or corrupt evidence
 fails verification; output values are never computed or corrected on the CPU.
-This command does not claim the complete upstream `test_put_along_axis`:
-that test includes floating-point scatter, still tracked by
-[#1986](https://github.com/CrossGL/crosstl/issues/1986). Its evidence explicitly
-records no upstream test-suite run and no complete-backend parity.
+This command does not claim the complete upstream `test_put_along_axis`, which
+runs in the upstream op job. Its evidence explicitly records no upstream
+test-suite run and no complete-backend parity.
 
 Five additional native controls check concrete function-object member forwarding,
 nested call operators, receiver state and single argument evaluation. They are
@@ -1868,8 +1878,8 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 124 more unchanged `test_ops`, `test_reduce`,
-`test_bf16` and `test_fast` tests on all three platforms (119 on OpenGL; see
+A dedicated job then runs 125 more unchanged `test_ops`, `test_reduce`,
+`test_bf16` and `test_fast` tests on all three platforms (120 on OpenGL; see
 below). They run in five groups, each in its own job per platform with its
 own deadlines: `operations` (the `test_ops` and `test_bf16` tests, which also
 run the rejection check and must reach a gather or scatter), `normalization`
@@ -1917,7 +1927,8 @@ translated; `column-reductions` holds the column reductions
 `test_real_imag`, `test_sign` and `test_trig_ops`; `test_clip`,
 `test_concatenate`, `test_meshgrid`, `test_nan_to_num`, `test_pad`,
 `test_pad_reflect_symmetric`, `test_slice_update_reversed` and `test_take`,
-which reach lazy selections of every GPU dtype; `test_round`, which also
+which reach lazy selections of every GPU dtype; `test_put_along_axis`, which
+reaches int32 and float32 replacement axis-scatters; `test_round`, which also
 reaches lazy aranges; `test_std`, `test_trace`, `test_var` and `test_vecdot`,
 which reach wide whole-array, small-row and small-column reductions; and
 `test_sum`, which also reaches looped float32 rows; and `test_argmin_argmax`,

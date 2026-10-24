@@ -232,6 +232,8 @@ UPSTREAM_TESTS = (
             "test_pad_reflect_symmetric",
             "test_slice_update_reversed",
             "test_take",
+            # This reaches int32 and float32 replacement axis-scatters.
+            "test_put_along_axis",
             # This also reaches lazily translated aranges.
             "test_round",
             # These reach lazily translated wide whole-array, small-row and
