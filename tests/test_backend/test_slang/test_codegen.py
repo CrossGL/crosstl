@@ -3896,6 +3896,29 @@ def test_slang_packed_8bit_vector_types_map_to_uint_like_the_hlsl_importer():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_packed_8bit_structured_buffer_elements_map_to_uint():
+    # A structured buffer of int8_t4_packed/uint8_t4_packed is a structured
+    # buffer of uint in CrossGL, as in the HLSL importer.
+    code = """
+    StructuredBuffer<uint8_t4_packed> pin;
+    RWStructuredBuffer<int8_t4_packed> pout;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        pout[id.x] = pin[id.x];
+        outp[id.x] = pin[id.x];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "StructuredBuffer<uint> pin;" in generated_code
+    assert "RWStructuredBuffer<uint> pout;" in generated_code
+    assert "int8_t4_packed" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
     # Source: shader-slang/slang tests/hlsl-intrinsic/fragment-derivative.slang
     # at 85c65f862c045c929814e1abe6b31828d78030ed exercises ddx/ddy,
