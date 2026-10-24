@@ -9886,7 +9886,6 @@ def test_struct_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
         assert "VertexOutput output;" in generated_code
     except SyntaxError:
         pytest.fail("Struct parsing or code generation not implemented.")
@@ -9905,8 +9904,7 @@ def test_if_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("If statement parsing or code generation not implemented.")
 
@@ -9924,8 +9922,7 @@ def test_for_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("For loop parsing or code generation not implemented.")
 
@@ -10049,8 +10046,7 @@ def test_while_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("While loop parsing or code generation not implemented.")
 
@@ -10125,8 +10121,7 @@ def test_else_if_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Else-if statement parsing or code generation not implemented.")
 
@@ -10324,8 +10319,7 @@ def test_bitwise_and_ops_codegen():
             print(f"{i}: {token}")
 
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise AND operator parsing or code generation not implemented.")
 
@@ -10346,8 +10340,7 @@ def test_bitwise_or_ops_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise OR operator parsing or code generation not implemented.")
 
@@ -10368,8 +10361,7 @@ def test_bitwise_xor_ops_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise XOR operator parsing or code generation not implemented.")
 
@@ -10389,8 +10381,7 @@ def test_bitwise_not_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Bitwise NOT operator parsing or code generation not implemented.")
 
@@ -10430,7 +10421,6 @@ def test_bitwise_shift_ops_codegen():
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
-        print(generated_code)
         assert "uint result1 = (value << 1);" in generated_code
         assert "uint result2 = (value >> 1);" in generated_code
         assert "if (((result1 == 8) && (result2 == 2)))" in generated_code
@@ -10516,8 +10506,7 @@ def test_double_dtype_codegen():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        generated_code = generate_code(ast)
-        print(generated_code)
+        generate_code(ast)
     except SyntaxError:
         pytest.fail("Double data type parsing or code generation not implemented.")
 

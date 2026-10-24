@@ -24177,9 +24177,9 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
                 );
                 bool active = rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 uint primitiveIndex = rq.CandidatePrimitiveIndex();
-                uint instanceId = rq.CommittedInstanceID();
+                uint instanceId = rq.CommittedInstanceIndex();
                 uint geometryIndex = rq.CandidateGeometryIndex();
                 vec3 origin = rq.CommittedObjectRayOrigin();
                 vec3 direction = rq.CandidateObjectRayDirection();
@@ -24400,7 +24400,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         compute {
             void main() {
                 RayQuery<RAY_FLAG_NONE> rq;
-                rq.Initialize(
+                rq.TraceRayInline(
                     topLevelAS,
                     gl_RayFlagsNoneEXT,
                     255u,
@@ -24413,20 +24413,20 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
                 vec3 worldDirection = rq.WorldRayDirection();
                 uint rayFlags = rq.RayFlags();
                 float tMin = rq.RayTMin();
-                uint customIndex = rq.CommittedInstanceCustomIndex();
+                uint customIndex = rq.CommittedInstanceID();
                 uint sbtOffset =
-                    rq.CandidateInstanceShaderBindingTableRecordOffset();
+                    rq.CandidateInstanceContributionToHitGroupIndex();
                 vec2 barycentrics = rq.CandidateTriangleBarycentrics();
                 bool frontFace = rq.CommittedTriangleFrontFace();
-                bool aabbOpaque = rq.CandidateAABBOpaque();
+                bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 mat4x3 objectToWorld = rq.CommittedObjectToWorld();
                 mat4x3 worldToObject = rq.CandidateWorldToObject3x4();
                 vec3 trianglePositions[3];
                 rq.CandidateTriangleVertexPositions(trianglePositions);
                 rq.CommittedTriangleVertexPositions(trianglePositions);
-                rq.GenerateIntersection(1.0);
-                rq.ConfirmIntersection();
-                rq.Terminate();
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
             }
         }
     }
@@ -24464,7 +24464,7 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
         in generated_code
     )
     assert (
-        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);"
+        "bool nonOpaque = (!rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq));"
         in generated_code
     )
     assert (
@@ -24489,8 +24489,8 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
     assert "rayQueryTerminateEXT(rq);" in generated_code
     assert ".WorldRayOrigin(" not in generated_code
     assert ".CandidateTriangleVertexPositions(" not in generated_code
-    assert ".GenerateIntersection(" not in generated_code
-    assert ".ConfirmIntersection(" not in generated_code
+    assert ".CommitProceduralPrimitiveHit(" not in generated_code
+    assert ".CommitNonOpaqueTriangleHit(" not in generated_code
 
 
 def test_glsl_ray_query_member_calls_reject_invalid_arities():
@@ -24500,8 +24500,8 @@ def test_glsl_ray_query_member_calls_reject_invalid_arities():
             r"GLSL ray query Proceed expects 0 arguments, got 1",
         ),
         (
-            "rq.Initialize(topLevelAS, gl_RayFlagsNoneEXT);",
-            r"GLSL ray query Initialize expects 4 or 7 arguments, got 2",
+            "rq.TraceRayInline(topLevelAS, gl_RayFlagsNoneEXT);",
+            r"GLSL ray query TraceRayInline expects 4 or 7 arguments, got 2",
         ),
         (
             "vec3 position = rq.CandidateTriangleVertexPositions();",
@@ -43014,6 +43014,45 @@ def test_opengl_explicit_as_type_rejects_mismatched_total_widths(
         ),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("target_type", "packed"),
+    [
+        pytest.param("long", "packInt2x32(ivec2(words))", id="long"),
+        pytest.param("ulong", "packUint2x32(words)", id="ulong"),
+    ],
+)
+def test_opengl_metal_long_as_type_keeps_64_bit_payload(tmp_path, target_type, packed):
+    source = tmp_path / "bits.metal"
+    source.write_text(f"""#include <metal_stdlib>
+using namespace metal;
+kernel void bits(device {target_type}* outputs [[buffer(0)]],
+                 uint index [[thread_position_in_grid]]) {{
+    uint2 words = uint2(index, 0x12345678u);
+    outputs[index] = as_type<{target_type}>(words);
+}}
+""")
+
+    generated_code = crosstl.translate(
+        str(source), backend="opengl", format_output=False
+    )
+
+    assert packed in generated_code
+    assert "as_type<" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        shader_path = tmp_path / "bits.comp"
+        shader_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(shader_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_opengl_explicit_as_type_scalar_vector_bitcasts_validate_with_glslang(

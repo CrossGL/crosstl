@@ -44,6 +44,11 @@ _LEGACY_SAMPLER = re.compile(r"\bsampler(?:1d|2d|3d|_cube)\b")
 # Functions the table declares but DXC rejects for every target: "Unsupported intrinsic" when compiling to DXIL, and
 # no equivalent or no implementation when compiling to SPIR-V.
 _REJECTED = frozenset({("Intrinsics", "abort"), ("Intrinsics", "source_mark")})
+# Functions DXC compiles only when it targets SPIR-V. DXIL has no print operation, and DXC rejects printf there ("use of
+# unsupported identifier"), so the probes, which compile to DXIL, cannot check it.
+_SPIRV_ONLY = {
+    "printf": "DXC compiles printf only to SPIR-V; DXIL has no print operation"
+}
 # Methods that take implicit derivatives, which a compute probe of one thread cannot.
 _DERIVATIVES = frozenset(
     "Sample SampleBias SampleCmp SampleCmpBias CalculateLevelOfDetail CalculateLevelOfDetailUnclamped"
@@ -407,6 +412,7 @@ def parse(
     features = []
     for name, declared in sorted(functions.items()):
         signatures, note = _overloads(_documented(name, declared))
+        note = _SPIRV_ONLY.get(name, note)
         features.append(
             Feature(
                 "hlsl",

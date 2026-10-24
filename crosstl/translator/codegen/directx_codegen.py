@@ -67,6 +67,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -187,6 +188,7 @@ from .extended_arithmetic_builtins import (
     emit_hlsl_extended_arithmetic_helpers,
     hlsl_extended_arithmetic_call,
 )
+from .fixed_sampler_contracts import fixed_sampler_records, with_hlsl_fixed_samplers
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -232,11 +234,23 @@ from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
+from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .hlsl_narrow_system_values import (
+    HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
+    hlsl_narrow_compute_system_value_bridge,
+)
+from .hlsl_ray_queries import (
+    hlsl_ray_query_expression,
+    hlsl_ray_query_helpers,
+    hlsl_ray_query_type,
+)
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_render_targets import is_render_target_value_type
+from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
@@ -244,6 +258,11 @@ from .hlsl_texel_buffers import (
     HLSLTexelBuffers,
     texel_buffer_base_type,
 )
+from .hlsl_texture_residency import (
+    hlsl_texture_residency_call,
+    hlsl_texture_resident_call,
+)
+from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -492,6 +511,10 @@ from .subgroup_control_flow import (
 from .texture_lod_clamp import (
     hlsl_texture_lod_clamp_call,
     is_texture_lod_clamp_operation,
+)
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis
 from .union_layout import UnionLayoutCollector
@@ -1709,6 +1732,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES = frozenset(
@@ -3397,7 +3422,9 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             self.metadata_preconditions,
             getattr(ast, "structs", ()),
         )
+        fixed_samplers = fixed_sampler_records(ast)
         code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
+        code = with_hlsl_fixed_samplers(code, fixed_samplers, ast)
         if records:
             code = with_metadata_precondition_header(code, records)
         return with_dispatch_region_header(code, region)
@@ -4152,6 +4179,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 self.generic_struct_specializations,
             )
         )
+        self.infer_hlsl_global_types(global_vars)
         self.prepare_directx_compile_time_globals(ast, global_vars)
         self.hlsl_lowered_struct_resource_members = (
             self.collect_hlsl_lowered_struct_resource_members(structs, functions)
@@ -4828,6 +4856,13 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 } and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
+            if id(node) in self.hlsl_inferred_global_node_ids:
+                if not qualifier.startswith("static"):
+                    qualifier = "static " + qualifier
+                initializer = self.generate_expression_with_expected(
+                    node.initial_value, node.var_type
+                )
+                declaration += f" = {initializer}"
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
@@ -5199,6 +5234,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
+            + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
         )
         return (
@@ -11802,7 +11838,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value, const_type)
+            value_code = hlsl_brace_struct_initializer(self, value, const_type)
+            if value_code is None:
+                value_code = self.generate_constant_expression(value, const_type)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
@@ -12129,6 +12167,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if name in known_constant_names:
                     return
                 if name and render_standard_math_constant(name, "directx") is not None:
+                    return
+                if name and render_float_limit_constant(name, "directx") is not None:
                     return
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
@@ -13507,6 +13547,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.hlsl_compute_dispatch_thread_id_parameter_bridge(
                         p, param_type, semantic, emitted_param_names
                     )
+                )
+            if dispatch_thread_id_bridge is None and effective_shader_type == "compute":
+                dispatch_thread_id_bridge = hlsl_narrow_compute_system_value_bridge(
+                    self, p, param_type, semantic, emitted_param_names
                 )
             if dispatch_thread_id_bridge is not None:
                 declaration, local_alias = dispatch_thread_id_bridge
@@ -15038,6 +15082,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value = self.generate_expression_with_expected(stmt.expression, return_type)
         return self.generate_hlsl_return_value_statement(value, indent)
 
+    def infer_hlsl_global_types(self, global_vars):
+        """Resolve untyped globals before declaration and expression lowering."""
+        self.hlsl_inferred_global_node_ids = set()
+        for node in global_vars:
+            if not hasattr(node, "var_type") or node.var_type is not None:
+                continue
+            vtype = inferred_value_type(
+                self, getattr(node, "initial_value", None), C_FAMILY
+            )
+            if not vtype:
+                self.refuse_lowering(
+                    f"global declaration: the type of '{getattr(node, 'name', '?')}' "
+                    "is not written and cannot be inferred from its initializer"
+                )
+            node.var_type = vtype
+            node.vtype = vtype
+            self.global_variable_types[node.name] = vtype
+            self.hlsl_inferred_global_node_ids.add(id(node))
+
     def local_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)
         if vtype is None:
@@ -15162,6 +15225,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "packed",
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
+            # MSL's half texture element type; the image format attribute gives HLSL its element type.
+            "metal_texture_element_half",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata
@@ -26643,6 +26708,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         storage_read = self.hlsl_half_storage.read(expr)
         if storage_read is not None:
             return storage_read
+        ray_query = hlsl_ray_query_expression(self, expr)
+        if ray_query is not None:
+            return ray_query
+        unavailable = hlsl_unavailable_builtin(self, expr)
+        if unavailable is not None:
+            return unavailable
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -28275,13 +28346,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return name
 
     def hlsl_standard_math_constant_expression(self, name):
-        # HLSL does not define the C/Metal NAN macro. Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        literal = (
-            "asfloat(0x7fc00000u)"
-            if name == "NAN"
-            else render_standard_math_constant(name, "directx")
-        )
+        # HLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        literal = render_float_limit_constant(
+            name, "directx"
+        ) or render_standard_math_constant(name, "directx")
         if literal is None:
             return None
 
@@ -28520,6 +28589,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.HLSL_WAVE_GROUP_SIZE_PLACEHOLDER,
                 self.hlsl_compute_group_size_constant(execution_config),
             )
+        if base_type in HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES:
+            # A Metal `ushort` lane index or count: narrow explicitly.
+            intrinsic = f"({base_type})({intrinsic})"
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type
         return f"{base_type} {local_name} = {intrinsic};"
@@ -28566,7 +28638,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_project_compute_vector3_expression(self, expression, target_type):
         normalized_type = str(target_type).strip()
-        match = re.fullmatch(r"(?P<scalar>u?int)(?P<width>[123]?)", normalized_type)
+        match = re.fullmatch(
+            r"(?P<scalar>u?int|min16uint|uint16_t)(?P<width>[123]?)", normalized_type
+        )
         if match is None:
             return expression
         width = int(match.group("width") or "1")
@@ -31797,7 +31871,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             element_type
         ):
             return mapped_type
-        return None
+        return hlsl_constant_matrix_member_type(
+            self, element_type, getattr(parameter, "name", None) or "constant"
+        )
 
     def hlsl_constant_reference_element_type(self, vtype):
         if isinstance(vtype, ReferenceType):
@@ -32161,6 +32237,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_hlsl_global_resource_type(self, mapped_type):
         mapped_type = str(mapped_type)
+        # Read array suffixes from the end. A repeated suffix expression
+        # re-segments a long malformed tail before it can reject the name.
+        suffix_end = len(mapped_type)
+        while suffix_end > 0 and mapped_type[suffix_end - 1] == "]":
+            open_bracket = mapped_type.rfind("[", 0, suffix_end)
+            if open_bracket < 0:
+                break
+            inner = mapped_type[open_bracket + 1 : suffix_end - 1]
+            if re.fullmatch(r"\s*(?:\w+\s*)?", inner) is None:
+                break
+            suffix_end = open_bracket
+            while suffix_end > 0 and mapped_type[suffix_end - 1].isspace():
+                suffix_end -= 1
+        sampler_type = mapped_type[:suffix_end]
         return (
             mapped_type.startswith("Texture")
             or self.is_hlsl_feedback_texture_type(mapped_type)
@@ -32171,8 +32261,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_hlsl_constant_buffer_type(mapped_type)
             or self.is_hlsl_texture_buffer_type(mapped_type)
             or self.is_hlsl_readonly_buffer_type(mapped_type)
-            or re.sub(r"(\s*\[\s*\w*\s*\])+$", "", mapped_type)
-            in ["SamplerState", "SamplerComparisonState"]
+            or sampler_type in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
@@ -34118,8 +34207,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_hlsl_compute_system_value_types(self, parameters):
-        self.validate_hlsl_exact_semantic_type(
-            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+        # A 16-bit unsigned parameter is declared with the 32-bit system value
+        # and narrowed in the body (hlsl_narrow_system_values).
+        narrow_scalars = {
+            name
+            for name in HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES
+            if not name[-1].isdigit()
+        }
+        self.validate_hlsl_semantic_type_one_of(
+            parameters,
+            "compute",
+            "SV_GroupIndex",
+            {"uint"} | narrow_scalars,
+            "scalar uint or a 16-bit unsigned scalar",
         )
         for semantic in ("SV_GroupID", "SV_GroupThreadID", "SV_DispatchThreadID"):
             # HLSL accepts a scalar uint for these compute system values as a
@@ -34130,8 +34230,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameters,
                 "compute",
                 semantic,
-                {"uint", "uint2", "uint3"},
-                "scalar uint, uint2, or uint3",
+                {"uint", "uint2", "uint3"} | HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
+                "scalar uint, uint2, or uint3, or a 16-bit unsigned form of one",
             )
 
     def hlsl_ray_stage_types(self):
@@ -34337,8 +34437,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "CommitNonOpaqueTriangleHit": "void",
             "CommitProceduralPrimitiveHit": "void",
             "CandidateType": "uint",
-            "CommittedType": "uint",
             "CommittedStatus": "uint",
+            "CandidateProceduralPrimitiveNonOpaque": "bool",
             "CandidatePrimitiveIndex": "uint",
             "CommittedPrimitiveIndex": "uint",
             "CandidateInstanceID": "uint",
@@ -34351,8 +34451,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "CandidateObjectRayDirection": "float3",
             "CommittedObjectRayOrigin": "float3",
             "CommittedObjectRayDirection": "float3",
-            "CandidateRayT": "float",
+            "CandidateTriangleRayT": "float",
             "CommittedRayT": "float",
+            "CandidateInstanceContributionToHitGroupIndex": "uint",
+            "CommittedInstanceContributionToHitGroupIndex": "uint",
             "CandidateObjectRayTMin": "float",
             "CandidateTriangleBarycentrics": "float2",
             "CommittedTriangleBarycentrics": "float2",
@@ -34373,8 +34475,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "CommitNonOpaqueTriangleHit",
                 "CommitProceduralPrimitiveHit",
                 "CandidateType",
-                "CommittedType",
                 "CommittedStatus",
+                "CandidateProceduralPrimitiveNonOpaque",
                 "CandidatePrimitiveIndex",
                 "CommittedPrimitiveIndex",
                 "CandidateInstanceID",
@@ -34387,8 +34489,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "CandidateObjectRayDirection",
                 "CommittedObjectRayOrigin",
                 "CommittedObjectRayDirection",
-                "CandidateRayT",
+                "CandidateTriangleRayT",
                 "CommittedRayT",
+                "CandidateInstanceContributionToHitGroupIndex",
+                "CommittedInstanceContributionToHitGroupIndex",
                 "CandidateObjectRayTMin",
                 "CandidateTriangleBarycentrics",
                 "CommittedTriangleBarycentrics",
@@ -34667,7 +34771,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_ray_query_receiver(query_expr, shader_type, operation)
 
         expected_arg_counts = {
-            "TraceRayInline": {4},
+            # Seven operands are the GLSL rayQueryInitializeEXT shape, whose
+            # ray operands are packed into a RayDesc on emission.
+            "TraceRayInline": {4, 7},
             "CommitProceduralPrimitiveHit": {1},
         }
         default_expected_counts = {0}
@@ -34697,13 +34803,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 shader_type,
                 "RayQuery.TraceRayInline",
             )
-            self.validate_hlsl_ray_exact_type_argument(
-                args[3],
-                shader_type,
-                "RayQuery.TraceRayInline",
-                "ray descriptor",
-                "RayDesc",
-            )
+            if len(args) == 4:
+                self.validate_hlsl_ray_exact_type_argument(
+                    args[3],
+                    shader_type,
+                    "RayQuery.TraceRayInline",
+                    "ray descriptor",
+                    "RayDesc",
+                )
         elif operation == "CommitProceduralPrimitiveHit":
             self.validate_hlsl_ray_scalar_float_argument(
                 args[0],
@@ -35220,6 +35327,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         if self.hlsl_gl_frag_data_semantic(semantic):
             return True
+        if re.fullmatch(r"gl_FragColor\d*", str(semantic)):
+            # A colour attachment (MSL [[color(N)]], HLSL SV_Target<N>) may be a scalar or a narrower vector, as in
+            # float depth [[color(3)]] or float main() : SV_Target; DXC accepts any numeric 1-4 component type.
+            return True
         return str(semantic).upper().startswith("SV_TARGET")
 
     def hlsl_gl_frag_data_semantic(self, semantic):
@@ -35238,6 +35349,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16int",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "float",
             "double",
             "half",
@@ -38459,10 +38571,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
+        # A fragment output's location is its render target index.
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            location_index = self.hlsl_location_attribute_index(member)
+            if not member_name or location_index is None:
+                continue
+            semantic = (
+                "SV_TARGET" if location_index == 0 else f"SV_TARGET{location_index}"
+            )
+            self.hlsl_reserve_semantic_range(
+                used_ranges, struct_node.name, member_name, semantic, 1
+            )
+            defaults[member_name] = semantic
+
         next_target = 0
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
-            if not member_name:
+            if not member_name or member_name in defaults:
                 continue
             if self.hlsl_struct_member_declared_semantic(member) is not None:
                 continue
@@ -38515,7 +38641,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
         if shader_type == "vertex" and return_type == "float4":
             return "gl_Position"
-        if shader_type == "fragment" and return_type == "float4":
+        if shader_type == "fragment" and is_render_target_value_type(return_type):
+            # A fragment function's value return is colour attachment 0 (MSL 5.2.3.4, GLSL 4.60 section 4.4.2),
+            # whatever its numeric scalar or vector type.
             return "gl_FragColor"
         return None
 
@@ -43745,6 +43873,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         attr_name = getattr(attr, "name", None)
         if not attr_name or getattr(attr, "arguments", None):
             return False
+        # Vulkan block kinds mark how a ConstantBuffer<T> is fed; they never name an array size.
+        if str(attr_name).lower() in {"push_constant", "shader_record"}:
+            return False
         if (
             is_image_format_attribute(attr)
             or self.is_resource_binding_attribute(attr)
@@ -43877,6 +44008,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_resource_array_hint_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
+            # ConstantBuffer<T> name[] is a runtime-sized array of constant-buffer descriptors (shader model 5.1).
+            or self.is_hlsl_constant_buffer_type(vtype)
             or texel_buffer_base_type(vtype) is not None
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)
@@ -50013,11 +50146,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         rendered_args = []
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
-                rendered_args.append(
-                    self.generate_expression_with_expected(
-                        positional_args[index],
-                        field_type,
+                argument = positional_args[index]
+                if isinstance(
+                    argument, ArrayLiteralNode
+                ) and self.hlsl_outer_array_type(field_type):
+                    # The helper call cannot take an array literal; only a
+                    # declaration initializer can use an initializer list.
+                    self.hlsl_aggregate_error(
+                        argument,
+                        expected_type=self.map_type(field_type),
+                        reason="array-argument-unsupported",
+                        detail=(
+                            "HLSL has no fixed-array literal expression for a "
+                            f"{type_name} constructor field outside a declaration "
+                            "initializer"
+                        ),
                     )
+                rendered_args.append(
+                    self.generate_expression_with_expected(argument, field_type)
                 )
                 continue
             if field_name in named_args:
@@ -53874,6 +54020,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return texel_buffer_call
         if is_texture_lod_clamp_operation(func_name):
             return hlsl_texture_lod_clamp_call(self, func_name, args, call_node)
+        if func_name == TEXTURE_RESIDENCY_OPERATION:
+            return hlsl_texture_residency_call(self, args, call_node)
+        if func_name == TEXTURE_RESIDENT_OPERATION:
+            return hlsl_texture_resident_call(self, args, call_node)
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:
@@ -54532,6 +54682,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        ray_query_type = hlsl_ray_query_type(vtype_str)
+        if ray_query_type is not None:
+            return ray_query_type
 
         aliases = getattr(self, "hlsl_type_aliases", {})
         if vtype_str in aliases:

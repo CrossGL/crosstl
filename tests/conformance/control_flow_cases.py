@@ -66,3 +66,48 @@ def structured_control_flow_reference(inputs):
     for word in np.asarray(inputs, np.uint32).tolist():
         out.extend(_thread(int(word)))
     return np.array(out, np.uint32)
+
+
+SHORT_CIRCUIT_THREADS = 64
+
+
+def short_circuit_inputs():
+    """Words whose low four bits take every value, then words outside the 64-element buffer."""
+    words = list(range(40)) + [-1, -64, 64, 65, 1000, 1 << 20, -(1 << 30), 2**31 - 1]
+    words += [3, 5, 12, 15, 9, 13, 11, 14, 7, 6, 2, 1, 0, 8, 10, 4]
+    assert len(words) == SHORT_CIRCUIT_THREADS
+    return np.array(words, np.int32)
+
+
+def short_circuit_reference(inputs):
+    """One word per thread: the number of bump() calls and the values the guarded operands decided."""
+    words = np.asarray(inputs, np.int32).tolist()
+    out = []
+    for x in words:
+        calls = 0
+
+        def bump():
+            nonlocal calls
+            calls += 1
+            return calls > 2
+
+        both = (x & 1) == 1 and bump()
+        either = (x & 2) == 2 or bump()
+        chosen = (100 if bump() else 200) if (x & 4) == 4 else 7
+        trips = 0
+        while trips < (x & 3) and bump():
+            trips += 1
+        while True:
+            trips += 10
+            if not ((x & 8) == 8 and trips < 40 and bump()):
+                break
+        guarded = 1 if 0 <= x < len(words) and words[x] == x else 0
+        out.append(
+            calls * 1000
+            + int(both)
+            + 2 * int(either)
+            + chosen * 10
+            + trips * 100000
+            + guarded * 4
+        )
+    return np.array(out, np.int32)

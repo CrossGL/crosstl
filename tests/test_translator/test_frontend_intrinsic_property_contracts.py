@@ -69,14 +69,16 @@ RAY_QUERY_CASES = (
     IntrinsicCase("Proceed", "rayQuery.Proceed()", RayQueryOpNode, 0),
     IntrinsicCase("Abort", "rayQuery.Abort()", RayQueryOpNode, 0),
     IntrinsicCase("CandidateType", "rayQuery.CandidateType()", RayQueryOpNode, 0),
-    IntrinsicCase("CommittedType", "rayQuery.CommittedType()", RayQueryOpNode, 0),
+    IntrinsicCase("CommittedStatus", "rayQuery.CommittedStatus()", RayQueryOpNode, 0),
     IntrinsicCase(
         "TraceRayInline",
         "rayQuery.TraceRayInline(accel, 0, 255, ray)",
         RayQueryOpNode,
         4,
     ),
-    IntrinsicCase("CandidateRayT", "rayQuery.CandidateRayT()", RayQueryOpNode, 0),
+    IntrinsicCase(
+        "CandidateTriangleRayT", "rayQuery.CandidateTriangleRayT()", RayQueryOpNode, 0
+    ),
     IntrinsicCase("CommittedRayT", "rayQuery.CommittedRayT()", RayQueryOpNode, 0),
 )
 

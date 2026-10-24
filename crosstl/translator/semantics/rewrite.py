@@ -9,9 +9,23 @@ see the same tree.
 from __future__ import annotations
 
 import copy
+from typing import NamedTuple
 
 from .. import ast as A
 from .hub_types import call_name, is_pure_callee
+
+
+class StageSlot(NamedTuple):
+    """The slot of one stage in a :class:`~crosstl.translator.ast.StageMap`.
+
+    A CrossGL module may declare several blocks of one stage kind (two ``vertex`` blocks, each with its own entry
+    point), and the stage map keeps every one under the same key. The key alone names only the first, so a slot of
+    a stage map carries the block's position among the blocks of its kind too.
+    """
+
+    stage: object
+    index: int
+
 
 # Attributes that hold types, metadata or back links rather than structural children.
 SKIPPED_FIELDS = frozenset(
@@ -57,6 +71,12 @@ def child_slots(node):
             for index, item in enumerate(value):
                 if isinstance(item, A.ASTNode):
                     yield field, index
+        elif isinstance(value, A.StageMap):
+            seen.add(id(value))
+            for stage in list(value.keys()):
+                for index, item in enumerate(value.all_for_stage(stage)):
+                    if isinstance(item, A.ASTNode):
+                        yield field, StageSlot(stage, index)
         elif isinstance(value, dict):
             seen.add(id(value))
             for key, item in list(value.items()):
@@ -66,6 +86,8 @@ def child_slots(node):
 
 def get_child(node, field, key):
     value = getattr(node, field)
+    if isinstance(key, StageSlot):
+        return value.all_for_stage(key.stage)[key.index]
     return value if key is None else value[key]
 
 
@@ -82,6 +104,9 @@ def field_slots(node, field):
 
 def set_child(node, field, key, new):
     """Replace a child, updating every alias attribute that referred to the same object."""
+    if isinstance(key, StageSlot):
+        getattr(node, field).replace_stage(key.stage, key.index, new)
+        return
     if key is not None:
         getattr(node, field)[key] = new
         return
