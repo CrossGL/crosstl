@@ -6070,7 +6070,12 @@ class WGSLCodeGen:
 
     def semantic_location(self, semantic, direction):
         key = self.semantic_key(semantic)
-        if key in {"gl_fragcolor", "sv_target", "color"}:
+        # The Slang importer spells vertex attributes in_Position, in_Normal, ...
+        # and fragment results Out_Color/Out_ColorN, where the HLSL importer writes
+        # Position, Normal, ... and gl_FragColor/gl_FragData[N].
+        if key.startswith("in_"):
+            key = key[len("in_") :]
+        if key in {"gl_fragcolor", "sv_target", "color", "out_color"}:
             return 0
         semantic_bases = {
             "position": 0,
