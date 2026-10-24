@@ -13,6 +13,9 @@ The HLSL importer keeps a resource's bindings as ``@ register(t3, space1)`` and 
   their binding tables. An array of ``k`` resources holds registers ``n`` to ``n + k - 1`` and one descriptor
   binding with ``k`` descriptors.
 
+Resources indexed by an MSL ``@ texture(n)`` or ``@ sampler(n)`` are placed after the registers, by the same rule
+(:mod:`.spirv_argument_tables`): textures, then samplers, each keeping binding ``n`` when it is free.
+
 Exact bindings (``@ binding``, ``@ buffer``, ``vk_binding``) are reserved before any register is placed. Two
 resources of one class and space that claim the same register are rejected, as Direct3D rejects them. Two
 ``vk_binding`` resources may share one slot only as the halves of a combined image sampler: one sampled image and
@@ -24,6 +27,7 @@ Resource and Descriptor Type Correspondence"), and DXC emits that layout for thi
 from __future__ import annotations
 
 from .glsl_hlsl_resources import HlslRegisterOverlapError
+from .spirv_argument_tables import argument_table_index, place_argument_table_slots
 
 __all__ = [
     "HLSL_REGISTER_CLASS_ORDER",
@@ -33,6 +37,7 @@ __all__ = [
 
 HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
 EXACT_BINDING_ATTRIBUTES = {"binding", "buffer", "texture", "sampler"}
+GLOBAL_ARGUMENT_TABLES = {"texture": 1, "sampler": 2}
 
 
 def _arguments(attr):
@@ -89,6 +94,14 @@ def _vk_binding(codegen, node, default_set):
         descriptor_set = values[1] if len(values) == 2 else default_set
         return descriptor_set, binding
     return None
+
+
+def _bound_exactly(codegen, node):
+    return any(
+        str(getattr(attr, "name", "") or "").lower() in {"binding", "buffer"}
+        and _arguments(attr)
+        for attr in getattr(node, "attributes", None) or []
+    )
 
 
 def _has_exact_binding(codegen, node):
@@ -175,18 +188,29 @@ def _claim_registers(claimed, register, count, name):
         claimed[key] = name
 
 
-def reserve_hlsl_descriptor_slots(codegen, nodes, skip=lambda node: False):
-    """Assign the descriptor slots of resources bound by ``vk_binding`` or ``register``.
+def reserve_hlsl_descriptor_slots(
+    codegen, nodes, skip=lambda node: False, scope=lambda node: None
+):
+    """Assign the descriptor slots of resources bound by ``vk_binding``, ``register``, ``texture`` or ``sampler``.
 
     ``nodes`` are the program's descriptor-bound declarations in declaration order; ``skip(node)`` excludes those
-    that take no descriptor (push-constant blocks). Returns ``{id(node): (set, binding)}``; the bindings are added
-    to ``codegen.reserved_resource_bindings``.
+    that take no descriptor (push-constant blocks), and ``scope(node)`` names the stage that declares a node (each
+    stage has its own MSL argument tables). Returns ``{id(node): (set, binding)}``; the bindings are added to
+    ``codegen.reserved_resource_bindings``.
     """
     slots = {}
     deferred = []
+    indexed = []
     seen = set()
     for order, node in enumerate(nodes):
-        if id(node) in seen or skip(node) or _has_exact_binding(codegen, node):
+        if id(node) in seen or skip(node):
+            continue
+        table_index = argument_table_index(codegen, node, GLOBAL_ARGUMENT_TABLES)
+        if table_index is not None and not _bound_exactly(codegen, node):
+            seen.add(id(node))
+            indexed.append((*table_index, order, scope(node), node))
+            continue
+        if _has_exact_binding(codegen, node):
             continue
         seen.add(id(node))
         register = _register(codegen, node)
@@ -212,4 +236,11 @@ def reserve_hlsl_descriptor_slots(codegen, nodes, skip=lambda node: False):
         binding = _next_free_binding(codegen, descriptor_set, register[1])
         codegen.reserved_resource_bindings.add((descriptor_set, binding))
         slots[id(node)] = (descriptor_set, binding)
+    slots.update(
+        place_argument_table_slots(
+            codegen,
+            indexed,
+            lambda slot: slot in codegen.reserved_resource_bindings,
+        )
+    )
     return slots
