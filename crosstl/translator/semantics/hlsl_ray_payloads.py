@@ -113,14 +113,23 @@ def _walk(node):
         yield from _walk(get_child(node, field, key))
 
 
+# Calls whose last argument is a ray payload, with their DXR argument counts.
+_PAYLOAD_CALL_ARITY = {
+    "TraceRay": 8,
+    "dx::HitObject::TraceRay": 8,
+    "dx::HitObject::Invoke": 2,
+}
+
+
 def _trace_ray_calls(function):
     for node in _walk(function):
         if isinstance(node, A.RayTracingOpNode) and node.operation == "TraceRay":
             yield node
         elif (
             isinstance(node, A.FunctionCallNode)
-            and _callee_name(node) == "TraceRay"
-            and len(getattr(node, "arguments", None) or []) == 8
+            and _callee_name(node) in _PAYLOAD_CALL_ARITY
+            and len(getattr(node, "arguments", None) or [])
+            == _PAYLOAD_CALL_ARITY[_callee_name(node)]
         ):
             yield node
 
@@ -134,12 +143,15 @@ def _callee_name(call):
 
 def _payload_struct_name(program, stage, function, call):
     arguments = list(getattr(call, "arguments", None) or [])
-    if len(arguments) != 8:
+    if len(arguments) != 8 and not (
+        isinstance(call, A.FunctionCallNode)
+        and len(arguments) == _PAYLOAD_CALL_ARITY.get(_callee_name(call))
+    ):
         # The GLSL form names the payload by location; lower_glsl_ray_interfaces rewrote every such call earlier.
         raise HlslRayPayloadUnsupportedError(
             f"TraceRay takes 8 arguments in DXR, this call has {len(arguments)}"
         )
-    payload = arguments[7]
+    payload = arguments[-1]
     base, element = payload, False
     while isinstance(base, A.ArrayAccessNode):
         base, element = base.array, True
