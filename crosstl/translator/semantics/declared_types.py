@@ -20,6 +20,7 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .builtin_type_names import BUILTIN_TYPE_NAMES
+from .feedback_textures import FEEDBACK_TEXTURE_TYPES, is_sampler_feedback_kind
 
 __all__ = [
     "UndeclaredTypeError",
@@ -83,6 +84,13 @@ def _nodes(program, skip=frozenset()):
 
 def _short(name):
     return str(name).rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _is_value_argument(node, argument):
+    """Whether ``argument`` of the generic type ``node`` is a value rather than a type."""
+    if node.name in VALUE_TEMPLATE_TYPES:
+        return True
+    return node.name in FEEDBACK_TEXTURE_TYPES and is_sampler_feedback_kind(argument)
 
 
 def declared_type_names(program) -> frozenset:
@@ -171,12 +179,14 @@ def undeclared_type_uses(program):
         if isinstance(node, A.GenericParameterNode)
         for bound in node.constraints
     }
-    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags.
+    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags. A feedback
+    # texture's argument is a value only when it is a sampler feedback kind; any other name is still read as a type.
     values = {
         id(argument)
         for node in _nodes(program)
-        if isinstance(node, A.NamedType) and node.name in VALUE_TEMPLATE_TYPES
+        if isinstance(node, A.NamedType)
         for argument in node.generic_args
+        if _is_value_argument(node, argument)
     }
     uses = []
     for node in _nodes(program, _dead_functions(program) | bounds | values):
