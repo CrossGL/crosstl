@@ -40,6 +40,7 @@ from .fixed_samplers import bind_fixed_samplers
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
+from .hit_objects import HitObjectUnsupportedError, refuse_hit_objects
 from .hlsl_geometry_streams import (
     HlslGeometryStreamUnsupportedError,
     raise_glsl_geometry_streams,
@@ -120,6 +121,7 @@ __all__ = [
     "FixedSamplerStateUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "HitObjectUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
@@ -209,6 +211,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D and Vulkan
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
+    Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
     prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
@@ -241,6 +244,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_hit_objects(program, report.target)
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
