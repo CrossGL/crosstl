@@ -3108,6 +3108,29 @@ def test_glsl_fine_coarse_derivative_builtins_lower_to_slang_aliases():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_glsl_fine_coarse_fwidth_builtins_lower_to_slang_aliases():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 wFine = fwidthFine(uv);
+                vec2 wCoarse = fwidthCoarse(uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 wFine = fwidth_fine(uv);" in generated_code
+    assert "float2 wCoarse = fwidth_coarse(uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
 def test_user_defined_derivative_function_names_are_not_lowered():
     code = """
     shader BuiltinGap {
