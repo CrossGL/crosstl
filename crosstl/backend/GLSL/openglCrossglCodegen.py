@@ -36,6 +36,7 @@ from .OpenglAst import (
     WhileNode,
 )
 from .shadow_textures import retype_shadow_textures
+from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
 
 try:
@@ -179,38 +180,41 @@ class GLSLToCrossGLConverter:
         "ray_callable",
     }
     RAY_QUERY_SIMPLE_METHODS = {
-        "rayQueryInitializeEXT": "Initialize",
+        # TraceRayInline with the seven rayQueryInitializeEXT operands in place
+        # of DXR's RayDesc.
+        "rayQueryInitializeEXT": "TraceRayInline",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
-        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
-        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGenerateIntersectionEXT": "CommitProceduralPrimitiveHit",
+        "rayQueryConfirmIntersectionEXT": "CommitNonOpaqueTriangleHit",
         "rayQueryGetRayTMinEXT": "RayTMin",
         "rayQueryGetRayFlagsEXT": "RayFlags",
         "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
         "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
-        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
     }
     RAY_QUERY_COMMITTED_METHODS = {
-        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedStatus"),
         "rayQueryGetIntersectionPrimitiveIndexEXT": (
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
         ),
+        # CrossGL follows HLSL: InstanceIndex is the instance's position in the
+        # top-level structure, InstanceID its application-defined custom index.
         "rayQueryGetIntersectionInstanceIdEXT": (
-            "CandidateInstanceID",
-            "CommittedInstanceID",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
         ),
         "rayQueryGetIntersectionGeometryIndexEXT": (
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
         ),
         "rayQueryGetIntersectionInstanceCustomIndexEXT": (
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
         ),
         "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
         ),
         "rayQueryGetIntersectionObjectRayOriginEXT": (
             "CandidateObjectRayOrigin",
@@ -220,7 +224,7 @@ class GLSLToCrossGLConverter:
             "CandidateObjectRayDirection",
             "CommittedObjectRayDirection",
         ),
-        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionTEXT": ("CandidateTriangleRayT", "CommittedRayT"),
         "rayQueryGetIntersectionBarycentricsEXT": (
             "CandidateTriangleBarycentrics",
             "CommittedTriangleBarycentrics",
@@ -3812,6 +3816,10 @@ class GLSLToCrossGLConverter:
         if subgroup_call is not None:
             return subgroup_call
 
+        sparse_call = import_sparse_texture_call(self, name, node.args)
+        if sparse_call is not None:
+            return sparse_call
+
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)
 
@@ -3896,6 +3904,10 @@ class GLSLToCrossGLConverter:
         return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
+        if name == "rayQueryGetIntersectionCandidateAABBOpaqueEXT" and len(args) == 1:
+            # CrossGL follows DXR, which asks whether the candidate is non-opaque.
+            query = self.generate_expression(args[0])
+            return f"(!{query}.CandidateProceduralPrimitiveNonOpaque())"
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:
             query = self.generate_expression(args[0])
             method = self.RAY_QUERY_SIMPLE_METHODS[name]

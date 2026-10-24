@@ -83,6 +83,8 @@ _FUNCTION_STAGES = {
     "report_intersection": "intersection",
     "emit_mesh_tasks_ext": "task",
     "emit_mesh_tasks_ext_payload": "task",
+    # OpExecuteCallableKHR passes on callable data, which a callable shader receives as a parameter.
+    "execute_callable": "callable",
 }
 # Functions whose bare name is a CrossGL function that computes something else, so they have no CrossGL spelling.
 _DIFFERENT = {
@@ -90,7 +92,7 @@ _DIFFERENT = {
     "Vec3::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
     "Float::log": "Float::log takes a base; CrossGL's log is the natural logarithm",
 }
-# Functions that return several values, or an optional one, where no CrossGL function does.
+# Functions whose result no CrossGL function computes, with the reason.
 _UNSPELLED = {
     "Float::integer_decode": (
         "no CrossGL function returns a float's mantissa, exponent and sign as integers"
@@ -108,12 +110,19 @@ _UNSPELLED = {
     "Vec3::min_position": (
         "no CrossGL function returns the index of a vector's smallest element"
     ),
+    "Float::classify": "no CrossGL function returns a float's category",
+    "Vec3::to_array": "no CrossGL function converts a vector to an array",
+    "Vec3::write_to_slice": (
+        "no CrossGL function writes a vector's elements to an array"
+    ),
 }
-# CrossGL builds vectors with constructors and reads an element with the subscript operator, rather than functions.
+# CrossGL builds vectors with constructors, and reads or replaces an element with the subscript operator, rather than
+# with functions.
 _CONSTRUCTORS = {
     "Vec3::new": "vec3",
     "Vec3::splat": "vec3",
     "vector_extract_dynamic": spellings.SUBSCRIPT,
+    "vector_insert_dynamic": spellings.ELEMENT,
 }
 # Parameters a probe passes as literals. The probes target Vulkan 1.1 (SPIR-V 1.3), where a subgroup broadcast's lane
 # id and a quad broadcast's index must be constants (SPIR-V specification, OpGroupNonUniformBroadcast and
@@ -126,6 +135,8 @@ _TRAIT_METHOD = re.compile(r"^    (unsafe )?fn (\w+)", re.M)
 _IMPL_METHOD = re.compile(r"^    pub (?:const )?(unsafe )?fn (\w+)", re.M)
 _MACRO = re.compile(r"^macro_rules! (\w+) \{", re.M)
 _TEMPLATE = re.compile(r"pub (?:const )?(?:unsafe )?fn \$name")
+# A slice parameter, ``&[T]`` or ``&mut [T]``. The probe passes its input buffer for one the function reads.
+_SLICE = re.compile(r"&\s*(mut\s+)?\[([^;\]]+)\]")
 
 
 def _nesting(text: str, index: int) -> int:
@@ -180,9 +191,22 @@ def header(text: str, position: int) -> Header:
     while depth or text[end] not in "{;":
         depth += _nesting(text, end)
         end += 1
-    tail = text[position:end]
-    result = re.split(r"\bwhere\b", tail)[0].strip().removeprefix("->").strip()
-    return generics, parameters, result
+    result, *where = re.split(r"\bwhere\b", text[position:end], maxsplit=1)
+    result = result.strip().removeprefix("->").strip()
+    return _bound(generics, where[0] if where else ""), parameters, result
+
+
+def _bound(generics: str, where: str) -> str:
+    """``generics`` with the bounds a ``where`` clause gives its unbounded type parameters."""
+    bounds = {}
+    for predicate in _split(where):
+        name, _, bound = predicate.partition(":")
+        if re.fullmatch(r"\w+", name.strip()) and bound.strip():
+            bounds[name.strip()] = bound.strip()
+    return ", ".join(
+        f"{part}: {bounds[part]}" if part in bounds else part
+        for part in _split(generics)
+    )
 
 
 def clean(text: str) -> str:
@@ -201,9 +225,21 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
         name, _, bounds = part.partition(":")
         name = name.strip()
         order.append((name, False))
+        if not bounds.strip():
+            # A parameter of any type takes a struct of the probe's own: the payload a task or hit shader declares.
+            types[name] = Type.other("udt")
+            continue
+        if re.search(r"\bFn(?:Mut|Once)?\s*\(", bounds):
+            # A closure has no probe; its signature's scalars are not the parameter's type.
+            continue
         scalar = re.search(r"Scalar\s*=\s*(?:impl\s+)?(\w+)", bounds)
         if re.search(r"\bVector<\s*bool\b", bounds):
             types[name] = Type("bool", (3,))
+            continue
+        # A vector of an earlier type parameter's scalar, as in ``V: Vector<T, N>``.
+        element = re.search(r"\bVector<\s*(\w+)\s*,", bounds)
+        if element and element.group(1) in types:
+            types[name] = Type(types[element.group(1)].scalar, (3,))
             continue
         for word in [scalar.group(1) if scalar else "", *re.findall(r"\w+", bounds)]:
             if word in _SCALARS:
@@ -238,6 +274,11 @@ def rust_type(
         element = rust_type(vector.group(1), generics, self_type)
         if not element.opaque and not element.shape:
             return Type(element.scalar, (3,))
+    array = re.fullmatch(r"\[(.+);\s*(\d+)\]", spelling)
+    if array:
+        element = rust_type(array.group(1), generics, self_type, aliases)
+        if not element.opaque:
+            return Type(element.scalar, element.shape, count=int(array.group(2)))
     # A tuple or an option stays opaque, spelled with the types it holds so that a probe can read its first value.
     held = re.fullmatch(r"\((.+)\)|Option<(.+)>", spelling)
     if held:
@@ -280,6 +321,17 @@ def signature(
             continue
         kind = part.partition(":")[2].strip()
         direction = "in"
+        sliced = _SLICE.fullmatch(kind)
+        element = rust_type(sliced.group(2), types, self_type) if sliced else None
+        if element and not element.opaque and not sliced.group(1):
+            params.append(Param(element, "buffer"))
+            continue
+        if element and not element.opaque and len(self_type.shape) == 1:
+            # A vector's mutable slice holds one value per component, as glam requires, so the probe passes a local
+            # array of that length.
+            array = Type(element.scalar, element.shape, count=self_type.shape[0])
+            params.append(Param(array, "out"))
+            continue
         if kind.startswith("&"):
             direction, kind = "inout", re.sub(r"^&\s*(?:mut\s+)?", "", kind)
         params.append(Param(rust_type(kind, types, self_type, aliases), direction))

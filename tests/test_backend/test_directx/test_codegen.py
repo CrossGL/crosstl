@@ -3132,7 +3132,8 @@ def test_codegen_rayquery_stage_roundtrip_drops_native_shader_attribute():
 
     assert "ray_generation" in output.lower()
     assert "@ shader" not in output
-    assert "rayQuery rq;" in output
+    # The query keeps its DXR type and flags in CrossGL.
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in output
     assert "rq.TraceRayInline(accel, RAY_FLAG_NONE, 255, ray);" in output
     assert "rq.Proceed()" in output
     assert "rq.CommitNonOpaqueTriangleHit();" in output
@@ -3528,6 +3529,7 @@ def test_codegen_subpass_input_globals_reparse_crossgl():
 
     assert "@ input_attachment_index(0)" in output
     assert "@ binding(0)" in output
+    # A subpass input is an input attachment, not a sampled texture.
     assert "subpassInput in_color_r;" in output
     assert "vec4 color_r = subpassLoad(in_color_r);" in output
     assert reparsed.global_variables[0].name == "in_color_r"

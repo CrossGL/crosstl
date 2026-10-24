@@ -57,17 +57,21 @@ Coverage is measured, so there is no support table to edit. The Coverage
 workflow writes a probe for every built-in in each language's pinned upstream
 feature list and for a set of language constructs (types, control flow,
 resources, compute and stages), translates it, and checks the result with the
-language's reference tool. It reports the coverage change on your pull
-request, as a comment or, for a pull request from a fork, in the job summary.
+language's reference tool. A comment on your pull request lists how it
+changes coverage against `main`.
 Once the change is on `main`, it closes the `coverage` issues whose probes now
 pass. Each of those issues gives the command that reproduces it, for example:
 
 ```bash
-python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum
+python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum --keep probes
 python -m tools.coverage tools    # which reference tools are installed
 ```
 
-A language whose reference tool is not installed comes out untested.
+`--keep` writes the probe and CrossTL's translations of it to
+`probes/<language>-<direction>/<feature>/`. A language whose reference tool is
+not installed comes out untested. With `--execute`, the Metal, GLSL and SPIR-V
+compute probes also run on a local GPU or Mesa runtime through the conformance
+harness, as CI does; a result the native probe does not compute is wrong.
 
 ## Picking an issue
 

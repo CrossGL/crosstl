@@ -55,6 +55,9 @@
 - name: backend:mojo
   color: c5def5
   description: Mojo
+- name: backend:opencl
+  color: c5def5
+  description: OpenCL C
 - name: backend:crossgl
   color: 5319e7
   description: The CrossGL IR itself

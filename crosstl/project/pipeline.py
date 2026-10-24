@@ -38,6 +38,7 @@ from crosstl.backend.Metal.function_specialization import (
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
 )
+from crosstl.backend.Metal.text_scanners import mask_comments_and_literals
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -20997,43 +20998,7 @@ def _template_materialization_unsupported_location(
 
 @functools.lru_cache(maxsize=8)
 def _masked_metal_non_code_text(source: str) -> str:
-    chars = list(source)
-    i = 0
-    while i < len(chars):
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                end = len(chars)
-            for index in range(i, end):
-                chars[index] = " "
-            i = end
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                end = len(chars) - 2
-            for index in range(i, min(end + 2, len(chars))):
-                if chars[index] != "\n":
-                    chars[index] = " "
-            i = end + 2
-            continue
-        if chars[i] in {"'", '"'}:
-            quote = chars[i]
-            chars[i] = " "
-            i += 1
-            while i < len(chars):
-                current = chars[i]
-                if current != "\n":
-                    chars[i] = " "
-                if current == "\\":
-                    i += 2
-                    continue
-                i += 1
-                if current == quote:
-                    break
-            continue
-        i += 1
-    return "".join(chars)
+    return mask_comments_and_literals(source)
 
 
 def _metal_template_type_declarations(
@@ -30010,6 +29975,19 @@ def _tool_status(target: str) -> dict[str, Any]:
     }
 
 
+def _toolchain_unavailable_message(toolchain: Mapping[str, Any]) -> str:
+    """Name every tool an unavailable validation toolchain is missing from ``PATH``."""
+    missing_tools = [
+        str(tool["name"])
+        for tool in toolchain.get("tools", ())
+        if isinstance(tool, Mapping) and tool.get("name") and not tool.get("available")
+    ]
+    if not missing_tools:
+        return f"No validation toolchain is available for target {toolchain['target']}"
+    verb = "is" if len(missing_tools) == 1 else "are"
+    return f"{', '.join(missing_tools)} {verb} not on PATH"
+
+
 def _status_counts(
     records: Sequence[Any], field_name: str, statuses: frozenset[str]
 ) -> dict[str, int]:
@@ -31498,7 +31476,7 @@ def _validate_artifacts(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
-                    message=f"No validation toolchain is available for target {toolchain['target']}",
+                    message=_toolchain_unavailable_message(toolchain),
                     location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],

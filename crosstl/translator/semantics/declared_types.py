@@ -9,7 +9,8 @@ name, so the translation fails with a typed diagnostic instead.
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
 trait bounds of generic parameters are not types. Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
 (``metal::texture2d``, ``Outer.Inner``) and parenthesised parts are resource or library spellings the generators
-resolve themselves.
+resolve themselves. The template argument of ``RayQuery<FLAGS>`` is a ray flag value, not a type (DXR, "RayQuery"),
+and the generators check it themselves.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Built-in types whose template arguments are values rather than types.
+VALUE_TEMPLATE_TYPES = frozenset({"RayQuery"})
 
 
 class UndeclaredTypeError(TranslationDiagnostic):
@@ -168,16 +171,15 @@ def undeclared_type_uses(program):
         if isinstance(node, A.GenericParameterNode)
         for bound in node.constraints
     }
-    # A generic type's arguments (``Texture2D<float4>``, ``RayQuery<RAY_FLAG_NONE>``) are resource or library
-    # spellings the generators resolve, and a constant argument is not a type name at all; neither is checked.
-    generic_args = {
-        id(arg)
+    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags.
+    values = {
+        id(argument)
         for node in _nodes(program)
-        if isinstance(node, A.NamedType)
-        for arg in node.generic_args
+        if isinstance(node, A.NamedType) and node.name in VALUE_TEMPLATE_TYPES
+        for argument in node.generic_args
     }
     uses = []
-    for node in _nodes(program, _dead_functions(program) | bounds | generic_args):
+    for node in _nodes(program, _dead_functions(program) | bounds | values):
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name

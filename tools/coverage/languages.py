@@ -6,7 +6,7 @@ from __future__ import annotations
 from .crossgl import DIALECT as CROSSGL
 from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
-from .kernels import CUDA, HIP, Mojo, Rust
+from .kernels import CUDA, HIP, Mojo, OpenCL, Rust
 from .model import (
     COOP_COLUMNS,
     COOP_ENUMERATORS,
@@ -464,6 +464,9 @@ class WGSL(Dialect):
     def inout_argument(self) -> str:
         return "&outp[i]"
 
+    def buffer_argument(self, name: str) -> str:
+        return f"&{name}"
+
     def to_int(self, condition: str) -> str:
         return f"select(0, 1, {condition})"
 
@@ -622,6 +625,7 @@ DIALECTS: dict[str, Dialect] = {
         HLSL(),
         Metal(),
         Mojo(),
+        OpenCL(),
         Rust(),
         Slang(),
         WebGL(),

@@ -394,6 +394,10 @@ EXTERNAL_FIXTURES = [
             #include <metal_stdlib>
             using namespace metal;
 
+            typedef enum AAPLRenderTargetIndices {
+                AAPLRenderTargetColor = 0,
+            } AAPLRenderTargetIndices;
+
             typedef struct {
                 float4 position [[position]];
             } ColorInOut;

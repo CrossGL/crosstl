@@ -41,6 +41,14 @@ pub unsafe fn vector_extract_dynamic<T: Scalar, const N: usize>(
     T::default()
 }
 
+pub unsafe fn vector_insert_dynamic<T: Scalar, V: Vector<T, N>, const N: usize>(
+    vector: V,
+    index: usize,
+    element: T,
+) -> V {
+    vector
+}
+
 pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
     0
 }
@@ -180,6 +188,7 @@ def test_rust_reads_spirv_std_arch_and_expands_its_macros():
         "subgroup_logical_and",
         "unsigned_max",
         "vector_extract_dynamic",
+        "vector_insert_dynamic",
     ]
     assert features["unsigned_max"].signature == Signature(
         Type("uint"), (Param(Type("uint")), Param(Type("uint")))
@@ -239,7 +248,7 @@ def test_rust_reads_float_and_vec3_methods():
     )
     assert features["Vec3::select"].spelling == "Vec3::select"
     assert features["Vec3::select"].signature.params[0] == Param(Type("bool", (3,)))
-    assert features["Vec3::to_array"].signature.unsupported == "[f32; 3]"
+    assert features["Vec3::to_array"].signature.result == Type("float", count=3)
     assert features["Vec3::lerp"].crossgl == "mix"
     assert features["Vec3::new"].crossgl == "vec3"
 
@@ -285,6 +294,21 @@ def test_rust_probes_pointer_sized_integers():
         probes.spell(Type("usize"), "glsl")
 
 
+def test_rust_probes_an_element_insert_as_an_assignment():
+    insert = parse()["vector_insert_dynamic"]
+    # V: Vector<T, N> is a vector of T's probe scalar.
+    assert insert.signature == Signature(
+        VEC3_TYPE, (Param(VEC3_TYPE), Param(Type("usize")), Param(Type("float")))
+    )
+    source = probes.build(insert, "rust").source
+    assert "let r: Vec3 = unsafe { vector_insert_dynamic(a0, a1, a2) };" in source
+    # CrossGL replaces an element by assigning to a copy of the vector, a statement rather than an expression.
+    crossgl = probes.build(insert, "crossgl").source
+    assert "vec3 w = a0;\n" in crossgl
+    assert "w[a1] = a2;\n" in crossgl
+    assert "vec3 r = w;\n" in crossgl
+
+
 def test_rust_has_no_probe_for_vectors_spirv_std_lacks():
     with pytest.raises(probes.ProbeError, match="no int16 vectors"):
         probes.spell(Type("int16", (3,)), "rust")
@@ -326,6 +350,82 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
     ):
         assert features[name].crossgl == ""
         assert features[name].note.startswith("no CrossGL function returns")
+        with pytest.raises(probes.NoSpelling):
+            probes.build(features[name], "crossgl")
+
+
+CONVERTED_FLOAT = """
+pub trait Float: Num + Copy {
+    fn classify(self) -> FpCategory;
+}
+"""
+
+CONVERTED_VEC3 = """
+impl Vec3 {
+    pub fn to_vec3a(self) -> Vec3A {
+        Vec3A::from(self)
+    }
+}
+"""
+
+
+def test_rust_probes_convert_a_float_category_and_an_aligned_vector():
+    found = rust.parse({}, CONVERTED_FLOAT, CONVERTED_VEC3, frozenset({"dot"}))
+    features = {f.name: f for f in found}
+    category = features["Float::classify"]
+    source = probes.build(category, "rust").source
+    assert "let r: u32 = (a0.classify()) as u32;" in source
+    assert category.note == "no CrossGL function returns a float's category"
+    with pytest.raises(probes.NoSpelling):
+        probes.build(category, "crossgl")
+    aligned = features["Vec3::to_vec3a"]
+    source = probes.build(aligned, "rust").source
+    assert "let r: Vec3 = Vec3::from(a0.to_vec3a());" in source
+    assert aligned.crossgl == "vec3"
+    assert "vec3 r = vec3(a0);" in probes.build(aligned, "crossgl").source
+
+
+ARRAY_VEC3 = """
+impl Vec3 {
+    pub const fn from_array(a: [f32; 3]) -> Self {
+        Self::new(a[0], a[1], a[2])
+    }
+    pub const fn to_array(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
+    }
+    pub const fn from_slice(slice: &[f32]) -> Self {
+        Self::new(slice[0], slice[1], slice[2])
+    }
+    pub fn write_to_slice(self, slice: &mut [f32]) {
+        slice[..3].copy_from_slice(&self.to_array());
+    }
+}
+"""
+
+
+def test_rust_probes_pass_arrays_and_slices():
+    found = rust.parse({}, "pub trait Float: Num + Copy {}", ARRAY_VEC3, frozenset())
+    features = {f.name: f for f in found}
+    built = features["Vec3::from_array"]
+    source = probes.build(built, "rust").source
+    assert "let a0: [f32; 3] = [fin[i + 0], fin[i + 1], fin[i + 2]];" in source
+    assert "let r: Vec3 = Vec3::from_array(a0);" in source
+    assert "vec3 r = vec3(a0, a1, a2);" in probes.build(built, "crossgl").source
+    # A slice the function reads is the probe's input buffer.
+    sliced = features["Vec3::from_slice"]
+    source = probes.build(sliced, "rust").source
+    assert "let r: Vec3 = Vec3::from_slice(fin);" in source
+    assert "vec3 r = vec3(a0, a1, a2);" in probes.build(sliced, "crossgl").source
+    # An array result is stored through its first element.
+    source = probes.build(features["Vec3::to_array"], "rust").source
+    assert "let r: [f32; 3] = a0.to_array();" in source
+    assert "outp[i] = r[0];" in source
+    # A slice the function writes is a local array of one value per component.
+    written = features["Vec3::write_to_slice"]
+    source = probes.build(written, "rust").source
+    assert "let mut a1: [f32; 3] = Default::default();" in source
+    assert "a0.write_to_slice(&mut a1);" in source
+    for name in ("Vec3::to_array", "Vec3::write_to_slice"):
         with pytest.raises(probes.NoSpelling):
             probes.build(features[name], "crossgl")
 
@@ -445,7 +545,7 @@ def test_rust_ray_tracing_functions_are_probed_in_a_stage_that_has_them():
     features = {f.name: f for f in found}
     assert features["report_intersection"].stage == "intersection"
     assert features["terminate_ray"].stage == "any-hit"
-    assert features["execute_callable"].stage == "closest-hit"
+    assert features["execute_callable"].stage == "callable"
     assert features["emit_vertex"].stage == "geometry"
     # A function that never returns is called as a statement.
     assert features["terminate_ray"].signature == Signature(VOID, ())
@@ -478,12 +578,38 @@ STAGE_SAMPLES = [
         stage="geometry",
     ),
     Feature("rust", "function", "kill", Signature(VOID, ()), stage="fragment"),
+    Feature(
+        "rust",
+        "function",
+        "set_mesh_outputs_ext",
+        Signature(VOID, (Param(Type("uint")), Param(Type("uint")))),
+        spelling="unsafe set_mesh_outputs_ext",
+        stage="mesh",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "emit_mesh_tasks_ext_payload",
+        Signature(
+            VOID, (*[Param(Type("uint"))] * 3, Param(Type.other("udt"), "inout"))
+        ),
+        spelling="unsafe emit_mesh_tasks_ext_payload",
+        stage="task",
+    ),
+    Feature(
+        "rust",
+        "function",
+        "execute_callable",
+        Signature(VOID, (Param(Type.other("udt"), "inout"),)),
+        spelling="unsafe execute_callable::<_, 0>",
+        stage="callable",
+    ),
 ]
 
 
 def test_rust_stage_probes_name_their_execution_model():
-    intersection, hit, geometry, _ = (
-        probes.build(f, "rust").source for f in STAGE_SAMPLES
+    intersection, hit, geometry = (
+        probes.build(f, "rust").source for f in STAGE_SAMPLES[:3]
     )
     assert (
         "#[spirv(intersection)]\npub fn probe(\n    #[spirv(storage_buffer"
@@ -501,13 +627,104 @@ def test_rust_stage_probes_name_their_execution_model():
     )
 
 
-def test_rust_has_no_mesh_or_task_probe_for_vulkan_1_1():
-    for stage in ("mesh", "task"):
-        probe_feature = Feature(
-            "rust", "function", "f", Signature(VOID, ()), stage=stage
-        )
-        with pytest.raises(probes.ProbeError, match="need SPIR-V 1.4"):
-            probes.build(probe_feature, "rust")
+MESH_SHADING = """
+pub unsafe fn set_mesh_outputs_ext(vertex_count: u32, primitive_count: u32) {}
+
+pub unsafe fn emit_mesh_tasks_ext_payload<T>(
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+    payload: &mut T,
+) -> ! {
+    loop {}
+}
+"""
+
+
+WHERE_VEC3 = """
+impl Vec3 {
+    pub fn map<F>(self, f: F) -> Self
+    where
+        F: Fn(f32) -> f32,
+    {
+        self
+    }
+
+    pub fn scaled<T>(self, s: T) -> Self
+    where
+        T: Into<f32>,
+    {
+        self
+    }
+}
+"""
+
+
+def test_rust_where_clauses_bound_type_parameters():
+    found = rust.parse({}, FLOAT, WHERE_VEC3, frozenset())
+    features = {f.name: f for f in found}
+    # A closure has no probe: its parameter is neither the payload nor its own argument's scalar.
+    with pytest.raises(probes.ProbeError, match="parameters of type F"):
+        probes.build(features["Vec3::map"], "rust")
+    # A bound in the where clause types its parameter as a bound in the generics would.
+    assert features["Vec3::scaled"].signature.params[1] == Param(Type("float"))
+
+
+def test_rust_payload_functions_take_the_probe_payload():
+    found = rust.parse(
+        {"mesh_shading": MESH_SHADING, "ray_tracing": RAY_TRACING}, FLOAT, VEC3
+    )
+    features = {f.name: f for f in found}
+    task = features["emit_mesh_tasks_ext_payload"]
+    assert task.stage == "task"
+    assert task.signature.params[3] == Param(Type.other("udt"), "inout")
+    source = probes.build(task, "rust").source
+    assert "#[spirv(task_ext(threads(1)))]" in source
+    assert "    #[spirv(task_payload_workgroup_ext)] payload: &mut Payload,\n" in source
+    assert "emit_mesh_tasks_ext_payload(a0, a1, a2, payload)" in source
+    callable_ = probes.build(features["execute_callable"], "rust").source
+    assert "#[spirv(callable)]" in callable_
+    assert "    #[spirv(incoming_callable_data)] payload: &mut Payload,\n" in callable_
+    assert "execute_callable::<_, 0>(payload)" in callable_
+    crossgl = probes.build(features["execute_callable"], "crossgl").source
+    assert "struct Payload {" in crossgl
+    assert "void main(Payload payload @ callable_data) {" in crossgl
+
+
+def test_rust_mesh_probe_writes_a_triangle_after_the_call():
+    found = rust.parse({"mesh_shading": MESH_SHADING}, FLOAT, VEC3)
+    mesh = next(f for f in found if f.name == "set_mesh_outputs_ext")
+    assert mesh.stage == "mesh"
+    source = probes.build(mesh, "rust").source
+    assert (
+        "#[spirv(mesh_ext(threads(1), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext))]"
+        in source
+    )
+    assert (
+        "    #[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1],\n"
+        in source
+    )
+    call = source.index("set_mesh_outputs_ext(a0, a1)")
+    assert call < source.index("indices[0] = UVec3::new(0, 1, 2);")
+
+
+def test_rust_mesh_and_task_probes_compile_for_vulkan_1_2(monkeypatch):
+    commands = []
+
+    def run(arguments, cwd):
+        commands.append(arguments)
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(rustgpu, "command", lambda target=rustgpu.TARGET: (target,))
+    monkeypatch.setattr(validators, "_run", run)
+    for stage in ("compute", "closest-hit", "mesh", "task"):
+        validators.validate("rust", "", stage)
+    assert [arguments[0] for arguments in commands] == [
+        "spirv-unknown-vulkan1.1",
+        "spirv-unknown-vulkan1.1",
+        "spirv-unknown-vulkan1.2",
+        "spirv-unknown-vulkan1.2",
+    ]
 
 
 def test_rust_gpu_is_unavailable_without_a_build(monkeypatch, tmp_path):
@@ -520,6 +737,45 @@ def test_rust_gpu_is_unavailable_without_a_build(monkeypatch, tmp_path):
     finally:
         rustgpu.command.cache_clear()
         rustgpu.version.cache_clear()
+
+
+def test_rust_gpu_needs_libraries_for_every_target(monkeypatch, tmp_path):
+    built = tmp_path / "target"
+    (built / "release").mkdir(parents=True)
+    (built / "release" / "librustc_codegen_spirv.so").touch()
+    (built / "compiletest-target-spec").mkdir()
+    deps = built / "compiletest-deps"
+    macros = deps / "debug" / "build" / "spirv-std-macros" / "h" / "out"
+    macros.mkdir(parents=True)
+    (macros / "libspirv_std_macros-h.so").touch()
+
+    def build(target):
+        (built / "compiletest-target-spec" / f"{target}.json").touch()
+        for crate in ("compiler_builtins", "core", "spirv-std"):
+            out = deps / target / "debug" / "build" / crate / "h" / "out"
+            out.mkdir(parents=True)
+            (out / f"lib{crate.replace('-', '_')}-h.rlib").touch()
+
+    monkeypatch.setenv("CROSSTL_COVERAGE_RUST_GPU", str(tmp_path))
+    monkeypatch.setenv("CROSSTL_COVERAGE_RUSTC", "rustc")
+    rustgpu.command.cache_clear()
+    try:
+        build(rustgpu.TARGET)
+        assert rustgpu.command() == ()
+        rustgpu.command.cache_clear()
+        build(rustgpu.MESH_TARGET)
+        compute, mesh = rustgpu.command(), rustgpu.command(rustgpu.MESH_TARGET)
+        assert compute[-1].endswith("spirv-unknown-vulkan1.1.json")
+        assert mesh[-1].endswith("spirv-unknown-vulkan1.2.json")
+        features = [
+            next(a for a in flags if a.startswith("-Ctarget-feature="))
+            for flags in (compute, mesh)
+        ]
+        assert "+MeshShadingEXT" not in features[0]
+        assert "+MeshShadingEXT," in features[1]
+        assert features[1].endswith(",+ext:SPV_EXT_mesh_shader")
+    finally:
+        rustgpu.command.cache_clear()
 
 
 needs_rust_gpu = pytest.mark.skipif(
@@ -574,7 +830,9 @@ def test_rust_fragment_probes_compile_with_rust_gpu(probe_feature):
 @pytest.mark.parametrize("probe_feature", STAGE_SAMPLES, ids=lambda f: f.name)
 def test_rust_stage_probes_compile_with_rust_gpu(probe_feature):
     probe = probes.build(probe_feature, "rust")
-    verdict = validators.validate("rust", probe.source, entry=probe.entry)
+    verdict = validators.validate(
+        "rust", probe.source, probe_feature.stage, entry=probe.entry
+    )
     assert verdict.accepted, verdict.log
 
 

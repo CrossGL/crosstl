@@ -212,25 +212,20 @@ def test_trait_bounds_are_not_type_uses():
     assert undeclared_type_uses(_program(BOUNDED)) == []
 
 
-GENERIC_CONSTANT_ARG = """
-shader Probe {
+RAY_QUERIES = """
+shader RayQueries {
     compute {
-        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-        buffer uint* outp;
         void main() {
-            RayQuery<RAY_FLAG_NONE> q;
-            q.Abort();
-            outp[gl_GlobalInvocationID.x] = 0u;
+            RayQuery<RAY_FLAG_FORCE_OPAQUE> opaque;
+            RayQuery<RAY_FLAG_CULL_OPAQUE | RAY_FLAG_SKIP_TRIANGLES> culled;
+            StructuredBuffer<Missing> values;
         }
     }
 }
 """
 
 
-def test_generic_arguments_are_not_type_uses():
-    assert undeclared_type_uses(_program(GENERIC_CONSTANT_ARG)) == []
-
-
-def test_generic_constant_argument_translates(tmp_path):
-    path = _write(tmp_path, "rayquery.cgl", GENERIC_CONSTANT_ARG)
-    assert "RayQuery<RAY_FLAG_NONE>" in crosstl.translate(path, backend="directx")
+def test_ray_query_flags_are_values_not_type_uses():
+    # The flags of RayQuery<FLAGS> are values; other template arguments are still types.
+    uses = undeclared_type_uses(_program(RAY_QUERIES))
+    assert [name for name, _node in uses] == ["Missing"]

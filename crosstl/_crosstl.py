@@ -808,6 +808,34 @@ def _run_validate_project(args):
     return 0 if payload["success"] else 1
 
 
+def _format_toolchain_doctor_text(payload):
+    lines = ["Validation toolchains"]
+    for row in payload.get("tools", []):
+        tools = row.get("tools") or []
+        tool_bits = []
+        for tool in tools:
+            name = tool.get("name", "?")
+            path = tool.get("path")
+            tool_bits.append(f"{name}={path or 'not found'}")
+        version = row.get("version")
+        version_suffix = f"  version: {version}" if version else ""
+        lines.append(
+            f"- {row.get('target')}: {row.get('status')}; {', '.join(tool_bits)}{version_suffix}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _run_doctor(args):
+    from .project import toolchain_doctor_report
+
+    payload = toolchain_doctor_report()
+    if args.format == "text":
+        _write_text_payload(_format_toolchain_doctor_text(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0
+
+
 def _format_runtime_integration_plan(payload):
     lines = [f"Runtime integration plan: {payload.get('sourceReport')}"]
     for header_line in (
@@ -7228,6 +7256,21 @@ def _build_parser():
     )
     validate_parser.set_defaults(func=_run_validate_project)
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="List validation toolchains CrossTL can find on this machine",
+    )
+    doctor_parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="text",
+        help="Doctor output format",
+    )
+    doctor_parser.add_argument(
+        "--output", "-o", help="Write doctor output; use '-' for stdout"
+    )
+    doctor_parser.set_defaults(func=_run_doctor)
+
     inspect_parser = subparsers.add_parser(
         "inspect-report", help="Inspect an existing project portability report"
     )
@@ -7945,6 +7988,7 @@ def _use_legacy_cli(argv):
         "plan-host-integration-execution",
         "execute-host-integration",
         "report",
+        "doctor",
     }
     if not argv or argv[0] in {"-h", "--help"}:
         return False

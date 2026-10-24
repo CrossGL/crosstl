@@ -18,6 +18,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.spirv_argument_tables import ArgumentTableOverlapError
 
 TEXTURE_THEN_BUFFER = """
 #include <metal_stdlib>
@@ -120,7 +121,10 @@ def test_each_kernel_of_a_library_keeps_its_buffer_bindings(tmp_path):
 
 def test_two_buffers_with_one_binding_are_still_refused(tmp_path):
     source = TEXTURE_THEN_BUFFER.replace("[[buffer(1)]]", "[[buffer(0)]]")
-    with pytest.raises(Exception, match="Duplicate SPIR-V resource binding"):
+    with pytest.raises(
+        ArgumentTableOverlapError,
+        match="'destination' and 'weights' both claim buffer index 0",
+    ):
         _translate(tmp_path, source)
 
 
