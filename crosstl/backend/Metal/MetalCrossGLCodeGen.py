@@ -80,6 +80,8 @@ from .texture_types import (
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
 
+_PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
+
 
 class MetalCallableAliasLoweringError(ValueError):
     """Raised when a callable alias survives as a runtime value."""
@@ -14169,6 +14171,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     def metal_source_overload_value_type(self, metal_type):
         if metal_type is None:
             return None
+        plain = str(metal_type).strip()
+        if (
+            _PLAIN_TYPE_NAME.fullmatch(plain)
+            and plain not in self.local_type_alias_names
+            and plain not in self.type_aliases
+            and plain not in self.scalar_alias_names
+            and not any(plain in scope for scope in self.template_type_bindings)
+        ):
+            # No alias table or template binding can rewrite this name.
+            return None if plain == "auto" else plain
         resolved = self.resolve_local_type_aliases(metal_type)
         resolved = self.substitute_template_type_text(resolved)
         resolved = self.resolve_type_alias(resolved)
@@ -19669,6 +19681,14 @@ float {scalar}(float value) {{
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        if (
+            "<" not in base
+            and ":" not in base
+            and base not in self.scalar_alias_names
+            and base not in self.type_aliases
+        ):
+            # A plain name absent from both alias tables cannot resolve further.
+            return f"{base}{suffix}"
         scalar_binding = self.scalar_alias_binding(base)
         if scalar_binding is not None:
             return f"{scalar_binding[0]}{suffix}"
