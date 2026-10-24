@@ -50,6 +50,28 @@ def test_sv_position_result_makes_a_vertex_entry(tmp_path):
     assert "void main()" in opengl
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        VERTEX_ENTRY,
+        '[shader("vertex")]\n' + VERTEX_ENTRY,
+        VERTEX_ENTRY.replace("SV_Position", "SV_POSITION"),
+    ],
+    ids=["by-result-semantic", "shader-attribute", "upper-case-semantic"],
+)
+def test_sv_position_result_writes_gl_position(tmp_path, source):
+    # The clip position is the built-in, as the HLSL importer maps it; a
+    # user varying left nothing rasterized at the intended position.
+    crossgl = _translate(tmp_path, source, "cgl")
+    assert "@ gl_Position" in crossgl
+    assert "Out_Position" not in crossgl
+
+    opengl = _translate(tmp_path, source, "opengl")
+    assert "gl_Position = vec4(position, 1.0);" in opengl
+    assert "vertexOutput" not in opengl
+    _validate_glsl(tmp_path, opengl, "vert")
+
+
 @pytest.mark.parametrize("stage", ["fragment {", "vertex {", "compute {"])
 def test_function_without_result_semantic_gets_no_stage(tmp_path, stage):
     assert stage not in _translate(tmp_path, HELPER_ONLY, "cgl")
