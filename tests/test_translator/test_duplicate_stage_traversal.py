@@ -102,9 +102,7 @@ def test_a_fixed_sampler_in_a_later_block_is_refused_on_opengl(tmp_path):
 
 
 @pytest.mark.parametrize("backend", ["directx", "vulkan"])
-def test_a_fixed_sampler_in_a_later_block_is_bound_with_its_record(
-    tmp_path, backend
-):
+def test_a_fixed_sampler_in_a_later_block_is_bound_with_its_record(tmp_path, backend):
     # Direct3D and Vulkan bind fixed sampler state from the host
     # (crosstl.translator.semantics.fixed_samplers); the later block's sampler
     # must reach that pass and its record.
