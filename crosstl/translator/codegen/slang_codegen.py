@@ -349,6 +349,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdxFine": "ddx_fine",
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
+            "fwidthCoarse": "fwidth_coarse",
+            "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "floatBitsToInt": "asint",
@@ -9070,6 +9072,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdyCoarse",
             "dFdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
             "inversesqrt",
             "inverseSqrt",
         }:
