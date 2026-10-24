@@ -3029,6 +3029,11 @@ class WGSLCodeGen:
         if normalized_name == "buffer_dimensions" and len(node.arguments) == 1:
             # The element count of a runtime-sized storage array (WGSL section 17.11, arrayLength).
             return f"arrayLength(&{self.generate_expression(node.arguments[0])})"
+        if normalized_name == "workgroupuniformload" and len(node.arguments) == 1:
+            # WGSL workgroupUniformLoad takes a pointer to workgroup storage (naga: "passed
+            # type must be a workgroup pointer"). Emit &arg unless the arg is already a
+            # pointer expression.
+            return self.generate_workgroup_uniform_load_call(node)
         if normalized_name in self.UNSUPPORTED_STORAGE_BUFFER_FREE_HELPERS:
             raise ValueError(
                 "WGSL target does not support storage buffer helper "
@@ -3108,6 +3113,14 @@ class WGSLCodeGen:
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    def generate_workgroup_uniform_load_call(self, node):
+        """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
+        argument = node.arguments[0]
+        arg_expr = self.generate_expression(argument)
+        if not arg_expr.startswith("&"):
+            arg_expr = f"&{arg_expr}"
+        return f"workgroupUniformLoad({arg_expr})"
 
     def is_user_function_name(self, name):
         return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
