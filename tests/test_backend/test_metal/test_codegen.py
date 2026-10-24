@@ -653,9 +653,10 @@ def test_codegen_attribute_mapping():
     }
     """
     result = convert(code)
-    assert re.search(r"@\s*POSITION", result)
-    assert re.search(r"@\s*NORMAL", result)
-    assert re.search(r"@\s*TEXCOORD0", result)
+    assert re.search(r"position\s*@\s*location\(0\)", result)
+    assert re.search(r"normal\s*@\s*location\(1\)", result)
+    assert re.search(r"uv\s*@\s*location\(5\)", result)
+    assert not re.search(r"@\s*(POSITION|NORMAL|TEXCOORD)", result)
     assert re.search(r"gl_Position", result)
     assert re.search(r"gl_FragColor", result)
     assert re.search(r"gl_VertexID", result)
@@ -4413,6 +4414,10 @@ def test_codegen_lowers_as_type_float_template_call():
         pytest.param("uint64_t", "uint2", "uint64", "uvec2", id="uint64-to-uint2"),
         pytest.param("uint2", "uint64_t", "uvec2", "uint64", id="uint2-to-uint64"),
         pytest.param("double", "int2", "double", "ivec2", id="double-to-int2"),
+        pytest.param("uint2", "long", "uvec2", "int64", id="uint2-to-long"),
+        pytest.param("int2", "ulong", "ivec2", "uint64", id="int2-to-ulong"),
+        pytest.param("long", "uint2", "int64", "uvec2", id="long-to-uint2"),
+        pytest.param("uint4", "long2", "uvec4", "i64vec2", id="uint4-to-long2"),
     ],
 )
 def test_codegen_preserves_as_type_target_shape_for_equal_width_reshape(

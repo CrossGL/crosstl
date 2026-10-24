@@ -123,7 +123,7 @@ python -m crosstl inspect-report crosstl-out/report.json --format text
 
 A relative `--output-dir` is resolved against the project, so the translated files land in
 `path/to/repo/crosstl-out/<target>/`. The report records each translated file, its diagnostics and provenance, the
-reference toolchain checks that ran, and the host-side changes that remain manual. The [project porting guide](https://github.com/CrossGL/crosstl/blob/main/docs/source/project-porting.rst) covers
+reference toolchain checks that ran, and the host-side changes that remain manual. The [project porting guide](https://github.com/CrossGL/crosstl/blob/main/docs/source/porting-guide.rst) covers
 the options, and [`demos/`](https://github.com/CrossGL/crosstl/blob/main/demos/README.md) has pinned open-source ports with checked artifacts.
 
 ## Documentation
