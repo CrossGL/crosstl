@@ -2470,8 +2470,9 @@ def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     output = generate_crossgl(hlsl)
 
     assert "MOD" not in output
-    assert "void MakeNop(in dx_HitObject obj[2])" in output
-    assert "dx_HitObject obj[2]" in output
+    assert "void MakeNop(in dx::HitObject obj[2])" in output
+    assert "dx::HitObject obj[2]" in output
+    assert "dx_HitObject" not in output
     parse_crossgl(output)
 
 
@@ -7932,6 +7933,26 @@ def test_codegen_fixed_array_value_initializer_rejects_resource_members():
     diagnostic = exc_info.value
     assert diagnostic.reason == "value-initialization-unsupported"
     assert diagnostic.expected_type == "Texture2D"
+
+
+def test_hlsl_import_keeps_dx_hit_object_namespace():
+    code = textwrap.dedent("""
+        RWStructuredBuffer<uint> outp : register(u0);
+        [shader("raygeneration")]
+        void main() {
+            uint i = 0u;
+            dx::HitObject obj;
+            uint r = obj.GetHitKind();
+            outp[i] = r;
+        }
+    """)
+
+    crossgl = generate_crossgl(code)
+
+    assert "dx::HitObject obj;" in crossgl
+    assert "dx_HitObject" not in crossgl
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "dx::HitObject obj;" in hlsl
 
 
 def test_codegen_invalid_hlsl_raises():
