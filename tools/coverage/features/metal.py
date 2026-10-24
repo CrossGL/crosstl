@@ -184,7 +184,8 @@ def _declared(part: str, template: str, bound: str) -> str | None:
         if part.startswith("thread ") and _value(kind):
             return f"address {kind}"
         return f"{kind}*"
-    reference = "&" in part
+    # A reference to const, such as MSL 4.1's ``determinant(const thread matrix<T, K, K> &a)``, takes a value.
+    reference = "&" in part and not re.match(r"const\b", part)
     words = part.replace("&", " ").rsplit(None, 1)
     kind = _concrete(words[0] if len(words) == 2 else part, template, bound)
     return f"out {kind}" if reference else kind

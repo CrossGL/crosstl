@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -74,8 +76,13 @@ def test_results_match_word_for_word_and_nan_matches_nan():
     assert "the native probe writes 0x3f800000" in found
 
 
-def _fake_harness(monkeypatch, translated_outcome, written, runtime="metal-apple"):
-    """Make run_suite report the native probe as run and the translation as ``translated_outcome``."""
+def _fake_harness(
+    monkeypatch, translated_outcome, written, runtime="metal-apple", environments=None
+):
+    """Make run_suite report the native probe as run and the translation as ``translated_outcome``.
+
+    ``environments``, when given, collects the Vulkan environment of each run.
+    """
 
     class Provided:
         available = True
@@ -87,8 +94,12 @@ def _fake_harness(monkeypatch, translated_outcome, written, runtime="metal-apple
         lambda spec, targets: {t: [(runtime, Provided())] for t in targets},
     )
 
-    def run_suite(cases, targets, configs, selection, root, *, reference=False):
+    def run_suite(
+        cases, targets, configs, selection, root, *, reference=False, environment
+    ):
         assert reference and targets == [runtime.target] and configs == ["strict"]
+        if environments is not None:
+            environments.append(environment)
         records = []
         for case in cases:
             assert "#version 460" not in case.src.read_text()
@@ -207,7 +218,55 @@ def test_hlsl_slang_and_wgsl_probes_run_as_spirv_on_vulkan(
     assert result.outcome == expected
     assert result.detail.startswith(detail)
     assert execution.found(result.detail) == (expected == "wrong")
-    assert execution.idle([result], used) == []
+    # A translation that did not run leaves HLSL without a probe that ran.
+    assert execution.idle([result]) == ([] if result.runtime else ["hlsl"])
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("", "vulkan1.1"), ("1.0", "vulkan1.1"), ("1.3", "vulkan1.1")]
+    + [("1.4", "vulkan1.2"), ("1.5", "vulkan1.2"), ("1.6", "vulkan1.3")],
+)
+def test_spirv_runs_in_the_oldest_environment_that_takes_its_version(version, expected):
+    header = f"; SPIR-V\n; Version: {version}\n" if version else ""
+    assert execution.environment([f"{header}OpCapability Shader\n"]) == expected
+    older = "; SPIR-V\n; Version: 1.0\n"
+    assert execution.environment([older, header]) == expected
+
+
+def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
+    monkeypatch,
+):
+    # slangc writes SPIR-V 1.5, which spirv-val rejects for Vulkan 1.1, so no Slang probe would ever run there.
+    environments = []
+    _fake_harness(monkeypatch, "preserved", 0, "vulkan-lavapipe", environments)
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    versions = {"slang": "1.5", "hlsl": "1.3"}
+    monkeypatch.setattr(
+        execution,
+        "as_spirv",
+        lambda language, source: f"; SPIR-V\n; Version: {versions[language]}\n",
+    )
+    feature = Feature("slang", "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, "slang").source
+    slang = Result(feature, "input", "supported", sources=(native, native))
+    [result, hlsl], used = execution.run([slang, _hlsl()], workers=1)
+    assert sorted(environments) == ["vulkan1.1", "vulkan1.2"]
+    assert result.runtime == hlsl.runtime == "vulkan-lavapipe"
+
+
+@pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
+def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
+    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes."""
+    if not validators.can_lower(language):
+        pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
+    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    native = probes.build(feature, language).source
+    probe = Result(feature, "output", "supported", sources=(native, native))
+    [result], used = execution.run([probe], workers=1)
+    if not used:
+        pytest.skip("no Vulkan runtime")
+    assert (result.outcome, result.runtime) == ("supported", used[0])
 
 
 def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
@@ -222,7 +281,7 @@ def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypat
     assert execution.run([probe])[0] == [probe]
     monkeypatch.setattr(validators, "can_lower", lambda language: False)
     assert execution.run([_hlsl()]) == ([_hlsl()], [])
-    assert execution.idle([_hlsl()], ["vulkan-lavapipe"]) == ["hlsl"]
+    assert execution.idle([_hlsl()]) == ["hlsl"]
 
 
 @pytest.mark.parametrize("language", ["hlsl", "spirv"])
@@ -266,9 +325,10 @@ def test_nothing_runs_without_a_runtime(monkeypatch):
     )
     results = [supported()]
     assert execution.run(results) == (results, [])
-    assert execution.idle(results, []) == ["metal"]
-    assert execution.idle(results, ["metal-apple"]) == []
-    assert execution.idle([Result(SIN, "output", "refused")], []) == []
+    assert execution.idle(results) == ["metal"]
+    # One Metal probe that ran is enough.
+    assert execution.idle([*results, replace(supported(), runtime="metal-apple")]) == []
+    assert execution.idle([Result(SIN, "output", "refused")]) == []
 
 
 def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
@@ -299,7 +359,9 @@ def test_metal_runs_the_native_probe_against_the_translation():
 
 def test_supported_metal_compute_results_keep_both_sources(monkeypatch):
     monkeypatch.setattr(validators, "available", lambda language, target="": True)
-    monkeypatch.setattr(runner, "_native_rejection", lambda feature, language: "")
+    monkeypatch.setattr(
+        runner, "_native_rejection", lambda feature, language: (feature, "")
+    )
     monkeypatch.setattr(runner, "translate", lambda *args: "translated metal")
     monkeypatch.setattr(
         runner, "_validated", lambda *args, **kwargs: validators.Verdict(True)
