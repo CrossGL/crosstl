@@ -43,23 +43,33 @@ jobs:
       execute: ${{ steps.plan.outputs.execute }}
       run: ${{ steps.plan.outputs.run }}
     steps:
-      - name: Check whether the merge queue tested this commit
-        id: queue
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # The merge queue moves main to the commit its merge group tested, so a
-          # push to main would repeat a run that already passed on that commit.
-          # When the lookup fails, the push runs every job.
-          workflow="${GITHUB_WORKFLOW_REF%@*}"
-          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
-          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check whether the merge queue tested every pushed commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # The merge queue moves main to the commits its merge groups tested, so a
+          # push to main would repeat runs that already passed on them. One push can
+          # land several groups, and each group's run selects the port's jobs from
+          # its own change alone, so every pushed commit needs a passing group run.
+          # When a lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          tested=false
+          if commits=$(git rev-list "$BEFORE..$GITHUB_SHA") && [ -n "$commits" ]; then
+            tested=true
+            for sha in $commits; do
+              passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$sha&event=merge_group&status=success" --jq .total_count || echo 0)
+              [ "${passed:-0}" -gt 0 ] || { tested=false; break; }
+            done
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
