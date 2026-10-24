@@ -473,6 +473,7 @@ from .resource_arrays import (
     is_private_pointer_parameter,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .sizeof_calls import sizeof_call_bytes
 from .stage_distance_layout import distance_semantic
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
@@ -27234,6 +27235,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if byteaddress_member_call is not None:
                 return byteaddress_member_call
+
+            sizeof_bytes = sizeof_call_bytes(self, func_name, args, "directx")
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
 
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:

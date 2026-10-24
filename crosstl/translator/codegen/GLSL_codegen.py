@@ -479,6 +479,7 @@ from .scalar_return_bounds import (
     scalar_return_interval,
     vector_return_intervals,
 )
+from .sizeof_calls import sizeof_call_bytes
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -40022,6 +40023,12 @@ complex64_t crossgl_complex64_mod_assign(
             if original_func_name not in self.function_return_types:
                 func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
+
+            sizeof_bytes = sizeof_call_bytes(
+                self, original_func_name, expr.args, "opengl"
+            )
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
 
             static_generic_call = generate_static_generic_numeric_call(
                 self,

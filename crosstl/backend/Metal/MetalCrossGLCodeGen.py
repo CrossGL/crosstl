@@ -2621,6 +2621,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 self.global_variable_types.get(operand),
             )
             return variable_type or operand
+        if (
+            isinstance(operand, VariableNode)
+            and not getattr(operand, "vtype", None)
+            and isinstance(operand.name, str)
+        ):
+            # The parser reads a type the lexer has no keyword for (``bfloat4``) as a variable reference.
+            variable_type = self.expression_metal_type(operand)
+            return variable_type or self.metal_sizeof_operand_type(operand.name)
         return self.expression_metal_type(operand)
 
     def render_resolved_static_constant(self, key):
@@ -12466,6 +12474,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 function_name = f"fast::{function_name}"
             elif metal_precise_math_operation(materialized_name) == function_name:
                 function_name = f"precise::{function_name}"
+            elif function_name == "sizeof":
+                # An operand this importer cannot size names a template parameter; CrossGL sizes it with MSL's
+                # layout once the generators know the type.
+                function_name = "metal_sizeof"
             return f"{function_name}({args})"
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_expression(expr, is_main)
