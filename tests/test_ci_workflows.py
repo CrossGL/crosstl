@@ -384,6 +384,68 @@ def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
         assert job["if"] == "needs.legs.outputs.run == 'true'", name
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"), reason="Bash required"
+)
+@pytest.mark.parametrize(
+    "response,status,expected",
+    [
+        # One merge-group run of this workflow passed on the pushed commit.
+        ("1", 0, "true"),
+        # A requeued group can pass the same commit twice.
+        ("2", 0, "true"),
+        # No run passed: an admin merge that bypassed the queue, or a failed,
+        # cancelled or still running group.
+        ("0", 0, "false"),
+        # The API fails: gh prints the error body and exits non-zero.
+        ('{"message":"Not Found","status":"404"}', 1, "false"),
+        # The API fails without a body.
+        ("", 1, "false"),
+    ],
+)
+def test_queue_lookup_skips_a_push_only_when_a_merge_group_run_passed(
+    tmp_path, response, status, expected
+):
+    # translator-tests.yml holds the step every other queue-tested workflow copies.
+    step = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    output = tmp_path / "output"
+    args = tmp_path / "args"
+    # Run the actual workflow shell with a local API substitute, without network access.
+    stub = textwrap.dedent("""\
+        gh() {
+          printf '%s\\n' "$*" >> "$LOOKUP_ARGS"
+          printf '%s' "$RESPONSE"
+          return "$STATUS"
+        }
+        """)
+    subprocess.run(
+        ["bash", "-e", "-c", stub + step["run"]],
+        check=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "RESPONSE": response,
+            "STATUS": str(status),
+            "GITHUB_OUTPUT": str(output),
+            "LOOKUP_ARGS": str(args),
+            "GITHUB_REPOSITORY": "CrossGL/crosstl",
+            "GITHUB_SHA": "0123abcd",
+            "GITHUB_WORKFLOW_REF": (
+                "CrossGL/crosstl/.github/workflows/backend-tests.yml@refs/heads/main"
+            ),
+        },
+        capture_output=True,
+    )
+    assert output.read_text().strip() == f"tested={expected}"
+    # The lookup asks about this workflow's runs only, not every workflow's.
+    assert args.read_text().splitlines() == [
+        "api repos/CrossGL/crosstl/actions/workflows/backend-tests.yml/runs"
+        "?head_sha=0123abcd&event=merge_group&status=success --jq .total_count"
+    ]
+
+
 def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
     # actions/setup-python fails its post step when the pip cache folder was never
     # created, so a job that caches pip downloads must also install with pip.
