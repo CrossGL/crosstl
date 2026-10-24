@@ -10,6 +10,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.project.doctor import DOCTOR_VERSION_COMMANDS
 from crosstl.project.pipeline import TOOLCHAIN_BY_BACKEND, _tool_status
 
 SHADER = textwrap.dedent("""
@@ -44,6 +45,12 @@ def test_toolchain_doctor_report_lists_every_backend(monkeypatch):
     assert cuda["tools"][0]["path"] is None
 
 
+def test_every_backend_has_a_version_command():
+    assert set(DOCTOR_VERSION_COMMANDS) == set(TOOLCHAIN_BY_BACKEND)
+    assert DOCTOR_VERSION_COMMANDS["directx"] == ("dxc", "--version")
+    assert DOCTOR_VERSION_COMMANDS["slang"] == ("slangc", "-v")
+
+
 def test_toolchain_doctor_includes_version_when_available(monkeypatch):
     monkeypatch.setattr(
         "crosstl.project.pipeline.shutil.which", lambda _name: "/usr/bin/fake"
@@ -75,6 +82,23 @@ def test_toolchain_doctor_reports_no_version_when_the_command_cannot_run(
     cuda = next(row for row in payload["tools"] if row["target"] == "cuda")
     assert cuda["status"] == "available"
     assert cuda["version"] is None
+
+
+def test_toolchain_doctor_reports_no_version_when_the_command_fails(monkeypatch):
+    monkeypatch.setattr(
+        "crosstl.project.pipeline.shutil.which", lambda _name: "/usr/bin/fake"
+    )
+    monkeypatch.setattr(
+        "crosstl.project.doctor.subprocess.run",
+        lambda *args, **kwargs: mock.Mock(
+            stdout="", stderr="error: unknown argument: '--version'\n", returncode=1
+        ),
+    )
+    payload = toolchain_doctor_report()
+    slang = next(row for row in payload["tools"] if row["target"] == "slang")
+    assert slang["status"] == "available"
+    assert slang["versionCommand"] == ["slangc", "-v"]
+    assert slang["version"] is None
 
 
 def test_doctor_command_prints_json_and_exits_zero(monkeypatch, capsys):
