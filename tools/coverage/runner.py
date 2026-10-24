@@ -162,7 +162,7 @@ def _native_rejection(feature: Feature, language: str) -> str:
 
 def _runs(feature: Feature, language: str) -> bool:
     """Whether :mod:`.execution` can run ``feature``'s probes in ``language``."""
-    return feature.stage == "compute" and language in execution.SUFFIXES
+    return feature.stage == "compute" and execution.runs(language)
 
 
 def run_output(feature: Feature, language: str) -> Result:
