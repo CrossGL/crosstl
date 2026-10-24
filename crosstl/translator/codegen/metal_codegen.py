@@ -9492,15 +9492,23 @@ class MetalCodeGen:
         """The type of a shader-scope declaration with no written type (#2444).
 
         Take it from the initializer: a literal carries its own type, and a
-        more involved expression goes through expression_result_type. Unknown
-        falls back to float, which is what map_type(None) already meant.
+        more involved expression goes through expression_result_type. When
+        neither gives a type the declaration is refused instead of guessed.
         """
         initial_value = getattr(node, "initial_value", None)
         literal_type = getattr(initial_value, "literal_type", None)
         if literal_type is not None:
             return self.type_name_string(literal_type)
         inferred = self.expression_result_type(initial_value)
-        return inferred or "float"
+        if inferred:
+            return inferred
+        var_name = getattr(node, "name", getattr(node, "variable_name", "?"))
+        # "float" only lets generation reach the program's other refusals.
+        return self.refuse_lowering(
+            f"global declaration: the type of '{var_name}' is not written and "
+            "cannot be inferred from its initializer",
+            "float",
+        )
 
     def expression_result_type(self, expr):
         if expr is None:
