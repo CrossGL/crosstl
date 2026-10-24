@@ -248,6 +248,7 @@ from .image_access_contracts import (
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
+    is_texel_fetch_operation,
     is_texture_compare_basic_operation,
     is_texture_compare_grad_offset_operation,
     is_texture_compare_grad_operation,
@@ -380,6 +381,7 @@ from .metal_keyword_identifiers import (
 )
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
+from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
@@ -10342,7 +10344,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if descriptor is not None:
                     return descriptor["return_type"]
-            if is_texture_sampling_operation(func_name) and args:
+            if (
+                is_texture_sampling_operation(func_name)
+                or is_texel_fetch_operation(func_name)
+            ) and args:
+                if self.is_plain_depth_read(func_name, args):
+                    # generate_texture_call widens the scalar MSL depth read to (d, 0, 0, 1).
+                    return "float4"
                 return self.texture_sample_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
@@ -14126,6 +14134,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
         intersector_type = f"intersector<{intersector_tags}>"
         intersection_type = f"intersection_result<{intersector_tags}>"
+        flag_statements, flags_reason = metal_trace_ray_flag_statements(
+            intersector_name,
+            raw_args[1],
+            rendered_args[1],
+            self.literal_int_constants,
+            lambda: self.next_metal_temp_variable("ray_flags"),
+        )
+        if flags_reason is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay ray flags", flags_reason
+            )
 
         lines = [
             f"ray {ray_name}",
@@ -14134,6 +14153,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             f"{ray_name}.min_distance = {min_distance}",
             f"{ray_name}.max_distance = {max_distance}",
             f"{intersector_type} {intersector_name}",
+            *flag_statements,
             (
                 f"{intersection_type} {intersection_name} = "
                 f"{intersector_name}.intersect({', '.join(intersect_args)})"

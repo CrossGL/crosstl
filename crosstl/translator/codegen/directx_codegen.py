@@ -4243,6 +4243,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 self.generic_struct_specializations,
             )
         )
+        self.infer_hlsl_global_types(global_vars)
         self.prepare_directx_compile_time_globals(ast, global_vars)
         self.hlsl_lowered_struct_resource_members = (
             self.collect_hlsl_lowered_struct_resource_members(structs, functions)
@@ -4919,6 +4920,13 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 } and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
+            if id(node) in self.hlsl_inferred_global_node_ids:
+                if not qualifier.startswith("static"):
+                    qualifier = "static " + qualifier
+                initializer = self.generate_expression_with_expected(
+                    node.initial_value, node.var_type
+                )
+                declaration += f" = {initializer}"
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
@@ -15492,6 +15500,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         value = self.generate_expression_with_expected(stmt.expression, return_type)
         return self.generate_hlsl_return_value_statement(value, indent)
+
+    def infer_hlsl_global_types(self, global_vars):
+        """Resolve untyped globals before declaration and expression lowering."""
+        self.hlsl_inferred_global_node_ids = set()
+        for node in global_vars:
+            if not hasattr(node, "var_type") or node.var_type is not None:
+                continue
+            vtype = inferred_value_type(
+                self, getattr(node, "initial_value", None), C_FAMILY
+            )
+            if not vtype:
+                self.refuse_lowering(
+                    f"global declaration: the type of '{getattr(node, 'name', '?')}' "
+                    "is not written and cannot be inferred from its initializer"
+                )
+            node.var_type = vtype
+            node.vtype = vtype
+            self.global_variable_types[node.name] = vtype
+            self.hlsl_inferred_global_node_ids.add(id(node))
 
     def local_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)

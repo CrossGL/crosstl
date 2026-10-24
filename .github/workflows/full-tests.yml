@@ -23,8 +23,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      tested: ${{ steps.queue.outputs.tested }}
+    steps:
+      - name: Check whether the merge queue tested this commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The merge queue moves main to the commit its merge group tested, so a
+          # push to main would repeat a run that already passed on that commit.
+          # When the lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
+          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-latest
     # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
     # minutes each, the longest job of a merge-queue run; six bring a shard close
@@ -91,6 +115,8 @@ jobs:
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -236,6 +262,8 @@ jobs:
 
   runtime-parity:
     name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -403,6 +431,8 @@ jobs:
 
   directx-native-runtime-smoke:
     name: Direct3D 12 Native Runtime Smoke (Windows)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -455,6 +485,8 @@ jobs:
 
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -636,6 +668,8 @@ jobs:
 
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: macOS-latest
     timeout-minutes: 60
 
@@ -703,7 +737,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue require.
     name: Complete Test Suite result
     if: always()
-    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    needs: [plan, pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

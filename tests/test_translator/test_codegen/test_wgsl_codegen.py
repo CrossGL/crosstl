@@ -1644,6 +1644,28 @@ def test_wgsl_codegen_rejects_unsupported_storage_buffer_resource_forms(
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_workgroup_uniform_load_takes_workgroup_pointer():
+    """WGSL workgroupUniformLoad requires a pointer (issue #2634)."""
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            shared float a0;
+            void main() {
+                float r = workgroupUniformLoad(a0);
+                outp[0] = r;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "workgroupUniformLoad(&a0)" in generated
+    assert "workgroupUniformLoad(a0)" not in generated
+
+
 def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
     # WGSL section 17.11: arrayLength reports a runtime-sized array's element count.
     shader = """

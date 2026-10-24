@@ -24,8 +24,9 @@ touches Metal or Direct3D.
   MLX native, parity, corpus and host tier runs in the queue only when the
   group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
   to `main`. A pull request merges only when this run passes.
-- **Main and nightly.** Pushes to `main` repeat the full Python sweep and
-  publish coverage. The MLX tier, conformance, the corpus and coverage also run
+- **Main and nightly.** Pushes to `main` publish coverage. The translator,
+  backend, complete and examples workflows skip a push whose commit already
+  passed the merge queue, and run in full for any other commit. The MLX tier, conformance, the corpus and coverage also run
   nightly, and fuzzing runs weekly.
 
 A maintainer can request the merge-queue tier on a pull request before
@@ -71,7 +72,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `corpus.yml` | The pinned third-party corpus in `tests/conformance/corpus` |
 | `fuzz.yml` | Weekly crash fuzzing of every importer |
 | `demo.yml`, `native-host-loader.yml`, `deferred-native-compilation.yml` | The open-source porting demo and the native host contracts, for changes to their paths |
-| `docs.yml` | The Sphinx documentation build |
+| `docs.yml` | The Sphinx documentation build, which fails on any warning |
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
@@ -102,7 +103,11 @@ and the test jobs size `pytest-xdist` to match. Jobs that install with pip
 cache their downloads. Every job has a timeout, and every workflow declares
 least-privilege permissions.
 
-A new push cancels the superseded pull-request runs of the test workflows. The
+A new push cancels the superseded pull-request runs of the test workflows.
+Coverage and the porting demo queue pushes to `main` behind the run in
+progress, and a newer push replaces the one still waiting, so a burst of merges
+measures and publishes only the newest commit. The other workflows never
+cancel a run on `main`, because a cancelled run turns the status badge red. The
 MLX workflow lets each leg finish, so a long Metal run does not hold up the
 next revision's DirectX or OpenGL legs; cancel superseded MLX runs by hand.
 Suites that take many minutes on macOS or Windows belong in the merge-queue,
