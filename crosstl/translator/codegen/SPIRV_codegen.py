@@ -4625,11 +4625,19 @@ class VulkanSPIRVCodeGen(
             target_width = self.integer_type_width(target_type_name)
             if source_width == target_width:
                 opcode = "OpBitcast"
-            elif (
-                source_type_name in self.UNSIGNED_INTEGER_TYPES
-                and target_type_name in self.UNSIGNED_INTEGER_TYPES
-            ):
-                opcode = "OpUConvert"
+            elif source_type_name in self.UNSIGNED_INTEGER_TYPES:
+                if target_type_name in self.UNSIGNED_INTEGER_TYPES:
+                    opcode = "OpUConvert"
+                elif source_width < target_width:
+                    # An unsigned source widens by zero extension even into a
+                    # signed type; OpSConvert would sign-extend values with the
+                    # high bit set, and OpUConvert needs an unsigned result.
+                    widened = self.convert_scalar_to_type(
+                        value, self.register_primitive_type("u64")
+                    )
+                    return self.convert_scalar_to_type(widened, target_type)
+                else:
+                    opcode = "OpSConvert"
             else:
                 opcode = "OpSConvert"
         else:
@@ -13377,9 +13385,11 @@ class VulkanSPIRVCodeGen(
             "int64": "i64",
             "int64_t": "i64",
             "long": "i64",
+            "ptrdiff_t": "i64",
             "uint64": "u64",
             "uint64_t": "u64",
             "ulong": "u64",
+            "size_t": "u64",
         }
         return aliases.get(str(type_name), str(type_name))
 
