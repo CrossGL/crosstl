@@ -257,3 +257,24 @@ def test_pixel_coordinates_are_refused(tmp_path, backend):
 def test_opengl_still_refuses_fixed_sampler_state(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
         _translate(tmp_path, SAMPLERS, "opengl")
+
+
+KEYWORD_NAMED_SAMPLER = """#include <metal_stdlib>
+using namespace metal;
+constexpr sampler linear(filter::linear);
+struct VOut { float4 position [[position]]; float2 uv; };
+fragment float4 shade(VOut in [[stage_in]], texture2d<float> colour [[texture(0)]]) {
+    return colour.sample(linear, in.uv);
+}
+"""
+
+
+def test_hlsl_keeps_the_record_of_a_sampler_renamed_from_a_keyword(tmp_path):
+    # `linear` is an HLSL interpolation modifier, so the sampler is renamed;
+    # its record must name the declaration the host binds.
+    hlsl = _translate(tmp_path, KEYWORD_NAMED_SAMPLER, "directx")
+    records = _records(hlsl)
+    assert set(records) == {"linear_"}
+    assert re.search(r"SamplerState linear_ : register\(s0\);", hlsl), hlsl
+    assert records["linear_"]["register"] == "s0"
+    assert records["linear_"]["state"]["mag_filter"] == "linear"

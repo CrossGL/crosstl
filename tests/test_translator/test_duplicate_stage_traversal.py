@@ -6,7 +6,7 @@ functions imports to. :class:`~crosstl.translator.ast.StageMap` keeps each block
 (:mod:`crosstl.translator.semantics.rewrite`) yielded that key once per block and then read ``stages[key]``, so it
 visited the first block as many times as there were blocks and never the others. Every pass that walks the whole
 program then skipped the later blocks: a fixed sampler state in the second fragment block reached HLSL verbatim and
-SPIR-V as a descriptor declared inside a function, instead of being refused.
+SPIR-V as a descriptor declared inside a function, instead of being bound or refused.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ import pytest
 
 import crosstl
 from crosstl.translator import ast as A
+from crosstl.translator.codegen.fixed_sampler_contracts import (
+    parse_fixed_sampler_contract,
+)
 from crosstl.translator.semantics.rewrite import (
     StageSlot,
     child_slots,
@@ -93,10 +96,20 @@ def test_replacing_a_later_block_keeps_the_first_as_the_keyed_stage():
     assert program.stages.all_for_stage(A.ShaderStage.VERTEX) == [second, replacement]
 
 
-@pytest.mark.parametrize("backend", ["opengl", "directx", "vulkan"])
-def test_a_fixed_sampler_in_a_later_block_is_refused(tmp_path, backend):
+def test_a_fixed_sampler_in_a_later_block_is_refused_on_opengl(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
-        translate(tmp_path, backend)
+        translate(tmp_path, "opengl")
+
+
+@pytest.mark.parametrize("backend", ["directx", "vulkan"])
+def test_a_fixed_sampler_in_a_later_block_is_bound_with_its_record(
+    tmp_path, backend
+):
+    # Direct3D and Vulkan bind fixed sampler state from the host
+    # (crosstl.translator.semantics.fixed_samplers); the later block's sampler
+    # must reach that pass and its record.
+    records = parse_fixed_sampler_contract(translate(tmp_path, backend))
+    assert [record["state"]["mag_filter"] for record in records] == ["linear"]
 
 
 def test_metal_keeps_the_fixed_sampler_of_a_later_block(tmp_path):
