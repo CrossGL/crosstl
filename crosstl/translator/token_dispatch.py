@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import functools
 import re
-from typing import FrozenSet, List, Optional, Pattern, Sequence, Tuple
+from typing import Pattern, Sequence, Tuple
 
 try:  # Python 3.11+ exposes the regular-expression parser here.
     from re import _constants as _sre
@@ -28,8 +28,8 @@ except ImportError:  # pragma: no cover - only an unexpected runtime lacks it
     _sre_parse = None
 
 ASCII_LIMIT = 128
-_ALL_ASCII: FrozenSet[int] = frozenset(range(ASCII_LIMIT))
-_NOTHING: FrozenSet[int] = frozenset()
+_ALL_ASCII: frozenset[int] = frozenset(range(ASCII_LIMIT))
+_NOTHING: frozenset[int] = frozenset()
 
 TokenTable = Tuple[Tuple[str, str], ...]
 
@@ -58,7 +58,7 @@ def _category_members() -> dict:
 _CATEGORY_MEMBERS = _category_members()
 
 
-def _set_first(items) -> FrozenSet[int]:
+def _set_first(items) -> frozenset[int]:
     """ASCII members of a parsed ``[...]`` set, or every ASCII character."""
 
     members = set()
@@ -77,7 +77,7 @@ def _set_first(items) -> FrozenSet[int]:
     return frozenset(members)
 
 
-def _item_first(op, value) -> Tuple[FrozenSet[int], bool]:
+def _item_first(op, value) -> tuple[frozenset[int], bool]:
     """Return (first characters, can match empty) for one parsed item."""
 
     if op is _sre.LITERAL:
@@ -111,7 +111,7 @@ def _item_first(op, value) -> Tuple[FrozenSet[int], bool]:
     return _ALL_ASCII, True
 
 
-def _sequence_first(pattern) -> Tuple[FrozenSet[int], bool]:
+def _sequence_first(pattern) -> tuple[frozenset[int], bool]:
     first: set = set()
     for op, value in pattern:
         item_first, nullable = _item_first(op, value)
@@ -134,7 +134,7 @@ else:  # pragma: no cover
 
 
 @functools.lru_cache(maxsize=None)
-def pattern_first_chars(pattern: str) -> FrozenSet[int]:
+def pattern_first_chars(pattern: str) -> frozenset[int]:
     """Return a superset of the ASCII code points a match can start with.
 
     A pattern that can match the empty string, uses case-insensitive
@@ -157,7 +157,7 @@ def pattern_first_chars(pattern: str) -> FrozenSet[int]:
     return _ALL_ASCII if nullable else first
 
 
-def _ascii_buckets(table: TokenTable) -> Tuple[Tuple[int, ...], ...]:
+def _ascii_buckets(table: TokenTable) -> tuple[tuple[int, ...], ...]:
     firsts = [pattern_first_chars(pattern) for _name, pattern in table]
     return tuple(
         tuple(index for index, first in enumerate(firsts) if code in first)
@@ -169,15 +169,15 @@ class OrderedPatternDispatch:
     """Per-character candidate lists for a first-match-wins pattern list."""
 
     def __init__(self, table: TokenTable) -> None:
-        self.patterns: Tuple[Tuple[str, Pattern[str]], ...] = tuple(
+        self.patterns: tuple[tuple[str, Pattern[str]], ...] = tuple(
             (name, re.compile(pattern)) for name, pattern in table
         )
-        self.buckets: Tuple[Tuple[Tuple[str, Pattern[str]], ...], ...] = tuple(
+        self.buckets: tuple[tuple[tuple[str, Pattern[str]], ...], ...] = tuple(
             tuple(self.patterns[index] for index in bucket)
             for bucket in _ascii_buckets(table)
         )
 
-    def candidates(self, char: str) -> Tuple[Tuple[str, Pattern[str]], ...]:
+    def candidates(self, char: str) -> tuple[tuple[str, Pattern[str]], ...]:
         """Return the patterns, in table order, that can match at ``char``."""
 
         code = ord(char)
@@ -200,17 +200,16 @@ class AlternationDispatch:
         self._table = table
         self.full: Pattern[str] = self._alternation(range(len(table)))
         self._indices = _ascii_buckets(table)
-        self._compiled: List[Optional[Pattern[str]]] = [None] * ASCII_LIMIT
+        self._compiled: list[Pattern[str] | None] = [None] * ASCII_LIMIT
         self._ready = [False] * ASCII_LIMIT
 
-    def _alternation(self, indices) -> Optional[Pattern[str]]:
+    def _alternation(self, indices) -> Pattern[str] | None:
         parts = [
-            f"(?P<{self._table[index][0]}>{self._table[index][1]})"
-            for index in indices
+            f"(?P<{self._table[index][0]}>{self._table[index][1]})" for index in indices
         ]
         return re.compile("|".join(parts)) if parts else None
 
-    def pattern_for(self, char: str) -> Optional[Pattern[str]]:
+    def pattern_for(self, char: str) -> Pattern[str] | None:
         """Return the alternation to match at ``char`` (``None``: no token)."""
 
         code = ord(char)
