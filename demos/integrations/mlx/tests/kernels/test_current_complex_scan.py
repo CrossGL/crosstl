@@ -25,7 +25,7 @@ from demos.integrations.mlx.tests.kernels.test_current_scan import (
 from demos.integrations.mlx.tests.kernels.test_current_scan import (
     scan_package as scan_package,
 )
-from tools import ci_coverage
+from tests import workflow_text
 
 REFERENCE = SCAN_REFERENCE.with_name("scan_complex_reference.json")
 REFERENCE_SHA256 = "4ecef33032d9d589055010a285a73e49fda79ac462bf020be5b91a8b2c413d8e"
@@ -114,8 +114,8 @@ def test_complete_complex_scan_executes_natively(scan_package, tmp_path, axis_in
 
 def test_ci_requires_complex_scan_execution_on_each_native_platform():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
-    step = ci_coverage.workflow_step_section(job, "Validate pinned complex scans")
+    job = workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
+    step = workflow_text.workflow_step_section(job, "Validate pinned complex scans")
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     for platform, target in (
@@ -133,7 +133,7 @@ def test_ci_requires_complex_scan_execution_on_each_native_platform():
             ("xdist_group", (f"complex-width-{width}",))
         ]
     assert "--basetemp=" in step and "--junitxml=" in step
-    upload = ci_coverage.workflow_step_section(job, "Upload complex scan evidence")
+    upload = workflow_text.workflow_step_section(job, "Upload complex scan evidence")
     assert "if: always()" in upload and "if-no-files-found: error" in upload
     assert (
         "path: mlx-complex-scan-results" in upload

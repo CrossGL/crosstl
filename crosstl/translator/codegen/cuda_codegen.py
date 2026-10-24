@@ -37,6 +37,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -2933,7 +2934,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
-        return self.format_assignment_expression(node)
+        return assignment_value_expression(self.format_assignment_expression(node))
 
     def format_assignment_expression(self, node):
         operator = getattr(node, "operator", "=")

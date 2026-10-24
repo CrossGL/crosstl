@@ -110,6 +110,7 @@ class OpenCL(Dialect):
     }
     _HALF = re.compile(r"\bhalf\d*\b")
     _FP16 = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
+    _GROUP_SIZE = "__attribute__((reqd_work_group_size(1, 1, 1)))"
     # An image or a pipe is a kernel argument, declared with its access qualifier.
     _IMAGE = re.compile(r"(?:read_only|write_only|read_write) (?:image|pipe)")
     # A sampler every image read accepts: integer and floating-point coordinates, and integer image formats.
@@ -228,7 +229,8 @@ class OpenCL(Dialect):
         lines = [
             *parts.get("prelude", ()),
             *(line for line in declarations if line not in shared + images),
-            f"__kernel void probe({', '.join(params)}) {{",
+            # Like the other languages' probes, the kernel fixes its work-group size at one invocation.
+            f"__kernel {self._GROUP_SIZE} void probe({', '.join(params)}) {{",
             "    uint i = get_global_id(0);",
         ]
         lines += [f"    {line}" for line in [*shared, *body]]

@@ -5514,6 +5514,9 @@ class HLSLToCrossGLConverter(
             "float64_t": "double",
             "int32_t": "int",
             "uint32_t": "uint",
+            # HLSL declares the packed 8-bit dot-product types as uint aliases.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
         }
         if text in fixed_width_aliases:
             return fixed_width_aliases[text]
