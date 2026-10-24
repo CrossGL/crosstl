@@ -4418,13 +4418,18 @@ class TestCudaCodeGen:
         assert "double e = norm(2, da);" in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
-    def test_euclidean_norm_of_an_integer_array_is_refused(self):
+    def test_euclidean_norm_builtins_follow_the_buffer_element_type(self):
         source_code = """
         shader TestShader {
+            buffer float* fin;
+            buffer double* din;
+
             compute {
                 void main() {
-                    int values[2];
-                    float r = norm(2, values);
+                    float a = norm(3, fin);
+                    float b = rnorm(2, fin + 1);
+                    double c = norm(3, din);
+                    double e = rnorm(2, din + 1);
                 }
             }
         }
@@ -4434,8 +4439,72 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        with pytest.raises(CudaLoweringRefused, match="norm of int elements"):
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float a = normf(3, fin);" in cuda_code
+        assert "float b = rnormf(2, (fin + 1));" in cuda_code
+        assert "double c = norm(3, din);" in cuda_code
+        assert "double e = rnorm(2, (din + 1));" in cuda_code
+
+    def test_euclidean_norm_leaves_user_defined_functions_alone(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            float norm(int n, float x) {
+                return x * float(n);
+            }
+
+            float rnorm(float x, float y, float z) {
+                return x + y + z;
+            }
+
+            compute {
+                void main() {
+                    float a = norm(2, 1.5);
+                    float b = rnorm(1.0, 2.0, 3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float a = norm(2, 1.5);" in cuda_code
+        assert "float b = rnorm(1.0, 2.0, 3.0);" in cuda_code
+        assert "normf" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            ("int values[2];", "norm(2, values)", "norm of int elements"),
+            ("float grid[2][3];", "rnorm(3, grid)", "rnorm of unresolved elements"),
+        ],
+    )
+    def test_euclidean_norm_of_an_unsupported_array_is_refused(
+        self, declaration, call, reason
+    ):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    float r = {call};
+                }}
+            }}
+        }}
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match=reason) as refusal:
             CudaCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.cuda-lowering-unsupported"
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
         source_code = """
