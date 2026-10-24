@@ -33499,7 +33499,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool advanced = rq.Proceed();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }
@@ -33519,7 +33519,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
     assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray);" in generated
     assert "bool advanced = cgl_ray_query_proceed(rq);" in generated
     assert "float hitT = cgl_ray_query_committed_ray_t(rq);" in generated
-    assert "float candidateT = cgl_ray_query_candidate_ray_t(rq);" in generated
+    assert "float candidateT = cgl_ray_query_candidate_triangle_ray_t(rq);" in generated
     assert "RayDesc ray = RayDesc" not in generated
     assert "RayQuery<RAY_FLAG_NONE>" not in generated
     assert "RAY_FLAG_NONE" not in generated

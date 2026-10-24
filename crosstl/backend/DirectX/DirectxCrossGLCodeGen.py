@@ -14,6 +14,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
 )
 from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
 
 from ..common_ast import (
     ArrayAccessNode,
@@ -320,7 +321,7 @@ class HLSLToCrossGLConverter(
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
             "RaytracingAccelerationStructure": "accelerationStructureEXT",
-            "RayQuery": "rayQuery",
+            "RayQuery": "RayQuery<RAY_FLAG_NONE>",
             "InputPatch": "inputPatch",
             "OutputPatch": "outputPatch",
             "PointStream": "pointStream",
@@ -5480,6 +5481,9 @@ class HLSLToCrossGLConverter(
         columns, see :meth:`generate_mul_expression`), so a non-square HLSL
         ``floatRxC`` becomes ``matRxC`` and ``intRxC`` becomes ``intCxR``.
         """
+        ray_query = canonical_ray_query_type(hlsl_type)
+        if ray_query is not None:
+            return ray_query
         mapped = self.map_type_preserving_matrix_shape(hlsl_type)
         if self.matrix_packing != "row_major" or not isinstance(mapped, str):
             return mapped
