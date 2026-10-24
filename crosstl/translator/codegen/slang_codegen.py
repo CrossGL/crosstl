@@ -9062,6 +9062,27 @@ class SlangCodeGen(LoweringRefusalMixin):
     def binary_precedence(self, op):
         return self.BINARY_PRECEDENCE.get(op, 0)
 
+    @staticmethod
+    def slang_postfix_operand(node, rendered):
+        """``rendered`` grouped so a following ``.member`` or ``[index]`` applies to all of it."""
+        if not isinstance(
+            node, (BinaryOpNode, TernaryOpNode, UnaryOpNode, AssignmentNode)
+        ):
+            return rendered
+        text = rendered.strip()
+        if text.startswith("(") and text.endswith(")"):
+            depth = 0
+            for position, char in enumerate(text):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and position != len(text) - 1:
+                        break
+            else:
+                return text
+        return f"({text})"
+
     def binary_child_needs_parentheses(self, parent_op, child, is_right_child=False):
         if not isinstance(child, BinaryOpNode):
             return False
@@ -9116,8 +9137,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             block_load = self.generate_glsl_buffer_block_array_load(node)
             if block_load is not None:
                 return block_load
-            array = self.generate_expression(
-                getattr(node, "array", getattr(node, "array_expr", None))
+            array_expr = getattr(node, "array", getattr(node, "array_expr", None))
+            array = self.slang_postfix_operand(
+                array_expr, self.generate_expression(array_expr)
             )
             index = self.format_array_access_index(
                 getattr(node, "index", getattr(node, "index_expr", None))
@@ -9151,7 +9173,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if member_info is not None:
                 return member_info["global_name"]
-            obj = self.generate_expression_without_expected(node.object)
+            obj = self.slang_postfix_operand(
+                node.object, self.generate_expression_without_expected(node.object)
+            )
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
             pointer = self.generate_expression(node.pointer_expr)

@@ -24088,3 +24088,36 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_slang_groups_member_and_subscript_operands():
+    """Postfix ``.member`` and ``[index]`` apply to the whole operand (#2813)."""
+    code = """
+    shader Group {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec2 v = vec2(fin[i], 2.0);
+                vec2 a = (v + v).yx;
+                float b = (v + v).x;
+                float d = (v * 3.0)[1];
+                float e = (-v).x;
+                float f = (i > 0u ? v : -v).y;
+                outp[i] = a.x + b + d + e + f + v.x + fin[i];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 a = (v + v).yx;" in generated_code
+    assert "float b = (v + v).x;" in generated_code
+    assert "float d = (v * 3.0)[1];" in generated_code
+    assert "float e = (-v).x;" in generated_code
+    assert "float f = (i > 0u ? v : -v).y;" in generated_code
+    assert "v + v.yx" not in generated_code
+    assert "v * 3.0[1]" not in generated_code
+    assert "+ v.x + fin[i];" in generated_code
