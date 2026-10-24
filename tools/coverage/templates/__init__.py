@@ -3,8 +3,8 @@
 A kernel template gives the statements of a compute kernel (``body``), what precedes them (``declarations``; for
 GLSL extensions and WGSL ``enable`` directives, ``prelude``) and extra entry-point parameters (``params``). The kernel
 around them is the language's :class:`~tools.coverage.dialect.Dialect` kernel: invocation index ``i``, input buffers
-``fin`` (float) and ``iin`` (int), output buffer ``outp`` (float), at bindings 0, 1 and 2. A stage template is a whole
-``program``. Templates may write ``$vec4``, ``$mat2`` and similar for the language's spelling of a type.
+``fin`` (float) and ``iin`` (int) and output buffer ``outp`` (float), bound in that order. The kernel declares only the
+input buffers the template reads. A stage template is a whole ``program``. Templates may write ``$vec4``, ``$mat2`` and similar for the language's spelling of a type.
 
 :data:`ABSENT` marks a feature the language does not have; a feature missing from a language's table has no template
 yet.

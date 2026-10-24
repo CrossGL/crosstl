@@ -45,6 +45,12 @@ def pin_mode() -> str:
     return mode
 
 
+def drift_allowed() -> bool:
+    """Return whether generated artifacts may differ from their pins in this run."""
+
+    return pin_mode() == REPORT_PIN_MODE
+
+
 def _record_drift(record: Mapping[str, Any]) -> None:
     directory = os.environ.get(PIN_DRIFT_DIR_ENV, "").strip()
     if not directory:

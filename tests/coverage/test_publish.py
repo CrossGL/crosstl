@@ -127,7 +127,7 @@ def test_markdown_lists_scores_sources_and_gaps():
     assert "glsl-extensions" not in text
     # A gap's diagnostic is its first line, in a code span, followed by the features that give it.
     assert "- `wrong | detail`: `fwrong0`" in text
-    assert "Untested, by category: function 2." in text
+    assert "<summary>2 untested: function 2</summary>" in text
     # The trend chart is published next to COVERAGE.md and embedded with a relative link.
     assert "](trend.svg)" in text
 
@@ -227,6 +227,35 @@ def test_markdown_ir_gaps_keep_their_language_and_link_no_bugs():
         in lines
     )
     assert "Wrong, by cause:" in lines
+
+
+def test_markdown_groups_untested_features_by_reason():
+    data = _report()
+    row = data["backends"][0]
+    row["features"] = [
+        _gap("ClusterID", "untested", "needs shader model 6.10"),
+        _gap("printf", "untested", "DXC compiles printf only to SPIR-V\nsecond line"),
+        _gap("Sample", "untested", "needs shader model 6.10", "method"),
+        _gap("abs", "wrong", "probe.hlsl:3:1: error: no matching function"),
+    ]
+    row["counts"] = {"supported": 0, "refused": 0, "wrong": 1, "untested": 3}
+    lines = publish.markdown(data).splitlines()
+    start = lines.index("### GLSL output") + 1
+    end = next(i for i in range(start, len(lines)) if lines[i].startswith("### "))
+    section = lines[start:end]
+    # The summary keeps the count per category; the list groups by reason, the most shared first.
+    summary = section.index("<summary>3 untested: function 2, method 1</summary>")
+    # A reason keeps its numbers, which here name a shader model rather than a probe's line, and shows its first line.
+    assert section[summary + 1 : summary + 6] == [
+        "",
+        "- `needs shader model 6.10` (2): `ClusterID`, `Sample`",
+        "- `DXC compiles printf only to SPIR-V`: `printf`",
+        "",
+        "</details>",
+    ]
+    # The untested list sits in its own collapsed block, after the gaps'.
+    wrong = next(i for i, line in enumerate(section) if line.startswith("Wrong, by"))
+    assert section.count("<details>") == 2 and wrong < summary
 
 
 def _history_rows(text):

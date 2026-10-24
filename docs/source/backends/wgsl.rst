@@ -23,6 +23,10 @@ The initial WGSL target surface covers common portable shader output:
 
 * vertex, fragment, and compute entry point generation
 * scalar, vector, matrix, array, struct, function, and local variable syntax
+* generic functions, monomorphized into one concrete WGSL function per
+  instantiation the module calls; calls whose type arguments cannot be
+  deduced, ambiguous generic overloads and generic resource parameters are
+  refused
 * stage input/output semantics mapped to ``@location`` and ``@builtin``
   attributes
 * explicit WGSL ``@location``, ``@builtin``, ``@interpolate``, and
