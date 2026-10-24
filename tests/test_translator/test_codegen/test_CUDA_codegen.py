@@ -25,6 +25,7 @@ from crosstl.translator.ast import (
     WaveOpNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -4386,6 +4387,55 @@ class TestCudaCodeGen:
         assert "ceilf(x)" not in cuda_code
         assert "roundf(x)" not in cuda_code
         assert "truncf(x)" not in cuda_code
+
+    def test_euclidean_norm_builtins_follow_the_array_element_type(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 3.0;
+                    float fa[3];
+                    double d = 3.0;
+                    double da[2];
+                    float a = norm(1, &f);
+                    float b = rnorm(3, fa);
+                    double c = rnorm(1, &d);
+                    double e = norm(2, da);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float a = normf(1, &f);" in cuda_code
+        assert "float b = rnormf(3, fa);" in cuda_code
+        assert "double c = rnorm(1, &d);" in cuda_code
+        assert "double e = norm(2, da);" in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_euclidean_norm_of_an_integer_array_is_refused(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int values[2];
+                    float r = norm(2, values);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match="norm of int elements"):
+            CudaCodeGen().generate(ast)
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
         source_code = """
