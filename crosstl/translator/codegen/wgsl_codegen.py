@@ -50,6 +50,7 @@ from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .call_graph import validate_recursion_free
 from .enum_utils import (
@@ -2871,6 +2872,9 @@ class WGSLCodeGen:
             )
             if option_none_comparison is not None:
                 return option_none_comparison
+            matrix_scalar = self.generate_matrix_scalar_binary(expr)
+            if matrix_scalar is not None:
+                return matrix_scalar
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
                 f"{self.generate_expression(expr.right)})"
@@ -3068,6 +3072,10 @@ class WGSLCodeGen:
             return self.generate_bit_cast_call(node, function_name, bit_cast)
         if function_name == "mod":
             return self.generate_mod_call(node)
+        if function_name in self.COLUMNWISE_MATRIX_BUILTINS and not (
+            self.is_user_function_name(function_name)
+        ):
+            return self.generate_columnwise_matrix_builtin_call(node, function_name)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:
@@ -3219,6 +3227,187 @@ class WGSLCodeGen:
         left = self.generate_expression(node.arguments[0])
         right = self.generate_expression(node.arguments[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    # WGSL has `*` between a matrix and a scalar but no matrix-scalar `+`, `-` or `/`
+    # and no matrixCompMult or outerProduct built-in (WGSL sections 8.7, 17.5), so
+    # these build the result one column at a time.
+    COLUMNWISE_MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
+    VECTOR_COMPONENT_NAMES = "xyzw"
+
+    def generate_matrix_scalar_binary(self, expr):
+        if expr.operator not in {"+", "-", "/"}:
+            return None
+        left_type = self.expression_type(expr.left)
+        right_type = self.expression_type(expr.right)
+        left_matrix = self.matrix_shape(left_type)
+        right_matrix = self.matrix_shape(right_type)
+        if left_matrix is not None and right_matrix is None:
+            matrix_shape, scalar = left_matrix, expr.right
+        elif right_matrix is not None and left_matrix is None:
+            matrix_shape, scalar = right_matrix, expr.left
+        else:
+            return None
+        if not self.is_matrix_scalar_operand(scalar, matrix_shape[0]):
+            return None
+        self.require_repeatable_matrix_operands(
+            f"matrix-scalar {expr.operator}", (expr.left, expr.right)
+        )
+        left = self.generate_expression(expr.left)
+        right = self.generate_expression(expr.right)
+        element, columns, rows = matrix_shape
+        parts = []
+        for index in range(columns):
+            column_left = (
+                self.matrix_column_expression(left, index)
+                if left_matrix is not None
+                else left
+            )
+            column_right = (
+                self.matrix_column_expression(right, index)
+                if right_matrix is not None
+                else right
+            )
+            parts.append(f"{column_left} {expr.operator} {column_right}")
+        return f"mat{columns}x{rows}<{element}>({', '.join(parts)})"
+
+    def is_matrix_scalar_operand(self, expr, element_type):
+        scalar_type = self.scalar_type_name(self.expression_type(expr))
+        if scalar_type is None or scalar_type == "bool":
+            return False
+        if scalar_type == element_type:
+            return True
+        # An integer literal is an abstract integer in WGSL and converts to the
+        # matrix element type.
+        return isinstance(expr, LiteralNode) and scalar_type == "i32"
+
+    def generate_columnwise_matrix_builtin_call(self, node, function_name):
+        if len(node.arguments) != 2:
+            raise ValueError(
+                f"WGSL target supports {function_name}() calls with exactly 2 "
+                f"arguments; got {len(node.arguments)}"
+            )
+        first, second = node.arguments
+        result_type = self.columnwise_matrix_builtin_type(function_name, node.arguments)
+        if result_type is None:
+            if function_name == "matrixCompMult":
+                requirement = "two float matrices of the same type"
+            else:
+                requirement = "two float vectors of the same component type"
+            raise ValueError(
+                f"WGSL target requires {function_name}() operands to be {requirement}"
+            )
+        self.require_repeatable_matrix_operands(function_name, node.arguments)
+        left = self.generate_expression(first)
+        right = self.generate_expression(second)
+        element, columns, rows = self.matrix_shape(result_type)
+        if function_name == "matrixCompMult":
+            parts = [
+                f"{self.matrix_column_expression(left, index)} * "
+                f"{self.matrix_column_expression(right, index)}"
+                for index in range(columns)
+            ]
+        else:
+            # outerProduct(c, r)[j] == c * r[j] (GLSL 4.60 section 8.6).
+            column = self.matrix_operand_expression(left)
+            row = self.matrix_operand_expression(right)
+            parts = [
+                f"{column} * {row}.{self.VECTOR_COMPONENT_NAMES[index]}"
+                for index in range(columns)
+            ]
+        return f"mat{columns}x{rows}<{element}>({', '.join(parts)})"
+
+    def columnwise_matrix_builtin_type(self, function_name, arguments):
+        if len(arguments) != 2:
+            return None
+        first_type, second_type = (self.expression_type(arg) for arg in arguments)
+        if function_name == "matrixCompMult":
+            first = self.matrix_shape(first_type)
+            if first is None or first != self.matrix_shape(second_type):
+                return None
+            if first[0] not in {"f32", "f16"}:
+                return None
+            element, columns, rows = first
+            return f"mat{columns}x{rows}<{element}>"
+        column = self.vector_shape(first_type)
+        row = self.vector_shape(second_type)
+        if column is None or row is None or column[0] != row[0]:
+            return None
+        if column[0] not in {"f32", "f16"}:
+            return None
+        return f"mat{row[1]}x{column[1]}<{column[0]}>"
+
+    def require_repeatable_matrix_operands(self, operation, operands):
+        # Each operand appears once per column in the lowered expression.
+        for operand in operands:
+            if not self.is_repeatable_matrix_operand(operand):
+                raise ValueError(
+                    f"WGSL target lowers {operation} one column at a time and "
+                    "requires operands without side effects; assign the operand "
+                    "to a local variable first"
+                )
+
+    def is_repeatable_matrix_operand(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            function_name = self.expression_name(expr.function)
+            if not isinstance(expr.function, IdentifierNode) or (
+                self.is_user_function_name(function_name)
+            ):
+                return False
+            if not (
+                self.is_type_constructor_name(function_name)
+                or function_name in self.COLUMNWISE_MATRIX_BUILTINS
+                or function_name in {"transpose", "inverse"}
+                or is_pure(expr)
+            ):
+                return False
+            return all(
+                self.is_repeatable_matrix_operand(argument)
+                for argument in expr.arguments or []
+            )
+        if isinstance(expr, BinaryOpNode):
+            return self.is_repeatable_matrix_operand(
+                expr.left
+            ) and self.is_repeatable_matrix_operand(expr.right)
+        if isinstance(expr, UnaryOpNode):
+            return expr.operator not in {
+                "++",
+                "--",
+            } and self.is_repeatable_matrix_operand(expr.operand)
+        if isinstance(expr, CastNode):
+            return self.is_repeatable_matrix_operand(expr.expression)
+        if isinstance(expr, MemberAccessNode):
+            return self.is_repeatable_matrix_operand(expr.object_expr)
+        if isinstance(expr, SwizzleNode):
+            return self.is_repeatable_matrix_operand(expr.vector_expr)
+        if isinstance(expr, ArrayAccessNode):
+            return self.is_repeatable_matrix_operand(
+                expr.array_expr
+            ) and self.is_repeatable_matrix_operand(expr.index_expr)
+        if isinstance(expr, ConstructorNode):
+            return all(
+                self.is_repeatable_matrix_operand(argument)
+                for argument in getattr(expr, "arguments", None) or []
+            )
+        return is_pure(expr)
+
+    def matrix_operand_expression(self, rendered):
+        if re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+|\[[^\[\]]*\])*", rendered):
+            return rendered
+        # A parenthesized expression or a call such as `mat2x2<f32>(...)` is already
+        # a primary expression when its first `(` closes at the end.
+        callee = re.match(r"(?:[A-Za-z_]\w*(?:<[\w<>, ]*>)?)?(?=\()", rendered)
+        if callee is not None and rendered.endswith(")"):
+            depth = 0
+            for index in range(callee.end(), len(rendered)):
+                depth += {"(": 1, ")": -1}.get(rendered[index], 0)
+                if depth == 0 and index < len(rendered) - 1:
+                    break
+            else:
+                return rendered
+        return f"({rendered})"
+
+    def matrix_column_expression(self, rendered, index):
+        return f"{self.matrix_operand_expression(rendered)}[{index}]"
 
     def generate_clamp_call(self, node):
         if len(node.arguments) != 3:
@@ -5427,6 +5616,14 @@ class WGSLCodeGen:
             return self._struct_member_types.get((struct_name, expr.member))
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator in {"-", "+"}
+            and not expr.is_postfix
+        ):
+            operand_type = self.expression_type(expr.operand)
+            if self.matrix_shape(operand_type) is not None:
+                return operand_type
         if isinstance(expr, FunctionCallNode):
             function_name = self.expression_name(expr.function)
             option_call_type = self.builtin_option_call_type(expr, function_name)
@@ -5445,6 +5642,21 @@ class WGSLCodeGen:
                 )
             ):
                 return "int"
+            if function_name in self.COLUMNWISE_MATRIX_BUILTINS and not (
+                self.is_user_function_name(function_name)
+            ):
+                return self.columnwise_matrix_builtin_type(
+                    function_name, expr.arguments
+                )
+            if (
+                function_name == "transpose"
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                operand = self.matrix_shape(self.expression_type(expr.arguments[0]))
+                if operand is not None:
+                    element, columns, rows = operand
+                    return f"mat{rows}x{columns}<{element}>"
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
@@ -5502,6 +5714,18 @@ class WGSLCodeGen:
                 matrix_element, columns, rows = right_matrix
                 if matrix_element == vector_element and rows == vector_size:
                     return f"vec{columns}<{matrix_element}>"
+        if expr.operator == "*" and left_matrix is not None:
+            if right_matrix is not None and left_matrix[0] == right_matrix[0]:
+                if left_matrix[1] == right_matrix[2]:
+                    return f"mat{right_matrix[1]}x{left_matrix[2]}<{left_matrix[0]}>"
+        if expr.operator in {"+", "-"} and left_matrix is not None:
+            if left_matrix == right_matrix:
+                return left_type
+        if expr.operator != "%":
+            if left_matrix is not None and right_scalar is not None:
+                return left_type
+            if right_matrix is not None and left_scalar is not None:
+                return right_type
         if left_vector is not None and right_vector is not None:
             if left_vector == right_vector:
                 return left_type
