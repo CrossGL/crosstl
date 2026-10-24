@@ -1296,6 +1296,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0
+
       - name: Install OpenGL runtime dependencies
         run: |
           python -m pip install --upgrade pip
@@ -3880,15 +3881,11 @@ jobs:
       - name: Validate native dispatch limits
         run: python -m pytest -q -n auto tests/test_translator/test_native_dispatch_limits.py
 
-      - name: Install system packages
+      - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
-      - name: Install Linux SPIR-V tools
-        if: runner.os == 'Linux'
-        run: |
-          glslangValidator --version
 
       - name: Install Linux DXC
         if: runner.os == 'Linux'
@@ -6801,15 +6798,11 @@ jobs:
           python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal --version
 
-      - name: Install system packages
+      - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
-      - name: Install Linux SPIR-V tools
-        if: runner.os == 'Linux'
-        run: |
-          glslangValidator --version
 
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
@@ -8570,6 +8563,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
@@ -9287,6 +9281,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
@@ -9363,6 +9358,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
@@ -9442,6 +9438,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
@@ -9673,6 +9670,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
