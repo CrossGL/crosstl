@@ -9757,7 +9757,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return False
 
-
     def cuda_euclidean_norm_function_name(self, func_name, raw_args):
         """Map CrossGL ``norm``/``rnorm`` to CUDA ``normf``/``rnormf`` for float arrays.
 
