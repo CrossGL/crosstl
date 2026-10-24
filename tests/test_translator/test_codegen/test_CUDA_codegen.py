@@ -3994,18 +3994,97 @@ class TestCudaCodeGen:
         assert "longBitsToDouble" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
-    def test_64bit_bitcast_of_a_vector_is_refused(self):
-        source_code = """
-        shader TestShader {
-            compute {
-                void main() {
-                    dvec2 v = dvec2(1.0, 2.0);
-                    int64_t bits = doubleBitsToLong(v);
-                }
-            }
-        }
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            (
+                "dvec2 v = dvec2(1.0, 2.0);",
+                "int64_t bits = doubleBitsToLong(v);",
+                "doubleBitsToLong of double2",
+            ),
+            (
+                "i64vec2 v = i64vec2(1, 2);",
+                "double value = longBitsToDouble(v);",
+                "longBitsToDouble of i64vec2",
+            ),
+        ],
+    )
+    def test_64bit_bitcast_of_a_vector_is_refused(self, declaration, call, reason):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    {call}
+                }}
+            }}
+        }}
         """
 
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match=reason) as refusal:
+            CudaCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.cuda-lowering-unsupported"
+
+    @pytest.mark.parametrize(
+        "source_code",
+        [
+            """
+            shader TestShader {
+                compute {
+                    void main() {
+                        int mode = 1;
+                        dvec2 v = dvec2(1.0, 2.0);
+                        int64_t bits = 0;
+                        match mode {
+                            0 => {
+                                bits = doubleBitsToLong(v);
+                            }
+                            _ => {
+                                bits = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            """,
+            """
+            shader TestShader {
+                compute {
+                    void main() {
+                        int mode = 1;
+                        dvec2 v = dvec2(1.0, 2.0);
+                        int64_t bits = match mode {
+                            0 => doubleBitsToLong(v),
+                            _ => int64_t(1),
+                        };
+                    }
+                }
+            }
+            """,
+            """
+            shader TestShader {
+                int64_t pick(int mode, dvec2 v) {
+                    return match mode {
+                        0 => doubleBitsToLong(v),
+                        _ => int64_t(1),
+                    };
+                }
+
+                compute {
+                    void main() {
+                        int64_t bits = pick(1, dvec2(1.0, 2.0));
+                    }
+                }
+            }
+            """,
+        ],
+        ids=["statement", "expression", "return"],
+    )
+    def test_cuda_lowering_refusal_inside_a_match_arm_is_raised(self, source_code):
         lexer = Lexer(source_code)
         parser = Parser(lexer.tokens)
         ast = parser.parse()

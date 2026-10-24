@@ -28,6 +28,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..diagnostics import TranslationDiagnostic
 from ..matrix_shape import matrix_type_spelling
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
@@ -2798,6 +2799,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 node.name,
@@ -6331,6 +6334,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 code = generate_ordered_conditional_match(
                     self, node, self.indent_level, "CUDA"
                 )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             reason = self.cuda_match_error_reason(error)
             code = (
@@ -6509,6 +6514,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 result_name,
