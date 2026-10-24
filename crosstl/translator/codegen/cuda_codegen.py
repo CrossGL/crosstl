@@ -4624,7 +4624,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         integer_kinds = {"int", "uint"}
         add_kinds = {*integer_kinds, "uint64", "float"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_kinds, "int/uint/u64/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -4638,6 +4638,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
+        # CUDA's block- and system-scoped atomics (atomicAdd_block,
+        # atomicCAS_system, ...) take the same operands as the device-wide
+        # intrinsic they are named after.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            for scope in ("_block", "_system"):
+                operations.setdefault(
+                    f"{intrinsic}{scope}",
+                    (f"{intrinsic}{scope}", arg_count, kinds, kinds_label),
+                )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to CUDA atomics."""
