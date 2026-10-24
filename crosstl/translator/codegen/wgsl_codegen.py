@@ -65,6 +65,10 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_numeric_types import (
+    refuse_unsupported_wgsl_numeric_type,
+    unsupported_wgsl_numeric_family,
+)
 
 
 class WGSLCodeGen:
@@ -108,7 +112,6 @@ class WGSLCodeGen:
         "int": "i32",
         "i32": "i32",
         "short": "i32",
-        "long": "i32",
         "uint": "u32",
         "u32": "u32",
         "unsigned": "u32",
@@ -117,8 +120,6 @@ class WGSLCodeGen:
         "f16": "f32",
         "float16": "f32",
         "half": "f32",
-        "double": "f32",
-        "f64": "f32",
     }
     BUILTIN_SEMANTICS = {
         "gl_position": "position",
@@ -3979,6 +3980,7 @@ class WGSLCodeGen:
         if vtype is None:
             return "void"
         if isinstance(vtype, PrimitiveType):
+            refuse_unsupported_wgsl_numeric_type(vtype.name)
             return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name)
         if isinstance(vtype, VectorType):
             return f"vec{vtype.size}<{self.type_name_string(vtype.element_type)}>"
@@ -4335,6 +4337,8 @@ class WGSLCodeGen:
         lower = normalized.lower()
         if lower in self.PRIMITIVE_TYPE_MAP:
             return self.PRIMITIVE_TYPE_MAP[lower]
+        if normalized not in self._type_identifier_names:
+            refuse_unsupported_wgsl_numeric_type(normalized)
         if self.is_resource_type_name(lower):
             raise ValueError(
                 "WGSL target does not support CrossGL resource type "
@@ -6025,6 +6029,8 @@ class WGSLCodeGen:
             lower in self.PRIMITIVE_TYPE_MAP
             or self.TYPE_CONSTRUCTOR_RE.match(lower)
             or re.fullmatch(r"vec[234]<[^>]+>", lower)
+            # A conversion to a type WGSL lacks is refused when its type is mapped.
+            or unsupported_wgsl_numeric_family(name) is not None
         )
 
     def expression_name(self, expr):
