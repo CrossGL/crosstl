@@ -14,6 +14,7 @@ from crosstl.translator.codegen.hlsl_buffer_layout import (
 )
 from crosstl.translator.codegen.stage_distance_layout import distance_semantic_spelling
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
 
 from ..common_ast import (
     ArrayAccessNode,
@@ -33,12 +34,14 @@ from .hlsl_matrix_import import (
     hlsl_matrix_type_map,
 )
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
+from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
 from .struct_methods import (
     analyze_receiver_mutations,
     collect_struct_methods,
     method_local_names,
 )
+from .subpass_inputs import SUBPASS_INPUT_TYPES
 from .texel_access import HLSLTexelAccessMixin
 from .texel_buffers import HLSLTexelBufferMixin
 from .trigonometric_reduction import HLSLTrigonometricReductionMixin
@@ -292,7 +295,9 @@ class HLSLToCrossGLConverter(
             "TextureCubeArray": "textureCubeArray",
             "Texture2DMS": "texture2DMS",
             "Texture2DMSArray": "texture2DMSArray",
-            "SubpassInput": "sampler2d",
+            # Vulkan input attachments ([[vk::input_attachment_index]]).
+            "SubpassInput": "subpassInput",
+            "SubpassInputMS": "subpassInputMS",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
             # RW Texture Types (for compute shaders)
@@ -321,7 +326,7 @@ class HLSLToCrossGLConverter(
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
             "RaytracingAccelerationStructure": "accelerationStructureEXT",
-            "RayQuery": "rayQuery",
+            "RayQuery": "RayQuery<RAY_FLAG_NONE>",
             "InputPatch": "inputPatch",
             "OutputPatch": "outputPatch",
             "PointStream": "pointStream",
@@ -1030,7 +1035,7 @@ class HLSLToCrossGLConverter(
             return None
         if (
             member == "SubpassLoad"
-            and self.raw_type_base(resource_type) == "SubpassInput"
+            and self.raw_type_base(resource_type) in SUBPASS_INPUT_TYPES
         ):
             return {
                 "member": member,
@@ -1313,6 +1318,11 @@ class HLSLToCrossGLConverter(
         resource_base = self.raw_type_base(descriptor.get("resource_type"))
         is_multisample = resource_base in {"Texture2DMS", "Texture2DMSArray"}
         if is_multisample:
+            if raw_args and rendered_args:
+                rendered_args = [
+                    self.integer_texel_operand(raw_args[0], rendered_args[0]),
+                    *rendered_args[1:],
+                ]
             return [obj, *rendered_args]
 
         split_location = None
@@ -1362,7 +1372,10 @@ class HLSLToCrossGLConverter(
                 coord = self.swizzle_rendered_expression(
                     rendered_location, "".join(swizzles[:coord_components])
                 )
-            return coord, lod
+            return (
+                self.integer_texel_operand(location_arg, coord, coord_components),
+                self.integer_texel_operand(location_arg, lod, 1),
+            )
 
         ctor_args = getattr(location_arg, "args", None)
         if not ctor_args:
@@ -1378,8 +1391,8 @@ class HLSLToCrossGLConverter(
             if first_components != coord_components or second_components:
                 return None
             return (
-                self.generate_expression(ctor_args[0], is_main),
-                self.generate_expression(ctor_args[1], is_main),
+                self.integer_texel_operand(ctor_args[0], is_main=is_main),
+                self.integer_texel_operand(ctor_args[1], is_main=is_main),
             )
 
         split_location = self.split_texture_load_constructor_arguments(
@@ -1391,10 +1404,10 @@ class HLSLToCrossGLConverter(
         if len(ctor_args) != coord_components + 1:
             return None
 
-        lod = self.generate_expression(ctor_args[-1], is_main)
+        lod = self.integer_texel_operand(ctor_args[-1], is_main=is_main)
         coord_args = [self.generate_expression(arg, is_main) for arg in ctor_args[:-1]]
         if coord_components == 1:
-            coord = coord_args[0]
+            coord = self.integer_texel_operand(ctor_args[0], coord_args[0], 1)
         else:
             coord = f"ivec{coord_components}({', '.join(coord_args)})"
         return coord, lod
@@ -1425,9 +1438,9 @@ class HLSLToCrossGLConverter(
         if consumed_components != coord_components or lod_arg is None:
             return None
 
-        lod = self.generate_expression(lod_arg, is_main)
+        lod = self.integer_texel_operand(lod_arg, is_main=is_main)
         if coord_components == 1:
-            coord = coord_args[0]
+            coord = self.integer_texel_operand(ctor_args[0], coord_args[0], 1)
         else:
             coord = f"ivec{coord_components}({', '.join(coord_args)})"
         return coord, lod
@@ -2032,6 +2045,9 @@ class HLSLToCrossGLConverter(
         )
         if matrix_layout_attributes:
             prefixes.append(matrix_layout_attributes)
+        # A buffer parameter reads the words of the buffer passed to it, so it carries the same layout.
+        if self.is_structured_buffer_resource_type(getattr(parameter, "vtype", None)):
+            prefixes.append(f"@ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})")
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
@@ -2968,8 +2984,8 @@ class HLSLToCrossGLConverter(
             )
         ):
             texture = self.generate_expression(expr.array.array.object, is_main)
-            sample_index = self.generate_expression(expr.array.index, is_main)
-            coord = self.generate_expression(expr.index, is_main)
+            sample_index = self.integer_texel_operand(expr.array.index, is_main=is_main)
+            coord = self.integer_texel_operand(expr.index, is_main=is_main)
             suffix = (
                 self.texel_narrowing_suffix(
                     self.expression_raw_type(expr.array.array.object)
@@ -2997,7 +3013,7 @@ class HLSLToCrossGLConverter(
             return None
 
         texture = self.generate_expression(expr.array, is_main)
-        coord = self.generate_expression(expr.index, is_main)
+        coord = self.integer_texel_operand(expr.index, is_main=is_main)
         suffix = (
             self.texel_narrowing_suffix(self.expression_raw_type(expr.array))
             if narrow
@@ -3019,7 +3035,7 @@ class HLSLToCrossGLConverter(
             return None
 
         texture = self.generate_expression(expr.array, is_main)
-        coord = self.generate_expression(expr.index, is_main)
+        coord = self.integer_texel_operand(expr.index, is_main=is_main)
         suffix = (
             self.texel_narrowing_suffix(self.expression_raw_type(expr.array))
             if narrow
@@ -4027,7 +4043,14 @@ class HLSLToCrossGLConverter(
         )
         if id(node) in self.legacy_sampler_declaration_ids:
             return ""
-        if self.raw_type_base(getattr(node, "vtype", None)) == "SubpassInput":
+        record = is_hlsl_shader_record(node)
+        if record is not None:
+            struct_name, layout = shader_record_layout(node, self.structs_by_name)
+            return (
+                f"    {self.render_identifier(struct_name)} {self.render_identifier(node.name)}"
+                f" @glsl_buffer_block({record}, {layout});\n"
+            )
+        if self.raw_type_base(getattr(node, "vtype", None)) in SUBPASS_INPUT_TYPES:
             code = self.format_subpass_input_attributes(
                 getattr(node, "attributes", []), 1
             )
@@ -4127,7 +4150,7 @@ class HLSLToCrossGLConverter(
                 "PointStream",
                 "LineStream",
                 "TriangleStream",
-                "SubpassInput",
+                *SUBPASS_INPUT_TYPES,
             }
         ):
             return False
@@ -4192,6 +4215,8 @@ class HLSLToCrossGLConverter(
         used_names = self.collect_cbuffer_reserved_names(ast)
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                if is_hlsl_shader_record(node) is not None:
+                    shader_record_layout(node, self.structs_by_name, is_cbuffer=True)
                 cbuffer_name = self.unique_cbuffer_name(node.name, used_names)
                 used_names.add(cbuffer_name)
                 attributes = list(getattr(node, "attributes", []) or [])
@@ -5470,6 +5495,9 @@ class HLSLToCrossGLConverter(
         columns, see :meth:`generate_mul_expression`), so a non-square HLSL
         ``floatRxC`` becomes ``matRxC`` and ``intRxC`` becomes ``intCxR``.
         """
+        ray_query = canonical_ray_query_type(hlsl_type)
+        if ray_query is not None:
+            return ray_query
         mapped = self.map_type_preserving_matrix_shape(hlsl_type)
         if self.matrix_packing != "row_major" or not isinstance(mapped, str):
             return mapped

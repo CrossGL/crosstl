@@ -394,6 +394,10 @@ EXTERNAL_FIXTURES = [
             #include <metal_stdlib>
             using namespace metal;
 
+            typedef enum AAPLRenderTargetIndices {
+                AAPLRenderTargetColor = 0,
+            } AAPLRenderTargetIndices;
+
             typedef struct {
                 float4 position [[position]];
             } ColorInOut;
@@ -1888,7 +1892,7 @@ EXTERNAL_FIXTURES = [
         "source_path": "backends/imgui_impl_metal.mm",
         "roundtrip": True,
         "contains": [
-            "u8vec4 color @TANGENT;",
+            "u8vec4 color @location(2);",
             "out_.color = vec4(in_.color) / vec4(255.0);",
             "f16vec4 texColor = texture(texture_, textureSampler, in_.texCoords);",
         ],

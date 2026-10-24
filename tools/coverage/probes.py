@@ -36,8 +36,9 @@ _STAGE_PROGRAMS = {
     "node": "node",
 }
 # Stages whose probe declares a payload, which a parameter of a user-defined or by-reference type takes: the task
-# payload a task shader hands to its mesh workgroups, and the ray payload a hit shader receives and can trace with.
-_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit"})
+# payload a task shader hands to its mesh workgroups, the ray payload a hit shader receives and can trace with, and
+# the data a callable shader receives and can pass to another.
+_PAYLOAD_STAGES = frozenset({"task", "any-hit", "closest-hit", "callable"})
 # The stage that starts rays: its probe passes a user-defined inout parameter a ray payload it declares as a local.
 _TRACING_STAGE = "ray-generation"
 # A ray descriptor, as the HLSL and Slang feature lists spell its type. A probe fills one in field by field.
@@ -64,8 +65,10 @@ _STORAGE = {
     "bool": "float",
     "double": "float",
     "half": "float",
+    "int8": "int",
     "int16": "int",
     "int64": "int",
+    "uint8": "uint",
     "uint16": "uint",
     "uint64": "uint",
     "int8x4_packed": "uint",
@@ -102,6 +105,8 @@ class _Builder:
         self.shared: list[str] = []
         # Uniforms that hold pointers to device memory, for a parameter that takes one.
         self.pointers: list[str] = []
+        # What the arguments the dialect makes itself declare before the entry point (Dialect.handle).
+        self.handles: list[str] = []
         # Fragment-shader inputs as ``(type spelling, name)``.
         self.inputs: list[Buffer] = []
 
@@ -117,6 +122,9 @@ class _Builder:
         return read
 
     def value(self, kind: Type) -> str:
+        if kind.count:
+            parts = [self.value(kind.element) for _ in range(kind.count)]
+            return self.dialect.array(kind, parts)
         held = tuple_element(kind.opaque)
         if held:
             element, length = held
@@ -136,15 +144,23 @@ class _Builder:
     def declarations(self) -> list[str]:
         """The resources the probe declares before its entry point."""
         objects = self.receiver.declarations if self.receiver else []
-        return objects + self.uniforms.declarations + self.shared + self.pointers
+        return (
+            objects
+            + self.uniforms.declarations
+            + self.shared
+            + self.pointers
+            + self.handles
+        )
 
     def _resource(self, kind: Type) -> bool:
         if (self.payload or self.tracing) and kind.opaque == "udt":
             return True
         if kind.opaque in _RAY_DESCRIPTIONS or local_object(kind):
             return True
-        return bool(self.receiver and self.receiver.takes(kind)) or self.uniforms.takes(
-            kind
+        return (
+            bool(self.receiver and self.receiver.takes(kind))
+            or self.uniforms.takes(kind)
+            or self.dialect.handle(kind, "") is not None
         )
 
     def _attributes(self, param: Param) -> bool:
@@ -213,6 +229,10 @@ class _Builder:
                 arguments.append(receiver.argument(param.type))
             elif self.uniforms.takes(param.type):
                 arguments.append(self.uniforms.argument(param.type))
+            elif handle := dialect.handle(param.type, local):
+                self.lines += handle.lines
+                self.handles += handle.declarations
+                arguments.append(handle.argument)
             elif param.type.opaque in _RAY_DESCRIPTIONS:
                 self.lines += self._ray(local)
                 arguments.append(local)
@@ -227,6 +247,12 @@ class _Builder:
                     raise ProbeError("more than one inout parameter")
                 arguments.append(dialect.inout_argument())
                 output = param.type
+            elif param.direction == "buffer":
+                storage = _storage(param.type.scalar)
+                if param.type.shape or storage not in _BUFFERS:
+                    raise ProbeError(f"no probe buffer holds {param.type.scalar}")
+                self.offsets.setdefault(storage, 0)
+                arguments.append(dialect.buffer_argument(_BUFFERS[storage]))
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
                 arguments.append(dialect.out_argument(local))
@@ -268,8 +294,11 @@ class _Builder:
         atomic = output is not None
         if self.receiver:
             name = self.receiver.call(name)
-        call = dialect.call(name, arguments)
         result = signature.result
+        assigned = dialect.assignment(name, result, arguments)
+        if assigned:
+            self.lines += assigned[0]
+        call = assigned[1] if assigned else dialect.call(name, arguments)
         reading = dialect.reading(result.opaque) if result.opaque else None
         held = dialect.holding(result.opaque) if result.opaque else ""
         if output is None and reading:
@@ -298,14 +327,17 @@ class _Builder:
 
     def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:
         """Statements that keep ``value``, of type ``kind``, in a local and store it, and the output buffer's element
-        type: a matrix's first column or row, and a scalar the buffers cannot hold widened or narrowed.
+        type: an array's first element, a matrix's first column or row, and a scalar the buffers cannot hold widened
+        or narrowed.
         """
         dialect = self.dialect
         output, stored = kind, "r"
-        if len(kind.shape) == 2:
-            columns, rows = kind.shape
-            output = Type(kind.scalar, (columns if dialect.rows_first else rows,))
-            stored = dialect.part("r")
+        if kind.count:
+            output, stored = kind.element, "r[0]"
+        if len(output.shape) == 2:
+            columns, rows = output.shape
+            output = Type(output.scalar, (columns if dialect.rows_first else rows,))
+            stored = dialect.part(stored)
         if _storage(kind.scalar) != kind.scalar:
             output = output.with_scalar(_storage(kind.scalar))
             stored = dialect.cast(output, stored)

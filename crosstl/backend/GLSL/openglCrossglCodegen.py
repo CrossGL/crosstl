@@ -36,6 +36,7 @@ from .OpenglAst import (
     WhileNode,
 )
 from .shadow_textures import retype_shadow_textures
+from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
 
 try:
@@ -179,38 +180,41 @@ class GLSLToCrossGLConverter:
         "ray_callable",
     }
     RAY_QUERY_SIMPLE_METHODS = {
-        "rayQueryInitializeEXT": "Initialize",
+        # TraceRayInline with the seven rayQueryInitializeEXT operands in place
+        # of DXR's RayDesc.
+        "rayQueryInitializeEXT": "TraceRayInline",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
-        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
-        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGenerateIntersectionEXT": "CommitProceduralPrimitiveHit",
+        "rayQueryConfirmIntersectionEXT": "CommitNonOpaqueTriangleHit",
         "rayQueryGetRayTMinEXT": "RayTMin",
         "rayQueryGetRayFlagsEXT": "RayFlags",
         "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
         "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
-        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
     }
     RAY_QUERY_COMMITTED_METHODS = {
-        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedStatus"),
         "rayQueryGetIntersectionPrimitiveIndexEXT": (
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
         ),
+        # CrossGL follows HLSL: InstanceIndex is the instance's position in the
+        # top-level structure, InstanceID its application-defined custom index.
         "rayQueryGetIntersectionInstanceIdEXT": (
-            "CandidateInstanceID",
-            "CommittedInstanceID",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
         ),
         "rayQueryGetIntersectionGeometryIndexEXT": (
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
         ),
         "rayQueryGetIntersectionInstanceCustomIndexEXT": (
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
         ),
         "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
         ),
         "rayQueryGetIntersectionObjectRayOriginEXT": (
             "CandidateObjectRayOrigin",
@@ -220,7 +224,7 @@ class GLSLToCrossGLConverter:
             "CandidateObjectRayDirection",
             "CommittedObjectRayDirection",
         ),
-        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionTEXT": ("CandidateTriangleRayT", "CommittedRayT"),
         "rayQueryGetIntersectionBarycentricsEXT": (
             "CandidateTriangleBarycentrics",
             "CommittedTriangleBarycentrics",
@@ -1908,7 +1912,7 @@ class GLSLToCrossGLConverter:
     )
 
     def private_global_prefix(self, var):
-        """``static `` for a global without a storage qualifier, which GLSL makes private to each invocation.
+        """``static`` for a global without a storage qualifier, which GLSL makes private to each invocation.
 
         GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
         is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
@@ -3064,8 +3068,24 @@ class GLSLToCrossGLConverter:
                 ):
                     result += self.indent() + statement + "\n"
             else:
-                for statement in self.generate_statement_sequence(main_function.body):
-                    result += self.indent() + statement + "\n"
+                # GLSL's void main() may leave early with `return;`; the entry now returns its outputs.
+                self.entry_bare_return_value = None
+                if self.shader_type == "vertex":
+                    self.entry_bare_return_value = "output"
+                elif (
+                    self.shader_type == "fragment"
+                    and self.outputs
+                    and not fragment_uses_direct_outputs
+                    and not self.is_fragment_explicit_entry_return(main_function)
+                ):
+                    self.entry_bare_return_value = self.outputs[0].name
+                try:
+                    for statement in self.generate_statement_sequence(
+                        main_function.body
+                    ):
+                        result += self.indent() + statement + "\n"
+                finally:
+                    self.entry_bare_return_value = None
 
                 if self.shader_type in ("vertex",) and not any(
                     isinstance(stmt, ReturnNode) for stmt in main_function.body
@@ -3680,7 +3700,8 @@ class GLSLToCrossGLConverter:
 
     def generate_return(self, node):
         if node.value is None:
-            return "return"
+            value = getattr(self, "entry_bare_return_value", None)
+            return f"return {value}" if value else "return"
         return f"return {self.generate_expression(node.value)}"
 
     def generate_expression(self, node):
@@ -3795,6 +3816,10 @@ class GLSLToCrossGLConverter:
         if subgroup_call is not None:
             return subgroup_call
 
+        sparse_call = import_sparse_texture_call(self, name, node.args)
+        if sparse_call is not None:
+            return sparse_call
+
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)
 
@@ -3879,6 +3904,10 @@ class GLSLToCrossGLConverter:
         return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
+        if name == "rayQueryGetIntersectionCandidateAABBOpaqueEXT" and len(args) == 1:
+            # CrossGL follows DXR, which asks whether the candidate is non-opaque.
+            query = self.generate_expression(args[0])
+            return f"(!{query}.CandidateProceduralPrimitiveNonOpaque())"
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:
             query = self.generate_expression(args[0])
             method = self.RAY_QUERY_SIMPLE_METHODS[name]

@@ -571,6 +571,13 @@ class StageMap(dict):
     def all_for_stage(self, key):
         return list(self._stage_lists.get(key, []))
 
+    def replace_stage(self, key, index, value):
+        """Replace the ``index``-th stage declared for ``key``; ``map[key]`` stays the first one."""
+        entries = self._stage_lists[key]
+        entries[index] = value
+        if index == 0:
+            dict.__setitem__(self, key, value)
+
     def copy(self):
         return StageMap(self)
 

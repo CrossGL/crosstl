@@ -188,6 +188,13 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
         **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
     },
     "wgsl": _WGSL_UNIFORMS,
+    # OpenCL C passes an image as a kernel argument and declares a sampler as a program-scope constant.
+    "opencl": _same(
+        "read_only image2d_t",
+        "write_only image2d_t",
+        "read_write image2d_t",
+        "sampler_t",
+    ),
     # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
 }
