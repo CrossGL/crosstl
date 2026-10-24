@@ -5667,7 +5667,7 @@ def test_metal_refuses_double_precision_vectors():
     """
 
     with pytest.raises(
-        MetalLoweringRefused, match=r"double-precision value: .*uses double2"
+        MetalLoweringRefused, match=r"double-precision value: .*uses dvec2"
     ):
         generate_code(parse_code(tokenize_code(shader)))
 

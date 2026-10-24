@@ -121,6 +121,10 @@ from .builtin_result_types import (
 )
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
+from .crossgl_vector_names import (
+    crossgl_named_vector_spelling,
+    crossgl_named_vector_type,
+)
 from .entry_selection import entry_type_references
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -27036,20 +27040,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     return f"uint{size}"
                 elif element_type == "bool":
                     return f"bool{size}"
-                elif element_type in {
-                    "f16",
-                    "f32",
-                    "f64",
-                    "i8",
-                    "u8",
-                    "i16",
-                    "u16",
-                    "i32",
-                    "u32",
-                }:
-                    return f"vec{size}<{element_type}>"
-                else:
-                    return f"{element_type}{size}"
+                named_vector = crossgl_named_vector_type(element_type, size)
+                if named_vector is not None:
+                    return named_vector
+                return f"{element_type}{size}"
         else:
             return str(type_node)
 
@@ -27186,6 +27180,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         resolved_alias = self.resolve_metal_type_alias(vtype_str)
         if resolved_alias != vtype_str:
             return self.map_type(resolved_alias)
+
+        named_vector = crossgl_named_vector_spelling(vtype_str)
+        if named_vector != vtype_str:
+            return self.map_type(named_vector)
 
         # Some imported frontends retain a local pointer/reference declarator as
         # text even though the CrossGL parser represented it structurally first.
