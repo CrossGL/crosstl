@@ -15296,6 +15296,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         is_materialized_type = any(
             text in bindings for bindings in self.template_type_bindings
         )
+        instance = self.alias_template_instance_parts(text)
         if (
             decltype_type is None
             and "::" not in text
@@ -15304,6 +15305,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             and not is_local_alias
             and not is_type_alias
             and not is_materialized_type
+            and (
+                instance is None
+                or self.alias_template_declaration_for_name(instance[0]) is None
+            )
         ):
             return None
         normalized = self.normalized_metal_type(
