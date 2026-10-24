@@ -252,10 +252,9 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install OpenGL build and runtime dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y g++ glslang-tools libegl1-mesa-dev libgl-dev libgl1-mesa-dri mesa-utils pkg-config
-          glslangValidator --version
+        uses: ./.github/actions/apt-install
+        with:
+          packages: g++ glslang-tools libegl1-mesa-dev libgl-dev libgl1-mesa-dri mesa-utils pkg-config
 
       - name: Install project and test dependencies
         run: |

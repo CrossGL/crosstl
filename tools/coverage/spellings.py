@@ -10,6 +10,9 @@ from __future__ import annotations
 
 # The CrossGL spelling of a function that reads a vector's element at an index, which CrossGL writes as ``v[i]``.
 SUBSCRIPT = "[]"
+# The CrossGL spelling of a function that returns a vector with the element at an index replaced, which CrossGL writes
+# as an assignment, ``v[i] = x``, to a copy of the vector.
+ELEMENT = "[]="
 
 # Built-in functions CrossGL spells as GLSL does rather than as the backend does. A rename applies only when the GLSL
 # feature list has the new name; any other backend function is probed under its own spelling.
@@ -220,6 +223,9 @@ COUNTERPARTS = {
         "frexp": "vec3 frexp(vec3, out ivec3)",
         "modf": "vec3 modf(vec3, out vec3)",
         "atomicCompareExchangeWeak": "int atomicCompSwap(inout int, int, int)",
+        # CrossGL asks a buffer for its element count with buffer_dimensions, as the SPIR-V importer writes
+        # OpArrayLength.
+        "arrayLength": "uint buffer_dimensions(buffer uint)",
     },
     # Metal's barrier takes memory flags, which the probe passes as mem_none: an execution barrier only.
     "metal": {"threadgroup_barrier": "void barrier()"},
@@ -230,9 +236,14 @@ COUNTERPARTS = {
     },
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
+    # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
+    # with the vec3 constructor, which also builds a vector from an array's or a slice's first three elements.
     "rust": {
         "Float::sin_cos": "void sincos(float, out float, out float)",
         "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
+        "Vec3::to_vec3a": "vec3 vec3(vec3)",
+        "Vec3::from_array": "vec3 vec3(float, float, float)",
+        "Vec3::from_slice": "vec3 vec3(float, float, float)",
         "emit_stream_vertex": "void EmitStreamVertex(const int)",
         "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },

@@ -22,8 +22,9 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 
-from . import chart, ir, publish
+from . import chart, execution, ir, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
+from .model import ROUND_TRIPS
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -47,6 +48,7 @@ TOOLS = {
     "hlsl": "DXC",
     "metal": "the Metal compiler",
     "mojo": "the Mojo compiler",
+    "opencl": "clang",
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
@@ -150,6 +152,15 @@ def _name(row: dict) -> str:
     return f"{language} {direction}"
 
 
+def _destination(language: str) -> str:
+    """Where an input probe of ``language`` is translated to, and whose check the translation must pass."""
+    emitted = ROUND_TRIPS.get(language)
+    if emitted:
+        return f"to {chart.name(emitted)} that {TOOLS[emitted]} accepts"
+    tool = TOOLS.get(language, language)
+    return f"back to code that {tool} accepts"
+
+
 def _anchor(row: dict) -> str:
     return re.sub(r"[^a-z0-9 -]", "", _name(row).lower()).replace(" ", "-")
 
@@ -215,7 +226,7 @@ def _summary(row: dict, repository: str) -> str:
     if row["direction"] == "input":
         rule = (
             f"CrossTL imports its generated {chart.name(row['language'])} probe, which {tool} accepts, "
-            f"and translates it back to code that {tool} accepts"
+            f"and translates it {_destination(row['language'])}"
         )
     else:
         rule = f"CrossTL translates its generated CrossGL probe and {tool} accepts the output"
@@ -291,9 +302,17 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             if language == "spirv"
             else f"produces code that {tool} rejects"
         )
+        emitted = ROUND_TRIPS.get(language)
+        if emitted:
+            rejects = f"produces {chart.name(emitted)} that {TOOLS[emitted]} rejects"
+        trip = (
+            f"translation to {chart.name(emitted)}"
+            if emitted
+            else "round trip through CrossGL"
+        )
         what = (
             f"CrossTL imports the generated {chart.name(language)} probe, which {tool} accepts, but the "
-            f"round trip through CrossGL fails without a typed diagnostic or {rejects}."
+            f"{trip} fails without a typed diagnostic or {rejects}."
         )
     else:
         what = (
@@ -301,6 +320,13 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             f"produces code that {tool} rejects."
         )
     first = features[0]
+    executed = execution.found(first.get("detail") or "")
+    if executed:
+        probe = "CrossGL probe" if direction == "output" else "probe"
+        what = (
+            f"CrossTL translates the generated {probe} and {tool} accepts the result, but run, it does not "
+            f"compute what the native {chart.name(language)} probe computes."
+        )
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "
@@ -326,7 +352,8 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
         "Reproduce it with:",
         "",
         "```bash",
-        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}",
+        f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}"
+        + (" --execute" if executed else ""),
         "```",
         "",
         f"The coverage workflow closes this issue when no probe fails this way. [COVERAGE.md]({_coverage_url(repository, row)}) "

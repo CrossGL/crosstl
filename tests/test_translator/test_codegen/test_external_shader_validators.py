@@ -1161,7 +1161,7 @@ shader GLSLRayQueryComputeValidator {
                 100.0
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -1195,7 +1195,7 @@ shader GLSLRayQueryTraceRayInlineValidator {
                 ray
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -4168,7 +4168,7 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "bool active =" not in code
     assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert ".Proceed(" not in code
-    assert ".CommittedType(" not in code
+    assert ".CommittedStatus(" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

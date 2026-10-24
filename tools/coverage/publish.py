@@ -123,6 +123,22 @@ def _sources(report: dict, repository: str) -> list[str]:
     return lines + ["", f"Reference tools: {tools}."]
 
 
+def _executed(report: dict) -> list[str]:
+    """Which rows also ran their compute probes on a runtime, as a paragraph, or nothing."""
+    rows = [r for r in report["backends"] if r.get("executed")]
+    if not rows:
+        return []
+    ran = "; ".join(
+        f"{' '.join(label(r))}, {r['executed']} probes on {r['runtime']}" for r in rows
+    )
+    return [
+        "Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one "
+        "input buffer also runs: the native probe and CrossTL's translation get the same inputs, and a "
+        f"translation that writes other results is wrong. Executed: {ran}.",
+        "",
+    ]
+
+
 def _gaps(row: dict) -> list[str]:
     """The refused and wrong features of one row, grouped by category, plus the untested count per category."""
     language, direction = label(row)
@@ -178,9 +194,11 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "native SPIR-V probe is the module glslang compiles the GLSL probe to, and its round trip must keep the "
         "feature's instruction. The language's reference tool then validates the result:",
         "",
-        "- **supported**: the reference tool accepts the translation;",
+        "- **supported**: the reference tool accepts the translation and, where it runs, the translation "
+        "computes what the native probe computes;",
         "- **refused**: CrossTL rejects the feature with a diagnostic;",
-        "- **wrong**: CrossTL produces output the reference tool rejects, or fails without a diagnostic;",
+        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, or fails "
+        "without a diagnostic;",
         "- **untested**: no probe can be built for the feature yet, or the reference tool rejects the probe "
         "itself.",
         "",
@@ -189,6 +207,7 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "features through the SPIR-V each native probe lowers to; a semantic feature is expressible when its "
         "CrossGL probe translates correctly to at least one language that has it.",
         "",
+        *_executed(report),
         *_table(report),
         "",
         "## Trend",

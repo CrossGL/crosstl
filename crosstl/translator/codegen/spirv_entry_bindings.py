@@ -8,9 +8,15 @@ in order, so the texture used to take binding 0 before the buffer claimed it, an
 duplicate. :func:`reserve_entry_buffer_bindings` reserves every explicit storage-buffer binding of an entry point's
 parameters before any of them is allocated, so the allocated ones go around them. Two parameters that claim the same
 binding are still refused when the second one is declared.
+
+A parameter indexed by ``@ buffer(n)`` is placed by :func:`.spirv_argument_tables.plan_entry_descriptor_slots`
+instead, with the entry point's texture and sampler tables, so only exact ``@ binding`` storage buffers are reserved
+here.
 """
 
 from __future__ import annotations
+
+from .spirv_argument_tables import argument_table_index
 
 __all__ = ["reserve_entry_buffer_bindings"]
 
@@ -24,6 +30,8 @@ def reserve_entry_buffer_bindings(codegen, parameters) -> int:
             continue
         type_name = codegen.type_name_from_value(declared)
         if not codegen.is_structured_buffer_declared_type_name(type_name):
+            continue
+        if argument_table_index(codegen, parameter) is not None:
             continue
         binding = codegen.explicit_descriptor_binding(parameter)
         if binding is None:
