@@ -1,4 +1,4 @@
-"""Cancel the merge-group runs that can no longer change what the merge queue does.
+"""Cancel the workflow runs that can no longer change what the merge queue does.
 
 A run is orphaned when its merge group is gone. When an entry fails or leaves the queue, GitHub deletes the groups
 behind it and creates new ones, but the runs it started for the deleted groups carry on and hold their runners
@@ -10,8 +10,11 @@ A run has failed when a job of its latest attempt failed while one of the branch
 entry only when it reports, so a slow leg holds every group behind it. Cancelling the run lets the result job
 report at once; the group's other runs are orphaned when the queue rebuilds the groups behind it.
 
-``python -m tools.orphaned_runs`` lists both kinds; ``--apply`` cancels them, and ``--watch`` repeats the sweep
-every few minutes while the queue has merge groups.
+A pull-request run is closed when no open pull request has its head branch. GitHub lets the runs of a pull request
+that merged or closed carry on; the merge group tested what landed, and nothing reads their checks any more.
+
+``python -m tools.orphaned_runs`` lists the three kinds; ``--apply`` cancels them, and ``--watch`` repeats the
+sweep every few minutes while the queue has merge groups.
 """
 
 from __future__ import annotations
@@ -60,6 +63,8 @@ class Run:
     workflow: str
     branch: str
     sha: str
+    # The full name of the repository the head branch is in; a fork for a pull request from one.
+    repository: str = ""
 
 
 def target(branch: str) -> str | None:
@@ -79,6 +84,15 @@ def orphaned(runs: Iterable[Run], groups: set[str], landed: set[str]) -> list[Ru
             for run in runs
             if target(run.branch) and run.branch not in groups and run.sha not in landed
         ),
+        key=lambda run: run.id,
+    )
+
+
+def closed(runs: Iterable[Run], heads: set[tuple[str, str]]) -> list[Run]:
+    """The pull-request ``runs`` whose ``(repository, branch)`` is not the head of an open pull request in
+    ``heads``, oldest first."""
+    return sorted(
+        (run for run in runs if (run.repository, run.branch) not in heads),
         key=lambda run: run.id,
     )
 
@@ -105,24 +119,42 @@ class GitHub:
             ["gh", "api", "--method", method, f"repos/{self.repository}/{path}"]
         )
 
-    def active_runs(self) -> list[Run]:
-        """The merge-group runs that have not completed."""
+    def active_runs(self, event: str = "merge_group") -> list[Run]:
+        """The runs for ``event`` that have not completed."""
         runs: dict[int, Run] = {}
         for status in ACTIVE:
             page = 1
             while True:
                 batch = self._api(
                     "GET",
-                    f"actions/runs?event=merge_group&status={status}&per_page={PAGE}&page={page}",
+                    f"actions/runs?event={event}&status={status}&per_page={PAGE}&page={page}",
                 )["workflow_runs"]
                 for item in batch:
                     runs[item["id"]] = Run(
-                        item["id"], item["name"], item["head_branch"], item["head_sha"]
+                        item["id"],
+                        item["name"],
+                        item["head_branch"],
+                        item["head_sha"],
+                        (item.get("head_repository") or {}).get("full_name", ""),
                     )
                 if len(batch) < PAGE:
                     break
                 page += 1
         return list(runs.values())
+
+    def open_heads(self) -> set[tuple[str, str]]:
+        """The ``(repository, branch)`` heads of the open pull requests."""
+        heads: set[tuple[str, str]] = set()
+        page = 1
+        while True:
+            batch = self._api("GET", f"pulls?state=open&per_page={PAGE}&page={page}")
+            heads |= {
+                ((pull["head"]["repo"] or {}).get("full_name", ""), pull["head"]["ref"])
+                for pull in batch
+            }
+            if len(batch) < PAGE:
+                return heads
+            page += 1
 
     def groups(self) -> set[str]:
         """The branches of the merge groups that exist now."""
@@ -214,7 +246,7 @@ class GitHub:
 
 
 class Sweeper:
-    """Finds and cancels orphaned and failed runs, remembering what never needs another look."""
+    """Finds and cancels orphaned, failed and closed runs, remembering what never needs another look."""
 
     def __init__(self, github: GitHub, apply: bool, limit: int, keep: set[int]):
         self.github = github
@@ -248,15 +280,22 @@ class Sweeper:
         return found
 
     def sweep(self) -> bool:
-        """List or cancel the orphaned and failed runs once; true while the queue has merge groups."""
-        # Runs first: a group created after this call has no run in the list, and one that lands meanwhile is in
-        # landed.
+        """List or cancel the orphaned, failed and closed runs once; true while the queue has merge groups."""
+        # Runs first: a group or pull request created after these calls has no run in the lists, and a group that
+        # lands meanwhile is in landed.
         runs = [run for run in self.github.active_runs() if run.id not in self.keep]
+        pulls = [
+            run
+            for run in self.github.active_runs("pull_request")
+            if run.id not in self.keep
+        ]
         groups = self.github.groups()
+        heads = self.github.open_heads()
         landed = self.github.landed({target(run.branch) for run in runs} - {None})
         # Failed runs first, since each one holds the queue.
         found = [(run, "failed") for run in self.failed(runs, groups)]
         found += [(run, "orphaned") for run in orphaned(runs, groups, landed)]
+        found += [(run, "closed") for run in closed(pulls, heads)]
         cancelled = 0
         for run, reason in found[: self.limit]:
             line = f"{run.id} {run.workflow} on {run.branch.removeprefix(QUEUE)} ({reason})"
@@ -273,9 +312,13 @@ class Sweeper:
             print(
                 f"left {len(found) - self.limit} for the next sweep (limit {self.limit})"
             )
-        failed = sum(reason == "failed" for _, reason in found)
+        counts = {
+            reason: sum(kind == reason for _, kind in found)
+            for reason in ("orphaned", "failed", "closed")
+        }
         print(
-            f"{len(runs)} active merge-group runs: {len(found) - failed} orphaned, {failed} failed"
+            f"{len(runs)} active merge-group and {len(pulls)} pull-request runs: "
+            + ", ".join(f"{count} {reason}" for reason, count in counts.items())
             + (f", {cancelled} cancelled" if self.apply else "")
         )
         return bool(groups)

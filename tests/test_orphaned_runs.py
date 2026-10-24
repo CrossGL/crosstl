@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from tools import orphaned_runs
-from tools.orphaned_runs import GitHub, Run, Sweeper, orphaned, target
+from tools.orphaned_runs import GitHub, Run, Sweeper, closed, orphaned, target
 
 GROUP = "gh-readonly-queue/main/pr-12-" + "a" * 40
 LIVE = "gh-readonly-queue/main/pr-13-" + "b" * 40
@@ -60,8 +60,11 @@ class FakeGh:
         return subprocess.CompletedProcess(command, 0, json.dumps(answer), "")
 
 
-def _run(id, branch, sha):
-    return {"id": id, "name": "Coverage", "head_branch": branch, "head_sha": sha}
+def _run(id, branch, sha, repository=None):
+    run = {"id": id, "name": "Coverage", "head_branch": branch, "head_sha": sha}
+    if repository is not None:
+        run["head_repository"] = repository and {"full_name": repository}
+    return run
 
 
 def test_active_runs_reads_every_state_and_page_once_per_run(monkeypatch):
@@ -86,6 +89,62 @@ def test_active_runs_reads_every_state_and_page_once_per_run(monkeypatch):
     assert {path.split("&")[1] for _, path in gh.calls} == {
         f"status={status}" for status in orphaned_runs.ACTIVE
     }
+
+
+def test_pull_request_runs_carry_the_repository_of_their_head():
+    gh = FakeGh(
+        {
+            "actions/runs?event=pull_request&status=queued&per_page=100&page=1": {
+                "workflow_runs": [
+                    _run(1, "topic", "1" * 40, "o/r"),
+                    _run(2, "main", "2" * 40, "fork/r"),
+                    # A run from a fork that has since been deleted.
+                    _run(3, "topic", "3" * 40, ""),
+                ]
+            }
+        }
+    )
+    runs = GitHub("o/r", run=gh).active_runs("pull_request")
+    assert sorted((run.id, run.repository, run.branch) for run in runs) == [
+        (1, "o/r", "topic"),
+        (2, "fork/r", "main"),
+        (3, "", "topic"),
+    ]
+    assert {path.split("&")[0] for _, path in gh.calls} == {
+        "actions/runs?event=pull_request"
+    }
+
+
+def test_open_heads_reads_every_page(monkeypatch):
+    monkeypatch.setattr(orphaned_runs, "PAGE", 2)
+    gh = FakeGh(
+        {
+            "pulls?state=open&per_page=2&page=1": [
+                {"head": {"repo": {"full_name": "o/r"}, "ref": "topic"}},
+                {"head": {"repo": {"full_name": "fork/r"}, "ref": "main"}},
+            ],
+            "pulls?state=open&per_page=2&page=2": [
+                {"head": {"repo": None, "ref": "gone"}}
+            ],
+        }
+    )
+    assert GitHub("o/r", run=gh).open_heads() == {
+        ("o/r", "topic"),
+        ("fork/r", "main"),
+        ("", "gone"),
+    }
+
+
+def test_only_runs_without_an_open_pull_request_are_closed():
+    runs = [
+        Run(5, "Corpus", "merged", "1" * 40, "o/r"),
+        Run(3, "Lint", "open", "2" * 40, "o/r"),
+        # Same branch name, other repository: a fork's pull request that closed.
+        Run(4, "Lint", "open", "3" * 40, "fork/r"),
+        Run(2, "Lint", "abandoned", "4" * 40, "fork/r"),
+    ]
+    found = closed(runs, heads={("o/r", "open"), ("fork/r", "abandoned")})
+    assert [run.id for run in found] == [4, 5]
 
 
 def test_groups_and_landed_commits():
@@ -202,7 +261,12 @@ class StubGitHub:
             Run(4, "Corpus", LIVE, "2" * 40),
             Run(5, "Lint", LIVE, "2" * 40),
         ]
+        self.pulls = [
+            Run(6, "Corpus", "merged", "3" * 40, "o/r"),
+            Run(7, "Lint", "open", "4" * 40, "o/r"),
+        ]
         self.groups_ = {LIVE}
+        self.heads = {("o/r", "open")}
         # 1 is not live; 5 was re-run and its latest attempt has not failed.
         self.failing_ = {1, 3, 4, 5}
         self.jobs_ = {
@@ -224,11 +288,14 @@ class StubGitHub:
         }
         self.calls: list[tuple] = []
 
-    def active_runs(self):
-        return list(self.runs)
+    def active_runs(self, event="merge_group"):
+        return list(self.runs if event == "merge_group" else self.pulls)
 
     def groups(self):
         return set(self.groups_)
+
+    def open_heads(self):
+        return set(self.heads)
 
     def landed(self, branches):
         self.calls.append(("landed", tuple(sorted(branches))))
@@ -275,21 +342,24 @@ def test_sweep_cancels_failed_runs_first_and_each_run_once(capsys):
     github = StubGitHub()
     sweeper = Sweeper(github, apply=True, limit=10, keep={2})
     assert sweeper.sweep() is True
-    assert [call[1] for call in github.calls if call[0] == "cancel"] == [3, 1]
+    assert [call[1] for call in github.calls if call[0] == "cancel"] == [3, 1, 6]
     out = capsys.readouterr().out.splitlines()
     assert out == [
         f"cancelled 3 Project Demo Testing on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
         f"cancelled 1 Corpus on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
-        "4 active merge-group runs: 1 orphaned, 1 failed, 2 cancelled",
+        "cancelled 6 Corpus on merged (closed)",
+        "4 active merge-group and 2 pull-request runs: "
+        "1 orphaned, 1 failed, 1 closed, 3 cancelled",
     ]
     # A cancelled run stays active for a while; the next sweep leaves it alone.
     github.calls.clear()
     assert sweeper.sweep() is True
     assert not [call for call in github.calls if call[0] == "cancel"]
     assert capsys.readouterr().out.splitlines()[-1] == (
-        "1 active merge-group runs: 0 orphaned, 0 failed, 0 cancelled"
+        "1 active merge-group and 1 pull-request runs: "
+        "0 orphaned, 0 failed, 0 closed, 0 cancelled"
     )
-    # Once the queue is empty, a watch can stop.
+    # Once the queue is empty, a watch can stop, even while pull requests have runs.
     github.runs, github.groups_ = [], set()
     assert sweeper.sweep() is False
 
@@ -304,8 +374,17 @@ def _main_answers(cancel=None):
                 _run(4, LIVE, "2" * 40),
             ]
         },
+        "actions/runs?event=pull_request&status=in_progress&per_page=100&page=1": {
+            "workflow_runs": [
+                _run(5, "merged", "3" * 40, "o/r"),
+                _run(6, "open", "4" * 40, "o/r"),
+            ]
+        },
         "git/matching-refs/heads/gh-readonly-queue/?per_page=100&page=1": [
             {"ref": f"refs/heads/{LIVE}"}
+        ],
+        "pulls?state=open&per_page=100&page=1": [
+            {"head": {"repo": {"full_name": "o/r"}, "ref": "open"}}
         ],
         "commits?sha=main&per_page=100": [{"sha": "9" * 40}],
         "graphql": {"c0": _suites((3, 1), (4, 0))},
@@ -335,7 +414,8 @@ def test_main_lists_without_cancelling(monkeypatch, capsys):
         f"would cancel 3 Coverage on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
         f"would cancel 1 Coverage on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
         f"would cancel 2 Coverage on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
-        "4 active merge-group runs: 2 orphaned, 1 failed",
+        "would cancel 5 Coverage on merged (closed)",
+        "4 active merge-group and 2 pull-request runs: 2 orphaned, 1 failed, 1 closed",
     ]
 
 
@@ -350,8 +430,9 @@ def test_main_cancels_up_to_the_limit(monkeypatch, capsys):
     ]
     out = capsys.readouterr().out.splitlines()
     assert out[-2:] == [
-        "left 1 for the next sweep (limit 2)",
-        "4 active merge-group runs: 2 orphaned, 1 failed, 2 cancelled",
+        "left 2 for the next sweep (limit 2)",
+        "4 active merge-group and 2 pull-request runs: "
+        "2 orphaned, 1 failed, 1 closed, 2 cancelled",
     ]
 
 
@@ -475,3 +556,14 @@ def test_a_failed_job_in_the_merge_queue_fails_its_workflow():
             continue
         for name, job in workflow["jobs"].items():
             assert "continue-on-error" not in job, (path.name, name)
+
+
+def test_no_workflow_runs_when_a_pull_request_closes():
+    # The sweep cancels the runs of closed pull requests, so a job started by closing one would never finish.
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        triggers = yaml.safe_load(path.read_text(encoding="utf-8"))[True]
+        if not isinstance(triggers, dict):
+            continue
+        for event in ("pull_request", "pull_request_target"):
+            types = (triggers.get(event) or {}).get("types", [])
+            assert "closed" not in types, (path.name, event)

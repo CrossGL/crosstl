@@ -1,9 +1,10 @@
-name: Orphaned Merge-Group Runs
+name: Orphaned Runs
 
-# Cancels the merge-group runs that can no longer change what the queue does (tools/orphaned_runs.py). When an
-# entry fails or leaves the merge queue, GitHub replaces the groups behind it but lets the runs of the old groups
-# finish; the runs of a group that landed are kept. A run that already has a failed job will fail its required
-# result check, but that check reports only after the run's slowest leg, and the queue waits for it.
+# Cancels the runs that can no longer change what the merge queue does (tools/orphaned_runs.py). When an entry fails
+# or leaves the merge queue, GitHub replaces the groups behind it but lets the runs of the old groups finish; the
+# runs of a group that landed are kept. A run that already has a failed job will fail its required result check, but
+# that check reports only after the run's slowest leg, and the queue waits for it. The runs of a pull request that
+# merged or closed also carry on, although nothing reads their checks.
 #
 # Replacing groups creates new ones, so a sweep starts on every merge_group event and repeats every five minutes
 # while the queue has groups. Runs triggered meanwhile share one concurrency group: the newest waits for the
@@ -62,7 +63,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Cancel discarded and failed merge-group runs while the queue has groups
+      - name: Cancel discarded, failed and closed runs while the queue has groups
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -m tools.orphaned_runs --repo "$GITHUB_REPOSITORY" --apply --watch 300
