@@ -152,8 +152,9 @@ def test_hlsl_structured_buffer_arrays_bind_one_slot_per_element(tmp_path):
         "{queuesCounter_0, queuesCounter_1};"
     ) in metal
     assert "pick(id.x % 3, id.x, inputs, inputsLength)" in metal
-    # GetDimensions(count, stride) reports the declared element stride.
-    assert "stride = uint(sizeof(inputs[params.which][0]))" in metal
+    # GetDimensions(count, stride) reports the declared element stride:
+    # float4 v (16 bytes) and uint id (4 bytes).
+    assert "stride = 20u;" in metal
     compile_metal(metal, tmp_path)
 
 
