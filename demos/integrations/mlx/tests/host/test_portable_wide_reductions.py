@@ -30,13 +30,20 @@ def test_entries_are_pinned_and_disjoint_from_the_installed_families():
     path = CONTRACTS / "reduce.current-tree.translation.json"
     pinned = set(json.loads(path.read_text(encoding="utf-8"))["entries"])
     entries = set(wide_reduction_packages.ENTRIES)
-    assert len(entries) == 16 and entries <= pinned
+    assert len(entries) == 44 and entries <= pinned
     assert not entries & set(reduction_packages.ALL_ENTRIES)
+    # instantiate_and_or's non-Boolean kernels write Booleans.
+    assert {
+        dtype
+        for entry, dtype in wide_reduction_packages.ENTRIES.items()
+        if entry.startswith(("all_reduce_and", "all_reduce_or"))
+    } == {"int16", "int32", "int64", "float16", "bfloat16", "float32"}
+    assert wide_reduction_packages.accumulator("or", "float32") == "bool_"
     assert {
         dtype
         for entry, dtype in wide_reduction_packages.ENTRIES.items()
         if entry.startswith(("all_reduce_min", "all_reduce_max"))
-    } == {"int64", "uint64", "complex64"}
+    } == {"int64", "uint64", "complex64", "int8", "int16", "uint8", "uint16"}
     assert wide_reduction_packages.signature("all_reduce_prodbfloat16") == (
         "prod",
         "bfloat16",
@@ -381,10 +388,83 @@ def test_runtime_routes_only_wide_entries_with_pinned_sources():
 
 def test_host_adapter_routes_wide_types_to_whole_array_or_small_row_plans():
     source = Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
-    assert "const bool wide = eight_byte ? !logical" in source
-    assert "plan.shape.back() <= 64;" in source
     assert (
-        "if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
-        "!small_columns) {"
+        "const bool wide = narrow || truth_test ||\n      (eight_byte ? !logical"
         in source
     )
+    assert "plan.shape.back() <= 64;" in source
+    assert (
+        "if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&"
+        in source
+    )
+    # Non-Boolean all and any write Booleans in both passes; floats test by
+    # value and the integers and complex64 by their bits, as remap_reduce_types.
+    assert 'const char* output = truth_test ? "bool_"' in source
+    assert (
+        "const char* partial = promoted || truth_test ? storage_type(out.dtype()) : dtype;"
+        in source
+    )
+    body = source.split("const char* logical_type(", 1)[1].split("\n}\n", 1)[0]
+    assert body.count('return "int64";') == 1 and "case mlx::core::complex64:" in body
+    assert "case mlx::core::int8:" not in body and "float64" not in body
+
+
+@pytest.mark.parametrize(
+    "operation, dtype, output",
+    [
+        ("sum", "int8", "int32"),
+        ("prod", "int16", "int32"),
+        ("sum", "uint8", "int32"),
+        ("prod", "uint16", "uint32"),
+        ("min", "int8", "int8"),
+        ("max", "uint16", "uint16"),
+        ("sum", "int64", "int64"),
+        ("max", "complex64", "complex64"),
+        ("and", "float16", "bool_"),
+        ("or", "int64", "bool_"),
+    ],
+)
+def test_narrow_integers_accumulate_as_reduce_metal_instantiates(
+    operation, dtype, output
+):
+    # instantiate_sum_prod writes uint8 sums as int32_t and uint16 sums as
+    # uint32_t; every extremum and every other type writes its element type.
+    entry = f"all_reduce_{operation}{dtype}"
+    assert wide_reduction_packages.accumulator(operation, dtype) == output
+    assert wide_reduction_dispatch.operand_types(entry)["out"] == output
+    assert wide_reduction_dispatch.operand_types(entry)["in"] == dtype
+
+
+def test_narrow_integer_passes_wrap_in_their_accumulator():
+    # 300 int8 values of 100 sum past int8 and fit int32; uint8 products wrap
+    # at 32 bits, and extrema stay in the element type.
+    expected = wide_reduction_evidence.expected_words
+    assert expected("sum", "int8", [100] * 300, 1, 300) == [30000]
+    assert expected("sum", "int8", [-128] * 3, 1, 3) == [-384]
+    assert expected("prod", "uint8", [255] * 5, 1, 5) == [
+        (255**5 + 2**31) % 2**32 - 2**31
+    ]
+    assert expected("prod", "uint16", [65535] * 3, 1, 3) == [65535**3 % 2**32]
+    assert expected("min", "int16", [5, -7, 3], 1, 3) == [-7]
+    assert expected("max", "uint8", [], 1, 0) == [0]
+    with pytest.raises(ValueError, match="storage range"):
+        expected("sum", "int8", [128], 1, 1)
+
+
+def test_logical_passes_test_floats_by_value_and_integers_by_bits():
+    # -0.0 is false, NaN and subnormals true; an empty row is the identity.
+    expected = wide_reduction_evidence.expected_words
+    negative_zero = {"float32": 0x80000000, "float16": 0x8000, "bfloat16": 0x8000}
+    for dtype, word in negative_zero.items():
+        assert expected("or", dtype, [0, word, word], 1, 3) == [0]
+        assert expected("and", dtype, [word, 1], 1, 2) == [0]
+        assert expected("and", dtype, [word | 1, word >> 1], 1, 2) == [1]
+    assert expected("and", "float32", [0x7FC00000, 0x3F800000], 1, 2) == [1]
+    assert expected("or", "int16", [0, -32768, 0, 0], 2, 2) == [1, 0]
+    assert expected("and", "int64", [-1, 2, 0], 2, 2) == [1, 0]
+    assert expected("and", "int32", [], 1, 0) == [1]
+    assert expected("or", "float16", [], 1, 0) == [0]
+    assert wide_reduction_evidence.recomputable("all_reduce_orbfloat16")
+    assert not wide_reduction_evidence.recomputable("all_reduce_sumbfloat16")
+    with pytest.raises(ValueError, match="storage range"):
+        expected("or", "float16", [0x10000], 1, 1)

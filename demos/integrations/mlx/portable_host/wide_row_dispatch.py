@@ -2,8 +2,10 @@
 
 ``row_reduce_small`` folds each output's rows in the accumulator type
 ``remap_reduce_types`` keeps for int64, uint64 and complex64 numeric
-reductions and 16-bit float sums and products: the element type itself. The
-native host passes upstream's ten buffers. ``row_reduction_layout`` checks
+reductions and 16-bit float sums and products, the element type itself, and
+for the 8- and 16-bit integers: their own type for extrema and 32 bits for
+sums and products (``wide_reduction_packages.accumulator``). The native host
+passes upstream's ten buffers. ``row_reduction_layout`` checks
 the row metadata, source span and launch against upstream's plan before any
 package is translated. Storage travels as MLX's exact words through
 ``element_storage``; the output carries a trailing guard and is decoded
@@ -30,6 +32,7 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
     WIDE_SMALL_ROW_ENTRIES as ENTRIES,
 )
 from demos.integrations.mlx.portable_host.trace_records import write_trace
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 
 INPUT, OUTPUT = "in", "out"
 METADATA = {name: dtype for name, dtype in row_reduction_layout.LOOPED.items() if dtype}
@@ -48,15 +51,23 @@ def signature(entry):
 
 def operand_types(entry):
     """Every source parameter's element type."""
-    _, dtype = signature(entry)
-    return {INPUT: dtype, OUTPUT: dtype, **METADATA}
+    operation, dtype = signature(entry)
+    return {INPUT: dtype, OUTPUT: accumulator(operation, dtype), **METADATA}
 
 
-def uploads(dtype, target, values, rows, metadata):
-    """The packets one launch binds: inputs, a guarded output and metadata."""
+def uploads(dtype, target, values, rows, metadata, output_type=None):
+    """The packets one launch binds: inputs, a guarded output and metadata.
+
+    ``output_type`` is the kernel's accumulator type, by default ``dtype``.
+    """
+    output_type = output_type or dtype
     return {
         INPUT: packet(dtype, target, values),
-        OUTPUT: packet(dtype, target, guard_words(dtype, rows) + guard_words(dtype)),
+        OUTPUT: packet(
+            output_type,
+            target,
+            guard_words(output_type, rows) + guard_words(output_type),
+        ),
         **{
             name: packet(kind, target, metadata[name])
             for name, kind in METADATA.items()
@@ -107,7 +118,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
             f"Subnormal bfloat16 reduction parity is not established for {target}; "
             "see CrossGL/crosstl#2000"
         )
-    packets = uploads(dtype, target, values, rows, metadata)
+    output_type = accumulator(operation, dtype)
+    packets = uploads(dtype, target, values, rows, metadata, output_type)
     regions = host.small_rows.get(
         entry,
         thread_grid_size=execution["threadGridSize"],
@@ -141,13 +153,13 @@ def dispatch(host, entry, buffers, count, threads, launch):
     words = returned.get("values")
     if not isinstance(words, list):
         raise RuntimeError("Native wide small-row output extent differs")
-    words = unpack(dtype, target, words)
+    words = unpack(output_type, target, words)
     if len(words) != rows + GUARD_COUNT:
         raise RuntimeError("Native wide small-row output extent differs")
-    if words[rows:] != guard_words(dtype):
+    if words[rows:] != guard_words(output_type):
         raise RuntimeError("Native wide small-row reduction changed its output guard")
     words = words[:rows]
-    payload = bytes((CTYPES[dtype] * rows)(*words))
+    payload = bytes((CTYPES[output_type] * rows)(*words))
     write_trace(
         host,
         {
@@ -162,7 +174,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "rowMetadata": metadata,
             "inputs": inputs,
             "operandValues": values,
-            "initialValues": guard_words(dtype, rows),
+            "initialValues": guard_words(output_type, rows),
             "outputValues": words,
             "outputHash": hashlib.sha256(payload).hexdigest(),
         },

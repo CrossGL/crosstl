@@ -44,7 +44,7 @@ def test_entries_are_pinned_and_disjoint_from_the_installed_small_columns():
     entries = set(column_small_layout.WIDE_SMALL_COLUMN_ENTRIES)
     # Three template ranks of sixteen wide operations and four 16-bit float
     # extrema, less the two float16 and bfloat16 partition sums installed.
-    assert len(entries) == 58 and entries <= pinned
+    assert len(entries) == 142 and entries <= pinned
     assert not entries & set(column_small_layout.ALL_SMALL_COLUMN_ENTRIES)
     assert set(column_small_layout.LAUNCH_ENTRIES) == entries | set(
         column_small_layout.ALL_SMALL_COLUMN_ENTRIES
@@ -81,14 +81,15 @@ def test_small_column_cache_keys_wide_variants():
     assert cache.source_entry(key) == "col_reduce_small_1_reduce_sumcomplex64"
     assert cache.workgroup_size(key) == (1, 3, 1)
     with pytest.raises(ValueError, match="Unsupported small column"):
-        column_small_layout.variant("col_reduce_small_1_reduce_sumint8", (1, 3, 1))
+        column_small_layout.variant("col_reduce_small_1_reduce_andint8", (1, 3, 1))
 
 
 def native_buffers(entry, words, outputs, metadata):
     """A callback's eleven buffers: input, output and upstream's column metadata."""
     types = wide_column_dispatch.operand_types(entry)
     ctype = element_storage.CTYPES[types["in"]]
-    memory = {"in": (ctype * len(words))(*words), "out": (ctype * outputs)()}
+    output = element_storage.CTYPES[types["out"]]
+    memory = {"in": (ctype * len(words))(*words), "out": (output * outputs)()}
     for name, values in metadata.items():
         memory[name] = (element_storage.CTYPES[types[name]] * len(values))(*values)
     array = (runtime.Buffer * len(memory))(
@@ -170,6 +171,7 @@ def run(
     fault=None,
 ):
     operation, dtype = wide_column_dispatch.signature(entry)
+    output_type = wide_column_dispatch.operand_types(entry)["out"]
     outputs = outputs_of(metadata)
     array, memory = native_buffers(entry, words, outputs, metadata)
     host = SimpleNamespace(
@@ -183,7 +185,9 @@ def run(
     def execute(_, request):
         inputs = request["inputs"]
         values = element_storage.unpack(dtype, target, inputs["inBinding"]["values"])
-        initial = element_storage.unpack(dtype, target, inputs["outBinding"]["values"])
+        initial = element_storage.unpack(
+            output_type, target, inputs["outBinding"]["values"]
+        )
         assert (
             inputs["reduction_strideBinding"]["values"] == metadata["reduction_stride"]
         )
@@ -200,7 +204,7 @@ def run(
             result[-1] ^= 1
         return SimpleNamespace(
             status="ok",
-            outputs={"outBinding": element_storage.packet(dtype, target, result)},
+            outputs={"outBinding": element_storage.packet(output_type, target, result)},
             details={"request": {}},
         )
 
@@ -271,6 +275,36 @@ def test_integer_columns_wrap_and_recompute(monkeypatch, tmp_path, target, dtype
                 {**event, "operandValues": [high, 2, 4, *words[3:]]},
                 target,
             )
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize(
+    "entry, words, expected",
+    [
+        # Columns of 127, 1 and -128: int8 sums write int32_t past int8.
+        ("col_reduce_small_1_reduce_sumint8", [127, 1, -128] * 3, [381, 3, -384]),
+        ("col_reduce_small_1_reduce_produint8", [255, 2, 0] * 3, [255**3, 8, 0]),
+        ("col_reduce_small_1_reduce_sumuint16", [65535] * 9, [3 * 65535] * 3),
+        (
+            "col_reduce_small_1_reduce_maxuint8",
+            [1, 200, 3, 4, 5, 255, 7, 8, 9],
+            [
+                7,
+                200,
+                255,
+            ],
+        ),
+    ],
+)
+def test_narrow_integer_columns_accumulate_and_recompute(
+    monkeypatch, tmp_path, target, entry, words, expected
+):
+    out, event, _ = run(monkeypatch, tmp_path, target, entry, words)
+    assert out == expected
+    assert audit(monkeypatch, event, target) == 3
+    tampered = {**event, "outputValues": [expected[0] ^ 1, *expected[1:]]}
+    with pytest.raises(ValueError, match="differs from its inputs"):
+        audit(monkeypatch, tampered, target)
 
 
 def test_outer_and_non_column_positions_fold_every_column():
@@ -478,8 +512,7 @@ def test_runtime_and_host_adapter_route_wide_columns():
         Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
     )
     assert (
-        "if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
-        "!small_columns) {"
-        in adapter
+        "if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&\n"
+        "      !small_rows && !small_columns) {" in adapter
     )
     assert "column_shape_size(plan.shape) < 32;" in adapter

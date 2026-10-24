@@ -135,8 +135,13 @@ def expected_words(kernel, operation, source, destination, values):
 
 
 def recomputable(entry):
-    """Whether the audit recomputes ``entry``'s results from its operands."""
-    return signature(entry)[2] not in INEXACT
+    """Whether the audit recomputes ``entry``'s results from its operands.
+
+    Integer and Boolean results of integer or Boolean operands are; floating
+    results, such as ``FromFP8``'s, are compared by the upstream tests.
+    """
+    _, _, source, destination = signature(entry)
+    return source not in INEXACT and destination not in INEXACT
 
 
 def audit_event(event, cache=None, *, native=True):

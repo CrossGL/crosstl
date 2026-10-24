@@ -4,12 +4,13 @@ Every dispatch must name the package its small-row cache derives again from
 the pinned source for the same launch, and its native modules must match the
 event: the Metal request and modules, or each Direct3D and OpenGL region.
 The row metadata and launch are validated again against upstream's plan.
-Integer dispatches are recomputed exactly: output ``r`` folds, for each of
+Integer dispatches, and all and any of every type, are recomputed exactly
+(``wide_reduction_evidence.fold``): output ``r`` folds, for each of
 the ``non_row_reductions`` positions ``reduce_shape`` and ``reduce_strides``
 address, the ``row_size`` contiguous inputs that start at ``r``'s offset
-under ``shape`` and ``strides``, with two's-complement wrapping for sums and
-products. Float16, bfloat16 and complex64 dispatches round in their element
-type in an order the kernel fixes; they are checked by package and native
+under ``shape`` and ``strides``, with two's-complement wrapping in the
+accumulator type for sums and products. Float16, bfloat16 and complex64
+sums, products and extrema round in their element type in an order the kernel fixes; they are checked by package and native
 identity, and their values are compared with the CPU results by the upstream
 tests themselves.
 """
@@ -21,7 +22,6 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import row_reduction_layout
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
-    INEXACT,
     guard_words,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -32,7 +32,8 @@ from demos.integrations.mlx.portable_host.lazy_package_evidence import (
     audit_regions,
     require_unchanged,
 )
-from demos.integrations.mlx.portable_host.wide_reduction_evidence import fold
+from demos.integrations.mlx.portable_host.wide_reduction_evidence import exact, fold
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 from demos.integrations.mlx.portable_host.wide_row_dispatch import (
     ENTRIES,
     signature,
@@ -46,7 +47,7 @@ GEOMETRY = ("workgroupCount", "workgroupSize", "threadGridSize")
 
 def recomputable(entry):
     """Whether the audit recomputes ``entry``'s results from its inputs."""
-    return signature(entry)[1] not in INEXACT
+    return exact(*signature(entry))
 
 
 def _offsets(shape, strides):
@@ -58,8 +59,11 @@ def _offsets(shape, strides):
 
 
 def expected_words(operation, dtype, words, metadata):
-    """Every output word of an integer small-row dispatch over ``words``."""
-    require(dtype not in INEXACT, "Wide row recompute requires an integer type")
+    """Every output word of an exact small-row dispatch over ``words``."""
+    require(
+        exact(operation, dtype),
+        "Wide row recompute requires an integer type or all/any",
+    )
     ndim, reduce_ndim = metadata["ndim"][0], metadata["reduce_ndim"][0]
     rows = _offsets(metadata["shape"][:ndim], metadata["strides"][:ndim])
     positions = _offsets(
@@ -92,12 +96,13 @@ def audit_event(event, cache, modules):
         entry, event["rowMetadata"], threads, len(values), len(outputs), execution
     )
     rows = len(outputs)
+    output_type = accumulator(operation, dtype)
     require(
-        event["initialValues"] == guard_words(dtype, rows)
+        event["initialValues"] == guard_words(output_type, rows)
         and event["dispatchVersion"] == 3,
         "Wide small-row readback extent differs",
     )
-    expected_uploads = uploads(dtype, target, values, rows, metadata)
+    expected_uploads = uploads(dtype, target, values, rows, metadata, output_type)
     bound = [*event["inputs"].values()]
     require(
         all(value in bound for value in expected_uploads.values())
@@ -111,7 +116,7 @@ def audit_event(event, cache, modules):
                 actual == wanted,
                 f"Wide small-row output {index} of {entry} differs from its inputs",
             )
-    payload = bytes((CTYPES[dtype] * rows)(*outputs))
+    payload = bytes((CTYPES[output_type] * rows)(*outputs))
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Wide small-row host output hash changed",

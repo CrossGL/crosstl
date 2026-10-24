@@ -44,7 +44,7 @@ def test_entries_are_pinned_and_disjoint_from_the_installed_small_rows():
     path = CONTRACTS / "reduce.current-tree.translation.json"
     pinned = set(json.loads(path.read_text(encoding="utf-8"))["entries"])
     entries = set(small_row_packages.WIDE_SMALL_ROW_ENTRIES)
-    assert len(entries) == 48 and entries <= pinned
+    assert len(entries) == 132 and entries <= pinned
     assert not entries & set(small_row_packages.SMALL_ROW_ENTRIES)
     assert set(small_row_packages.ALL_SMALL_ROW_ENTRIES) == entries | set(
         small_row_packages.SMALL_ROW_ENTRIES
@@ -80,7 +80,7 @@ def test_small_row_cache_translates_wide_entries(monkeypatch, tmp_path):
     assert built == [entry]
     with pytest.raises(ValueError, match="Unknown small-row"):
         cache.get(
-            "row_reduce_small_1_reduce_sumint8",
+            "row_reduce_small_1_reduce_andint8",
             thread_grid_size=(3, 1, 1),
             workgroup_size=(3, 1, 1),
         )
@@ -90,7 +90,8 @@ def native_buffers(entry, words, rows, metadata):
     """A callback's ten buffers: input, output and upstream's row metadata."""
     types = wide_row_dispatch.operand_types(entry)
     ctype = element_storage.CTYPES[types["in"]]
-    memory = {"in": (ctype * len(words))(*words), "out": (ctype * rows)()}
+    output = element_storage.CTYPES[types["out"]]
+    memory = {"in": (ctype * len(words))(*words), "out": (output * rows)()}
     for name, values in metadata.items():
         memory[name] = (element_storage.CTYPES[types[name]] * len(values))(*values)
     array = (runtime.Buffer * len(memory))(
@@ -164,6 +165,7 @@ def run(
     fault=None,
 ):
     operation, dtype = wide_row_dispatch.signature(entry)
+    output_type = wide_row_dispatch.operand_types(entry)["out"]
     rows = 1
     for size in metadata["shape"][: metadata["ndim"][0]]:
         rows *= size
@@ -179,7 +181,9 @@ def run(
 
     def execute(inputs, outputs):
         values = element_storage.unpack(dtype, target, inputs["inBinding"]["values"])
-        initial = element_storage.unpack(dtype, target, inputs["outBinding"]["values"])
+        initial = element_storage.unpack(
+            output_type, target, inputs["outBinding"]["values"]
+        )
         assert inputs["row_sizeBinding"]["values"] == metadata["row_size"]
         if dtype in element_storage.INEXACT:
             # Inexact rows echo their first inputs; identity checks cover them.
@@ -193,7 +197,7 @@ def run(
             result[-1] ^= 1
         return SimpleNamespace(
             status="ok",
-            outputs={"outBinding": element_storage.packet(dtype, target, result)},
+            outputs={"outBinding": element_storage.packet(output_type, target, result)},
             details={"request": {}},
         )
 
@@ -282,6 +286,53 @@ def test_integer_rows_wrap_and_recompute(monkeypatch, tmp_path, target, dtype):
                 {**event, "operandValues": [high, 2, 4, *words[3:]]},
                 target,
             )
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize(
+    "entry, words, expected",
+    [
+        # int8 rows of 100 sum to 300, past int8; uint8 sums write int32_t.
+        (
+            "row_reduce_small_1_reduce_sumint8",
+            [100] * 3 + [-128] * 6,
+            [300, -384, -384],
+        ),
+        ("row_reduce_small_1_reduce_sumuint8", [255] * 9, [765] * 3),
+        (
+            "row_reduce_small_1_reduce_produint16",
+            [65535] * 3 + [2] * 6,
+            [
+                65535**3 % 2**32,
+                8,
+                8,
+            ],
+        ),
+        (
+            "row_reduce_small_1_reduce_minint16",
+            [5, -7, 3, 0, 1, 2, 9, 8, 7],
+            [-7, 0, 7],
+        ),
+    ],
+)
+def test_narrow_integer_rows_accumulate_and_recompute(
+    monkeypatch, tmp_path, target, entry, words, expected
+):
+    output_type = wide_row_dispatch.operand_types(entry)["out"]
+    out, event, _ = run(monkeypatch, tmp_path, target, entry, words)
+    assert out == expected
+    assert audit(monkeypatch, event, target) == 3
+    tampered = {**event, "outputValues": [expected[0] ^ 1, *expected[1:]]}
+    with pytest.raises(ValueError, match="differs from its inputs"):
+        audit(monkeypatch, tampered, target)
+    # The output buffer must carry the accumulator type, not the input type.
+    _, dtype = wide_row_dispatch.signature(entry)
+    if output_type != dtype:
+        array, _ = native_buffers(entry, words, 3, ROWS)
+        array[1].dtype = dtype.encode()
+        supplied = element_storage.supplied_buffers(array, len(array), "Wide small-row")
+        with pytest.raises(ValueError, match="type, alignment or direction"):
+            wide_row_dispatch.validate(entry, supplied, len(words), SCALAR)
 
 
 def test_strided_non_row_positions_fold_every_row():
@@ -439,7 +490,6 @@ def test_runtime_and_host_adapter_route_wide_rows():
         Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
     )
     assert (
-        "if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && "
-        "!small_columns) {"
-        in adapter
+        "if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&\n"
+        "      !small_rows && !small_columns) {" in adapter
     )

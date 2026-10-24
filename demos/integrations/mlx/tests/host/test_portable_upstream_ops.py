@@ -25,15 +25,32 @@ def records(*, native):
                 "failures": 0,
                 "errors": 0,
                 "skips": 0,
-                "dispatchCount": 3 if native else 0,
+                "dispatchCount": (
+                    3 if native and name not in ops.NO_DISPATCH_TESTS else 0
+                ),
             }
             for name in ops.UPSTREAM_TESTS
         ]
     }
 
 
+def test_upstream_op_tests_without_dispatches_are_exact():
+    assert ops.NO_DISPATCH_TESTS <= set(ops.UPSTREAM_TESTS)
+    for native in (True, False):
+        ops.validate_upstream(records(native=native), native=native)
+    for name in sorted(ops.NO_DISPATCH_TESTS):
+        record = records(native=True)
+        for item in record["tests"]:
+            if item["test"] == name:
+                # A rejected argument check or an empty result must not reach
+                # a kernel.
+                item["dispatchCount"] = 1
+        with pytest.raises(ValueError, match=name):
+            ops.validate_upstream(record, native=True)
+
+
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 114
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 124
     assert all(
         name.startswith(
             (
@@ -68,13 +85,99 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 109 and not set(opengl) & set(excluded)
+    assert len(opengl) == 119 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
         ops.validate_upstream(record, native=True, inventory=opengl)
     record["tests"] = [item for item in record["tests"] if item["test"] in opengl]
     ops.validate_upstream(record, native=True, inventory=opengl)
+
+
+def test_upstream_op_groups_partition_the_inventory():
+    assert list(ops.GROUPS) == [
+        "operations",
+        "normalization",
+        "reductions",
+        "reduction-dtypes",
+        "reduction-permutations",
+    ]
+    assert all(len(tests) == 1 for tests in ops.GROUP_TESTS.values())
+    for group, tests in ops.GROUP_TESTS.items():
+        assert ops.GROUPS[group] == tests
+    combined = [name for group in ops.GROUPS.values() for name in group]
+    assert sorted(combined) == sorted(ops.UPSTREAM_TESTS)
+    assert len(combined) == len(set(combined))
+    assert all(name.startswith("test_fast.") for name in ops.GROUPS["normalization"])
+    assert len(ops.GROUPS["normalization"]) == 9
+    assert len(ops.GROUPS["reductions"]) == 8
+    assert not set(ops.GROUPS["reductions"]) & {
+        name for tests in ops.GROUP_TESTS.values() for name in tests
+    }
+    assert all(name.startswith("test_reduce.") for name in ops.GROUPS["reductions"])
+    assert not any(
+        name.startswith(("test_fast.", "test_reduce."))
+        for name in ops.GROUPS["operations"]
+    )
+    for target in ("metal", "directx", "opengl"):
+        grouped = [
+            name for group in ops.GROUPS for name in ops.upstream_tests(target, group)
+        ]
+        assert sorted(grouped) == sorted(ops.upstream_tests(target))
+        for group in ops.GROUPS:
+            selected = ops.upstream_tests(target, group)
+            assert list(selected) == [
+                name for name in ops.upstream_tests(target) if name in selected
+            ]
+    with pytest.raises(ValueError, match="Unknown upstream op group"):
+        ops.upstream_tests("metal", "fast")
+    # The operation tests own the rejection check and the indexing requirement.
+    assert ops.negative_checks(None) == ops.negative_checks("operations")
+    assert ops.negative_checks("operations") == ops.NEGATIVE_CHECKS
+    for group in set(ops.GROUPS) - {"operations"}:
+        assert ops.negative_checks(group) == {}
+        assert not ops.requires_indexing(group)
+    assert ops.requires_indexing(None) and ops.requires_indexing("operations")
+
+
+def test_upstream_op_workers_receive_their_group(tmp_path, monkeypatch):
+    commands = []
+
+    def run(command, **_):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ops.subprocess, "run", run)
+    args = ops.parse(
+        [
+            *(
+                item
+                for name in (
+                    "mlx-root",
+                    "packages",
+                    "random",
+                    "bitwise",
+                    "selection",
+                    "absolute",
+                    "integer64",
+                    "output-dir",
+                )
+                for item in ("--" + name, str(tmp_path / name))
+            ),
+            "--reductions",
+            str(tmp_path / "reductions"),
+            "--group",
+            "normalization",
+        ]
+    )
+    assert args.group == "normalization"
+    ops.run_worker(args, tmp_path, "native")
+    (command,) = commands
+    assert command[command.index("--group") + 1] == "normalization"
+    assert command[command.index("--worker") + 1] == "native"
+    args.group = None
+    ops.run_worker(args, tmp_path, "cpu")
+    assert "--group" not in commands[-1]
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -267,6 +370,30 @@ def test_upstream_op_trace_requires_an_indexing_dispatch(audit):
             audit.indexes,
             audit.reductions,
         )
+    # The normalization group reaches no indexing kernel; its dispatches must
+    # still each belong to one package.
+    assert (
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("vv_Equalint32")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+            require_indexing=ops.requires_indexing("normalization"),
+        )
+        == 0
+    )
+    with pytest.raises(ValueError, match="unknown or ambiguous package"):
+        ops.audit_trace(
+            None,
+            audit.args,
+            [event("vv_Equalint32"), event("vv_Unknownint32")],
+            "metal",
+            audit.indexes,
+            audit.reductions,
+            require_indexing=False,
+        )
 
 
 def test_upstream_op_indexing_dispatch_must_use_the_package_target(audit):
@@ -302,8 +429,8 @@ def test_upstream_op_indexing_audit_failures_fail_the_trace(audit, monkeypatch):
     [
         event("row_reduce_looped_1_32_32_reduce_sumint32"),
         event("all_reduce_andbool_", 256),
-        # No family translates the FP8 conversions, so they are unknown.
-        event("v_ToFP8float32uint8"),
+        # The 64-bit vectors have no work-per-thread instantiation.
+        event("vvn_Addint64"),
     ],
 )
 def test_upstream_op_trace_rejects_unindexed_families(audit, unknown):
@@ -338,16 +465,24 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
     job = workflow["jobs"]["upstream-ops-host"]
     assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
     assert "upstream-ops-host" in workflow["jobs"]["result"]["needs"]
-    assert {row["target"] for row in job["strategy"]["matrix"]["include"]} == {
+    matrix = job["strategy"]["matrix"]
+    assert {row["target"] for row in matrix["include"]} == {
         "metal",
         "directx",
         "opengl",
     }
+    assert set(matrix["target"]) == {"metal", "directx", "opengl"}
+    # Every group runs in its own job on every platform.
+    assert matrix["group"] == list(ops.GROUPS)
+    assert "${{ matrix.group }}" in job["name"]
     names = [step.get("name") for step in job["steps"]]
     step = job["steps"][names.index("Execute unchanged upstream op tests")]
     assert not step.get("continue-on-error") and not step.get("if")
     assert "set -euo pipefail" in step["run"]
     assert "portable_host.verify_upstream_ops" in step["run"]
+    assert '--group "${{ matrix.group }}"' in step["run"]
+    retained = job["steps"][names.index("Retain upstream op execution evidence")]
+    assert "${{ matrix.group }}" in retained["with"]["name"]
     deadline = int(re.search(r"--timeout-seconds (\d+)", step["run"]).group(1))
     # The workers' own bounds leave the audit time inside the step's deadline.
     assert sum(ops.TIMEOUTS.values()) + 60 <= deadline

@@ -3,12 +3,12 @@
 Every dispatch must name the package its small-column cache derives again
 from the pinned source for the same threadgroup size, and its retained native
 modules and request must match the event. The column metadata and launch are
-validated again against ``strided_reduce_small``'s plan. Integer dispatches
-are recomputed exactly: output ``o * reduction_stride + c`` folds, for each
+validated again against ``strided_reduce_small``'s plan. Integer dispatches,
+and all and any of every type, are recomputed exactly: output ``o * reduction_stride + c`` folds, for each
 position ``reduce_shape`` and ``reduce_strides`` address, the input at column
 ``c`` of ``o``'s offset under ``shape`` and ``strides``, with two's-complement
-wrapping for sums and products. Float16, bfloat16 and complex64 dispatches
-round or select in their element type in an order the kernel fixes; they are
+wrapping in the accumulator type for sums and products. Float16, bfloat16
+and complex64 sums, products and extrema round or select in their element type in an order the kernel fixes; they are
 checked by package and native identity, and their values are compared with
 the CPU results by the upstream tests themselves.
 """
@@ -20,7 +20,6 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import column_small_layout
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
-    INEXACT,
     guard_words,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -35,7 +34,8 @@ from demos.integrations.mlx.portable_host.wide_column_dispatch import (
     signature,
     uploads,
 )
-from demos.integrations.mlx.portable_host.wide_reduction_evidence import fold
+from demos.integrations.mlx.portable_host.wide_reduction_evidence import exact, fold
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 
 __all__ = ("audit_event", "expected_words", "recomputable")
 
@@ -44,7 +44,7 @@ GEOMETRY = ("workgroupCount", "workgroupSize")
 
 def recomputable(entry):
     """Whether the audit recomputes ``entry``'s results from its inputs."""
-    return signature(entry)[1] not in INEXACT
+    return exact(*signature(entry))
 
 
 def _offsets(shape, strides):
@@ -56,8 +56,11 @@ def _offsets(shape, strides):
 
 
 def expected_words(operation, dtype, words, metadata):
-    """Every output word of an integer small-column dispatch over ``words``."""
-    require(dtype not in INEXACT, "Wide column recompute requires an integer type")
+    """Every output word of an exact small-column dispatch over ``words``."""
+    require(
+        exact(operation, dtype),
+        "Wide column recompute requires an integer type or all/any",
+    )
     ndim, reduce_ndim = metadata["ndim"][0], metadata["reduce_ndim"][0]
     outer = _offsets(metadata["shape"][:ndim], metadata["strides"][:ndim])
     positions = _offsets(
@@ -92,12 +95,13 @@ def audit_event(event, cache):
         entry, event["columnMetadata"], threads, len(values), len(outputs), execution
     )
     count = len(outputs)
+    output_type = accumulator(operation, dtype)
     require(
-        event["initialValues"] == guard_words(dtype, count)
+        event["initialValues"] == guard_words(output_type, count)
         and event["dispatchVersion"] == 3,
         "Wide small-column readback extent differs",
     )
-    expected_uploads = uploads(dtype, target, values, count, metadata)
+    expected_uploads = uploads(dtype, target, values, count, metadata, output_type)
     bound = [*event["inputs"].values()]
     require(
         all(value in bound for value in expected_uploads.values())
@@ -112,7 +116,7 @@ def audit_event(event, cache):
                 actual == wanted,
                 f"Wide small-column output {index} of {entry} differs from its inputs",
             )
-    payload = bytes((CTYPES[dtype] * count)(*outputs))
+    payload = bytes((CTYPES[output_type] * count)(*outputs))
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Wide small-column host output hash changed",

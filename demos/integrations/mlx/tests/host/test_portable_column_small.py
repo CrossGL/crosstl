@@ -178,11 +178,13 @@ def test_partition_sums_accept_their_16_bit_launches(dtype):
         f"col_reduce_small_2_reduce_sum{dtype}",
         f"col_reduce_small_1_reduce_max{dtype}",
         f"col_reduce_small_1_reduce_prod{dtype}",
+        f"col_reduce_small_1_reduce_and{dtype}",
     ):
         assert other not in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
         assert column_small_layout.WIDE_SMALL_COLUMN_ENTRIES[other] == dtype
+    # instantiate_and_or has no 1-byte integer kernels.
     with pytest.raises(ValueError):
-        column_small_layout.signature(f"col_reduce_small_1_reduce_and{dtype}")
+        column_small_layout.signature("col_reduce_small_1_reduce_andint8")
 
 
 def _view(shape, strides, rows, columns):

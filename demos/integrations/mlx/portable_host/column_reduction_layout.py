@@ -40,12 +40,14 @@ def signature(entry):
     return TWO_PASS if entry.startswith("col_reduce_2pass_") else LOOPED
 
 
-def read_metadata(entry, entries, spec, buffers, logical_size):
+def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     """Check one column launch's buffers and read its shape metadata.
 
     ``entries`` maps the family's entries to their element types and ``spec``
-    the entry's buffers to their metadata types. Returns the metadata and the
-    plan quantities ``(size, stride, total, outer, reduce_ndim)``.
+    the entry's buffers to their metadata types; ``outputs`` maps the entries
+    whose ``out`` holds another accumulator type to that type. Returns the
+    metadata and the plan quantities ``(size, stride, total, outer,
+    reduce_ndim)``.
     """
     if (
         entry not in entries
@@ -54,11 +56,13 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
         or not 1 <= logical_size <= MAX_ELEMENTS
     ):
         raise ValueError("Native column reduction metadata does not match")
+    output_type = (outputs or {}).get(entry, entries[entry])
     for name, buffer in buffers.items():
         maximum = MAX_ELEMENTS if name in {"in", "out"} else 64 if name in ARRAYS else 1
+        element_type = output_type if name == "out" else entries[entry]
         if (
             not buffer.dtype
-            or buffer.dtype.decode("ascii") != (spec[name] or entries[entry])
+            or buffer.dtype.decode("ascii") != (spec[name] or element_type)
             or not 1 <= buffer.count <= maximum
             or not buffer.data
             or buffer.output != int(name == "out")

@@ -16,10 +16,11 @@ accumulator is the element type, as in reduce.metal: each addition rounds.
 
 ``WIDE_SMALL_COLUMN_ENTRIES`` are the remaining instantiations whose storage
 is 8 or 16 bits wide: int64, uint64 and complex64 numeric reductions, 16-bit
-float sums and products of any rank, and 16-bit float extrema. They keep the
-element type as their accumulator, as ``remap_reduce_types`` does, and the
-runtime dispatches them through ``wide_column_dispatch`` with exact storage
-words. The launch checks below are the same for both sets.
+float sums and products of any rank, 16-bit float extrema, and reductions of
+the 8- and 16-bit integers. They accumulate as ``remap_reduce_types`` does,
+in the element type except for the narrow integer sums and products
+(``SMALL_COLUMN_OUTPUTS``), and the runtime dispatches them through
+``wide_column_dispatch`` with exact storage words. The launch checks below are the same for both sets.
 """
 
 import ctypes
@@ -37,6 +38,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import ENTRIES
 from demos.integrations.mlx.portable_host.wide_reduction_packages import (
     OPERATIONS as WIDE_OPERATIONS,
 )
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 
 ENTRY_PREFIX = "col_reduce_small_"
 SMALL_COLUMN_ENTRIES = {
@@ -67,6 +69,14 @@ WIDE_SMALL_COLUMN_ENTRIES = {
 }
 # Every entry whose launch this module checks.
 LAUNCH_ENTRIES = {**ALL_SMALL_COLUMN_ENTRIES, **WIDE_SMALL_COLUMN_ENTRIES}
+# The accumulator type each wide entry writes, where it differs from its input.
+SMALL_COLUMN_OUTPUTS = {
+    f"{ENTRY_PREFIX}{dimension}_reduce_{operation}{dtype}": output
+    for dimension in (1, 2, 5)
+    for operation, dtypes in WIDE_OPERATIONS.items()
+    for dtype in dtypes
+    if (output := accumulator(operation, dtype)) != dtype
+}
 N_READS = 4
 MAX_LANES = 32
 MAX_ROWS = 8
@@ -121,7 +131,7 @@ def validate(entry, buffers, logical_size, execution):
     """Check one launch against strided_reduce_small and return its metadata."""
     spec = signature(entry)
     metadata, (size, stride, total, outer, reduce_ndim) = read_metadata(
-        entry, LAUNCH_ENTRIES, spec, buffers, logical_size
+        entry, LAUNCH_ENTRIES, spec, buffers, logical_size, SMALL_COLUMN_OUTPUTS
     )
     if buffers["out"].count != outer * stride:
         raise ValueError(
@@ -184,8 +194,13 @@ def validate_metadata(
                 raise ValueError("Invalid small column reduction metadata values")
             words, count = (METADATA_TYPES[kind] * len(values))(*values), len(values)
         storage[name] = words
+        element_type = (
+            SMALL_COLUMN_OUTPUTS.get(entry, LAUNCH_ENTRIES[entry])
+            if name == "out"
+            else LAUNCH_ENTRIES[entry]
+        )
         buffers[name] = SimpleNamespace(
-            dtype=(kind or LAUNCH_ENTRIES[entry]).encode("ascii"),
+            dtype=(kind or element_type).encode("ascii"),
             count=count,
             data=ctypes.addressof(words),
             output=int(name == "out"),

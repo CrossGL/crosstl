@@ -86,13 +86,16 @@ def _buffers(simple=False, dimension=1):
         (1025, 288),
         (4096, 1024),
         (65535, 1024),
+        (65536, 1024),
+        (274625, 1024),
+        (2**28 - 1, 1024),
     ],
 )
 def test_row_width_matches_upstream_thresholds(size, expected):
     assert row_reduction_layout.width(size) == expected
 
 
-@pytest.mark.parametrize("size", [0, 64, 65536, True, "65", 65.0])
+@pytest.mark.parametrize("size", [0, 64, 2**28, True, "65", 65.0])
 def test_invalid_row_width_is_rejected(size):
     with pytest.raises(ValueError):
         row_reduction_layout.width(size)
@@ -226,6 +229,22 @@ def test_row_plans_bind_more_than_65535_elements(simple):
     )
     assert row_reduction_layout.MAX_ELEMENTS == 2**28 - 1
     assert reduction_packages.ROW_MAX_ELEMENTS == row_reduction_layout.MAX_ELEMENTS
+
+
+@pytest.mark.parametrize("simple", [True, False])
+def test_rows_longer_than_65535_elements_use_full_width_groups(simple):
+    # A 274,625-element row, as a sum over three axes of a 65 x 65 x 65 view.
+    rows = 32 if simple else 2
+    entry, metadata, logical, span, rows, execution = _wide_metadata(
+        simple, rows, 65**3, reductions=1
+    )
+    assert execution["workgroupSize"] == [1024, 1, 1]
+    assert row_reduction_layout.validate_metadata(
+        entry, metadata, logical, span, rows, execution
+    )
+    # A row cannot outgrow the element bound that every source view shares.
+    with pytest.raises(ValueError, match="elements per row"):
+        _wide_metadata(simple, 1, row_reduction_layout.MAX_ELEMENTS + 1)
 
 
 def test_sliced_row_views_bind_spans_beyond_their_logical_size():

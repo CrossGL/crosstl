@@ -221,6 +221,8 @@ UPSTREAM_TESTS = (
             "test_real_imag",
             "test_sign",
             "test_trig_ops",
+            # This reaches the lazily translated ToFP8 and FromFP8 vectors.
+            "test_to_from_fp8",
             # These reach lazily translated selections of every GPU dtype.
             "test_clip",
             "test_concatenate",
@@ -247,6 +249,21 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_argmin_argmax",
         "test_reduce.TestReduce.test_arg_reduce",
         "test_bf16.TestBF16.test_arg_reduction_ops",
+    ) + (
+        # These reach lazily translated whole-array, row and column sums,
+        # products and extrema of every integer, float and Boolean dtype, over
+        # permuted, expanded and negative-stride views, and empty outputs.
+        "test_reduce.TestReduce.test_axis_permutation_sums",
+        "test_reduce.TestReduce.test_expand_sums",
+        "test_reduce.TestReduce.test_row_reduce_negative_stride",
+        "test_reduce.TestReduce.test_dtypes",
+        "test_reduce.TestReduce.test_sum_bool",
+        "test_reduce.TestReduce.test_edge_case",
+        "test_reduce.TestReduce.test_zero_size",
+        # These reach complex64 extrema with NaN in either part, and a column
+        # sum over 8,192 rows.
+        "test_reduce.TestReduce.test_nan_propagation_complex64",
+        "test_reduce.TestReduce.test_long_column",
     ) + (
         # These reach lazily translated block and looped softmax and logsumexp
         # rows, precise 16-bit softmax, and transposed and broadcast inputs.
@@ -336,15 +353,66 @@ RETAINED_VALUES = (
     *wide_row_dispatch.ENTRIES,
     *wide_column_dispatch.ENTRIES,
 )
-# The CI step bounds the three workers and the audit at 5,000 seconds; a cold
-# native run also translates about a hundred lazy vectors.
+# Tests that reject their arguments before building a graph, or whose every
+# result is empty. They dispatch no kernel on either worker, and the native
+# worker must dispatch none for them.
+NO_DISPATCH_TESTS = frozenset(
+    (
+        "test_fast.TestFast.test_layer_norm_dim_check",
+        "test_reduce.TestReduce.test_zero_size",
+    )
+)
+# CI runs each group in its own job. The normalization gradients move tens of
+# millions of elements through the host, about as long as every other test, and
+# the reduction tests sweep thousands of axis, dtype and layout subcases. The
+# two longest sweeps translate a package for each new reduction launch, about
+# half an hour each, so each runs in a job of its own.
+GROUP_PREFIXES = {"normalization": "test_fast.", "reductions": "test_reduce."}
+GROUP_TESTS = {
+    "reduction-dtypes": ("test_reduce.TestReduce.test_dtypes",),
+    "reduction-permutations": ("test_reduce.TestReduce.test_axis_permutation_sums",),
+}
+
+
+def _group_of(name):
+    for group, tests in GROUP_TESTS.items():
+        if name in tests:
+            return group
+    for group, prefix in GROUP_PREFIXES.items():
+        if name.startswith(prefix):
+            return group
+    return "operations"
+
+
+GROUPS = {
+    group: tuple(name for name in UPSTREAM_TESTS if _group_of(name) == group)
+    for group in ("operations", *GROUP_PREFIXES, *GROUP_TESTS)
+}
+# The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
+# native run also translates its lazy vectors and kernels.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
 
 
-def upstream_tests(target):
-    """The upstream tests ``target`` runs, in inventory order."""
+def upstream_tests(target, group=None):
+    """The upstream tests ``target`` runs in ``group``, in inventory order.
+
+    ``group=None`` selects every group.
+    """
+    if group is not None and group not in GROUPS:
+        raise ValueError(f"Unknown upstream op group: {group}")
     excluded = TARGET_EXCLUSIONS.get(target, {})
-    return tuple(name for name in UPSTREAM_TESTS if name not in excluded)
+    selected = UPSTREAM_TESTS if group is None else GROUPS[group]
+    return tuple(name for name in selected if name not in excluded)
+
+
+def negative_checks(group):
+    """The rejection checks a group runs; the operation tests own them."""
+    return NEGATIVE_CHECKS if group in {None, "operations"} else {}
+
+
+def requires_indexing(group):
+    """Whether a group's trace must reach a gather or scatter."""
+    return group in {None, "operations"}
 
 
 def package_target(packages):
@@ -431,7 +499,7 @@ def worker(args):
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
-    tests = upstream_tests(package_target(args.packages))
+    tests = upstream_tests(package_target(args.packages), args.group)
     records = []
     for name in tests:
         start = host.dispatch_count if host else 0
@@ -459,10 +527,11 @@ def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
     for item in tests:
         expected = {"testsRun": 1, "failures": 0, "errors": 0, "skips": 0}
         count = item.get("dispatchCount")
+        dispatches = native and item.get("test") not in NO_DISPATCH_TESTS
         if (
             any(item.get(key) != value for key, value in expected.items())
             or type(count) is not int
-            or (count <= 0 if native else count != 0)
+            or (count <= 0 if dispatches else count != 0)
         ):
             raise ValueError(f"Unchanged upstream test failed: {item.get('test')}")
 
@@ -501,8 +570,11 @@ def indexing_auditor(entry):
     return auditors.get(prefix)
 
 
-def audit_trace(np, args, trace, target, indexes, reductions):
-    """Tie every dispatch to exactly one translated package."""
+def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexing=True):
+    """Tie every dispatch to exactly one translated package.
+
+    ``require_indexing`` requires the trace to reach a gather or scatter.
+    """
     random_events = [event for event in trace if event["entry"] in ENTRIES]
     for event in random_events:
         random_evidence.audit_event(np, event)
@@ -732,7 +804,7 @@ def audit_trace(np, args, trace, target, indexes, reductions):
             owners[i] += 1
     if any(count != 1 for count in owners):
         raise ValueError("Upstream op trace contains an unknown or ambiguous package")
-    if not indexing:
+    if require_indexing and not indexing:
         raise ValueError("Upstream indexing tests did not reach gather or scatter")
     return indexing
 
@@ -758,6 +830,8 @@ def run_worker(args, output, mode):
         )
     for path in args.reductions:
         command.extend(("--reductions", str(path.resolve())))
+    if args.group is not None:
+        command.extend(("--group", args.group))
     command.extend(("--output-dir", str(output / mode)))
     with (output / f"{mode}.stdout").open("w") as stdout, (
         output / f"{mode}.stderr"
@@ -775,7 +849,8 @@ def verify(args):
     output.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
     target = package_target(args.packages)
-    tests = upstream_tests(target)
+    tests = upstream_tests(target, args.group)
+    checks = negative_checks(args.group)
     sources = upstream_test_sources(args.mlx_root, tests)
     write_json(output / "adaptation-before.json", before)
     target, indexes, reductions = load_indexes(args)
@@ -785,6 +860,7 @@ def verify(args):
         "passed": False,
         "adaptation": before,
         "upstreamTestSources": sources,
+        "group": args.group,
         "upstreamTests": list(tests),
         "excludedUpstreamTests": dict(TARGET_EXCLUSIONS.get(target, {})),
         "workers": {},
@@ -792,7 +868,7 @@ def verify(args):
         "fullUpstreamSuite": False,
     }
     try:
-        for mode in ("cpu", "native", *NEGATIVE_CHECKS):
+        for mode in ("cpu", "native", *checks):
             evidence["workers"][mode] = run_worker(args, output, mode)
             write_json(output / "evidence.json", evidence)
         if any(value["returncode"] for value in evidence["workers"].values()):
@@ -809,9 +885,17 @@ def verify(args):
             trace
         ):
             raise ValueError("Upstream op trace count differs")
-        indexing = audit_trace(np, args, trace, target, indexes, reductions)
+        indexing = audit_trace(
+            np,
+            args,
+            trace,
+            target,
+            indexes,
+            reductions,
+            require_indexing=requires_indexing(args.group),
+        )
         rejections = {}
-        for mode, error in NEGATIVE_CHECKS.items():
+        for mode, error in checks.items():
             item = json.loads((output / mode / "rejection.json").read_text())
             if (
                 item.get("check") != mode
@@ -854,6 +938,7 @@ def parse(argv=None):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--reductions", type=Path, action="append", required=True)
     parser.add_argument("--worker", choices=("cpu", "native", *NEGATIVE_CHECKS))
+    parser.add_argument("--group", choices=tuple(GROUPS))
     return parser.parse_args(argv)
 
 

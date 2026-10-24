@@ -318,10 +318,11 @@ float32 and, where the pinned sources instantiate it, complex64 (including
 `binary.metal` or `v_Select<type>` entry of `ternary.metal` with one element
 per invocation. When an installed family provides the entry it is used;
 otherwise `elementwise_packages` translates it from the pinned source on first
-use through `lazy_kernel_cache`. Its tables are exactly the 415 `v_` and `vv_`
-instantiations of the pinned sources (only the six FP8 conversions are
-excluded) and the nine `v_Select` vectors the selection family does not
-install, 424 entries in all, and each floating entry pins
+use through `lazy_kernel_cache`. Its tables are exactly the 421 `v_` and `vv_`
+instantiations of the pinned sources, including the six `ToFP8` and `FromFP8`
+conversions `fast::ConvertFP8` launches between the real floats and E4M3
+bytes, and the nine `v_Select` vectors the selection family does not install,
+430 entries in all, and each floating entry pins
 the Metal profiles the complete binary and unary kernel proofs use: rne-flush
 additive, multiplicative and division results, flushed comparison and
 remainder operands for binary32 and bfloat16, the binary32 quotient for
@@ -337,8 +338,8 @@ exactly a donated input. `elementwise_evidence` recomputes every integer and
 Boolean dispatch from its retained operands: C++ promotes narrow operands to
 `int`, so results wrap modulo their width and Booleans keep whether the
 promoted result is nonzero; an integer or Boolean selection must return the
-second operand where the condition is true and the third elsewhere. Floating
-and complex dispatches are checked by package and native identity like the
+second operand where the condition is true and the third elsewhere. Floating,
+complex and FP8 conversion dispatches are checked by package and native identity like the
 prebuilt float families, and their values by the upstream tests' own
 comparisons with the CPU.
 
@@ -1370,7 +1371,9 @@ retain output strides, non-row reduction strides and source allocation offsets.
 General plans use translated copies only when upstream's planner requires them.
 
 The source width is 32 for rows through 512 elements, 128 through 1,024, and
-then a multiple of 32 capped at 1,024. The default row build includes all 26
+then a multiple of 32 capped at 1,024, which every row from 4,096 elements up
+to the element bound uses; the kernels stride through rows of any length. The
+default row build includes all 26
 reachable widths and all 56 entries, producing 1,456 packages per target.
 Runtime checks reject invalid ranks, mismatched metadata arrays, out-of-range
 source spans and incorrect launch dimensions before device execution. Source
@@ -1497,8 +1500,10 @@ NumPy, checks unchanged host inputs and output guards, and retains package ident
 and DirectX/OpenGL region module evidence. These are additional integration
 workloads, not 34 additional upstream unit tests. The existing upstream-test
 gate remains required. Every operation has distinguishable row results to reject
-constant-output and wrong-row errors. Negative-stride row views, additional storage types
-and full upstream-suite parity remain open work;
+constant-output and wrong-row errors. A reduction of a view with a negative
+stride reduces a dense translated copy, so its passes bind storage from the
+first element they read. Additional storage types and full upstream-suite
+parity remain open work;
 partial-workgroup coverage is tracked in
 [#2011](https://github.com/CrossGL/crosstl/issues/2011).
 
@@ -1734,13 +1739,33 @@ package and native identity, and their values by the upstream tests'
 comparisons with the CPU. Off Metal, subnormal bfloat16 inputs stay refused
 under [#2000](https://github.com/CrossGL/crosstl/issues/2000).
 
+The 8- and 16-bit integers run the same lazy families. Their minima and maxima
+keep the element type; their sums and products write the accumulator that
+`instantiate_sum_prod` gives them, int32 for int8, int16 and uint8 and uint32
+for uint16, and the result MLX types uint32 for uint8 holds the same bits.
+Boolean sums and products read their bytes through the int8 entries, as
+`remap_reduce_types` does. A two-pass whole-array reduction's second pass
+reduces the 32-bit partials with the installed int32 or uint32 entry. The
+audits recompute every pass, row and column exactly, wrapping sums and
+products in the accumulator type.
+
+`all` and `any` of a non-Boolean array run the same families through
+`instantiate_and_or`'s entries and write Booleans. As in `remap_reduce_types`,
+float16, bfloat16 and float32 are tested by value, so -0.0 is false, and the
+2-, 4- and 8-byte integers and complex64 by their bits, through the int16,
+int32 and int64 entries; a two-pass reduction's second pass is the installed
+Boolean entry. The audits recompute these passes for every type, a float word
+being true when any bit but its sign is set. Upstream reads the 1-byte
+integers as Booleans, which the canonical Boolean storage cannot carry, so
+their `all` and `any` stay refused.
+
 Row plans of these types whose rows hold at most 64 elements run the same
 types' `row_reduce_small` entries, which `small_row_packages` translates on
 first use for each launch's exact thread grid. On Direct3D and OpenGL each
 launch runs as its dispatch regions, as for the other small rows.
 `wide_row_dispatch` moves exact storage words with a guarded output, and
 `wide_row_evidence` checks every dispatch against its cached packages and
-recomputes 64-bit integer rows from their inputs.
+recomputes 64-bit and narrow integer rows from their inputs.
 
 Column plans of these types that reduce fewer than 32 elements per output run
 the same types' `col_reduce_small` entries; float16 and bfloat16 sums over one
@@ -1749,8 +1774,8 @@ each launch's metadata, source span and thread grid against upstream's
 `strided_reduce_small` plan before translation, and every target runs the launch
 as one dispatch. `wide_column_dispatch` moves exact storage words with a guarded
 output, and `wide_column_evidence` derives each dispatch's package again and
-recomputes 64-bit integer columns from their inputs. Longer rows and columns of
-these types remain explicit unsupported operations.
+recomputes 64-bit and narrow integer columns from their inputs. Longer rows and
+columns of these types remain explicit unsupported operations.
 
 ## Random Generation
 
@@ -1843,9 +1868,17 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 114 more unchanged `test_ops`, `test_reduce`,
-`test_bf16` and `test_fast` tests on all three platforms (109 on OpenGL; see
-below):
+A dedicated job then runs 124 more unchanged `test_ops`, `test_reduce`,
+`test_bf16` and `test_fast` tests on all three platforms (119 on OpenGL; see
+below). They run in five groups, each in its own job per platform with its
+own deadlines: `operations` (the `test_ops` and `test_bf16` tests, which also
+run the rejection check and must reach a gather or scatter), `normalization`
+(the nine `test_fast` tests, whose gradients move tens of millions of elements
+through the host), `reductions` (eight `test_reduce` tests), and
+`reduction-dtypes` and `reduction-permutations` (`test_dtypes` and
+`test_axis_permutation_sums`, which each translate a package for every new
+reduction launch of their sweeps). `--group` selects one; without it, one
+verification runs every test:
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
@@ -1854,7 +1887,7 @@ python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
   --absolute absolute-packages --integer64 integer64-packages \
   --reductions init-packages --reductions all-reductions \
   --reductions row-reductions --reductions column-reductions \
-  --output-dir upstream-op-evidence
+  --group operations --output-dir upstream-op-evidence
 ```
 
 `all-reductions` and `row-reductions` are on-demand whole-array and row
@@ -1891,6 +1924,14 @@ which reach wide whole-array, small-row and small-column reductions; and
 `test_reduce.test_arg_reduce` and `test_bf16.test_arg_reduction_ops`, which
 reach `arg_reduce.metal` for every real dtype, one package per threadgroup
 width. Every arg reduction index is recomputed from its retained input.
+`test_axis_permutation_sums`, `test_expand_sums`,
+`test_row_reduce_negative_stride`, `test_dtypes`, `test_sum_bool` and
+`test_edge_case` reach whole-array, row and column sums, products and extrema
+of every integer, float and Boolean dtype over permuted, expanded and
+negative-stride views; a negative-stride view is reduced from a dense copy.
+`test_nan_propagation_complex64` reaches complex64 extrema with NaN in either
+part and `test_long_column` a column sum over 8,192 rows. `test_zero_size`
+reduces only into empty results and rejects empty axes.
 OpenGL runs simdgroups as 32-lane software subgroups and cannot yet run an
 arg reduction wider than one simdgroup, because the kernel returns every
 simdgroup but the first before its final shuffles (CrossGL/crosstl#2207);
@@ -1911,6 +1952,7 @@ with a negative stride is sorted from a dense copy.
 inclusive and exclusive `scan.metal` entries of float32, int32, int64 and
 complex64 (see "Cumulative Operations"); OpenGL excludes the first and third,
 whose reverse scans it cannot bound yet (CrossGL/crosstl#2905).
+`test_to_from_fp8` reaches the `ToFP8` and `FromFP8` vectors.
 `test_searchsorted` reaches every searchsorted pass shape above: contiguous,
 strided, reversed and empty sequences, and transposed, sliced and broadcast
 values. `test_unstack` concatenates int64 arrays through lazy copies.
@@ -1931,7 +1973,9 @@ over more than 65,536 row elements keep their extents and digests. The tests
 compare the values with MLX's composed normalization.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
-native run must dispatch. Every dispatch must belong to exactly one of the
+native run must dispatch, except `test_layer_norm_dim_check`, which rejects its
+arguments before building a graph, and `test_zero_size`, which must dispatch
+nothing. Every dispatch must belong to exactly one of the
 base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
 indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from

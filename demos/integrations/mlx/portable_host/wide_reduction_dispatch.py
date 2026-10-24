@@ -2,8 +2,8 @@
 
 The native host passes one pass of upstream's ``all_reduce`` plan: ``in``
 holds ``threads`` elements, ``out`` one element per row, and ``in_size`` and
-``row_size`` are the plan's uint64 metadata. Two-pass reductions call this
-once per pass. Storage travels as MLX's exact words through
+``row_size`` are the plan's uint64 metadata; ``out`` holds the kernel's accumulator type.
+Two-pass reductions call this once per pass. Storage travels as MLX's exact words through
 ``element_storage``; the output carries a trailing guard and is decoded
 exactly.
 """
@@ -26,6 +26,7 @@ from demos.integrations.mlx.portable_host.elementwise_dispatch import bind
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 from demos.integrations.mlx.portable_host.wide_reduction_packages import (
+    accumulator,
     dispatch_contract,
     signature,
 )
@@ -36,8 +37,12 @@ INPUT, OUTPUT = "in", "out"
 
 def operand_types(entry):
     """Every source parameter's element type."""
-    _, dtype = signature(entry)
-    return {INPUT: dtype, OUTPUT: dtype, **{name: "uint64" for name in METADATA}}
+    operation, dtype = signature(entry)
+    return {
+        INPUT: dtype,
+        OUTPUT: accumulator(operation, dtype),
+        **{name: "uint64" for name in METADATA},
+    }
 
 
 def validate(entry, buffers, threads, execution):
@@ -81,6 +86,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
     dtype, rows, target = metadata["dtype"], metadata["rows"], host.target
+    output_type = accumulator(metadata["operation"], dtype)
     values = buffer_words(supplied[INPUT], dtype)
     if (
         dtype == "bfloat16"
@@ -92,11 +98,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "see CrossGL/crosstl#2000"
         )
     # A fresh output is filled with guards, so the readback is never stale.
-    initial = guard_words(dtype, rows)
-    tail = guard_words(dtype)
+    initial = guard_words(output_type, rows)
+    tail = guard_words(output_type)
     uploads = {
         INPUT: packet(dtype, target, values),
-        OUTPUT: packet(dtype, target, initial + tail),
+        OUTPUT: packet(output_type, target, initial + tail),
         **{
             name: {"dtype": "uint64", "shape": [1], "values": [metadata[name]]}
             for name in METADATA
@@ -127,13 +133,13 @@ def dispatch(host, entry, buffers, count, threads, launch):
     words = returned.get("values")
     if not isinstance(words, list):
         raise RuntimeError("Native wide reduction output extent differs")
-    words = unpack(dtype, target, words)
+    words = unpack(output_type, target, words)
     if len(words) != rows + GUARD_COUNT:
         raise RuntimeError("Native wide reduction output extent differs")
     if words[rows:] != tail:
         raise RuntimeError("Native wide reduction changed its output guard")
     words = words[:rows]
-    payload = bytes((CTYPES[dtype] * rows)(*words))
+    payload = bytes((CTYPES[output_type] * rows)(*words))
     write_trace(
         host,
         {

@@ -32,7 +32,7 @@ def declaration_macro(name):
     """The no_gpu/primitives.cpp macro that declares ``name``."""
     if name in prepare.FALLBACK_PRIMITIVES:
         return "NO_GPU_USE_FALLBACK"
-    multi = {"DivMod", "Quantize", *prepare.NORMALIZATION_PRIMITIVES}
+    multi = {"DivMod", "Quantize", *prepare.FAST_PRIMITIVES}
     return (
         "NO_GPU_MULTI"
         if name in prepare.MULTI_OUTPUT_VIEWS or name in multi
@@ -58,7 +58,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Partition",
                     "Sort",
                     "SearchSorted",
-                    *prepare.NORMALIZATION_PRIMITIVES,
+                    *prepare.FAST_PRIMITIVES,
                     "RandomBits",
                     "Scan",
                     "Quantize",
@@ -120,7 +120,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
     assert record["commit"] == prepare.COMMIT and len(record["files"]) == 6
-    for name in prepare.NORMALIZATION_PRIMITIVES:
+    for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
         assert declared in (backend / "primitives.cpp").read_text()

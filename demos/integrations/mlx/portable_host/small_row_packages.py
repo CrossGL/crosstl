@@ -26,6 +26,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import ALL_ENTRIES,
 from demos.integrations.mlx.portable_host.wide_reduction_packages import (
     OPERATIONS as WIDE_OPERATIONS,
 )
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 
 SMALL_ROW_ENTRIES = {
     f"row_reduce_small_{dimension}_reduce_" + entry.removeprefix("all_reduce_"): dtype
@@ -34,13 +35,22 @@ SMALL_ROW_ENTRIES = {
 }
 # The same kernels for the types that accumulate in their element type:
 # int64, uint64 and complex64 numeric reductions and 16-bit float sums and
-# products. Their storage needs exact 8-byte and 16-bit transport, so the
-# runtime dispatches them through ``wide_row_dispatch``.
+# products, and for the 8- and 16-bit integers. Their storage needs exact
+# 8-byte, 16-bit and 8-bit transport, so the runtime dispatches them through
+# ``wide_row_dispatch``.
 WIDE_SMALL_ROW_ENTRIES = {
     f"row_reduce_small_{dimension}_reduce_{operation}{dtype}": dtype
     for dimension in (1, 2, 5)
     for operation, dtypes in WIDE_OPERATIONS.items()
     for dtype in dtypes
+}
+# The accumulator type each wide entry writes, where it differs from its input.
+SMALL_ROW_OUTPUTS = {
+    f"row_reduce_small_{dimension}_reduce_{operation}{dtype}": output
+    for dimension in (1, 2, 5)
+    for operation, dtypes in WIDE_OPERATIONS.items()
+    for dtype in dtypes
+    if (output := accumulator(operation, dtype)) != dtype
 }
 ALL_SMALL_ROW_ENTRIES = {**SMALL_ROW_ENTRIES, **WIDE_SMALL_ROW_ENTRIES}
 

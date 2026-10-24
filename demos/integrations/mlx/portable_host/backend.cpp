@@ -113,14 +113,23 @@ void dispatch_unary(
     const char* operation) {
   require_runtime();
   // unary.metal instantiates each operation for the types it supports, with
-  // matching outputs except Real and Imag, which read complex64 into float32;
+  // matching outputs except Real and Imag, which read complex64 into float32,
+  // and ToFP8 and FromFP8, which convert real floats to and from E4M3 bytes;
   // the runtime refuses an entry it cannot serve.
   const char* dtype = inputs.size() == 1 ? cast_type(inputs[0].dtype()) : nullptr;
   const std::string name = operation;
   const bool part = name == "Real" || name == "Imag";
-  if (!dtype ||
-      out.dtype() != (part ? mlx::core::float32 : inputs[0].dtype()) ||
-      (part && inputs[0].dtype() != mlx::core::complex64)) {
+  auto real_float = [](mlx::core::Dtype type) {
+    return type == mlx::core::float16 || type == mlx::core::bfloat16 ||
+        type == mlx::core::float32;
+  };
+  const bool valid = !dtype ? false
+      : part                ? inputs[0].dtype() == mlx::core::complex64 &&
+                   out.dtype() == mlx::core::float32
+      : name == "ToFP8"     ? real_float(inputs[0].dtype()) && out.dtype() == mlx::core::uint8
+      : name == "FromFP8"   ? inputs[0].dtype() == mlx::core::uint8 && real_float(out.dtype())
+                            : out.dtype() == inputs[0].dtype();
+  if (!valid) {
     throw std::invalid_argument(
         "CrossTL unary dispatch requires matching bool, integer, float16, "
         "bfloat16, float32 or complex64 arrays.");
@@ -533,7 +542,10 @@ void dispatch_all_reduce(
     const mlx::core::array& in,
     mlx::core::array& out,
     const std::string& operation,
-    const char* dtype) {
+    const char* dtype,
+    const char* output = nullptr) {
+  // ``output`` names the type the kernel writes when it is not ``dtype``.
+  output = output ? output : dtype;
   uint64_t size = in.size();
   const uint32_t rows = all_reduce_rows(in);
   uint64_t row_size = (size + rows - 1) / rows;
@@ -549,7 +561,7 @@ void dispatch_all_reduce(
   std::string entry = "all_reduce_" + operation + dtype;
   CrosstlMlxBuffer buffers[] = {
       {"in", dtype, const_cast<void*>(in.data<void>()), size, 0},
-      {"out", dtype, out.data<void>(), rows, 1},
+      {"out", output, out.data<void>(), rows, 1},
       {"in_size", "uint64", &size, 1, 0},
       {"row_size", "uint64", &row_size, 1, 0},
   };
@@ -576,7 +588,8 @@ void dispatch_row_reduce(
     const mlx::core::ReductionPlan& plan,
     const std::vector<int>& axes,
     const std::string& operation,
-    const char* dtype) {
+    const char* dtype,
+    const char* output) {
   using namespace mlx::core;
   int64_t row_size = plan.shape.back();
   const bool small = row_size <= 64;
@@ -638,7 +651,7 @@ void dispatch_row_reduce(
     std::string entry = "row_reduce_simple_" + operation + dtype;
     CrosstlMlxBuffer buffers[] = {
         {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
-        {"out", dtype, out.data<void>(), out.size(), 1},
+        {"out", output, out.data<void>(), out.size(), 1},
         {"reduction_size", "uint64", &reduction_size, 1, 0},
         {"out_size", "int64", &out_size, 1, 0},
     };
@@ -652,7 +665,7 @@ void dispatch_row_reduce(
     if (reduce_ndim == 0) { reduce_shape.push_back(0); reduce_strides.push_back(0); }
     CrosstlMlxBuffer buffers[] = {
         {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
-        {"out", dtype, out.data<void>(), out.size(), 1},
+        {"out", output, out.data<void>(), out.size(), 1},
         {"row_size", "int64", &row_size, 1, 0},
         {"non_row_reductions", "int64", &non_rows, 1, 0},
         {"shape", "int32", shape.data(), shape.size(), 0},
@@ -703,7 +716,8 @@ void dispatch_column_pass(
     mlx::core::Strides reduce_strides,
     ColumnPass pass,
     const std::string& operation,
-    const char* dtype) {
+    const char* dtype,
+    const char* output) {
   const bool two_pass = pass == ColumnPass::TwoPass;
   if (shape.size() > 64 || shape.size() != strides.size() ||
       reduce_shape.empty() || reduce_shape.size() > 64 ||
@@ -749,7 +763,7 @@ void dispatch_column_pass(
   out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   CrosstlMlxBuffer buffers[] = {
       {"in", dtype, const_cast<void*>(in.data<void>()), span, 0},
-      {"out", dtype, out.data<void>(), out.size(), 1},
+      {"out", output, out.data<void>(), out.size(), 1},
       {"reduction_size", "uint64", &reduction_size, 1, 0},
       {"reduction_stride", "int64", &reduction_stride, 1, 0},
       {"shape", "int32", shape.data(), shape.size(), 0},
@@ -794,8 +808,11 @@ void dispatch_column_reduce(
     const mlx::core::ReductionPlan& plan,
     const std::vector<int>& axes,
     const std::string& operation,
-    const char* dtype) {
+    const char* dtype,
+    const char* output = nullptr) {
   using namespace mlx::core;
+  // ``output`` names the type the passes write when it is not ``dtype``.
+  output = output ? output : dtype;
   if (plan.shape.empty() || plan.shape.size() != plan.strides.size()) {
     throw std::invalid_argument("CrossTL column reduction plan is empty or inconsistent.");
   }
@@ -822,23 +839,27 @@ void dispatch_column_reduce(
   std::tie(shape, strides) = collapse_contiguous_dims(shape, strides);
   if (total < 32) {
     dispatch_column_pass(
-        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Small, operation, dtype);
+        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Small, operation, dtype,
+        output);
     return;
   }
   const bool two_pass = total > 256 && out.size() / 32 < 1024;
   if (!two_pass) {
     dispatch_column_pass(
-        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Looped, operation, dtype);
+        in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Looped, operation, dtype,
+        output);
     return;
   }
   Shape intermediate_shape{32};
   intermediate_shape.insert(intermediate_shape.end(), out.shape().begin(), out.shape().end());
   array intermediate(std::move(intermediate_shape), out.dtype(), nullptr, {});
   dispatch_column_pass(
-      in, intermediate, shape, strides, plan.shape, plan.strides, ColumnPass::TwoPass, operation, dtype);
+      in, intermediate, shape, strides, plan.shape, plan.strides, ColumnPass::TwoPass, operation, dtype,
+      output);
   // Consume the completed native partials, preserving the upstream second pass.
   dispatch_column_pass(
-      intermediate, out, {}, {}, {32}, {int64_t(out.size())}, ColumnPass::Looped, operation, dtype);
+      intermediate, out, {}, {}, {32}, {int64_t(out.size())}, ColumnPass::Looped, operation, output,
+      output);
 }
 
 const char* storage_type(mlx::core::Dtype dtype) {
@@ -892,6 +913,34 @@ const char* cast_type(mlx::core::Dtype dtype) {
       return "int64";
     case mlx::core::complex64:
       return "complex64";
+    default:
+      return nullptr;
+  }
+}
+
+// The type remap_reduce_types tests a non-Boolean all or any in: 16-bit
+// floats and float32 by value, so -0.0 is false, and the 2-, 4- and 8-byte
+// integers and complex64 by their bits. Upstream reads the 1-byte integers as
+// Booleans, which the host's canonical Boolean storage cannot carry, and has
+// no GPU float64.
+const char* logical_type(mlx::core::Dtype dtype) {
+  switch (dtype) {
+    case mlx::core::float16:
+      return "float16";
+    case mlx::core::bfloat16:
+      return "bfloat16";
+    case mlx::core::float32:
+      return "float32";
+    case mlx::core::int16:
+    case mlx::core::uint16:
+      return "int16";
+    case mlx::core::int32:
+    case mlx::core::uint32:
+      return "int32";
+    case mlx::core::int64:
+    case mlx::core::uint64:
+    case mlx::core::complex64:
+      return "int64";
     default:
       return nullptr;
   }
@@ -2007,12 +2056,37 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   // 8-byte types, accumulate in their element type, as remap_reduce_types
   // does; they run lazily translated whole-array passes.
   const bool eight_byte = in.dtype() == int64 || in.dtype() == uint64 || in.dtype() == complex64;
-  const bool wide = eight_byte ? !logical
-      : (in.dtype() == bfloat16 || in.dtype() == float16) &&
-          (reduce_type_ == Sum || reduce_type_ == Prod);
+  const bool counting = reduce_type_ == Sum || reduce_type_ == Prod;
+  // The 8- and 16-bit integers keep their type for extrema and accumulate
+  // sums and products in 32 bits; Boolean sums and products read their bytes
+  // as int8. They run the same lazily translated passes as the 8-byte types.
+  const bool narrow_integer = in.dtype() == int8 || in.dtype() == int16 ||
+      in.dtype() == uint8 || in.dtype() == uint16;
+  const bool narrow = (narrow_integer && !logical) || (boolean && counting);
+  // All and any of every other type run the same lazily translated passes and
+  // write Booleans, as instantiate_and_or does.
+  const char* truth_type = logical && !boolean ? logical_type(in.dtype()) : nullptr;
+  const bool truth_test = truth_type != nullptr;
+  const bool wide = narrow || truth_test ||
+      (eight_byte ? !logical
+                  : (in.dtype() == bfloat16 || in.dtype() == float16) && counting);
   const char* dtype = half_extrema ? (in.dtype() == bfloat16 ? "bfloat16" : "float16")
-      : wide ? cast_type(in.dtype())
-             : storage_type(in.dtype());
+      : truth_test                 ? truth_type
+      : boolean && counting        ? "int8"
+      : wide                       ? cast_type(in.dtype())
+                                   : storage_type(in.dtype());
+  // reduce.metal's instantiate_sum_prod writes the narrow sums and products
+  // as int32_t, except uint16's as uint32_t; ops.cpp types the uint8 result
+  // uint32, which holds the same bits.
+  const bool promoted = narrow && counting;
+  const char* output = truth_test ? "bool_"
+      : !promoted                 ? dtype
+      : in.dtype() == uint16      ? "uint32"
+                                  : "int32";
+  const Dtype result_type = truth_test ? bool_
+      : !promoted                      ? in.dtype()
+      : in.dtype() == uint8 || in.dtype() == uint16 ? uint32
+                                                     : int32;
   const char* operation = nullptr;
   switch (reduce_type_) {
     case And: operation = "and"; break;
@@ -2027,12 +2101,15 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
     return;
   }
   if (!dtype || (!wide && (in.dtype() == int64 || in.dtype() == uint64)) ||
-      in.dtype() != out.dtype() ||
-      (boolean ? (reduce_type_ == Sum || reduce_type_ == Prod) : logical)) {
+      out.dtype() != result_type || (!boolean && logical && !truth_test)) {
     throw std::invalid_argument(
-        "CrossTL reductions require matching float32/int32/uint32 numeric arrays, "
-        "int64/uint64/complex64 or 16-bit float sums and products, or Boolean all/any.");
+        "CrossTL reductions require float32/int32/uint32, 8- or 16-bit integer, "
+        "int64/uint64/complex64 or 16-bit float numeric arrays, Boolean sums, or "
+        "all/any of Boolean, 16-bit float, float32 or 2-, 4- or 8-byte arrays.");
   }
+  // A view with a negative stride reduces a dense copy: bound storage starts
+  // at the first element a pass reads, and the reduced values are unchanged.
+  in = gather_input(in);
   auto plan = get_reduction_plan(in, axes_);
   // Column passes bound their own views; every other plan that is not a
   // whole-array reduction binds at most max_row_elements elements, checked
@@ -2055,29 +2132,33 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
       !plan.shape.empty() && column_shape_size(plan.shape) < 32;
   // 16-bit floats also run the looped row and the looped and two-pass column
   // instantiations; the 8-byte types have only the small and whole-array ones.
-  if (eight_byte && plan.type != ContiguousAllReduce && !small_rows && !small_columns) {
+  if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&
+      !small_rows && !small_columns) {
     throw std::invalid_argument(
-        "CrossTL int64, uint64 and complex64 reductions require whole-array plans, "
-        "rows of at most 64 elements or columns of fewer than 32.");
+        "CrossTL int64, uint64, complex64, 8- and 16-bit integer, Boolean sum and "
+        "non-Boolean all/any reductions require whole-array plans, rows of at "
+        "most 64 elements or columns of fewer than 32.");
   }
   if (plan.type == ContiguousReduce || plan.type == GeneralContiguousReduce) {
-    dispatch_row_reduce(in, out, plan, axes_, operation, dtype);
+    dispatch_row_reduce(in, out, plan, axes_, operation, dtype, output);
     return;
   }
   if (plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce) {
-    dispatch_column_reduce(in, out, plan, axes_, operation, dtype);
+    dispatch_column_reduce(in, out, plan, axes_, operation, dtype, output);
     return;
   }
   if (plan.type != ContiguousAllReduce) {
     throw std::invalid_argument("CrossTL reduction plan is not implemented.");
   }
   if (in.size() <= 4096) {
-    dispatch_all_reduce(in, out, operation, dtype);
+    dispatch_all_reduce(in, out, operation, dtype, output);
   } else {
-    // Retain upstream's two passes; each callback completes before its input expires.
+    // Retain upstream's two passes; each callback completes before its input
+    // expires. The second pass reduces the result type, as reduce.cpp names it.
     array intermediate({static_cast<int>(all_reduce_rows(in))}, out.dtype(), nullptr, {});
-    dispatch_all_reduce(in, intermediate, operation, dtype);
-    dispatch_all_reduce(intermediate, out, operation, dtype);
+    dispatch_all_reduce(in, intermediate, operation, dtype, output);
+    const char* partial = promoted || truth_test ? storage_type(out.dtype()) : dtype;
+    dispatch_all_reduce(intermediate, out, operation, partial);
   }
 }
 
@@ -2299,6 +2380,17 @@ CROSSTL_UNARY_GPU(Real)
 CROSSTL_UNARY_GPU(Imag)
 
 #undef CROSSTL_UNARY_GPU
+
+// Ports quantized.cpp fast::ConvertFP8::eval_gpu: ToFP8 and FromFP8 are the
+// unary vectors unary_op_gpu launches under the primitive's name.
+void fast::ConvertFP8::eval_gpu(
+    const std::vector<array>& inputs,
+    std::vector<array>& outputs) {
+  if (outputs.size() != 1) {
+    throw std::invalid_argument("CrossTL FP8 conversion requires one output.");
+  }
+  dispatch_unary(inputs, outputs[0], name());
+}
 
 // As mlx/backend/metal/unary.cpp: rounding an integer or Boolean array is a no-op.
 void Round::eval_gpu(const std::vector<array>& inputs, array& out) {

@@ -42,6 +42,8 @@ COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
 # fallback, and every one of them is a multi-output primitive.
 FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm")
 NORMALIZATION_PRIMITIVES = (*FALLBACK_PRIMITIVES, "LayerNormVJP", "RMSNormVJP")
+# fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors.
+FAST_PRIMITIVES = (*NORMALIZATION_PRIMITIVES, "ConvertFP8")
 
 
 def replace_once(text, before, after):
@@ -62,7 +64,7 @@ def adapted_sources(original, primitives, events):
         "Partition",
         "Sort",
         "SearchSorted",
-        *NORMALIZATION_PRIMITIVES,
+        *FAST_PRIMITIVES,
         "RandomBits",
         "Scan",
         "Quantize",
@@ -98,7 +100,7 @@ def adapted_sources(original, primitives, events):
             else (
                 "NO_GPU_MULTI"
                 if primitive in MULTI_OUTPUT_VIEWS
-                or primitive in {"DivMod", "Quantize", *NORMALIZATION_PRIMITIVES}
+                or primitive in {"DivMod", "Quantize", *FAST_PRIMITIVES}
                 else "NO_GPU"
             )
         )

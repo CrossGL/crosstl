@@ -2,8 +2,9 @@
 
 ``col_reduce_small`` folds each output column in the accumulator type
 ``remap_reduce_types`` keeps for int64, uint64 and complex64 numeric
-reductions and 16-bit float sums and products, the element type itself, and
-16-bit float extrema select an input element. The native host passes
+reductions and 16-bit float sums and products, the element type itself;
+16-bit float extrema select an input element, and the 8- and 16-bit integers
+accumulate as ``wide_reduction_packages.accumulator`` names. The native host passes
 upstream's eleven buffers. ``column_small_layout`` checks the column
 metadata, source span and launch against ``strided_reduce_small``'s plan
 before any package is translated. The kernel reads its threadgroup size, so
@@ -30,6 +31,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
 from demos.integrations.mlx.portable_host.elementwise_dispatch import bind
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
+from demos.integrations.mlx.portable_host.wide_reduction_packages import accumulator
 
 ENTRIES = column_small_layout.WIDE_SMALL_COLUMN_ENTRIES
 INPUT, OUTPUT = "in", "out"
@@ -50,15 +52,23 @@ def signature(entry):
 
 def operand_types(entry):
     """Every source parameter's element type."""
-    _, dtype = signature(entry)
-    return {INPUT: dtype, OUTPUT: dtype, **METADATA}
+    operation, dtype = signature(entry)
+    return {INPUT: dtype, OUTPUT: accumulator(operation, dtype), **METADATA}
 
 
-def uploads(dtype, target, values, outputs, metadata):
-    """The packets one launch binds: inputs, a guarded output and metadata."""
+def uploads(dtype, target, values, outputs, metadata, output_type=None):
+    """The packets one launch binds: inputs, a guarded output and metadata.
+
+    ``output_type`` is the kernel's accumulator type, by default ``dtype``.
+    """
+    output_type = output_type or dtype
     return {
         INPUT: packet(dtype, target, values),
-        OUTPUT: packet(dtype, target, guard_words(dtype, outputs) + guard_words(dtype)),
+        OUTPUT: packet(
+            output_type,
+            target,
+            guard_words(output_type, outputs) + guard_words(output_type),
+        ),
         **{
             name: packet(kind, target, metadata[name])
             for name, kind in METADATA.items()
@@ -119,7 +129,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
     values = buffer_words(supplied[INPUT], dtype)
     outputs = supplied[OUTPUT].count
     refuse_subnormal_bfloat(dtype, target, values)
-    packets = uploads(dtype, target, values, outputs, metadata)
+    output_type = accumulator(operation, dtype)
+    packets = uploads(dtype, target, values, outputs, metadata, output_type)
     descriptor, directory = host.small_columns.get(
         column_small_layout.variant(entry, tuple(execution["workgroupSize"]))
     )
@@ -149,15 +160,15 @@ def dispatch(host, entry, buffers, count, threads, launch):
     words = returned.get("values")
     if not isinstance(words, list):
         raise RuntimeError("Native wide small-column output extent differs")
-    words = unpack(dtype, target, words)
+    words = unpack(output_type, target, words)
     if len(words) != outputs + GUARD_COUNT:
         raise RuntimeError("Native wide small-column output extent differs")
-    if words[outputs:] != guard_words(dtype):
+    if words[outputs:] != guard_words(output_type):
         raise RuntimeError(
             "Native wide small-column reduction changed its output guard"
         )
     words = words[:outputs]
-    payload = bytes((CTYPES[dtype] * outputs)(*words))
+    payload = bytes((CTYPES[output_type] * outputs)(*words))
     write_trace(
         host,
         {
@@ -172,7 +183,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "columnMetadata": metadata,
             "inputs": inputs,
             "operandValues": values,
-            "initialValues": guard_words(dtype, outputs),
+            "initialValues": guard_words(output_type, outputs),
             "outputValues": words,
             "outputHash": hashlib.sha256(payload).hexdigest(),
         },

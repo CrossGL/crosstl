@@ -42,15 +42,22 @@ def pinned_selections():
     return {entry for entry in entries if entry.startswith("v_Select")}
 
 
-def test_entries_are_every_pinned_vector_instantiation_but_fp8():
+def test_entries_are_every_pinned_vector_instantiation():
     pinned = pinned_vectors()
     portable = {name for name in pinned if "FP8" not in name}
     selections = pinned_selections()
     assert len(selections) == 13
     lazy_selections = selections - set(packages.SELECTION_ENTRIES)
-    assert set(elementwise_packages.ENTRIES) == portable | lazy_selections
+    assert set(elementwise_packages.ENTRIES) == pinned | lazy_selections
     assert len(portable) == 415 and len(pinned) - len(portable) == 6
-    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 424
+    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 430
+    # fast::ConvertFP8 converts each real float to and from E4M3 bytes.
+    assert {
+        name: elementwise_packages.signature(name) for name in pinned - portable
+    } == {
+        f"v_{operation}{source}{destination}": ("v_", operation, source, destination)
+        for operation, source, destination in elementwise_packages.FP8_CONVERSIONS
+    }
     assert sum("complex64" in name for name in portable) == 40
     assert elementwise_packages.signature("v_Selectfloat16") == (
         "ternary_v",
@@ -693,6 +700,9 @@ def test_float_events_check_package_and_native_identity(monkeypatch, tmp_path):
     assert not elementwise_evidence.recomputable("vv_Equalfloat16")
     assert not elementwise_evidence.recomputable("vv_Addcomplex64")
     assert not elementwise_evidence.recomputable("v_Realcomplex64float32")
+    # FP8 conversions produce or read floats; the upstream tests compare them.
+    assert not elementwise_evidence.recomputable("v_ToFP8float32uint8")
+    assert not elementwise_evidence.recomputable("v_FromFP8uint8bfloat16")
     assert elementwise_evidence.audit_event(event, cache) == 2
     assert seen == ["vv_Equalfloat16"]
     (package / "artifact.glsl").write_bytes(b"change")
@@ -770,7 +780,7 @@ def test_warm_translates_every_entry_in_parallel_batches(monkeypatch, tmp_path, 
     )
     assert sorted(requested) == sorted(elementwise_packages.ENTRIES)
     record = json.loads(summary.read_text())
-    assert record["entries"] == 424 and record["target"] == "opengl"
+    assert record["entries"] == 430 and record["target"] == "opengl"
     assert record["artifacts"]["vv_Addint8"] == "vv_Addint8"[::-1]
 
 

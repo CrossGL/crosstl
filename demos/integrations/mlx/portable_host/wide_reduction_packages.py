@@ -1,13 +1,19 @@
-"""Translate whole-array reductions of the 8-byte and 16-bit float types.
+"""Translate whole-array reductions of the 8-byte, 16-bit and 8-bit types.
 
 The pinned ``reduce.metal`` instantiates ``all_reduce`` for every dtype. The
 base families install float32, int32, uint32 and Boolean entries and 16-bit
 float extrema. Sums and products of int64, uint64, float16, bfloat16 and
 complex64, and extrema of int64, uint64 and complex64, keep their element
 type as accumulator (``remap_reduce_types`` in the pinned ``reduce.cpp``), so
-each addition or product rounds in that type. They are translated on first
-use for their exact launch, with the checked in_size and row_size metadata of
-``reduction_cache``: one package per entry, count and launch.
+each addition or product rounds in that type. Extrema of the 8- and 16-bit
+integers also keep their type; their sums and products accumulate in 32 bits
+(``ACCUMULATORS``), and Boolean sums read their bytes as int8. All and any of
+a non-Boolean array test 16-bit floats and float32 by value, so -0.0 is false,
+and the other types by their bits as int16, int32 or int64 (``LOGICAL``); they
+write Booleans. They are
+translated on first use for their exact launch, with the checked in_size and
+row_size metadata of ``reduction_cache``: one package per entry, count and
+launch.
 """
 
 import hashlib
@@ -25,17 +31,39 @@ CACHE = "wide-reductions"
 PREFIX = "all_reduce_"
 # instantiate_sum_prod and instantiate_min_max in the pinned reduce.metal, for
 # the element types no installed whole-array family covers.
+NARROW = ("int8", "int16", "uint8", "uint16")
+# instantiate_and_or's non-Boolean instantiations: the types remap_reduce_types
+# tests all and any in. 1-byte types read as Booleans there.
+LOGICAL = ("int16", "int32", "int64", "float16", "bfloat16", "float32")
 OPERATIONS = {
-    "sum": ("int64", "uint64", "float16", "bfloat16", "complex64"),
-    "prod": ("int64", "uint64", "float16", "bfloat16", "complex64"),
-    "min": ("int64", "uint64", "complex64"),
-    "max": ("int64", "uint64", "complex64"),
+    "sum": ("int64", "uint64", "float16", "bfloat16", "complex64", *NARROW),
+    "prod": ("int64", "uint64", "float16", "bfloat16", "complex64", *NARROW),
+    "min": ("int64", "uint64", "complex64", *NARROW),
+    "max": ("int64", "uint64", "complex64", *NARROW),
+    "and": LOGICAL,
+    "or": LOGICAL,
 }
 ENTRIES = {
     f"{PREFIX}{operation}{dtype}": dtype
     for operation, dtypes in OPERATIONS.items()
     for dtype in dtypes
 }
+# The output type of instantiate_sum_prod's narrow integer kernels: uint8 as
+# int32_t, uint16 as uint32_t, int8 and int16 as int32_t; and/or write bool.
+# Every other entry writes its element type.
+ACCUMULATORS = {
+    **{
+        (operation, dtype): "uint32" if dtype == "uint16" else "int32"
+        for operation in ("sum", "prod")
+        for dtype in NARROW
+    },
+    **{(operation, dtype): "bool_" for operation in ("and", "or") for dtype in LOGICAL},
+}
+
+
+def accumulator(operation, dtype):
+    """The type a reduction kernel of ``operation`` over ``dtype`` writes."""
+    return ACCUMULATORS.get((operation, dtype), dtype)
 
 
 def signature(entry):

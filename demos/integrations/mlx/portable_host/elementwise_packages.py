@@ -10,8 +10,8 @@ pinned source and cached by ``lazy_kernel_cache``.
 
 The tables below mirror the pinned instantiation macros exactly, including
 the explicit ``complex64`` instantiations (``complex64_t`` storage is a packed
-float32 pair on every target) and without the FP8 conversions (``ConvertFP8``
-has no host port). The per-operation float profiles are the ones the complete
+float32 pair on every target) and the ``ToFP8`` and ``FromFP8`` conversions
+``fast::ConvertFP8`` launches. The per-operation float profiles are the ones the complete
 binary and unary kernel proofs pin to reproduce Metal, including the atan2
 profile of the complex logarithms and inverse sines and cosines.
 """
@@ -100,6 +100,16 @@ for _operation in UNARY_COMPLEX:
     UNARY_TYPES[_operation] = (*UNARY_TYPES.get(_operation, ()), COMPLEX)
 # instantiate_unary_base(Real|Imag, complex64, float32, complex64_t, float)
 UNARY_PARTS = ("Real", "Imag")
+# instantiate_unary_all(ToFP8, <float>, uint8, ...) and
+# instantiate_unary_all(FromFP8, uint8, <float>, ...): E4M3 bytes.
+FP8_CONVERSIONS = tuple(
+    (operation, source, destination)
+    for dtype in FLOATS
+    for operation, source, destination in (
+        ("ToFP8", dtype, "uint8"),
+        ("FromFP8", "uint8", dtype),
+    )
+)
 # instantiate_binary_types / _types_bool / _float / _integer and the explicit
 # NaNEqual, logical and Boolean bitwise instantiations.
 BINARY_TYPED = (
@@ -142,6 +152,15 @@ ENTRIES = {
     **{
         f"{UNARY}{operation}{COMPLEX}float32": (UNARY, operation, COMPLEX, "float32")
         for operation in UNARY_PARTS
+    },
+    **{
+        f"{UNARY}{operation}{source}{destination}": (
+            UNARY,
+            operation,
+            source,
+            destination,
+        )
+        for operation, source, destination in FP8_CONVERSIONS
     },
     **{
         f"{BINARY}{operation}{dtype}": (

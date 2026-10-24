@@ -11,6 +11,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 )
 from demos.integrations.mlx.portable_host.small_row_packages import (
     ALL_SMALL_ROW_ENTRIES,
+    SMALL_ROW_OUTPUTS,
 )
 
 SIMPLE = {"in": None, "out": None, "reduction_size": "uint64", "out_size": "int64"}
@@ -43,8 +44,13 @@ def signature(entry):
 
 
 def width(row_size):
-    if type(row_size) is not int or not 65 <= row_size <= 65535:
-        raise ValueError("Row kernels require 65 to 65535 elements per row")
+    """The threadgroup width reduce.cpp picks for a row of ``row_size``.
+
+    Looped and simple kernels stride through any row, so a row may span every
+    element a source view holds.
+    """
+    if type(row_size) is not int or not 65 <= row_size <= MAX_ELEMENTS:
+        raise ValueError("Row kernels require 65 to 2**28 - 1 elements per row")
     if row_size <= 512:
         return 32
     if row_size <= 1024:
@@ -58,7 +64,11 @@ def validate(entry, buffers, logical_size, execution):
     if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
-        expected_type = spec[name] or entries[entry]
+        expected_type = spec[name] or (
+            SMALL_ROW_OUTPUTS.get(entry, entries[entry])
+            if name == "out"
+            else entries[entry]
+        )
         if buffer.dtype.decode("ascii") != expected_type:
             raise ValueError("Native row reduction dtype does not match")
         maximum = (
