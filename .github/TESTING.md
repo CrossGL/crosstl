@@ -64,7 +64,7 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `backend-tests.yml` | Importers for each source language |
 | `full-tests.yml` | The whole suite, split by test id into six shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
-| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
+| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main` |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
 | `computesharp.yml` | The ComputeSharp port, on Metal and OpenGL; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
