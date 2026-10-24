@@ -6701,6 +6701,47 @@ def test_directx_user_defined_fwidth_fine_name_is_not_lowered():
     assert "ddx_fine(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    "declaration, call, reason",
+    [
+        (
+            "float abs = 1.0;",
+            "fwidthFine(uv) * abs",
+            "would name the shader's own 'abs'",
+        ),
+        (
+            "float ddy_coarse = 1.0;",
+            "fwidthCoarse(uv) * ddy_coarse",
+            "would name the shader's own 'ddy_coarse'",
+        ),
+        (
+            "int i = 0;",
+            "fwidthFine(uv * float(i++))",
+            "would evaluate an argument with side effects twice",
+        ),
+    ],
+)
+def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
+    declaration, call, reason
+):
+    shader = f"""
+    shader FineCoarseFwidthRefusal {{
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                {declaration}
+                vec2 r = {call};
+                return vec4(r, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    message = refused_hlsl(generate_code, parse_code(tokenize_code(shader)))
+
+    assert "HLSL has no fwidth" in message
+    assert reason in message
+
+
 def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     shader = """
     shader FineDerivativeShadowing {
