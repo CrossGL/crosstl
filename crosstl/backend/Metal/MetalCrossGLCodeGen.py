@@ -50,6 +50,7 @@ from .dependent_builtins import (
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
+from .external_functions import refuse_external_function_calls
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
@@ -3361,8 +3362,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     def generate(self, ast):
         """Render ``ast`` as a CrossGL program.
 
-        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully.
+        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully, and
+        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
         """
+        refuse_external_function_calls(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
