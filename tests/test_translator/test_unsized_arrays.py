@@ -125,6 +125,66 @@ shader S {
     ),
 }
 
+# ``buffer S name[]`` is one storage buffer of S elements, as Metal's ``device S*`` always read it; GLSL had emitted
+# an unsized array of buffer blocks (rejected by glslang), SPIR-V a runtime descriptor array, HLSL a refusal.
+FLAT_STRUCT = """
+shader FlatStructBuffers {
+    struct Particle { vec4 position; vec4 velocity; float mass; float drag; vec2 spin; };
+    compute {
+        layout(std430, binding = 0) buffer Particle particles[];
+        layout(std430, binding = 1) readonly buffer Particle seeds[];
+        layout(local_size_x = 64) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            if (i >= uint(particles.length())) {
+                return;
+            }
+            Particle p = particles[i];
+            p.position += seeds[i].velocity * seeds[i].mass;
+            particles[i] = p;
+            particles[i].spin.y = p.drag;
+        }
+    }
+}
+"""
+
+PADDED_STRUCT = """
+shader PaddedStructBuffers {
+    struct Particle { vec4 position; float mass; };
+    compute {
+        layout(std430, binding = 0) buffer Particle particles[];
+        layout(local_size_x = 64) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            particles[i].position = particles[i].position * particles[i].mass;
+            particles[i].mass = 0.5;
+        }
+    }
+}
+"""
+
+# ``buffer T name[N]`` is one storage buffer holding N elements. HLSL had declared a ``static`` private array (writes
+# never reached memory), GLSL a ``uniform`` array (which a store makes invalid), and struct elements an array of N
+# buffer blocks.
+SIZED = """
+shader SizedBuffers {
+    const int COUNT = 4;
+    struct Particle { vec4 position; vec4 velocity; };
+    compute {
+        layout(std430, binding = 0) buffer float data[COUNT];
+        layout(std430, binding = 1) buffer vec3 dirs[4];
+        layout(std430, binding = 2) buffer Particle particles[4];
+        layout(local_size_x = 4) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            data[i] = data[i] * 2.0 + float(data.length()) + float(buffer_dimensions(data));
+            dirs[i] = dirs[i].zyx * float(dirs.length());
+            particles[i].position += particles[i].velocity;
+        }
+    }
+}
+"""
+
 KEPT = """
 shader Kept {
     struct Particle { vec4 position; float mass; };
@@ -173,8 +233,17 @@ def check_natively(tmp_path, target, code):
 
 @pytest.mark.parametrize(
     "source",
-    [FLAT, BLOCK, STD140, INITIALIZED, KEPT],
-    ids=["flat", "block", "std140", "init", "kept"],
+    [FLAT, BLOCK, STD140, INITIALIZED, KEPT, FLAT_STRUCT, PADDED_STRUCT, SIZED],
+    ids=[
+        "flat",
+        "block",
+        "std140",
+        "init",
+        "kept",
+        "flat_struct",
+        "padded_struct",
+        "sized",
+    ],
 )
 @pytest.mark.parametrize("target", TARGETS)
 def test_storage_and_initialized_arrays_translate_to_checked_output(
@@ -216,6 +285,71 @@ def test_other_buffer_arrays_become_buffer_blocks(tmp_path):
     assert "vec3 d = dirsStorage.dirs[i];" in glsl
     assert "dirsStorage.dirs[i] = vec3(basesStorage.bases[i][1], 1.0);" in glsl
     assert "dirsStorage.dirs[(i + 1u)] = d.zyx;" in glsl
+
+
+def test_unpadded_struct_buffer_arrays_become_structured_buffers(tmp_path):
+    hlsl = translate(tmp_path, FLAT_STRUCT, "hlsl")
+    assert "RWStructuredBuffer<Particle> particles : register(u0);" in hlsl
+    assert "StructuredBuffer<Particle> seeds : register(t1);" in hlsl
+    assert "ByteAddressBuffer" not in hlsl
+    glsl = " ".join(translate(tmp_path, FLAT_STRUCT, "glsl").split())
+    assert "buffer particlesBuffer { Particle particles[]; };" in glsl
+    assert "readonly buffer seedsBuffer { Particle seeds[]; };" in glsl
+    assert "} particles[]" not in glsl
+    metal = translate(tmp_path, FLAT_STRUCT, "metal")
+    assert re.search(r"device Particle \*particles \[\[buffer\(0\)\]\]", metal)
+    spirv = translate(tmp_path, FLAT_STRUCT, "spirv")
+    assert "RuntimeDescriptorArray" not in spirv
+
+
+def test_padded_struct_buffer_arrays_become_buffer_blocks(tmp_path):
+    # std430 pads Particle to 32 bytes; an HLSL structured buffer would pack it into 20 (and MSL agrees with
+    # std430 only by accident of the member order), so every target goes through the std430 block layout.
+    hlsl = translate(tmp_path, PADDED_STRUCT, "hlsl")
+    assert re.search(r"\bRWByteAddressBuffer particlesStorage : register\(u0\);", hlsl)
+    assert "(i * 32)" in " ".join(hlsl.split())
+    glsl = " ".join(translate(tmp_path, PADDED_STRUCT, "glsl").split())
+    assert "buffer ParticlesBlock { Particle particles[]; } particlesStorage;" in glsl
+    assert "particlesStorage.particles[i].mass = 0.5;" in glsl
+    spirv = translate(tmp_path, PADDED_STRUCT, "spirv")
+    assert "RuntimeDescriptorArray" not in spirv
+    assert re.search(r"OpDecorate %\w+ ArrayStride 32", spirv)
+
+
+def test_sized_buffer_arrays_are_one_storage_buffer(tmp_path):
+    hlsl = translate(tmp_path, SIZED, "hlsl")
+    assert "RWStructuredBuffer<float> data : register(u0);" in hlsl
+    assert re.search(r"\bRWByteAddressBuffer dirsStorage : register\(u1\);", hlsl)
+    assert "RWStructuredBuffer<Particle> particles : register(u2);" in hlsl
+    assert "static float" not in hlsl
+    assert "particles[4]" not in hlsl
+    glsl = " ".join(translate(tmp_path, SIZED, "glsl").split())
+    assert "buffer dataBuffer { float data[]; };" in glsl
+    assert "buffer DirsBlock { vec3 dirs[4]; } dirsStorage;" in glsl
+    assert "buffer particlesBuffer { Particle particles[]; };" in glsl
+    assert "uniform" not in glsl
+    # The declared count, not the bound buffer's, is what length() and buffer_dimensions() give.
+    assert "float(int(COUNT))" in glsl
+    assert "float(uint(COUNT))" in glsl
+    assert "float(dirsStorage.dirs.length())" in glsl
+    wgsl = translate(tmp_path, SIZED, "wgsl")
+    assert "var<storage, read_write> particles: array<Particle>;" in wgsl
+    assert "dirs: array<vec3<f32>, 4>," in wgsl
+
+
+def test_inline_buffer_block_arrays_stay_descriptor_arrays(tmp_path):
+    # GLSL's ``buffer B { ... } name[N];`` is an array of N blocks, each its own binding; it keeps that meaning.
+    source = """
+shader BlockArray {
+    compute {
+        layout(std430, binding = 0) buffer Blk { vec4 a; } blocks[2];
+        layout(local_size_x = 1) in;
+        void main() { blocks[1].a = blocks[0].a; }
+    }
+}
+"""
+    glsl = " ".join(translate(tmp_path, source, "glsl").split())
+    assert re.search(r"buffer Blk \{ vec4 a; \} blocks\[2\];", glsl)
 
 
 def test_std140_buffer_arrays_keep_the_std140_stride(tmp_path):
