@@ -24,10 +24,10 @@ from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.portable_host import bfloat_storage
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
+from tests import workflow_text
 from tests.runtime_helpers import compile_metal, run
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 SOURCE = "mlx/backend/metal/kernels/scan.metal"
@@ -585,8 +585,8 @@ def _execute_scan_case(scan_package, tmp_path, dtype, axis, expected, operation=
 
 def test_ci_requires_complete_scan_execution_on_each_native_platform():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
-    step = ci_coverage.workflow_step_section(job, "Validate pinned complete scans")
+    job = workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
+    step = workflow_text.workflow_step_section(job, "Validate pinned complete scans")
     assert "if:" not in step and "continue-on-error" not in step
     assert f'{REQUIRE_ENV}: "1"' in step
     assert "CROSTL_MLX_CURRENT_ROOT:" in step
@@ -605,7 +605,7 @@ def test_ci_requires_complete_scan_execution_on_each_native_platform():
             ("xdist_group", (f"scan-width-{width}",))
         ]
     assert "--basetemp=" in step and "--junitxml=" in step
-    upload = ci_coverage.workflow_step_section(job, "Upload complete scan evidence")
+    upload = workflow_text.workflow_step_section(job, "Upload complete scan evidence")
     assert "if: always()" in upload and "if-no-files-found: error" in upload
     assert "path: mlx-scan-results" in upload
     assert "include-hidden-files: true" in upload

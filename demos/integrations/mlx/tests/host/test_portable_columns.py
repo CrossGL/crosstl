@@ -115,7 +115,7 @@ def test_column_cases_cover_upstream_thresholds_and_repeated_tiles():
 def test_column_ci_includes_metadata_tests_on_changes():
     from pathlib import Path
 
-    from tools import ci_coverage
+    from tests import workflow_text
 
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -123,7 +123,7 @@ def test_column_ci_includes_metadata_tests_on_changes():
     ).read_text()
     for event in ("pull_request", "push"):
         assert_paths_covered(
-            ci_coverage.workflow_event_path_filters(workflow, event),
+            workflow_text.workflow_event_path_filters(workflow, event),
             "demos/integrations/mlx/tests/host/test_portable_columns.py",
         )
 
