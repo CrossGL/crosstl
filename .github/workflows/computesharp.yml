@@ -33,9 +33,13 @@ env:
 jobs:
   plan:
     name: ComputeSharp validation plan
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      tested: ${{ steps.queue.outputs.tested }}
       execute: ${{ steps.plan.outputs.execute }}
       run: ${{ steps.plan.outputs.run }}
     steps:
@@ -43,6 +47,29 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check whether the merge queue tested every pushed commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # The merge queue moves main to the commits its merge groups tested, so a
+          # push to main would repeat runs that already passed on them. One push can
+          # land several groups, and each group's run selects the port's jobs from
+          # its own change alone, so every pushed commit needs a passing group run.
+          # When a lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          tested=false
+          if commits=$(git rev-list "$BEFORE..$GITHUB_SHA") && [ -n "$commits" ]; then
+            tested=true
+            for sha in $commits; do
+              passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$sha&event=merge_group&status=success" --jq .total_count || echo 0)
+              [ "${passed:-0}" -gt 0 ] || { tested=false; break; }
+            done
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -57,7 +84,7 @@ jobs:
   discovery-contract:
     name: Compute discovery contract (Linux)
     needs: plan
-    if: ${{ needs.plan.outputs.run == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -102,7 +129,7 @@ jobs:
   original-directx:
     name: Original compute baseline (Windows WARP)
     needs: plan
-    if: ${{ needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -201,7 +228,7 @@ jobs:
   adapted-source-parity:
     name: Adapted source parity (Linux)
     needs: [plan, original-directx]
-    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -257,7 +284,7 @@ jobs:
   translated-metal:
     name: Translated compute tests (macOS Metal)
     needs: plan
-    if: ${{ needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -349,7 +376,7 @@ jobs:
   translated-opengl:
     name: Translated compute tests (Linux OpenGL, Mesa llvmpipe)
     needs: plan
-    if: ${{ needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -445,7 +472,7 @@ jobs:
   qualification:
     name: ComputeSharp port qualification (Linux)
     needs: [plan, original-directx, adapted-source-parity, translated-metal, translated-opengl]
-    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.tested != 'true' && !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

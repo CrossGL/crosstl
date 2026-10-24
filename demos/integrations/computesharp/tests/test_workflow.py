@@ -185,11 +185,16 @@ def test_every_pull_request_and_merge_group_starts_the_workflow():
 def test_plan_job_selects_the_port_from_the_event_diff():
     plan = load_workflow()["jobs"]["plan"]
     assert plan["outputs"] == {
+        "tested": "${{ steps.queue.outputs.tested }}",
         "execute": "${{ steps.plan.outputs.execute }}",
         "run": "${{ steps.plan.outputs.run }}",
     }
     assert plan["timeout-minutes"] <= 5
-    checkout = plan["steps"][0]
+    checkout = next(
+        step
+        for step in plan["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["fetch-depth"] == 0
     step = next(step for step in plan["steps"] if step.get("id") == "plan")
