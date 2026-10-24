@@ -3472,6 +3472,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args_str = ", ".join(args)
 
+        euclidean_norm_name = self.cuda_euclidean_norm_function_name(
+            func_name, raw_args
+        )
+        if euclidean_norm_name is not None:
+            return f"{euclidean_norm_name}({args_str})"
+
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
@@ -9750,6 +9756,41 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 object_expr
             )
         return False
+
+
+    def cuda_euclidean_norm_function_name(self, func_name, raw_args):
+        """Map CrossGL ``norm``/``rnorm`` to CUDA ``normf``/``rnormf`` for float arrays.
+
+        CUDA's ``norm``/``rnorm`` take ``const double*``. CrossGL spells the
+        single-precision forms without the ``f`` suffix, so a float array must
+        become ``normf``/``rnormf`` or nvcc rejects the pointer type.
+        """
+        if func_name not in {"norm", "rnorm"} or len(raw_args or []) < 2:
+            return None
+        if self.is_user_defined_function(func_name):
+            return None
+
+        array_expr = self.strip_address_of_expression(raw_args[1]) or raw_args[1]
+        array_type = self.expression_result_type(array_expr)
+        component = self.scalar_component_type(array_type)
+        if component is None and array_type is not None:
+            mapped = (
+                self.map_type(array_type)
+                if not isinstance(array_type, str)
+                else array_type
+            )
+            info = self.cuda_pointer_or_reference_type_info(mapped)
+            if info is None and isinstance(array_type, str):
+                info = self.cuda_pointer_or_reference_type_info(array_type)
+            if info is not None:
+                component = self.scalar_component_type(info.get("pointee_type"))
+
+        if component == "double":
+            return func_name
+        if component == "float" or component is None:
+            # Float arrays and unresolved float locals from coverage probes.
+            return f"{func_name}f"
+        return func_name
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
