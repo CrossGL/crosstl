@@ -18,7 +18,7 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_C_RAW_STRING_RE = re.compile(r'^cr(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
-RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\(.|\n))*)"$', re.DOTALL)
+RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_C_STRING_RE = re.compile(r'^c"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)

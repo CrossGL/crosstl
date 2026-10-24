@@ -1911,7 +1911,7 @@ class GLSLToCrossGLConverter:
     )
 
     def private_global_prefix(self, var):
-        """``static `` for a global without a storage qualifier, which GLSL makes private to each invocation.
+        """``static`` for a global without a storage qualifier, which GLSL makes private to each invocation.
 
         GLSL 4.60 section 4.3: a global with no storage qualifier is neither shared nor visible to the API; it
         is a plain variable each invocation reads and writes. A CrossGL global without a qualifier is a
@@ -3067,8 +3067,24 @@ class GLSLToCrossGLConverter:
                 ):
                     result += self.indent() + statement + "\n"
             else:
-                for statement in self.generate_statement_sequence(main_function.body):
-                    result += self.indent() + statement + "\n"
+                # GLSL's void main() may leave early with `return;`; the entry now returns its outputs.
+                self.entry_bare_return_value = None
+                if self.shader_type == "vertex":
+                    self.entry_bare_return_value = "output"
+                elif (
+                    self.shader_type == "fragment"
+                    and self.outputs
+                    and not fragment_uses_direct_outputs
+                    and not self.is_fragment_explicit_entry_return(main_function)
+                ):
+                    self.entry_bare_return_value = self.outputs[0].name
+                try:
+                    for statement in self.generate_statement_sequence(
+                        main_function.body
+                    ):
+                        result += self.indent() + statement + "\n"
+                finally:
+                    self.entry_bare_return_value = None
 
                 if self.shader_type in ("vertex",) and not any(
                     isinstance(stmt, ReturnNode) for stmt in main_function.body
@@ -3683,7 +3699,8 @@ class GLSLToCrossGLConverter:
 
     def generate_return(self, node):
         if node.value is None:
-            return "return"
+            value = getattr(self, "entry_bare_return_value", None)
+            return f"return {value}" if value else "return"
         return f"return {self.generate_expression(node.value)}"
 
     def generate_expression(self, node):

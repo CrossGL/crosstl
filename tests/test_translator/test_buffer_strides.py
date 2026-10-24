@@ -115,6 +115,34 @@ def test_spirv_stores_hlsl_strides(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_metal_assigns_hlsl_strides(tmp_path):
+    # Metal's buffers carry a length sidecar but no stride, so the stride output was left unassigned.
+    metal = translate(tmp_path, "metal")
+    assert sorted(stride_assignments(metal)) == [
+        ("s", "16"),
+        ("stride", "12"),
+        ("stride", "16"),
+        ("stride", "20"),
+    ]
+    if shutil.which("xcrun") is None:
+        pytest.skip("the Metal toolchain is not installed")
+    found = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "--find", "metal"], capture_output=True
+    )
+    if found.returncode != 0:
+        pytest.skip("the Metal toolchain is not installed")
+    artifact = tmp_path / "shader.metal"
+    artifact.write_text(metal, encoding="utf-8")
+    result = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "metal", "-c", str(artifact)]
+        + ["-o", str(tmp_path / "shader.air")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
 def test_cuda_and_hip_assign_hlsl_strides(tmp_path, backend):
     source = HLSL.replace("register(u0)", "register(u3)")
@@ -153,6 +181,9 @@ shader main {
     # std430 aligns vec3 to 16 bytes.
     glsl = translate(tmp_path, "opengl", source, "cgl")
     assert stride_assignments(glsl) == [("stride", "16")]
+    # MSL aligns float3 to 16 bytes as well.
+    metal = translate(tmp_path, "metal", source, "cgl")
+    assert stride_assignments(metal) == [("stride", "16")]
     with pytest.raises(StructuredLayoutUnsupportedError, match="declares no buffer"):
         translate(tmp_path, "cuda", source, "cgl")
 

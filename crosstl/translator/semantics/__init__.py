@@ -24,6 +24,7 @@ from .constant_reference_layouts import (
     hoist_constant_reference_layouts,
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -55,6 +56,10 @@ from .intrinsic_named_functions import (
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .metal_ray_dispatch import (
+    MetalRayDispatchUnsupportedError,
+    lower_metal_ray_dispatch,
+)
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -111,6 +116,7 @@ __all__ = [
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
+    "MetalRayDispatchUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -122,6 +128,7 @@ __all__ = [
     "SpirvArrayLengthUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "apply_rule_carrying",
 ]
@@ -211,6 +218,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    refuse_undeclared_types(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     canonicalize_texture_swizzles(program)
@@ -228,6 +236,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
+    lower_metal_ray_dispatch(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)

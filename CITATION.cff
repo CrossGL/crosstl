@@ -10,7 +10,7 @@ authors:
     given-names: "Vaatsalya"
     affiliation: "CrossGL"
 version: "3.4.0"
-date-released: "2026-10-07"
+date-released: "2026-10-23"
 doi: "10.5281/zenodo.15826974"
 url: "https://github.com/CrossGL/crosstl"
 repository-code: "https://github.com/CrossGL/crosstl"

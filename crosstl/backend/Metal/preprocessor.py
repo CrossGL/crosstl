@@ -63,7 +63,8 @@ MSL_SOURCE_START_RE = re.compile(
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METAL_ANGLE_OPERATOR_RE = re.compile(
-    r"\boperator(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
+    r"\boperator"
+    r"(?>\s+|/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*(?:\n|$))*+"
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
@@ -14888,8 +14889,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     ) -> _MetalReceiverContract:
         normalized = self._normalize_template_argument_text(type_text or struct_name)
         indirection_match = re.search(
-            r"(?P<indirection>\*+|&&|&)\s*"
-            r"(?:(?:const|volatile|restrict|__restrict|__restrict__)\s*)*$",
+            r"(?P<indirection>\*++|&&|&)\s*+"
+            r"(?:(?:__restrict__|__restrict|restrict|const|volatile)\s*+)*+$",
             normalized,
         )
         indirection = (

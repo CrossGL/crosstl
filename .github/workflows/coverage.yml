@@ -454,11 +454,12 @@ jobs:
   # Posts the change against main on the pull request, and edits that one comment on later pushes. The job runs no
   # code from the pull request; it only reads the report job's comparison as text. Fork pull requests get a read-only
   # token, so only same-repository pull requests get the comment; the report job's summary has it for every one.
+  # `!cancelled()` replaces the implicit `success()`, which is false whenever a planned-out leg was skipped.
   comment:
     name: Comment the coverage change
     needs: report
     if: >-
-      github.event_name == 'pull_request' && needs.report.result == 'success'
+      !cancelled() && github.event_name == 'pull_request' && needs.report.result == 'success'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -497,7 +498,9 @@ jobs:
     name: Publish coverage
     needs: report
     # Pushes to main and the nightly run publish; pull requests and the merge queue only measure.
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    if: >-
+      !cancelled() && needs.report.result == 'success' && github.ref == 'refs/heads/main'
+      && github.event_name != 'pull_request' && github.event_name != 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The only job that writes to the repository: it replaces the single commit of the orphan coverage branch.
@@ -571,7 +574,7 @@ jobs:
     name: Reconcile coverage issues
     needs: publish
     # Runs only after this run's results were published, so issues never fall back to older data.
-    if: needs.publish.outputs.published == 'true'
+    if: "!cancelled() && needs.publish.outputs.published == 'true'"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
