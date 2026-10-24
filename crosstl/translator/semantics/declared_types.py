@@ -7,7 +7,10 @@ type of the same spelling. :func:`refuse_undeclared_types` raises :class:`Undecl
 name, so the translation fails with a typed diagnostic instead.
 
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
-trait bounds of generic parameters are not types. Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
+trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
+``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
+other argument there is still read as a type, and :mod:`.feedback_textures` refuses one that is not a kind. Names
+with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
 (``metal::texture2d``, ``Outer.Inner``) and parenthesised parts are resource or library spellings the generators
 resolve themselves. The template argument of ``RayQuery<FLAGS>`` is a ray flag value, not a type (DXR, "RayQuery"),
 and the generators check it themselves.
@@ -20,6 +23,7 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .builtin_type_names import BUILTIN_TYPE_NAMES
+from .feedback_textures import FEEDBACK_TEXTURE_TYPES, is_sampler_feedback_kind
 
 __all__ = [
     "UndeclaredTypeError",
@@ -83,6 +87,13 @@ def _nodes(program, skip=frozenset()):
 
 def _short(name):
     return str(name).rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _is_value_argument(node, argument):
+    """Whether ``argument`` of the generic type ``node`` is a value rather than a type."""
+    if node.name in VALUE_TEMPLATE_TYPES:
+        return True
+    return node.name in FEEDBACK_TEXTURE_TYPES and is_sampler_feedback_kind(argument)
 
 
 def declared_type_names(program) -> frozenset:
@@ -171,12 +182,14 @@ def undeclared_type_uses(program):
         if isinstance(node, A.GenericParameterNode)
         for bound in node.constraints
     }
-    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags.
+    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags. A feedback
+    # texture's argument is a value only when it is a sampler feedback kind; any other name is still read as a type.
     values = {
         id(argument)
         for node in _nodes(program)
-        if isinstance(node, A.NamedType) and node.name in VALUE_TEMPLATE_TYPES
+        if isinstance(node, A.NamedType)
         for argument in node.generic_args
+        if _is_value_argument(node, argument)
     }
     uses = []
     for node in _nodes(program, _dead_functions(program) | bounds | values):
