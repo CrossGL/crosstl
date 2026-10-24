@@ -201,6 +201,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
@@ -27411,6 +27412,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+            else:
+                reject_unresolved_explicit_generic_call(self, func_name, "HLSL")
 
             resolved_overload = None
             if func_name in self.hlsl_mapped_overload_names:

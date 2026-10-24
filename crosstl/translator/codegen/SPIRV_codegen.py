@@ -95,6 +95,7 @@ from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_sam
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
+    generic_function_definition_name,
     generic_function_emission_list,
     generic_function_parameters,
     generic_function_value_arguments,
@@ -29967,7 +29968,7 @@ class VulkanSPIRVCodeGen(
                 )
 
             generic_function_definition = self.generic_function_definitions.get(
-                callee_name
+                generic_function_definition_name(self, callee_name)
             )
             if (
                 generic_function_definition is not None
