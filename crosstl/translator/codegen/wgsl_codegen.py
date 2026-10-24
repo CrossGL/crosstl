@@ -2896,6 +2896,11 @@ class WGSLCodeGen:
                 if operand_type is not None and not isinstance(operand_type, str):
                     operand_type = self.type_name_string(operand_type)
                 operand = wgsl_logical_not_operand(operand, operand_type)
+            if expr.operator == "-" and self.matrix_shape(
+                self.expression_type(expr.operand)
+            ):
+                # WGSL has no unary minus on matrices; multiplying by -1 is exact.
+                return f"({operand} * -1.0)"
             return f"{expr.operator}{operand}"
         if isinstance(expr, TernaryOpNode):
             return (
@@ -3259,8 +3264,16 @@ class WGSLCodeGen:
         elif right_matrix is not None and left_matrix is None:
             matrix_shape, scalar = right_matrix, expr.left
         else:
+            if expr.operator == "/" and left_matrix is not None:
+                self.refuse_matrix_scalar_binary(expr)
             return None
         if not self.is_matrix_scalar_operand(scalar, matrix_shape[0]):
+            # WGSL has no `/` on matrices at all, and a scalar of another type
+            # does not convert to the matrix element type.
+            if expr.operator == "/" or self.scalar_type_name(
+                self.expression_type(scalar)
+            ):
+                self.refuse_matrix_scalar_binary(expr)
             return None
         self.require_repeatable_matrix_operands(
             f"matrix-scalar {expr.operator}", (expr.left, expr.right)
@@ -3282,6 +3295,13 @@ class WGSLCodeGen:
             )
             parts.append(f"{column_left} {expr.operator} {column_right}")
         return f"mat{columns}x{rows}<{element}>({', '.join(parts)})"
+
+    def refuse_matrix_scalar_binary(self, expr):
+        raise ValueError(
+            f"WGSL target lowers matrix {expr.operator} only with a scalar operand "
+            "of the matrix element type or an integer literal; convert the operand "
+            "first"
+        )
 
     def is_matrix_scalar_operand(self, expr, element_type):
         scalar_type = self.scalar_type_name(self.expression_type(expr))
@@ -5702,6 +5722,14 @@ class WGSLCodeGen:
                 return storage_element
             if isinstance(array_type, PointerType):
                 return array_type.pointee_type
+            # Indexing a matrix gives a column and indexing a vector a component.
+            matrix = self.matrix_shape(array_type)
+            if matrix is not None:
+                element, _columns, rows = matrix
+                return f"vec{rows}<{element}>"
+            vector = self.vector_shape(array_type)
+            if vector is not None:
+                return vector[0]
             return self.array_element_type(array_type)
         return None
 

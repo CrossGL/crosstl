@@ -2876,14 +2876,17 @@ shader WGSLMatrixColumns {
             mat3x2 wide = k - 2.0;
             mat2 nested = (m + n) / 2.0;
             mat2 negated = -m + 1.0;
+            mat2 flipped = -m;
+            vec2 column = m[0] / 2.0;
             mat2 product = matrixCompMult(m, n);
             mat2 square = outerProduct(v, v);
             mat3x2 outer = outerProduct(v, u);
             mat2 scaled = m * 2.0;
             mat2 added = m + n;
             outp[i] = quotient[1].x + sum[1].x + difference[1].x + wide[2].y
-                + nested[0].y + negated[1].y + product[1].x + square[1].x
-                + outer[2].y + scaled[1].x + added[1].x;
+                + nested[0].y + negated[1].y + flipped[0].x + column.y
+                + product[1].x + square[1].x + outer[2].y + scaled[1].x
+                + added[1].x;
         }
     }
 }
@@ -2908,10 +2911,14 @@ def test_wgsl_codegen_lowers_matrix_scalar_arithmetic_by_column(tmp_path):
     assert (
         "var nested: mat2x2<f32> = " "mat2x2<f32>((m + n)[0] / 2.0, (m + n)[1] / 2.0);"
     ) in generated
+    # WGSL has no unary minus on matrices.
     assert (
-        "var negated: mat2x2<f32> = mat2x2<f32>((-m)[0] + 1.0, (-m)[1] + 1.0);"
-        in generated
-    )
+        "var negated: mat2x2<f32> = "
+        "mat2x2<f32>((m * -1.0)[0] + 1.0, (m * -1.0)[1] + 1.0);"
+    ) in generated
+    assert "var flipped: mat2x2<f32> = (m * -1.0);" in generated
+    # A matrix column is a vector, so vector / scalar stays as written.
+    assert "var column: vec2<f32> = (m[0] / 2.0);" in generated
     # WGSL defines matrix * scalar and matrix + matrix, so those stay as written.
     assert "var scaled: mat2x2<f32> = (m * 2.0);" in generated
     assert "var added: mat2x2<f32> = (m + n);" in generated
@@ -2972,6 +2979,30 @@ def test_wgsl_codegen_rejects_column_lowering_of_operands_with_side_effects():
     with pytest.raises(
         ValueError,
         match=r"WGSL target lowers matrix-scalar / one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize("expression", ["m / n", "m + count", "m / 2u"])
+def test_wgsl_codegen_rejects_matrix_arithmetic_it_cannot_lower(expression):
+    shader = f"""
+    shader WGSLMatrixUnsupportedOperand {{
+        compute {{
+            buffer float* outp;
+            void main() {{
+                mat2 m = mat2(1.0);
+                mat2 n = mat2(2.0);
+                int count = 2;
+                mat2 r = {expression};
+                outp[0] = r[1].x;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix [/+] only with a scalar operand",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
 
