@@ -34,6 +34,7 @@ from .hlsl_matrix_import import (
     hlsl_matrix_type_map,
 )
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
+from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
 from .struct_methods import (
     analyze_receiver_mutations,
@@ -4038,6 +4039,13 @@ class HLSLToCrossGLConverter(
         )
         if id(node) in self.legacy_sampler_declaration_ids:
             return ""
+        record = is_hlsl_shader_record(node)
+        if record is not None:
+            struct_name, layout = shader_record_layout(node, self.structs_by_name)
+            return (
+                f"    {self.render_identifier(struct_name)} {self.render_identifier(node.name)}"
+                f" @glsl_buffer_block({record}, {layout});\n"
+            )
         if self.raw_type_base(getattr(node, "vtype", None)) == "SubpassInput":
             code = self.format_subpass_input_attributes(
                 getattr(node, "attributes", []), 1
@@ -4203,6 +4211,8 @@ class HLSLToCrossGLConverter(
         used_names = self.collect_cbuffer_reserved_names(ast)
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                if is_hlsl_shader_record(node) is not None:
+                    shader_record_layout(node, self.structs_by_name, is_cbuffer=True)
                 cbuffer_name = self.unique_cbuffer_name(node.name, used_names)
                 used_names.add(cbuffer_name)
                 attributes = list(getattr(node, "attributes", []) or [])
