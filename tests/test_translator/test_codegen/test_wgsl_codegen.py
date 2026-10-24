@@ -1991,6 +1991,49 @@ def test_translate_metal_half_vector_aliases_to_wgsl_widens_to_f32(tmp_path):
     assert "float16" not in generated
 
 
+def test_translate_hlsl_packed_dot4add_to_wgsl_packed_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "outi[id.x] = (acc + dot4I8Packed(a[id.x], b[id.x]));" in generated
+    assert "outu[id.x] = (0u + dot4U8Packed(a[id.x], b[id.x]));" in generated
+    assert "dot4add_" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_packed_dot4add_requires_three_arguments():
+    shader = parse_shader("""
+        shader PackedDot {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    uint a = 1u;
+                    int r = dot4add_i8packed(a, a);
+                }
+            }
+        }
+        """)
+
+    with pytest.raises(ValueError, match="dot4add_i8packed\\(\\) with exactly 3"):
+        WGSLCodeGen().generate(shader)
+
+
 @pytest.mark.parametrize(
     "stage",
     (
