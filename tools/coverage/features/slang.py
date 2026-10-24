@@ -49,6 +49,7 @@ CONSTRAINTS = {
     "__BuiltinSignedArithmeticType": "float",
     "__BuiltinType": "float",
     "IFloat": "float",
+    "IFloatingPointCoopElement": "float",
     "IArithmetic": "float",
     "IArithmeticAtomicable": "int",
     "IAtomicable": "int",
