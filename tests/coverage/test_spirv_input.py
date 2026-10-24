@@ -40,15 +40,67 @@ def test_a_nan_aware_instruction_is_renamed_from_the_one_with_its_operands():
 
 @needs_glslang
 def test_a_probe_must_call_the_features_own_instruction():
-    modf = Feature(
+    # A spelling whose GLSL call glslang lowers to another instruction.
+    inverse = Feature(
         "spirv",
         "function",
-        "Modf",
-        Signature(VEC3, (Param(VEC3), Param(VEC3, "out"))),
-        crossgl="modf",
+        "InverseSqrt",
+        Signature(VEC3, (Param(VEC3),)),
+        crossgl="sqrt",
     )
-    with pytest.raises(ProbeError, match="glslang lowers modf to ModfStruct, not Modf"):
-        spirv_input.build(modf)
+    with pytest.raises(
+        ProbeError, match="glslang lowers sqrt to Sqrt, not InverseSqrt"
+    ):
+        spirv_input.build(inverse)
+
+
+@needs_glslang
+@pytest.mark.parametrize("name, out", [("Frexp", Type("int", (3,))), ("Modf", VEC3)])
+def test_a_pointer_form_is_the_struct_forms_module_writing_the_out_variable(name, out):
+    feature = Feature(
+        "spirv",
+        "function",
+        name,
+        Signature(VEC3, (Param(VEC3), Param(out, "out"))),
+        crossgl=name.lower(),
+    )
+    probe = spirv_input.build(feature)
+    assert f" {name}Struct " not in probe.source
+    assert "OpCompositeExtract" not in probe.source
+    (call,) = (line for line in probe.source.splitlines() if f" {name} " in line)
+    assert call.split()[-1] == "%a1"
+    assert validators.validate("spirv", probe.source).accepted
+
+
+STRUCT_CALL = """\
+         %48 = OpExtInst %ResType %1 FrexpStruct %43
+         %49 = OpCompositeExtract %v3int %48 1
+               OpStore %a1 %49
+         %50 = OpCompositeExtract %v3float %48 0
+               OpStore %r %50
+"""
+
+
+def test_the_pointer_form_rewrite_replaces_the_call_extracts_and_store():
+    assert spirv_input._pointer_form(STRUCT_CALL, "Frexp") == (
+        "         %50 = OpExtInst %v3float %1 Frexp %43 %a1\n"
+        "               OpStore %r %50\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "assembly",
+    [
+        STRUCT_CALL + STRUCT_CALL.replace("%48", "%58"),
+        STRUCT_CALL + "         %51 = OpCopyObject %ResType %48\n",
+        STRUCT_CALL + "               OpStore %e %49\n",
+        STRUCT_CALL.replace("OpStore %a1 %49", "OpNop"),
+    ],
+    ids=["two calls", "struct used again", "member 1 used again", "no store"],
+)
+def test_the_pointer_form_rewrite_refuses_any_other_shape(assembly):
+    with pytest.raises(ProbeError, match="FrexpStruct call has an unexpected shape"):
+        spirv_input._pointer_form(assembly, "Frexp")
 
 
 @needs_glslang

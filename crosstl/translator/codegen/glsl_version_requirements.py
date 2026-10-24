@@ -93,6 +93,34 @@ _BUILTIN_FUNCTION_GROUPS = (
         ),
         (None, None, ("GL_ARB_sparse_texture_clamp",), ()),
     ),
+    # Residency-reporting reads exist only through GL_ARB_sparse_texture2, which GLSL ES does not have.
+    (
+        (
+            "sparseTextureARB",
+            "sparseTextureLodARB",
+            "sparseTextureOffsetARB",
+            "sparseTexelFetchARB",
+            "sparseTexelFetchOffsetARB",
+            "sparseTextureLodOffsetARB",
+            "sparseTextureGradARB",
+            "sparseTextureGradOffsetARB",
+            "sparseTextureGatherARB",
+            "sparseTextureGatherOffsetARB",
+            "sparseTextureGatherOffsetsARB",
+            "sparseTexelsResidentARB",
+            "sparseImageLoadARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture2",), ()),
+    ),
+    (
+        (
+            "sparseTextureClampARB",
+            "sparseTextureOffsetClampARB",
+            "sparseTextureGradClampARB",
+            "sparseTextureGradOffsetClampARB",
+        ),
+        (None, None, ("GL_ARB_sparse_texture_clamp",), ()),
+    ),
     (("textureQueryLod",), (400, None, ("GL_ARB_texture_query_lod",), ())),
     (("textureQueryLevels",), (430, None, ("GL_ARB_texture_query_levels",), ())),
     (

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 
 from . import chart, execution, ir, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
-from .model import ROUND_TRIPS
+from .model import ROUND_TRIPS, kept_folder
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -353,8 +353,12 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
         "",
         "```bash",
         f"python -m tools.coverage run --backend {language} --direction {direction} --feature {shlex.quote(first['name'])}"
-        + (" --execute" if executed else ""),
+        + (" --execute" if executed else "")
+        + " --keep probes",
         "```",
+        "",
+        f"`probes/{kept_folder(language, direction, first['name'])}/` then holds the probe and, if CrossTL produced "
+        "one, its translation.",
         "",
         f"The coverage workflow closes this issue when no probe fails this way. [COVERAGE.md]({_coverage_url(repository, row)}) "
         "has the current results.",

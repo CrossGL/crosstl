@@ -5,20 +5,73 @@ the rows whose score changed, then the backend features whose outcome changed, r
 skip a leg, such as Metal when it touches no Metal code; rows the new report lacks are named and left out, and the
 CrossGL IR row of the published report is rebuilt from the rows both reports share, so a skipped leg does not read as
 an IR regression.
+
+The new report may come from a fork, whose run uses the fork's own workflow, and the comment workflow posts the result
+with a token that can write comments. So only the fields this module reads are kept, each checked, and the report's
+own text (feature names and diagnostics) appears only inside code spans, where no link, mention or HTML renders.
 """
 
 from __future__ import annotations
 
 from . import ir
-from .publish import cell, label
+from .model import DIRECTIONS, LANGUAGES, OUTCOMES
+from .publish import DETAIL_LIMIT, label
 
 # Changed features listed in full; a pin bump can change hundreds, and the summary only needs to show the trend.
 LIMIT = 40
 MISSING = "-"
+_KEYS = {(ir.LANGUAGE, ir.DIRECTION)} | {(l, d) for l in LANGUAGES for d in DIRECTIONS}
 
 
 def _name(key: tuple[str, str]) -> str:
     return " ".join(label({"language": key[0], "direction": key[1]}))
+
+
+def _code(text: str) -> str:
+    """``text`` as one inline code span: one line, bounded, without backticks that could close it."""
+    line = " ".join(text.split()).replace("`", "'")
+    if len(line) > DETAIL_LIMIT:
+        line = line[: DETAIL_LIMIT - 1].rstrip() + "…"
+    return f"`{line}`"
+
+
+def _feature(feature: object) -> dict | None:
+    if not isinstance(feature, dict) or not isinstance(feature.get("name"), str):
+        return None
+    if feature.get("outcome") not in OUTCOMES:
+        return None
+    detail = feature.get("detail")
+    checked = {"name": feature["name"], "outcome": feature["outcome"]}
+    return checked | ({"detail": detail} if isinstance(detail, str) else {})
+
+
+def _row(row: object) -> dict | None:
+    if not isinstance(row, dict) or row.get("offered") is not True:
+        return None
+    if (row.get("language"), row.get("direction")) not in _KEYS:
+        return None
+    score = row.get("score")
+    if score is not None and not (type(score) in (int, float) and 0 <= score <= 100):
+        return None
+    features = row.get("features")
+    features = [_feature(f) for f in features] if isinstance(features, list) else []
+    return {
+        "language": row["language"],
+        "direction": row["direction"],
+        "offered": True,
+        "score": score,
+        "features": [f for f in features if f is not None],
+    }
+
+
+def checked(report: dict) -> dict:
+    """The schema and the well-formed rows of known languages in ``report``, reduced to the fields ``compare`` reads."""
+    rows = report.get("backends")
+    rows = [_row(row) for row in rows] if isinstance(rows, list) else []
+    return {
+        "schema": report.get("schema"),
+        "backends": [row for row in rows if row is not None],
+    }
 
 
 def _rows(report: dict) -> dict[tuple[str, str], dict]:
@@ -84,10 +137,10 @@ def _changes(
             new = after.get(name, {}).get("outcome", MISSING)
             if old == new:
                 continue
-            line = f"{_name(key)} `{cell(name)}`: {old} → {new}"
+            line = f"{_name(key)} {_code(name)}: {old} → {new}"
             detail = after.get(name, {}).get("detail")
             if detail and new in ("refused", "wrong"):
-                line += f" ({cell(detail)})"
+                line += f" ({_code(detail)})"
             changes.append(((_rank(old, new), order.index(key), name), line))
     return [(key[0], line) for key, line in sorted(changes)]
 
@@ -95,7 +148,8 @@ def _changes(
 def compare(published: dict, report: dict, limit: int = LIMIT) -> str:
     """Markdown describing how ``report`` differs from ``published``."""
     head = f"Against the coverage published for `{published['commit'][:12]}` on {published['date'][:10]}"
-    if published.get("schema") != report.get("schema"):
+    report = checked(report)
+    if published.get("schema") != report["schema"]:
         return f"{head}: the published report uses another schema, so there is nothing to compare.\n"
     current = _rows(report)
     rows = _comparable(published, current)

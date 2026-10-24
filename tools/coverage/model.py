@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 
@@ -77,6 +78,18 @@ _RAYTRACING_ONLY = {
 def raytracing_stage(name: str) -> str:
     """The ray-tracing stage that probes the intrinsic ``name``."""
     return _RAYTRACING_ONLY.get(name, "closest-hit")
+
+
+def kept_folder(language: str, direction: str, name: str) -> str:
+    """The folder, relative to ``run --keep DIR``, that holds the probe of feature ``name`` and its translations.
+
+    A name with characters a file name cannot hold, as Rust's ``Float::abs``, has them replaced and a digest of the
+    name appended, so two features never share a folder.
+    """
+    folder = re.sub(r"[^\w.-]+", "_", name, flags=re.ASCII)
+    if folder != name:
+        folder += "-" + hashlib.sha256(name.encode()).hexdigest()[:8]
+    return f"{language}-{direction}/{folder}"
 
 
 @dataclass(frozen=True)

@@ -9,8 +9,11 @@ Two bugs affected HLSL ``[[vk::input_attachment_index(N)]] SubpassInput``:
   ``subpassInput`` failed the same way.
 
 OpenGL and OpenGL ES have no input attachments. ``subpassInput`` exists only
-in Vulkan GLSL (GL_KHR_vulkan_glsl section 4.1.7), so those targets now
-refuse it. SPIR-V keeps it as an input attachment.
+in Vulkan GLSL (GL_KHR_vulkan_glsl section 4.1.7), so for those targets the
+attachment is read as a texture at the fragment's pixel
+(:mod:`crosstl.translator.semantics.subpass_inputs`); ``subpassLoad`` and
+``subpassInput`` never reach their output. SPIR-V keeps it as an input
+attachment.
 """
 
 import re
@@ -80,6 +83,10 @@ def test_hlsl_input_attachments_lower_to_spirv(tmp_path):
 
 @pytest.mark.parametrize("backend", ["opengl", "webgl"])
 @pytest.mark.parametrize(("source", "suffix"), [(HLSL, ".frag.hlsl"), (GLSL, ".frag")])
-def test_opengl_targets_refuse_input_attachments(tmp_path, backend, source, suffix):
-    with pytest.raises(ValueError, match="OpenGL has no subpass inputs"):
-        _translate(tmp_path, source, suffix, backend)
+def test_opengl_targets_read_input_attachments_as_textures(
+    tmp_path, backend, source, suffix
+):
+    code = _translate(tmp_path, source, suffix, backend)
+    assert "subpassInput" not in code and "subpassLoad" not in code
+    assert re.search(r"uniform sampler2D \w+;", code)
+    assert re.search(r"texelFetch\(\w+, ivec2\(gl_FragCoord\.xy\), 0\)", code)

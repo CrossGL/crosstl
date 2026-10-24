@@ -121,22 +121,48 @@ def test_workflows_declare_least_privilege_permissions():
 def test_no_workflow_runs_pull_request_code_with_a_privileged_token():
     for filename, workflow in _workflows().items():
         assert "pull_request_target" not in workflow[True], filename
-        assert "workflow_run" not in workflow[True], filename
+        if "workflow_run" not in workflow[True]:
+            continue
+        # A workflow_run workflow holds this repository's token even after a fork's run. It checks out main only,
+        # keeps the token out of git, unpacks artifacts outside the workspace and passes the triggering run's values
+        # to scripts through `env`, so none of them is ever expanded into a script.
+        for name, job in workflow["jobs"].items():
+            for step in job["steps"]:
+                action = step.get("uses", "").split("@")[0]
+                if action == "actions/checkout":
+                    assert step["with"] == {"persist-credentials": False}, (
+                        filename,
+                        name,
+                    )
+                if action == "actions/download-artifact":
+                    assert step["with"]["path"].startswith("${{ runner.temp }}/")
+                assert "${{" not in step.get("run", ""), (filename, name, step)
 
 
-def test_the_coverage_comment_job_runs_no_pull_request_code():
-    workflow = _workflows()["coverage.yml"]
+def test_the_coverage_comment_runs_only_main_code_on_the_report():
+    workflow = _workflows()["coverage-comment.yml"]
+    assert workflow[True] == {
+        "workflow_run": {"workflows": ["Coverage"], "types": ["completed"]}
+    }
     job = workflow["jobs"]["comment"]
-    # It writes pull-request comments only, and only where the token belongs to this repository.
-    assert job["permissions"] == {"pull-requests": "write"}
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in (
-        job["if"]
-    )
-    # It reads the report job's comparison as text and never checks out or runs the pull request's code.
+    assert "github.event.workflow_run.event == 'pull_request'" in job["if"]
+    assert job["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "write",
+    }
     uses = [step["uses"] for step in job["steps"] if "uses" in step]
-    assert uses == ["actions/download-artifact@v8"]
-    script = job["steps"][-1]["run"]
-    assert not re.search(r"\b(?:python|pip)\b", script)
+    assert uses == [
+        "actions/checkout@v7",
+        "actions/setup-python@v7",
+        "actions/download-artifact@v8",
+    ]
+    # main's tools/coverage reads the run's coverage.json as data; nothing is installed or run from the artifact.
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert not re.search(r"\bpip\b", scripts)
+    assert re.findall(r"\bpython\b.*", scripts) == [
+        'python -m tools.coverage compare published.json "$REPORT" > compare.md'
+    ]
 
 
 STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\)")
@@ -220,6 +246,32 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
         assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
 
 
+def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
+    # Every conformance job already waits for the leg selection, so the planner
+    # skips that step instead and leaves `run` empty.
+    workflow = yaml.safe_load(
+        (WORKFLOW_DIR / "conformance.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    planner = jobs["legs"]
+    assert planner["permissions"] == {"actions": "read", "contents": "read"}
+    assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
+    assert planner["outputs"]["run"] == "${{ steps.select.outputs.run }}"
+    steps = {step.get("id"): index for index, step in enumerate(planner["steps"])}
+    reference = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    assert planner["steps"][steps["queue"]] == reference
+    select = planner["steps"][steps["select"]]
+    assert steps["queue"] < steps["select"]
+    assert select["if"] == "steps.queue.outputs.tested != 'true'"
+    for name, job in jobs.items():
+        if name in {"legs", "result"}:
+            continue
+        assert job["needs"] == "legs", name
+        assert job["if"] == "needs.legs.outputs.run == 'true'", name
+
+
 def test_pip_cache_is_only_enabled_for_jobs_that_install_with_pip():
     # actions/setup-python fails its post step when the pip cache folder was never
     # created, so a job that caches pip downloads must also install with pip.
@@ -255,10 +307,8 @@ def _steps():
 
 def test_actions_are_referenced_by_release_tag():
     # Release tags keep workflows readable and let Dependabot propose upgrades.
-    # pypa/gh-action-pypi-publish publishes only its release/v1 branch. actions/cache/save is a sub-action.
-    release_tag = re.compile(
-        r"^[\w.-]+/[\w.-]+(?:/[\w.-]+)?@(?:v\d+(?:\.\d+){0,2}|release/v\d+)$"
-    )
+    # The optional third segment admits sub-actions such as actions/cache/save.
+    release_tag = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w.-]+)?@v\d+(?:\.\d+){0,2}$")
     for name, step in _steps():
         ref = str(step.get("uses", ""))
         if ref and not ref.startswith("./"):
