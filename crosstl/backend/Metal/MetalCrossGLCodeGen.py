@@ -6057,6 +6057,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             self.current_type_resolution_context = previous
 
     def scalar_alias_binding(self, name, *, context=None, stack=()):
+        if str(name).rsplit("::", 1)[-1] not in self.scalar_alias_names:
+            return None
         if context is None and str(name) in self.alias_resolution_shadow_names():
             return None
         declarations = self.scalar_alias_declarations(name, context)
@@ -7071,7 +7073,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
 
     def materialize_alias_template_type(self, metal_type, *, required=False):
         original = str(metal_type or "").strip()
-        if not original:
+        if not original or ("<" not in original and ":" not in original):
+            # Neither a dependent ``Owner::member`` type nor an alias-template instance.
             return original
 
         candidate = re.sub(r"^typename\s+", "", original).strip()
