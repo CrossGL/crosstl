@@ -1313,6 +1313,11 @@ class HLSLToCrossGLConverter(
         resource_base = self.raw_type_base(descriptor.get("resource_type"))
         is_multisample = resource_base in {"Texture2DMS", "Texture2DMSArray"}
         if is_multisample:
+            if raw_args and rendered_args:
+                rendered_args = [
+                    self.integer_texel_operand(raw_args[0], rendered_args[0]),
+                    *rendered_args[1:],
+                ]
             return [obj, *rendered_args]
 
         split_location = None
@@ -1362,7 +1367,10 @@ class HLSLToCrossGLConverter(
                 coord = self.swizzle_rendered_expression(
                     rendered_location, "".join(swizzles[:coord_components])
                 )
-            return coord, lod
+            return (
+                self.integer_texel_operand(location_arg, coord, coord_components),
+                self.integer_texel_operand(location_arg, lod, 1),
+            )
 
         ctor_args = getattr(location_arg, "args", None)
         if not ctor_args:
@@ -1378,8 +1386,8 @@ class HLSLToCrossGLConverter(
             if first_components != coord_components or second_components:
                 return None
             return (
-                self.generate_expression(ctor_args[0], is_main),
-                self.generate_expression(ctor_args[1], is_main),
+                self.integer_texel_operand(ctor_args[0], is_main=is_main),
+                self.integer_texel_operand(ctor_args[1], is_main=is_main),
             )
 
         split_location = self.split_texture_load_constructor_arguments(
@@ -1391,10 +1399,10 @@ class HLSLToCrossGLConverter(
         if len(ctor_args) != coord_components + 1:
             return None
 
-        lod = self.generate_expression(ctor_args[-1], is_main)
+        lod = self.integer_texel_operand(ctor_args[-1], is_main=is_main)
         coord_args = [self.generate_expression(arg, is_main) for arg in ctor_args[:-1]]
         if coord_components == 1:
-            coord = coord_args[0]
+            coord = self.integer_texel_operand(ctor_args[0], coord_args[0], 1)
         else:
             coord = f"ivec{coord_components}({', '.join(coord_args)})"
         return coord, lod
@@ -1425,9 +1433,9 @@ class HLSLToCrossGLConverter(
         if consumed_components != coord_components or lod_arg is None:
             return None
 
-        lod = self.generate_expression(lod_arg, is_main)
+        lod = self.integer_texel_operand(lod_arg, is_main=is_main)
         if coord_components == 1:
-            coord = coord_args[0]
+            coord = self.integer_texel_operand(ctor_args[0], coord_args[0], 1)
         else:
             coord = f"ivec{coord_components}({', '.join(coord_args)})"
         return coord, lod
@@ -2971,8 +2979,8 @@ class HLSLToCrossGLConverter(
             )
         ):
             texture = self.generate_expression(expr.array.array.object, is_main)
-            sample_index = self.generate_expression(expr.array.index, is_main)
-            coord = self.generate_expression(expr.index, is_main)
+            sample_index = self.integer_texel_operand(expr.array.index, is_main=is_main)
+            coord = self.integer_texel_operand(expr.index, is_main=is_main)
             suffix = (
                 self.texel_narrowing_suffix(
                     self.expression_raw_type(expr.array.array.object)
@@ -3000,7 +3008,7 @@ class HLSLToCrossGLConverter(
             return None
 
         texture = self.generate_expression(expr.array, is_main)
-        coord = self.generate_expression(expr.index, is_main)
+        coord = self.integer_texel_operand(expr.index, is_main=is_main)
         suffix = (
             self.texel_narrowing_suffix(self.expression_raw_type(expr.array))
             if narrow
@@ -3022,7 +3030,7 @@ class HLSLToCrossGLConverter(
             return None
 
         texture = self.generate_expression(expr.array, is_main)
-        coord = self.generate_expression(expr.index, is_main)
+        coord = self.integer_texel_operand(expr.index, is_main=is_main)
         suffix = (
             self.texel_narrowing_suffix(self.expression_raw_type(expr.array))
             if narrow
