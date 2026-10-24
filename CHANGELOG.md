@@ -4,6 +4,28 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- A type name that is neither built in nor declared by the program, as a structure, enumeration, alias, constant block or generic parameter, is refused with a typed error. Every generator used to copy it into the output.
+
+### Improved
+
+- Metal output renames identifiers that MSL reads as keywords, such as `kernel`, `device`, `thread` and `half`, gives `gl_InstanceIndex` an `[[instance_id]]` input, binds a ray generation stage's launch index and size to the kernel grid and spells its ray flags as constants, and passes resources and module-scope groupshared values to mesh and object functions.
+- The Metal importer types matrix arithmetic, the `saturate` family and the results of texture methods, imports depth texture reads as the depth value, and keeps `[[attribute(n)]]` vertex inputs at location `n` on every target instead of renaming them to HLSL semantics.
+- SPIR-V output folds module-scope constant expressions exactly, rounding binary32 results after each operation, instead of emitting instructions that module scope cannot hold. Shading-rate built-ins, per-primitive mesh outputs and arrays of constant buffers are declared with their SPIR-V built-ins and capabilities.
+- `INFINITY`, `NAN`, `FLT_MAX`, `FLT_MIN`, `FLT_EPSILON` and the other standard float limits are written as exact binary32 values on HLSL and GLSL.
+- Arrays of HLSL structured buffers keep HLSL's tight element layout on GLSL, SPIR-V and Metal.
+- GLSL `length()` of a vector or matrix becomes its component or column count on other targets.
+
+### Fixed
+
+- Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
+- HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
+- An early `return;` in a GLSL `main` that writes stage outputs returns those outputs on every target.
+- CUDA output writes CrossGL scalar casts such as `f64(x)` with C type names.
+- A program with several stages of one kind, such as a Metal library with several vertex functions, has every stage rewritten, not only the first.
+- Translating a malformed shader no longer takes time that grows much faster than its length.
+
 ---
 
 ## [3.4.0] - 2026-10-23
