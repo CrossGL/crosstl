@@ -25,6 +25,7 @@ from crosstl.translator.ast import (
     WaveOpNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -3992,6 +3993,25 @@ class TestCudaCodeGen:
         assert "doubleBitsToLong" not in cuda_code
         assert "longBitsToDouble" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_64bit_bitcast_of_a_vector_is_refused(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    dvec2 v = dvec2(1.0, 2.0);
+                    int64_t bits = doubleBitsToLong(v);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match="doubleBitsToLong of double2"):
+            CudaCodeGen().generate(ast)
 
     def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
         source_code = """

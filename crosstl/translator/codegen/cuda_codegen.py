@@ -37,6 +37,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .cuda_refusals import CudaLoweringRefused
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -3526,7 +3527,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
         if wide_bitcast is not None:
-            return f"{wide_bitcast[0]}({args[0]})"
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and CUDA converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise CudaLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
