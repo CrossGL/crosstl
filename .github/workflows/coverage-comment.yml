@@ -1,0 +1,105 @@
+name: Coverage comment
+
+# Posts how a pull request changes coverage against main, once the Coverage workflow has measured it, and edits that
+# one comment on later pushes. A pull request's own runs get a read-only token when it comes from a fork, so the
+# comment is posted here, where the token can write comments. This workflow always runs main's version of itself and
+# of tools/coverage: it checks out main, never the pull request, and reads only the run's coverage.json, which
+# `tools.coverage compare` treats as untrusted data. Values from the triggering run reach scripts through `env` only.
+
+on:
+  workflow_run:
+    workflows: [Coverage]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    name: Comment the coverage change
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Find the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # The open pull request whose head is still the measured commit; a later push gets its own comment.
+          number="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="$OWNER:$BRANCH" \
+            --jq "map(select(.head.sha == \"${SHA//[^0-9a-f]/}\")) | .[0].number // empty")"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          [ -n "$number" ] || echo "No open pull request has $SHA as its head; nothing to comment on."
+
+      - uses: actions/checkout@v7
+        if: steps.pr.outputs.number != ''
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        if: steps.pr.outputs.number != ''
+        with:
+          python-version: "3.11"
+
+      # Outside the workspace, so nothing in the artifact can stand in for a checked-out file.
+      - uses: actions/download-artifact@v8
+        id: report
+        if: steps.pr.outputs.number != ''
+        continue-on-error: true
+        with:
+          name: coverage
+          path: ${{ runner.temp }}/run
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Compare with the published coverage
+        if: steps.report.outcome == 'success'
+        env:
+          REPORT: ${{ runner.temp }}/run/coverage.json
+        run: |
+          set -euo pipefail
+          if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
+            python -m tools.coverage compare published.json "$REPORT" > compare.md
+          else
+            echo "No published coverage to compare with yet." > compare.md
+          fi
+
+      - name: Post or update the comment
+        if: steps.report.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          marker="<!-- coverage-change -->"
+          {
+            echo "$marker"
+            echo "### Coverage change against main"
+            echo
+            cat compare.md
+            echo
+            echo "Measured by [this Coverage run]($RUN_URL)."
+          } > body.md
+          comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
+          existing="$(gh api --paginate "$comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- coverage-change -->"))) | .id' | sed -n 1p)"
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@body.md > /dev/null
+          else
+            gh api --method POST "$comments" -F body=@body.md > /dev/null
+          fi

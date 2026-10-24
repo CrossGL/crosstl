@@ -67,6 +67,7 @@ class VulkanParser:
         "mediump",
         "noperspective",
         "patch",
+        "perprimitiveEXT",
         "pervertexEXT",
         "precise",
         "readonly",
@@ -133,6 +134,7 @@ class VulkanParser:
         "Patch": "patch",
         "PerVertexKHR": "pervertexEXT",
         "PerVertexNV": "pervertexEXT",
+        "PerPrimitiveEXT": "perprimitiveEXT",
         "RelaxedPrecision": "mediump",
         "Restrict": "restrict",
         "Sample": "sample",
@@ -6402,6 +6404,7 @@ class VulkanParser:
                 "invariant",
                 "noperspective",
                 "patch",
+                "perprimitiveEXT",
                 "pervertexEXT",
                 "sample",
             }

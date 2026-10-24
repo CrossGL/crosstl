@@ -2,7 +2,8 @@ import json
 
 from tools.coverage import __main__ as cli
 from tools.coverage import ir
-from tools.coverage.compare import compare
+from tools.coverage.compare import checked, compare
+from tools.coverage.publish import DETAIL_LIMIT
 
 
 def _row(language, direction, outcomes, **extra):
@@ -80,7 +81,7 @@ def test_score_changes_and_feature_changes_list_regressions_first():
     assert "3 features change outcome, 1 of them for the worse:" in lines
     changes = [line for line in lines if line.startswith("- ")]
     assert changes == [
-        "- HLSL output `mad`: supported → wrong (dxc: error \\| bad line)",
+        "- HLSL output `mad`: supported → wrong (`dxc: error | bad line`)",
         "- GLSL output `fma`: refused → supported",
         "- GLSL output `cos`: wrong → refused",
     ]
@@ -144,3 +145,74 @@ def test_command_prints_the_comparison(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "| GLSL output | 100.0 % | 0.0 % (-100.0) |" in out
     assert "- GLSL output `sin`: supported → refused" in out
+
+
+def test_a_reports_text_appears_only_in_code_spans():
+    published = _report(_row("glsl", "output", {"sin": "supported"}))
+    hostile = "`x` [link](https://example.com) @someone <img src=x>"
+    current = _report(
+        _row(
+            "glsl",
+            "output",
+            {"sin": "wrong", hostile: "refused"},
+            sin={"detail": hostile + "\n" + "y" * 400},
+        )
+    )
+    changes = [
+        line
+        for line in compare(published, current).splitlines()
+        if line.startswith("- ")
+    ]
+    code = "'x' [link](https://example.com) @someone <img src=x>"
+    detail = changes[0].removeprefix(
+        f"- GLSL output `sin`: supported → wrong (`{code} "
+    )
+    assert detail == "y" * (DETAIL_LIMIT - len(code) - 2) + "…`)"
+    assert changes[1] == f"- GLSL output `{code}`: - → refused"
+    for line in changes:
+        assert all("@" not in part for part in line.split("`")[::2])
+
+
+def test_malformed_rows_and_features_are_left_out():
+    good = _row("glsl", "output", {"sin": "supported"})
+    rows = [
+        good,
+        dict(good, language="<b>evil</b>"),
+        dict(good, direction="sideways"),
+        dict(good, language="hlsl", score="100"),
+        dict(good, language="wgsl", score=float("nan")),
+        dict(good, language="metal", score=True),
+        dict(good, language="spirv", offered="yes"),
+        dict(
+            good,
+            language="slang",
+            features=[
+                {"name": "a", "outcome": "fine"},
+                {"name": 3, "outcome": "wrong"},
+                {"name": "b", "outcome": "wrong", "detail": ["x"]},
+                "c",
+            ],
+        ),
+        "row",
+    ]
+    report = checked({"schema": 1, "commit": "c", "backends": rows})
+    assert report == {
+        "schema": 1,
+        "backends": [
+            {
+                "language": "glsl",
+                "direction": "output",
+                "offered": True,
+                "score": 100.0,
+                "features": [{"name": "sin", "outcome": "supported"}],
+            },
+            {
+                "language": "slang",
+                "direction": "output",
+                "offered": True,
+                "score": 100.0,
+                "features": [{"name": "b", "outcome": "wrong"}],
+            },
+        ],
+    }
+    assert checked({"backends": "none"}) == {"schema": None, "backends": []}

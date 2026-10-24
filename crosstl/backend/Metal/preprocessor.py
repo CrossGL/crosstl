@@ -34,9 +34,21 @@ from .function_specialization import (
     _metal_function_parameter_declarations,
 )
 from .template_constants import unresolved_constant_references
+from .text_scanners import (
+    function_parameter_start,
+    split_top_level_assignment,
+    split_top_level_commas,
+    strip_comments_outside_strings,
+    strip_top_level_default_value,
+)
 from .type_layout import metal_type_layout, metal_type_size
+from .value_traits import struct_value_trait_definitions
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
+# Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
+# major * 100 + minor * 10, and __METAL__. MSL 3.1 is the importer's default language version.
+METAL_PREDEFINED_MACROS = {"__METAL_VERSION__": "310", "__METAL__": "1"}
+
 CLANG_FEATURE_TEST_MACROS = {
     "__has_attribute",
     "__has_builtin",
@@ -59,7 +71,8 @@ MSL_SOURCE_START_RE = re.compile(
 )
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METAL_ANGLE_OPERATOR_RE = re.compile(
-    r"\boperator(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*"
+    r"\boperator"
+    r"(?>\s+|/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*(?:\n|$))*+"
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
@@ -155,6 +168,15 @@ METAL_RECEIVER_DECLARATOR_PREFIX_RE = re.compile(
     r"|constant))*\s*(?:\*+|&&|&)?"
     r"(?:\s*(?:const|volatile|restrict|__restrict|__restrict__)\b)*\s*"
 )
+
+
+# A `::` that opens a name (not `A::metal`), before `metal::`.
+_GLOBAL_METAL_QUALIFIER = re.compile(r"(?<![\w:])::\s*(?=metal\s*::)")
+
+
+def _strip_global_metal_qualifiers(text: str) -> str:
+    """Spell `::metal::name` as `metal::name`; both name the same declaration."""
+    return _GLOBAL_METAL_QUALIFIER.sub("", text)
 
 
 def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[int]:
@@ -423,6 +445,8 @@ class _MetalBooleanVariableTemplate:
     is_partial_specialization: bool
     span: Tuple[int, int]
     namespace: str
+    # ``value`` for a struct template read as a trait (``Name<T>::value``).
+    member: str = ""
 
 
 @dataclass(frozen=True)
@@ -479,6 +503,9 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+    # ``using``/``typedef`` names a type: it shadows outer constants but is no
+    # unresolved value.
+    type_alias: bool = False
 
 
 @dataclass(frozen=True)
@@ -1037,6 +1064,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
         )
+        # The Metal compiler always defines these, and shared host/shader headers test them to hide host-only
+        # code (#ifndef __METAL_VERSION__) or choose language features (#if __METAL_VERSION__ >= 230). The
+        # importer reads sources as MSL 3.1 unless the caller defines another version.
+        for name, value in METAL_PREDEFINED_MACROS.items():
+            self.macros.setdefault(name, Macro(name=name, replacement=value))
         for name in CLANG_FEATURE_TEST_MACROS:
             self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
@@ -1101,6 +1133,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
+        # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
+        # bound) as for the source's own concrete code.
+        processed = self._fold_concrete_type_trait_values(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -4823,7 +4858,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 resolved,
                 qualified_replacements,
             )
-            candidate = self._replace_identifiers(candidate, replacements)
+            candidate = self._replace_identifiers(
+                candidate,
+                replacements,
+                skip_template_names=True,
+            )
             if candidate == resolved:
                 break
             resolved = candidate
@@ -5171,6 +5210,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     scope_start=scope_start,
                     scope_end=scope_end,
                     value=value,
+                    type_alias=bool(type_tokens)
+                    and type_tokens[0] in {"using", "typedef"},
                 )
             )
         record_parameters_through(len(code))
@@ -6025,43 +6066,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # `==`/`<=`/`>=`/`!=` or a compound operator), returning (lhs, rhs) with
         # rhs None when there is no such assignment. Used to peel a data member's
         # default initializer from its declarator.
-        paren = bracket = brace = angle = 0
-        i = 0
-        while i < len(text):
-            ch = text[i]
-            if ch in "\"'":
-                _literal, consumed = self._read_string(text, i)
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                break
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                i = len(text) if end == -1 else end + 2
-                continue
-            if ch == "(":
-                paren += 1
-            elif ch == ")":
-                paren = max(0, paren - 1)
-            elif ch == "[":
-                bracket += 1
-            elif ch == "]":
-                bracket = max(0, bracket - 1)
-            elif ch == "{":
-                brace += 1
-            elif ch == "}":
-                brace = max(0, brace - 1)
-            elif ch == "<":
-                angle += 1
-            elif ch == ">":
-                angle = max(0, angle - 1)
-            elif ch == "=" and paren == bracket == brace == angle == 0:
-                nxt = text[i + 1] if i + 1 < len(text) else ""
-                prv = text[i - 1] if i > 0 else ""
-                if nxt != "=" and prv not in "=<>!+-*/%&|^~":
-                    return text[:i].strip(), text[i + 1 :].strip()
-            i += 1
-        return text.strip(), None
+        return split_top_level_assignment(text, self._read_string)
 
     def _parse_struct_constructor(
         self,
@@ -6256,7 +6261,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # value type; otherwise (None, return_type) unchanged. Only a return type
         # that is EXACTLY an `enable_if_t<...>` template-id is unwrapped, so an
         # ordinary `T` / `float4` return is left intact (never guess).
-        text = return_type.strip()
+        text = _strip_global_metal_qualifiers(return_type.strip())
         match = re.match(r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text)
         if match is None:
             return None, return_type
@@ -6902,7 +6907,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # return whether the overload is ENABLED. Raises _UnrecognizedConstraint
         # for any constraint shape outside the recognized set so the caller can
         # clean-fail rather than guess.
-        text = constraint.strip()
+        text = _strip_global_metal_qualifiers(constraint.strip())
         # Unwrap an `[metal::]enable_if_t<COND, type>` enabler down to COND; a
         # bare `enable_if_t<COND>` (one argument) unwraps to COND too. The
         # presence of the alias means "enabled iff COND".
@@ -6958,7 +6963,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         lookup_position: Optional[int] = None,
         variable_stack: Tuple[Tuple[str, Tuple[str, ...]], ...] = (),
     ) -> bool:
-        expr = self._replace_identifiers(expression, bindings).strip()
+        expr = _strip_global_metal_qualifiers(
+            self._replace_identifiers(expression, bindings).strip()
+        )
         if not expr:
             raise self._UnrecognizedConstraint(expression)
 
@@ -6996,6 +7003,25 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if conjunction is not None:
             return all(evaluate(part) for part in conjunction)
 
+        # `a == b` and `a != b` over Boolean operands (`is_complex_v<T> ==
+        # is_complex_v<U>`). Equality binds tighter than `&&` and looser than
+        # `!`. Operands that are not Boolean constraints, such as
+        # `sizeof(T) == 4`, fall through to the integer comparisons below.
+        for equality_operator in ("==", "!="):
+            operands = self._split_top_level_boolean_constraint(
+                expr, (equality_operator,)
+            )
+            if operands is None or len(operands) != 2:
+                continue
+            try:
+                left_value = evaluate(operands[0])
+                right_value = evaluate(operands[1])
+            except self._UnrecognizedConstraint:
+                break
+            if equality_operator == "==":
+                return left_value == right_value
+            return left_value != right_value
+
         if expr.startswith("!"):
             return not evaluate(expr[1:])
 
@@ -7026,7 +7052,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if name.rsplit("::", 1)[-1] in boolean_templates:
                 angle_start = expr.find("<", named.start())
                 angle_end = self._find_matching_angle(expr, angle_start)
-                if angle_end is None or expr[angle_end + 1 :].strip():
+                suffix = "" if angle_end is None else expr[angle_end + 1 :].strip()
+                member = re.fullmatch(r"::\s*(value)", suffix)
+                if angle_end is None or (suffix and member is None):
                     raise self._UnrecognizedConstraint(expression)
                 return self._evaluate_boolean_variable_template(
                     name,
@@ -7039,6 +7067,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     position=position,
                     namespace_visibility=namespace_visibility,
                     lookup_position=lookup_position,
+                    member=member.group(1) if member else "",
                 )
 
         parsed_trait = self._parse_metal_type_trait_expression(expr)
@@ -9390,6 +9419,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 )
             cursor = semicolon + 1
+        traits = struct_value_trait_definitions(
+            self, code, _MetalBooleanVariableTemplate
+        )
+        for trait_name, trait_definitions in traits.items():
+            definitions.setdefault(trait_name, []).extend(trait_definitions)
         return definitions
 
     def _evaluate_boolean_variable_template(
@@ -9405,10 +9439,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         position: int = 0,
         namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
         lookup_position: Optional[int] = None,
+        member: str = "",
     ) -> bool:
         visible = self._visible_boolean_variable_templates(
             name, definitions, position, namespace_visibility, lookup_position
         )
+        if any(definition.member != member for definition in visible):
+            raise self._UnrecognizedConstraint(name)
 
         def canonical(argument: str, at: int) -> str:
             normalized = self._canonical_type_trait_operand(
@@ -9587,7 +9624,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
         lookup_position: Optional[int] = None,
     ) -> bool:
-        text = constraint.strip()
+        text = _strip_global_metal_qualifiers(constraint.strip())
         enable_match = re.match(
             r"^(?:typename\s+)?(?:metal\s*::\s*)?enable_if_t\s*<", text
         )
@@ -14846,8 +14883,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     ) -> _MetalReceiverContract:
         normalized = self._normalize_template_argument_text(type_text or struct_name)
         indirection_match = re.search(
-            r"(?P<indirection>\*+|&&|&)\s*"
-            r"(?:(?:const|volatile|restrict|__restrict|__restrict__)\s*)*$",
+            r"(?P<indirection>\*++|&&|&)\s*+"
+            r"(?:(?:__restrict__|__restrict|restrict|const|volatile)\s*+)*+$",
             normalized,
         )
         indirection = (
@@ -15323,12 +15360,36 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             argument_close=arg_close,
         )
 
+    # Keywords that may be followed by a parenthesized expression. In
+    # `return (float)(x)` the parentheses are a cast and its operand, not a
+    # temporary `return(float)` called with `(x)`.
+    _KEYWORDS_BEFORE_EXPRESSIONS = frozenset(
+        {
+            "case",
+            "co_return",
+            "co_yield",
+            "do",
+            "else",
+            "for",
+            "if",
+            "return",
+            "sizeof",
+            "alignof",
+            "switch",
+            "throw",
+            "while",
+        }
+    )
+
     def _temporary_functor_is_candidate(
         self,
         code: str,
         identifier_start: int,
         temporary: _MetalTemporaryFunctorCall,
     ) -> bool:
+        identifier, _consumed = self._read_identifier(code, identifier_start)
+        if identifier in self._KEYWORDS_BEFORE_EXPRESSIONS:
+            return False
         constructor_text = code[
             temporary.constructor_open + 1 : temporary.constructor_close
         ].strip()
@@ -23633,7 +23694,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 (
                     name
                     for name, binding in visible_local_constants.items()
-                    if binding.value is None
+                    if binding.value is None and not binding.type_alias
                 ),
             )
             if unresolved_local_constants:
@@ -23952,7 +24013,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     (
                         name
                         for name, binding in visible_local_constants.items()
-                        if binding.value is None
+                        if binding.value is None and not binding.type_alias
                     ),
                 )
                 if unresolved_local_constants:
@@ -25502,52 +25563,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return result
 
     def _strip_top_level_default_value(self, text: str) -> str:
-        paren_depth = 0
-        bracket_depth = 0
-        brace_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(text):
-            if text[i] in "\"'":
-                _literal, consumed = self._read_string(text, i)
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                break
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                if end == -1:
-                    break
-                i = end + 2
-                continue
-
-            ch = text[i]
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "{":
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth = max(0, brace_depth - 1)
-            elif ch == "<":
-                angle_depth += 1
-            elif ch == ">":
-                angle_depth = max(0, angle_depth - 1)
-            elif (
-                ch == "="
-                and paren_depth == 0
-                and bracket_depth == 0
-                and brace_depth == 0
-                and angle_depth == 0
-            ):
-                return text[:i].strip()
-            i += 1
-        return text.strip()
+        return strip_top_level_default_value(text, self._read_string)
 
     def _infer_template_parameter_bindings_from_type(
         self,
@@ -27057,29 +27073,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return resolved
 
     def _strip_template_argument_comments(self, value: str) -> str:
-        result = ""
-        i = 0
-        while i < len(value):
-            if value[i] in "\"'":
-                literal, consumed = self._read_string(value, i)
-                result += literal
-                i += consumed
-                continue
-            if value.startswith("//", i):
-                end = value.find("\n", i)
-                if end == -1:
-                    break
-                i = end + 1
-                continue
-            if value.startswith("/*", i):
-                end = value.find("*/", i + 2)
-                if end == -1:
-                    break
-                i = end + 2
-                continue
-            result += value[i]
-            i += 1
-        return result
+        return strip_comments_outside_strings(value, self._read_string)
 
     # ------------------------------------------------------------------ #
     # `<` disambiguation for template-PARAMETER lists.                    #
@@ -28279,50 +28273,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return tokens[-2], tokens[-1]
 
     def _function_parameter_start(self, header: str) -> Optional[int]:
-        paren_depth = 0
-        bracket_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(header):
-            if header[i] in "\"'":
-                _literal, consumed = self._read_string(header, i)
-                i += consumed
-                continue
-            if header.startswith("//", i):
-                end = header.find("\n", i)
-                if end == -1:
-                    return None
-                i = end + 1
-                continue
-            if header.startswith("/*", i):
-                end = header.find("*/", i + 2)
-                if end == -1:
-                    return None
-                i = end + 2
-                continue
-
-            ch = header[i]
-            if (
-                ch == "("
-                and paren_depth == 0
-                and bracket_depth == 0
-                and angle_depth == 0
-            ):
-                return i
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "<":
-                angle_depth += 1
-            elif ch == ">":
-                angle_depth = max(0, angle_depth - 1)
-            i += 1
-        return None
+        return function_parameter_start(header, self._read_string)
 
     def _function_parameter_list_span(self, header: str) -> Optional[Tuple[int, int]]:
         # Locate the (open, close) offsets of a function header's REAL parameter
@@ -28446,75 +28397,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return bytes(value, "utf-8").decode("unicode_escape")
 
     def _split_top_level_commas(self, text: str) -> List[str]:
-        parts: List[str] = []
-        current = ""
-        paren_depth = 0
-        bracket_depth = 0
-        brace_depth = 0
-        angle_depth = 0
-        i = 0
-        while i < len(text):
-            if text[i] in "\"'":
-                literal, consumed = self._read_string(text, i)
-                current += literal
-                i += consumed
-                continue
-            if text.startswith("//", i):
-                end = text.find("\n", i)
-                if end == -1:
-                    current += text[i:]
-                    break
-                current += text[i:end]
-                i = end
-                continue
-            if text.startswith("/*", i):
-                end = text.find("*/", i + 2)
-                if end == -1:
-                    current += text[i:]
-                    break
-                current += text[i : end + 2]
-                i = end + 2
-                continue
+        return split_top_level_commas(text, self._read_string)
 
-            ch = text[i]
-            if text.startswith("<<", i):
-                current += "<<"
-                i += 2
-                continue
-            if ch == "(":
-                paren_depth += 1
-            elif ch == ")":
-                paren_depth = max(0, paren_depth - 1)
-            elif ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth = max(0, bracket_depth - 1)
-            elif ch == "{":
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth = max(0, brace_depth - 1)
-            elif ch == "<" and not (paren_depth or bracket_depth or brace_depth):
-                angle_depth += 1
-            elif ch == ">" and not (paren_depth or bracket_depth or brace_depth):
-                angle_depth = max(0, angle_depth - 1)
-            elif (
-                ch == ","
-                and paren_depth == 0
-                and bracket_depth == 0
-                and brace_depth == 0
-                and angle_depth == 0
-            ):
-                parts.append(current.strip())
-                current = ""
-                i += 1
-                continue
-            current += ch
-            i += 1
-        if current.strip():
-            parts.append(current.strip())
-        return parts
-
-    def _replace_identifiers(self, text: str, replacements: Dict[str, str]) -> str:
+    def _replace_identifiers(
+        self,
+        text: str,
+        replacements: Dict[str, str],
+        *,
+        skip_template_names: bool = False,
+    ) -> str:
+        # With ``skip_template_names`` an identifier followed by ``<`` is kept: a
+        # plain alias takes no template arguments, so ``Op<`` after
+        # ``using Op = Op<T>;`` names the template the alias refers to.
         result = ""
         i = 0
         while i < len(text):
@@ -28541,7 +28435,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 continue
             if text[i].isalpha() or text[i] == "_":
                 ident, consumed = self._read_identifier(text, i)
-                if self._is_member_identifier_context(text, i):
+                if self._is_member_identifier_context(text, i) or (
+                    skip_template_names
+                    and ident in replacements
+                    and text[i + consumed :].lstrip().startswith("<")
+                ):
                     result += ident
                 else:
                     result += replacements.get(ident, ident)

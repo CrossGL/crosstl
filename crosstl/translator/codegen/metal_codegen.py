@@ -247,6 +247,7 @@ from .image_access_contracts import (
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
+    is_texel_fetch_operation,
     is_texture_compare_basic_operation,
     is_texture_compare_grad_offset_operation,
     is_texture_compare_grad_operation,
@@ -360,6 +361,10 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_buffer_arrays import expand_entry_buffer_array
+from .metal_buffer_component_stores import metal_buffer_component_store
+from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
+from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
@@ -371,8 +376,14 @@ from .metal_hlsl_matrix import (
 )
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
+from .metal_keyword_identifiers import (
+    METAL_KEYWORD_IDENTIFIERS,
+    rename_metal_keyword_members,
+    rename_metal_keyword_parameters,
+)
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
+from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
@@ -428,10 +439,22 @@ from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
 )
+from .texture_residency import (
+    TEXTURE_RESIDENCY_OPERATION,
+    TEXTURE_RESIDENT_OPERATION,
+    emit_metal_texture_residency_helpers,
+    metal_texture_residency_call,
+    metal_texture_resident_call,
+)
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
     "glsl.builtin.gl_FragSizeEXT",
+)
+
+# The value types of an MSL colour attachment output: a scalar or a vector of up to four components.
+METAL_COLOR_ATTACHMENT_TYPE = re.compile(
+    r"(?:float|half|int|uint|short|ushort|char|uchar)[234]?"
 )
 
 
@@ -525,6 +548,13 @@ class CharTypeMapper:
         return char_type_mapping.get(vtype, vtype)
 
 
+# Entry stages whose threadgroup memory Metal declares inside the entry function, so a
+# program-scope groupshared value used only by such entries becomes an entry local.
+METAL_GROUPSHARED_ENTRY_STAGES = frozenset(
+    {"compute", "task", "amplification", "object", "mesh"}
+)
+
+
 class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctionMixin):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
@@ -596,7 +626,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "mesh",
         "object",
         "amplification",
-    }
+    } | METAL_KEYWORD_IDENTIFIERS
     METAL_INTERPOLATION_ATTRIBUTES = {
         "center_no_perspective": "center_no_perspective",
         "center_perspective": "center_perspective",
@@ -876,14 +906,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     METAL_RAY_QUERY_RETURN_TYPES = {
         "Proceed": "bool",
         "Abort": "void",
-        "Terminate": "void",
-        "ConfirmIntersection": "void",
         "CommitNonOpaqueTriangleHit": "void",
-        "GenerateIntersection": "void",
         "CommitProceduralPrimitiveHit": "void",
         "TraceRayInline": "void",
         "CandidateType": "uint",
-        "CommittedType": "uint",
         "CommittedStatus": "uint",
         "CandidatePrimitiveIndex": "uint",
         "CommittedPrimitiveIndex": "uint",
@@ -893,10 +919,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "CommittedInstanceIndex": "uint",
         "CandidateGeometryIndex": "uint",
         "CommittedGeometryIndex": "uint",
-        "CandidateInstanceCustomIndex": "uint",
-        "CommittedInstanceCustomIndex": "uint",
-        "CandidateInstanceShaderBindingTableRecordOffset": "uint",
-        "CommittedInstanceShaderBindingTableRecordOffset": "uint",
+        "CandidateInstanceContributionToHitGroupIndex": "uint",
+        "CommittedInstanceContributionToHitGroupIndex": "uint",
         "RayFlags": "uint",
         "CandidateObjectRayOrigin": "float3",
         "CandidateObjectRayDirection": "float3",
@@ -904,7 +928,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "CommittedObjectRayDirection": "float3",
         "WorldRayOrigin": "float3",
         "WorldRayDirection": "float3",
-        "CandidateRayT": "float",
+        "CandidateTriangleRayT": "float",
         "CommittedRayT": "float",
         "CandidateObjectRayTMin": "float",
         "RayTMin": "float",
@@ -912,7 +936,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         "CommittedTriangleBarycentrics": "float2",
         "CandidateTriangleFrontFace": "bool",
         "CommittedTriangleFrontFace": "bool",
-        "CandidateAABBOpaque": "bool",
+        "CandidateProceduralPrimitiveNonOpaque": "bool",
         "CandidateObjectToWorld3x4": "float3x4",
         "CandidateWorldToObject3x4": "float3x4",
         "CommittedObjectToWorld3x4": "float3x4",
@@ -1033,6 +1057,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_ballot_helper = False
         self.metal_wave_extension_helpers = {}
         self.metal_exponent_helpers = {}
+        self.metal_texture_residency_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -1432,6 +1457,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "sv_vertex_id": "vertex_id",
             "sv_vertexid": "vertex_id",
             "gl_InstanceID": "instance_id",
+            "gl_InstanceIndex": "instance_id",
             "SV_InstanceID": "instance_id",
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",
@@ -1992,7 +2018,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
+        ast = rename_metal_keyword_parameters(ast)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (
@@ -2170,6 +2198,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        # Declared types of program-scope constants, so expressions that read
+        # them (such as an array constant copied into an array member) are typed.
+        self.metal_program_scope_constant_types = {
+            node.name: self.type_name_string(
+                getattr(node, "const_type", getattr(node, "vtype", None))
+            )
+            for node in getattr(ast, "constants", []) or []
+            if getattr(node, "name", None)
+        }
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -2349,6 +2386,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         self.required_metal_wave_ballot_helper = False
         self.metal_wave_extension_helpers = {}
         self.metal_exponent_helpers = {}
+        self.metal_texture_residency_helpers = {}
         self.required_metal_wave_match_helper = False
         self.required_metal_wave_mask_contains_helper = False
         self.required_metal_wave_multi_prefix_helpers = set()
@@ -2613,7 +2651,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
 
             resource_count = 1
             array_size = None
-            if hasattr(node, "var_type"):
+            if getattr(node, "var_type", None) is not None:
                 if (
                     hasattr(node.var_type, "name")
                     or hasattr(node.var_type, "element_type")
@@ -2652,11 +2690,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 else:
                     vtype = str(node.var_type)
                     array_suffix = ""
-            elif hasattr(node, "vtype"):
+            elif getattr(node, "vtype", None) is not None:
                 vtype = node.vtype
                 array_suffix = ""
             else:
-                vtype = "float"
+                # No written type: take it from the initializer so a shader-scope
+                # `let scale = 2.0` is `constant float scale = 2.0`, not
+                # `constant None scale` (#2444).
+                vtype = self.infer_metal_global_value_type(node)
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
@@ -3090,12 +3131,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     declaration = f"{declaration}{array_suffix}"
                 qualifier = self.global_variable_qualifier(node)
                 declaration = f"{qualifier}{declaration}"
+                resolved_var_type = getattr(node, "var_type", None) or vtype
                 self.record_metal_program_scope_value_global(
-                    var_name, getattr(node, "var_type", vtype), qualifier, node
+                    var_name, resolved_var_type, qualifier, node
                 )
                 initial_value = getattr(node, "initial_value", None)
                 if initial_value is not None:
-                    expected_type = getattr(node, "var_type", vtype)
+                    expected_type = getattr(node, "var_type", None) or vtype
                     init_expr = self.generate_expression_with_expected(
                         initial_value, expected_type
                     )
@@ -3217,6 +3259,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         code += self.generate_metal_wave_helpers()
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
+        code += emit_metal_texture_residency_helpers(self)
         code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
@@ -4494,36 +4537,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if arg_dimensions is None:
             return None
 
-        target_prefix, target_columns, target_rows = target_dimensions
+        _target_prefix, target_columns, target_rows = target_dimensions
         _arg_prefix, arg_columns, arg_rows = arg_dimensions
         if target_columns == arg_columns and target_rows == arg_rows:
             return None
 
+        # A helper takes the matrix by value, so the argument is evaluated once and indexed as a whole.
+        helper = self.metal_matrix_builtins.resize(target_dimensions, arg_dimensions)
         rendered_arg = self.generate_expression_with_expected(args[0], None)
-        columns = []
-        for column in range(target_columns):
-            if column < arg_columns:
-                source_column = f"{rendered_arg}[{column}]"
-                if target_rows == arg_rows:
-                    columns.append(source_column)
-                elif target_rows < arg_rows:
-                    columns.append(
-                        f"{source_column}.{self.vector_swizzle(target_rows)}"
-                    )
-                else:
-                    fill_values = [
-                        "1.0" if row == column else "0.0"
-                        for row in range(arg_rows, target_rows)
-                    ]
-                    columns.append(
-                        f"{target_prefix}{target_rows}({source_column}, {', '.join(fill_values)})"
-                    )
-            else:
-                values = [
-                    "1.0" if row == column else "0.0" for row in range(target_rows)
-                ]
-                columns.append(f"{target_prefix}{target_rows}({', '.join(values)})")
-        return f"{target_type}({', '.join(columns)})"
+        return f"{helper}({rendered_arg})"
 
     def vector_swizzle(self, width):
         return {1: "x", 2: "xy", 3: "xyz", 4: "xyzw"}[width]
@@ -5121,6 +5143,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         value_array_parameter_copy_statements = []
         vertex_stage_input_alias_declarations = []
         fragment_stage_input_alias_declarations = []
+        self.metal_entry_buffer_array_declarations = []
+        self.metal_entry_buffer_array_names = set()
         stage_output_parameters = []
         stage_output_struct_name = None
         previous_function_name = self.current_function_name
@@ -5567,6 +5591,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 self.current_metal_graphics_builtin_parameter_names[
                     "gl_VertexIndex"
                 ] = explicit_stage_builtins["vertex_id"]
+            if explicit_stage_builtins.get("instance_id"):
+                self.current_metal_graphics_builtin_parameter_names[
+                    "gl_InstanceIndex"
+                ] = explicit_stage_builtins["instance_id"]
             reserved_builtin_names = set(reserved_parameter_names)
             reserved_builtin_names.update(
                 self.metal_function_local_variable_names(func)
@@ -5607,7 +5635,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 reserved_parameter_names.add(name)
                 self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
-        if shader_type == "compute":
+        if shader_type in {"compute", "ray_generation"}:
             existing_param_names = {getattr(p, "name", None) for p in param_list}
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
                 param_list
@@ -6041,6 +6069,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
             function_name = entry_name or f"{stage_keyword}_{func.name}"
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name, func
+            )
             stage_attribute = self.metal_mesh_stage_attribute(
                 shader_type, func, execution_config
             )
@@ -6186,6 +6217,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             code += self.generate_metal_mesh_output_accumulator_declarations()
         for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
             code += f"    {diagnostic}\n"
+        for declaration in self.metal_entry_buffer_array_declarations:
+            code += f"    {declaration}\n"
         for declaration in stage_builtin_parameter_alias_declarations:
             code += f"    {declaration}\n"
         for statement in value_array_parameter_copy_statements:
@@ -6366,6 +6399,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             ("gl_SubgroupSize", "uint", "threads_per_simdgroup"),
             ("gl_SubgroupID", "uint", "simdgroup_index_in_threadgroup"),
             ("gl_NumSubgroups", "uint", "simdgroups_per_threadgroup"),
+            # A ray generation kernel's launch size (semantics.metal_ray_dispatch).
+            ("gl_LaunchSizeEXT", "uint3", "threads_per_grid"),
         ]
 
     def compute_builtin_name_for_metal_attribute(self, attribute):
@@ -6427,12 +6462,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             or name not in self.current_metal_graphics_builtin_parameter_names
         ):
             return None
-        if name == "gl_VertexIndex":
+        if name in ("gl_VertexIndex", "gl_InstanceIndex"):
             return "uint"
         if name == "gl_ViewIndex":
             return "int"
         if name == "gl_FragCoord":
             return "float4"
+        if name == "gl_PointCoord":
+            return "float2"
         return None
 
     def metal_compute_builtin_result_type(self, name):
@@ -6462,6 +6499,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_SubgroupSize": "threads_per_simdgroup",
             "gl_SubgroupID": "simdgroup_index_in_threadgroup",
             "gl_NumSubgroups": "simdgroups_per_threadgroup",
+            "gl_LaunchSizeEXT": "threads_per_grid",
         }.get(builtin_name, attribute)
 
     def required_compute_builtin_parameters(
@@ -6534,6 +6572,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             "gl_SubgroupSize",
             "gl_SubgroupID",
             "gl_NumSubgroups",
+            "gl_LaunchSizeEXT",
         }
         used_names = set()
         for node in self.iter_ast_nodes(body):
@@ -6743,12 +6782,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     def metal_vertex_builtin_parameter_specs(self):
         return [
             ("gl_VertexIndex", "uint", "vertex_id"),
+            # Vulkan's InstanceIndex counts from the base instance, as MSL's instance_id does.
+            ("gl_InstanceIndex", "uint", "instance_id"),
             ("gl_ViewIndex", "uint", "amplification_id"),
         ]
 
     def metal_fragment_builtin_parameter_specs(self):
         return [
             ("gl_FragCoord", "float4", "position"),
+            ("gl_PointCoord", "float2", "point_coord"),
         ]
 
     def explicit_graphics_stage_builtin_parameters(self, parameters, stage_name):
@@ -6783,9 +6825,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         ) in self.metal_vertex_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            base_name = {"gl_ViewIndex": "_crossglViewIndex"}.get(
-                builtin_name, "_crossglVertexID"
-            )
+            base_name = {
+                "gl_ViewIndex": "_crossglViewIndex",
+                "gl_InstanceIndex": "_crossglInstanceID",
+            }.get(builtin_name, "_crossglVertexID")
             name = self.unique_metal_generated_name(base_name, reserved_names)
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
@@ -6823,13 +6866,21 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         ) in self.metal_fragment_builtin_parameter_specs():
             if builtin_name not in used_names or attribute in explicit_stage_builtins:
                 continue
-            name = self.unique_metal_generated_name("_crossglFragCoord", reserved_names)
+            # gl_FragCoord -> _crossglFragCoord, gl_PointCoord -> _crossglPointCoord.
+            name = self.unique_metal_generated_name(
+                "_crossgl" + builtin_name[len("gl_") :], reserved_names
+            )
             reserved_names.add(name)
             required_parameters.append((builtin_name, name, param_type, attribute))
         return required_parameters
 
     def used_metal_fragment_builtin_names(self, body):
-        builtin_names = {"gl_FragCoord"}
+        builtin_names = {
+            builtin_name
+            for builtin_name, _type, _attribute in (
+                self.metal_fragment_builtin_parameter_specs()
+            )
+        }
         used_names = set()
         for node in self.iter_ast_nodes(body):
             class_name = node.__class__.__name__
@@ -7234,10 +7285,12 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     f"'{metal_semantic}' and is not supported"
                 )
             actual_type = self.map_type(self.struct_member_raw_type(member))
-            # A half-precision color attachment value is the same four-component
-            # output; [[color(n)]] accepts half vectors (MSL 3.2 section 5.2.3.4).
-            half_color = metal_semantic.startswith("color(") and actual_type == "half4"
-            if actual_type != expected_type and not half_color:
+            # [[color(n)]] takes any scalar or vector of up to four float, half or integer components,
+            # such as float depth [[color(3)]] (MSL 3.2 section 5.2.3.4).
+            color_value = metal_semantic.startswith("color(") and (
+                METAL_COLOR_ATTACHMENT_TYPE.fullmatch(str(actual_type)) is not None
+            )
+            if actual_type != expected_type and not color_value:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
                 member_name = getattr(member, "name", "<anonymous>")
                 raise ValueError(
@@ -7611,7 +7664,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_parameter(
                     buffer_type, buffer_name, array_size, buffer_variable
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.structured_buffer_length_variables:
             for (
                 buffer_variable,
@@ -7625,7 +7685,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_length_parameter(
                     buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.structured_buffer_counter_variables:
             for (
                 buffer_variable,
@@ -7639,7 +7706,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_structured_buffer_counter_parameter(
                     buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.glsl_buffer_block_variables:
             for (
                 buffer_variable,
@@ -7653,7 +7727,14 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 declaration = self.format_glsl_buffer_block_parameter(
                     block, buffer_name, array_size
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.extend(
+                    expand_entry_buffer_array(
+                        self,
+                        declaration,
+                        i,
+                        self.metal_entry_buffer_array_declarations,
+                    )
+                )
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
@@ -8903,8 +8984,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             for stage_name, func, stage_locals in entries:
                 if not self.node_uses_identifier(getattr(func, "body", []), name):
                     continue
-                if stage_name != "compute" or name in self.metal_entry_local_names(
-                    func, stage_locals
+                if stage_name not in METAL_GROUPSHARED_ENTRY_STAGES or (
+                    name in self.metal_entry_local_names(func, stage_locals)
                 ):
                     blocked_entry_reference = True
                     break
@@ -9912,6 +9993,28 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return f"{expected_mapped}({code})"
         return code
 
+    def infer_metal_global_value_type(self, node):
+        """The type of a shader-scope declaration with no written type (#2444).
+
+        Take it from the initializer: a literal carries its own type, and a
+        more involved expression goes through expression_result_type. When
+        neither gives a type the declaration is refused instead of guessed.
+        """
+        initial_value = getattr(node, "initial_value", None)
+        literal_type = getattr(initial_value, "literal_type", None)
+        if literal_type is not None:
+            return self.type_name_string(literal_type)
+        inferred = self.expression_result_type(initial_value)
+        if inferred:
+            return inferred
+        var_name = getattr(node, "name", getattr(node, "variable_name", "?"))
+        # "float" only lets generation reach the program's other refusals.
+        return self.refuse_lowering(
+            f"global declaration: the type of '{var_name}' is not written and "
+            "cannot be inferred from its initializer",
+            "float",
+        )
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -9927,6 +10030,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.metal_program_scope_value_global_types.get(expr.name)
                 or self.metal_global_resource_value_type(expr.name)
                 or getattr(self, "metal_cbuffer_member_types", {}).get(expr.name)
+                or getattr(self, "metal_program_scope_constant_types", {}).get(
+                    expr.name
+                )
             )
         if isinstance(expr, (VariableNode, BackendVariableNode)):
             name = getattr(expr, "name", None)
@@ -9941,6 +10047,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 or self.metal_program_scope_value_global_types.get(name)
                 or self.metal_global_resource_value_type(name)
                 or getattr(self, "metal_cbuffer_member_types", {}).get(name)
+                or getattr(self, "metal_program_scope_constant_types", {}).get(name)
             )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
@@ -10278,7 +10385,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 if descriptor is not None:
                     return descriptor["return_type"]
-            if is_texture_sampling_operation(func_name) and args:
+            if (
+                is_texture_sampling_operation(func_name)
+                or is_texel_fetch_operation(func_name)
+            ) and args:
+                if self.is_plain_depth_read(func_name, args):
+                    # generate_texture_call widens the scalar MSL depth read to (d, 0, 0, 1).
+                    return "float4"
                 return self.texture_sample_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in getattr(self, "function_return_types", {}):
@@ -11417,6 +11530,13 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     left = f"int({left})"
                 if self.map_type(self.expression_result_type(expr.right)) == "bool":
                     right = f"int({right})"
+            if operator in {"<", ">", "<=", ">=", "==", "!="}:
+                left, right = metal_sign_matched_comparison_operands(
+                    self.map_type(self.expression_result_type(expr.left)),
+                    self.map_type(self.expression_result_type(expr.right)),
+                    left,
+                    right,
+                )
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
@@ -11805,6 +11925,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
             if mesh_output_call is not None:
                 return mesh_output_call
+
+            if func_name == TEXTURE_RESIDENCY_OPERATION:
+                return metal_texture_residency_call(self, expr.args, expr)
+            if func_name == TEXTURE_RESIDENT_OPERATION:
+                return metal_texture_resident_call(self, expr.args, expr)
 
             if is_texture_lod_clamp_operation(func_name):
                 return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)
@@ -13739,7 +13864,6 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
                 continue
             if operation in {
-                "GenerateIntersection",
                 "CommitProceduralPrimitiveHit",
                 "CandidateTriangleVertexPositions",
                 "CommittedTriangleVertexPositions",
@@ -14055,6 +14179,17 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             )
         intersector_type = f"intersector<{intersector_tags}>"
         intersection_type = f"intersection_result<{intersector_tags}>"
+        flag_statements, flags_reason = metal_trace_ray_flag_statements(
+            intersector_name,
+            raw_args[1],
+            rendered_args[1],
+            self.literal_int_constants,
+            lambda: self.next_metal_temp_variable("ray_flags"),
+        )
+        if flags_reason is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay ray flags", flags_reason
+            )
 
         lines = [
             f"ray {ray_name}",
@@ -14063,6 +14198,7 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             f"{ray_name}.min_distance = {min_distance}",
             f"{ray_name}.max_distance = {max_distance}",
             f"{intersector_type} {intersector_name}",
+            *flag_statements,
             (
                 f"{intersection_type} {intersection_name} = "
                 f"{intersector_name}.intersect({', '.join(intersect_args)})"
@@ -15596,7 +15732,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
                 arguments[3]
             )
-            return "\n".join([payload_assignment, grid_assignment])
+            # DispatchMesh implies GroupMemoryBarrierWithGroupSync: the payload
+            # the mesh grid reads holds every thread's groupshared writes.
+            return "\n".join(
+                [
+                    "threadgroup_barrier(mem_flags::mem_threadgroup)",
+                    payload_assignment,
+                    grid_assignment,
+                ]
+            )
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
@@ -15760,6 +15904,23 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_reference(args[0])
+            if len(args) > 2 and length_expr is not None:
+                # semantics.buffer_strides answers the stride of a laid-out buffer; one left here holds
+                # MSL-laid-out elements, whose stride is their size.
+                buffer_type = str(
+                    self.resource_base_type(self.expression_result_type(args[0]))
+                )
+                if "<" not in buffer_type or not buffer_type.endswith(">"):
+                    raise BufferLengthUnsupportedError(
+                        "metal",
+                        f"buffer_dimensions({self.generate_expression(args[0])}) has a stride output "
+                        "and no known element type",
+                    )
+                element = self.structured_buffer_element_type(buffer_type)
+                return (
+                    f"{self.generate_expression(args[1])} = {length_expr}, "
+                    f"{self.generate_expression(args[2])} = uint(sizeof({element}))"
+                )
             if length_expr is None:
                 raise BufferLengthUnsupportedError(
                     "metal",
@@ -15768,7 +15929,16 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 )
             if len(args) >= 2:
                 target = self.generate_expression(args[1])
-                return f"{target} = {length_expr}"
+                if len(args) < 3:
+                    return f"{target} = {length_expr}"
+                # GetDimensions(count, stride): the element stride is the size of the element type the buffer
+                # is declared with, which carries the source layout; sizeof does not read the element.
+                buffer = self.generate_expression(args[0])
+                stride = self.generate_expression(args[2])
+                return (
+                    f"{target} = {length_expr}, "
+                    f"{stride} = uint(sizeof({buffer}[0]))"
+                )
             return length_expr
         return None
 
@@ -16430,6 +16600,8 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if resource_attr:
                 return resource_attr
         if self.is_resource_parameter_type(raw_param_type):
+            return ""
+        if is_metal_colour_attachment_input_parameter(self, node, shader_type):
             return ""
         if shader_type in {"vertex", "fragment"}:
             return " [[stage_in]]"
@@ -20118,6 +20290,16 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         declared_types = {}
         for parameter in getattr(func, "parameters", []) or []:
             declared_types[parameter.name] = self.metal_parameter_raw_type(parameter)
+        # Program-scope groupshared values lowered into this entry are its locals.
+        for (
+            node
+        ) in self.metal_lowered_program_scope_groupshared_globals_by_function.get(
+            id(func), []
+        ):
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            name = self.metal_variable_name(node)
+            if name and raw_type is not None:
+                declared_types[name] = self.type_name_string(raw_type)
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
             if not isinstance(node, VariableNode):
                 continue
@@ -21503,6 +21685,20 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 func_name, index
             ):
                 continue
+            if (
+                isinstance(arg, ArrayLiteralNode)
+                and split_array_type_suffix(self.type_name_string(param_type) or "")[1]
+            ):
+                # A C array parameter is a pointer, and no Metal expression
+                # yields the address of an array literal.
+                args.append(
+                    self.refuse_lowering(
+                        f"array literal argument to '{func_name}': Metal has no array literal "
+                        "expression for an array parameter; a materialized array temporary is "
+                        "required"
+                    )
+                )
+                continue
             native_type = self.metal_native_narrow_bitcast_storage_type(param_type)
             parameters = self.function_parameter_nodes.get(func_name, [])
             qualifiers = (
@@ -22735,6 +22931,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
     def generate_glsl_buffer_block_store(self, target, rhs, op):
+        component_store = metal_buffer_component_store(self, target, rhs, op)
+        if component_store is not None:
+            return component_store
         access = self.glsl_buffer_block_array_access(target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
@@ -24086,7 +24285,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             or len(args) < 2
         ):
             return
-        coord_type = self.expression_result_type(args[1])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[1])
+        )
         if coord_type is None or self.is_integer_coordinate_type(coord_type):
             return
         raise ValueError(
@@ -24113,7 +24314,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         expected_dimension = self.resource_coordinate_dimension(texture_type)
         if expected_dimension is None:
             return
-        coord_type = self.expression_result_type(args[1])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[1])
+        )
         coord_dimension = integer_coordinate_dimension_from_type_name(
             self.type_name_string(coord_type), self.map_type
         )
@@ -24146,7 +24349,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if expected_dimension is None:
             return
         for offset_index in offset_indices:
-            offset_type = self.expression_result_type(args[offset_index])
+            offset_type = self.metal_referenced_value_type(
+                self.expression_result_type(args[offset_index])
+            )
             if offset_type is None:
                 continue
             if not self.is_integer_coordinate_type(offset_type):
@@ -24200,7 +24405,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         expected_dimension = self.resource_query_lod_coordinate_dimension(texture_type)
         if expected_dimension is None:
             return
-        coord_type = self.expression_result_type(args[coord_index])
+        coord_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[coord_index])
+        )
         if coord_type is None:
             return
         coord_dimension = self.query_lod_coordinate_dimension(coord_type)
@@ -24239,7 +24446,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         if expected_dimension is None:
             return
         for gradient_index in gradient_indices:
-            gradient_type = self.expression_result_type(args[gradient_index])
+            gradient_type = self.metal_referenced_value_type(
+                self.expression_result_type(args[gradient_index])
+            )
             if gradient_type is None:
                 continue
             gradient_dimension = self.gradient_argument_dimension(gradient_type)
@@ -24284,13 +24493,26 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         sampler_names = {
             sampler_variable.name for sampler_variable, _, _ in self.sampler_variables
         } | self.current_sampler_parameters
-        return shared_texture_argument_diagnostic_type(
+        argument_type = shared_texture_argument_diagnostic_type(
             arg,
             self.texture_resource_type,
             self.expression_name,
             self.expression_result_type,
             sampler_names,
         )
+        # A reference argument such as `constant float &bias` names its referent's value.
+        if argument_type is None:
+            return None
+        return self.reference_referent_type_name(argument_type) or argument_type
+
+    @staticmethod
+    def metal_referenced_value_type(vtype):
+        """Return the value type a reference-typed expression reads as."""
+        if isinstance(vtype, ReferenceType):
+            return vtype.referenced_type
+        if isinstance(vtype, str) and vtype.rstrip().endswith("&"):
+            return vtype.rstrip().rstrip("&").rstrip()
+        return vtype
 
     def validate_compare_argument(self, func_name, args):
         compare_index = texture_compare_argument_index(
@@ -24300,7 +24522,9 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
         )
         if compare_index is None:
             return
-        compare_type = self.expression_result_type(args[compare_index])
+        compare_type = self.metal_referenced_value_type(
+            self.expression_result_type(args[compare_index])
+        )
         if compare_type is None or self.is_scalar_floating_type(compare_type):
             return
         raise ValueError(

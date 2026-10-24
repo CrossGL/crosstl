@@ -9,7 +9,7 @@ touches Metal or Direct3D.
 
 - **Pull request tier.** Runs on every push.
   - Translator and backend tests for every component on Python 3.11 and
-    3.15 on Ubuntu, plus one job each on macOS and Windows that runs every
+    3.15 on Ubuntu, plus sharded macOS and Windows jobs that run every
     component on Python 3.13.
   - The complete core suite.
   - Shader validators and runtime parity on all three platforms.
@@ -24,9 +24,11 @@ touches Metal or Direct3D.
   MLX native, parity, corpus and host tier runs in the queue only when the
   group changes `demos/integrations/mlx/**` or the MLX workflow, as for pushes
   to `main`. A pull request merges only when this run passes.
-- **Main and nightly.** Pushes to `main` repeat the full Python sweep and
-  publish coverage. The MLX tier, conformance, the corpus and coverage also run
-  nightly, and fuzzing runs weekly.
+- **Main and nightly.** Pushes to `main` publish coverage. The translator,
+  backend, complete, examples and conformance workflows skip a push whose
+  commit already passed the merge queue, and run in full for any other commit.
+  The MLX tier, conformance, the corpus and coverage also run nightly, and
+  fuzzing runs weekly.
 
 A maintainer can request the merge-queue tier on a pull request before
 queueing it. The `ci:full` label applies from the next push, and
@@ -59,11 +61,11 @@ A gating workflow runs on every pull request and uses a planning job, not a
 
 | Workflow | Checks |
 |---|---|
-| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each |
+| `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each, and every test on macOS in two |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into six shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite, split by test id into eight shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
-| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md) |
+| `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main` |
 | `lint.yml` | The pinned black hook on the Python files a change touches, which pre-commit.ci skips |
 | `demo-project-testing.yml` | The MLX port: smoke tier on pull requests, full native, parity, corpus and host tier on `main` and nightly |
 | `computesharp.yml` | The ComputeSharp port, on Metal and OpenGL; its plan job skips the port's jobs when a change cannot affect it, and it ends in one `ComputeSharp validation result` check |
@@ -71,10 +73,11 @@ A gating workflow runs on every pull request and uses a planning job, not a
 | `corpus.yml` | The pinned third-party corpus in `tests/conformance/corpus` |
 | `fuzz.yml` | Weekly crash fuzzing of every importer |
 | `demo.yml`, `native-host-loader.yml`, `deferred-native-compilation.yml` | The open-source porting demo and the native host contracts, for changes to their paths |
-| `docs.yml` | The Sphinx documentation build |
+| `docs.yml` | The Sphinx documentation build, which fails on any warning |
 | `release.yml` | Distribution builds for packaging changes, and publishing from a release tag (see [RELEASING.md](RELEASING.md)) |
-| `labels.yml` | Syncs the labels in `.github/labels.yml` |
+| `labels.yml` | Syncs the labels in `.github/labels.yml`; hourly, labels each open pull request that has none from the paths it changes |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
+| `orphaned-runs.yml` | Every 20 minutes: cancels the runs of merge groups the queue has discarded (`tools/orphaned_runs.py`), so they stop holding runners |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.
@@ -102,7 +105,11 @@ and the test jobs size `pytest-xdist` to match. Jobs that install with pip
 cache their downloads. Every job has a timeout, and every workflow declares
 least-privilege permissions.
 
-A new push cancels the superseded pull-request runs of the test workflows. The
+A new push cancels the superseded pull-request runs of the test workflows.
+Coverage and the porting demo queue pushes to `main` behind the run in
+progress, and a newer push replaces the one still waiting, so a burst of merges
+measures and publishes only the newest commit. The other workflows never
+cancel a run on `main`, because a cancelled run turns the status badge red. The
 MLX workflow lets each leg finish, so a long Metal run does not hold up the
 next revision's DirectX or OpenGL legs; cancel superseded MLX runs by hand.
 Suites that take many minutes on macOS or Windows belong in the merge-queue,

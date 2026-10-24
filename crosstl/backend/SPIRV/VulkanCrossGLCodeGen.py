@@ -1373,6 +1373,7 @@ class VulkanToCrossGLConverter:
             "mediump",
             "noperspective",
             "patch",
+            "perprimitiveext",
             "pervertexext",
             "precise",
             "sample",

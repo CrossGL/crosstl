@@ -118,6 +118,14 @@ SOURCES = {
         "d2978a288ad44a3ffc87fa6d4cb4f28564da1ec1fed2f4f31ecd11450d148e20",
         "Mojo 1.1.0 floating-point predicates std.math re-exports",
     ),
+    # OpenCL C is pinned to LLVM 18.1.3, the clang-18 of the Ubuntu 24.04 runner image that validates the probes.
+    "opencl": Source(
+        "llvm/llvm-project",
+        "c13b7485b87909fcf739f62cfa382b55407433c0",
+        "clang/lib/Headers/opencl-c.h",
+        "92425955d27a4f703fc88671c4ae6722fcdbf77d61c3b0f1df13c4310bec6b37",
+        "LLVM 18.1.3 OpenCL C built-in function declarations",
+    ),
     # rust-gpu v0.11.0, the release CI builds the probes with, and the num-traits and glam versions its lock file
     # resolves for spirv-std.
     "rust-arch": Source(
