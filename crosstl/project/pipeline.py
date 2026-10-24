@@ -30010,6 +30010,19 @@ def _tool_status(target: str) -> dict[str, Any]:
     }
 
 
+def _toolchain_unavailable_message(toolchain: Mapping[str, Any]) -> str:
+    """Name every tool an unavailable validation toolchain is missing from ``PATH``."""
+    missing_tools = [
+        str(tool["name"])
+        for tool in toolchain.get("tools", ())
+        if isinstance(tool, Mapping) and tool.get("name") and not tool.get("available")
+    ]
+    if not missing_tools:
+        return f"No validation toolchain is available for target {toolchain['target']}"
+    verb = "is" if len(missing_tools) == 1 else "are"
+    return f"{', '.join(missing_tools)} {verb} not on PATH"
+
+
 def _status_counts(
     records: Sequence[Any], field_name: str, statuses: frozenset[str]
 ) -> dict[str, int]:
@@ -31498,7 +31511,7 @@ def _validate_artifacts(
                 ProjectDiagnostic(
                     severity="warning",
                     code="project.validate.toolchain-unavailable",
-                    message=f"No validation toolchain is available for target {toolchain['target']}",
+                    message=_toolchain_unavailable_message(toolchain),
                     location=_config_location(config),
                     target=toolchain["target"],
                     missing_capabilities=["toolchain.validation"],
