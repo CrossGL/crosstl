@@ -1,139 +1,337 @@
-"""Resource slots that name an enumerator or an integer constant bind at that integer in GLSL and SPIR-V."""
+"""Index attributes that name enumerators or integer constants keep their value on every target.
+
+Metal samples index resources with enumerators of a header shared with the host (``[[buffer(BufferIndexColors)]]``),
+and GLSL layout qualifiers take constant expressions (``layout(location = BASE + 1)``). The generators read only
+integer literals: the HLSL generator assigned the next free register, the Metal generator dropped the attribute and
+the GLSL generator refused or printed the AST, so the binding moved without a diagnostic.
+"""
 
 import re
 import shutil
 import subprocess
+import textwrap
+
+import pytest
 
 import crosstl
+from crosstl.translator import parse
+from crosstl.translator.semantics import BindingIndexUnresolvedError
+from crosstl.translator.semantics.binding_constants import fold_binding_constants
 
-METAL_ENUM_SLOTS = """#include <metal_stdlib>
-using namespace metal;
-typedef enum BufferIndex {
-    BufferIndexParams = 2,
-    BufferIndexWeights,
-} BufferIndex;
-typedef enum TextureIndex { TextureIndexColor } TextureIndex;
-struct Params { float4 tint; };
-fragment float4 fmain(float4 pos [[position]],
-                      constant Params &params [[buffer(BufferIndexParams)]],
-                      device const float *weights [[buffer(BufferIndexWeights)]],
-                      texture2d<float> color [[texture(TextureIndexColor)]]) {
-    return params.tint * weights[0] * color.read(uint2(pos.xy));
-}
-"""
-
-CROSSGL_CONSTANT_SLOT = """
-shader main {
-    const int PARAMS_SLOT = 5;
-    cbuffer Params @binding(PARAMS_SLOT) { vec4 tint; };
-    fragment {
-        vec4 main() @ gl_FragColor { return tint; }
+METAL_ENUM_BINDINGS = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+    typedef enum BufferIndex { BufferIndexUniforms = 3, BufferIndexColors = 7 } BufferIndex;
+    typedef enum TextureIndex { TextureIndexBase = 2 } TextureIndex;
+    struct Uniforms { float4 tint; };
+    struct VertexOut { float4 position [[position]]; float2 uv; };
+    vertex VertexOut vmain(uint vid [[vertex_id]],
+                           constant Uniforms &u [[buffer(BufferIndexUniforms)]]) {
+        VertexOut out;
+        out.position = float4(float(vid), 0.0, 0.0, 1.0) * u.tint;
+        out.uv = float2(0.5);
+        return out;
     }
-}
-"""
-
-
-def _translate(tmp_path, source, name):
-    path = tmp_path / name
-    path.write_text(source)
-    return crosstl.translate(str(path), backend="opengl", format_output=False)
-
-
-def test_glsl_binds_resources_at_the_enumerators_they_name(tmp_path):
-    glsl = _translate(tmp_path, METAL_ENUM_SLOTS, "shader.metal")
-
-    # BufferIndexParams = 2, BufferIndexWeights counts on to 3, TextureIndexColor is 0.
-    assert re.search(r"layout\(std140, binding = 2\) uniform \w+", glsl), glsl
-    assert re.search(r"layout\(std430, binding = 3\) readonly buffer \w+", glsl), glsl
-    assert re.search(r"layout\(binding = 0\) uniform sampler2D color;", glsl), glsl
-    if shutil.which("glslangValidator"):
-        result = subprocess.run(
-            ["glslangValidator", "--stdin", "-S", "frag"],
-            input=glsl,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_glsl_binds_a_block_at_the_constant_it_names(tmp_path):
-    glsl = _translate(tmp_path, CROSSGL_CONSTANT_SLOT, "shader.cgl")
-
-    assert re.search(r"layout\(std140, binding = 5\) uniform Params", glsl), glsl
-
-
-def test_spirv_binds_resources_at_the_enumerators_they_name(tmp_path):
-    path = tmp_path / "shader.metal"
-    path.write_text(METAL_ENUM_SLOTS)
-    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
-
-    bindings = {
-        int(binding) for binding in re.findall(r"OpDecorate %\w+ Binding (\d+)", spirv)
+    fragment float4 fmain(VertexOut in [[stage_in]],
+                          device const float4 *colors [[buffer(BufferIndexColors)]],
+                          texture2d<float> base [[texture(TextureIndexBase)]],
+                          sampler smp [[sampler(TextureIndexBase)]]) {
+        return base.sample(smp, in.uv) * colors[0];
     }
-    assert {2, 3} <= bindings, spirv
+    """)
+
+CGL_CONSTANT_EXPRESSIONS = textwrap.dedent("""
+    shader main {
+        enum Slots { First, Second = 4, Third, Fourth = Second + Third * 2 };
+        enum Scoped { X = 2, Y };
+        const int BASE = 3;
+        struct S { vec4 p; };
+        vertex {
+            vec4 main(StructuredBuffer<S> s @buffer(Third) @constant,
+                      StructuredBuffer<S> t @buffer(Scoped::Y) @constant,
+                      StructuredBuffer<S> u @buffer((BASE + 1) * 2) @constant,
+                      StructuredBuffer<S> v @buffer(Fourth) @constant) @gl_Position {
+                return s[0].p + t[0].p + u[0].p + v[0].p;
+            }
+        }
+    }
+    """)
+
+GLSL_LOCATION_EXPRESSION = textwrap.dedent("""
+    #version 450
+    const int BASE_LOCATION = 2;
+    layout(location = BASE_LOCATION + 1) in vec3 position;
+    layout(location = 0) out vec4 color;
+    void main() { color = vec4(position, 1.0); }
+    """)
 
 
-METAL_NAMED_ATTACHMENTS = """#include <metal_stdlib>
-using namespace metal;
-typedef enum RenderTarget {
-    RenderTargetLighting = 0,
-    RenderTargetAlbedo,
-    RenderTargetNormal,
-    RenderTargetDepth,
-} RenderTarget;
-struct GBufferData {
-    half4 lighting [[color(RenderTargetLighting)]];
-    half4 albedo [[color(RenderTargetAlbedo)]];
-    half4 normal [[color(RenderTargetNormal)]];
-    float depth [[color(RenderTargetDepth)]];
-};
-struct VOut { float4 position [[position]]; };
-fragment GBufferData gbuffer(VOut in [[stage_in]]) {
-    GBufferData out;
-    out.lighting = half4(0.0h);
-    out.albedo = half4(1.0h);
-    out.normal = half4(0.5h);
-    out.depth = in.position.z;
-    return out;
-}
-"""
+def _translate(tmp_path, source, suffix, backend):
+    path = tmp_path / f"shader{suffix}"
+    path.write_text(source, encoding="utf-8")
+    # Unformatted output: the formatter depends on whether clang-format and SPIRV-Tools are installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
-def test_metal_colour_attachments_named_by_enumerators_keep_their_index(tmp_path):
-    path = tmp_path / "shader.metal"
-    path.write_text(METAL_NAMED_ATTACHMENTS)
-    crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
-    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
-
-    # Every attachment used to collapse to colour 0.
-    for member, attribute in (
-        ("lighting", "@gl_FragColor"),
-        ("albedo", "@gl_FragColor1"),
-        ("normal", "@gl_FragColor2"),
-        ("depth", "@gl_FragColor3"),
-    ):
-        assert re.search(rf"\b{member} {attribute}\b", crossgl), crossgl
-    # A colour attachment may be a scalar, as MSL and HLSL allow.
-    assert re.search(r"float depth\s*:\s*SV_TARGET3;", hlsl), hlsl
-    assert re.search(r"albedo\s*:\s*SV_TARGET1;", hlsl), hlsl
+def _matches(code, pattern):
+    """Search a regex, or an ``(OpName, decoration)`` pair resolved through the SPIR-V names."""
+    if isinstance(pattern, str):
+        return re.search(pattern, code)
+    name, decoration = pattern
+    ids = re.findall(rf'OpName (%\S+) "{name}"', code)
+    return any(
+        re.search(rf"OpDecorate {re.escape(i)} {decoration}\b", code) for i in ids
+    )
 
 
-METAL_FUNCTION_CONSTANT_EXPRESSION = """#include <metal_stdlib>
-using namespace metal;
-#define FC_NORM 1700
-constant bool FC_use_scale [[function_constant(FC_NORM + 0)]];
-kernel void scale(device float *out [[buffer(0)]], uint id [[thread_position_in_grid]]) {
-    out[id] = FC_use_scale ? 2.0 : 1.0;
-}
-"""
+def _crossgl_bindings(source):
+    program = parse(source)
+    fold_binding_constants(program, "opengl")
+    return {
+        parameter.name: [
+            argument.value
+            for attribute in parameter.attributes
+            if attribute.name == "buffer"
+            for argument in attribute.arguments
+        ]
+        for parameter in next(iter(program.stages.values())).entry_point.parameters
+    }
 
 
-def test_spirv_specialization_id_folds_an_integer_expression(tmp_path):
-    path = tmp_path / "shader.metal"
-    path.write_text(METAL_FUNCTION_CONSTANT_EXPRESSION)
-    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
-    glsl = crosstl.translate(str(path), backend="opengl", format_output=False)
+def test_crossgl_enumerators_and_constant_expressions_fold():
+    assert _crossgl_bindings(CGL_CONSTANT_EXPRESSIONS) == {
+        "s": [5],
+        "t": [3],
+        "u": [8],
+        "v": [14],
+    }
 
-    # Before, SPIR-V refused the id: "specialization constant 'FC_use_scale' requires an integer id".
-    assert re.search(r"OpDecorate %\w+ SpecId 1700\b", spirv), spirv
-    assert "layout(constant_id = 1700) const bool FC_use_scale" in glsl, glsl
+
+@pytest.mark.parametrize(
+    ("backend", "patterns"),
+    [
+        (
+            "directx",
+            [
+                r"Uniforms> u : register\(b3\)",
+                r"colors : register\(t7\)",
+                r"base : register\(t2\)",
+                r"smp : register\(s2\)",
+            ],
+        ),
+        (
+            "metal",
+            [
+                r"Uniforms\s*&\s*u \[\[buffer\(3\)\]\]",
+                r"\*\s*colors \[\[buffer\(7\)\]\]",
+                r"base \[\[texture\(2\)\]\]",
+                r"smp \[\[sampler\(2\)\]\]",
+            ],
+        ),
+        (
+            "opengl",
+            [
+                r"binding = 3\) uniform Uniforms",
+                r"binding = 7\) readonly buffer colorsBuffer",
+                r"binding = 2\) uniform sampler2D base",
+            ],
+        ),
+        ("vulkan", [("uUniform", "Binding 3"), ("colors", "Binding 7")]),
+    ],
+)
+def test_metal_enumerator_bindings_survive(tmp_path, backend, patterns):
+    code = _translate(tmp_path, METAL_ENUM_BINDINGS, ".metal", backend)
+    for pattern in patterns:
+        assert _matches(code, pattern), (pattern, code)
+
+
+def test_metal_enumerator_bindings_compile(tmp_path):
+    if not shutil.which("xcrun"):
+        pytest.skip("the Metal toolchain is not installed")
+    code = _translate(tmp_path, METAL_ENUM_BINDINGS, ".metal", "metal")
+    (tmp_path / "a.metal").write_text(code, encoding="utf-8")
+    result = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "metal", "-c", "a.metal", "-o", "a.air"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+@pytest.mark.parametrize(
+    ("backend", "pattern"),
+    [
+        ("opengl", r"layout\(location = 3\) in vec3 position;"),
+        ("vulkan", ("CrossGL_fragment_input_input_position", "Location 3")),
+        ("directx", r"float3 position\s*: TEXCOORD3;"),
+        ("metal", r"float3 position \[\[user\(locn3\)\]\];"),
+    ],
+)
+def test_glsl_location_expression_survives(tmp_path, backend, pattern):
+    code = _translate(tmp_path, GLSL_LOCATION_EXPRESSION, ".frag", backend)
+    assert _matches(code, pattern), code
+    assert "BinaryOpNode" not in code
+
+
+def _shader(declarations, parameter_attribute):
+    return textwrap.dedent(f"""
+        shader main {{
+            {declarations}
+            struct S {{ vec4 p; }};
+            vertex {{
+                vec4 main(StructuredBuffer<S> s {parameter_attribute} @constant) @gl_Position {{
+                    return s[0].p;
+                }}
+            }}
+        }}
+        """)
+
+
+@pytest.mark.parametrize(
+    ("declarations", "attribute", "message"),
+    [
+        ("", "@buffer(Missing)", "Missing is not an enumerator or integer constant"),
+        (
+            "const int SPEC @constant_id(0) = 3;",
+            "@buffer(SPEC)",
+            "SPEC is a specialization constant",
+        ),
+        ("const float SCALE = 2.0;", "@buffer(SCALE)", "SCALE is not an integer"),
+        ("const int BASE = 1;", "@buffer(BASE - 2)", "evaluates to -1"),
+        (
+            "enum A { P = 1 }; enum B { P = 2 };",
+            "@buffer(P)",
+            "P names several constants",
+        ),
+        ("enum Loop { Q = Q + 1 };", "@buffer(Q)", "defined in terms of itself"),
+    ],
+)
+@pytest.mark.parametrize("backend", ["opengl", "directx", "metal", "vulkan"])
+def test_unresolvable_index_is_refused(
+    tmp_path, backend, declarations, attribute, message
+):
+    with pytest.raises(BindingIndexUnresolvedError, match=re.escape(message)):
+        _translate(tmp_path, _shader(declarations, attribute), ".cgl", backend)
+
+
+def test_literal_and_register_spellings_are_left_to_the_generators():
+    program = parse(textwrap.dedent("""
+            shader main {
+                cbuffer Constants @register(b1) @space(space2) { vec4 tint; };
+                struct S { vec4 p; };
+                vertex {
+                    vec4 main(StructuredBuffer<S> s @buffer(4) @constant) @gl_Position {
+                        return s[0].p * tint;
+                    }
+                }
+            }
+            """))
+    assert fold_binding_constants(program, "metal") == 0
+
+
+WGSL_HOST_GROUP = textwrap.dedent("""
+    shader main {
+        const int SLOT = 3;
+        layout(set = BIND_GROUP, binding = SLOT + 1) uniform sampler2D colorTexture;
+        fragment {
+            vec4 main() {
+                return texture(colorTexture, vec2(0.5));
+            }
+        }
+    }
+    """)
+
+
+def test_wgsl_keeps_an_undeclared_index_for_the_host_and_folds_the_rest(tmp_path):
+    code = _translate(tmp_path, WGSL_HOST_GROUP, ".cgl", "wgsl")
+    assert "@group(BIND_GROUP) @binding(4)" in code
+    assert "@binding(SLOT" not in code
+
+
+@pytest.mark.parametrize("backend", ["opengl", "directx", "metal", "vulkan"])
+def test_other_targets_refuse_the_undeclared_index(tmp_path, backend):
+    with pytest.raises(BindingIndexUnresolvedError, match="BIND_GROUP"):
+        _translate(tmp_path, WGSL_HOST_GROUP, ".cgl", backend)
+
+
+def test_wgsl_still_refuses_a_declared_constant_it_cannot_fold(tmp_path):
+    source = WGSL_HOST_GROUP.replace("const int SLOT = 3;", "const float SLOT = 3.0;")
+    with pytest.raises(BindingIndexUnresolvedError, match="SLOT is not an integer"):
+        _translate(tmp_path, source, ".cgl", "wgsl")
+
+
+METAL_FUNCTION_CONSTANTS = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+    typedef enum FunctionConstantIndex {
+        FunctionConstantBaseColor = 4,
+        FunctionConstantNormal
+    } FunctionConstantIndex;
+    constant bool hasBase [[function_constant(FunctionConstantBaseColor)]];
+    constant bool hasNormal [[function_constant(FunctionConstantNormal)]];
+    constant bool hasAny = hasBase || hasNormal;
+    struct V { float4 p [[position]]; float2 uv; };
+    fragment float4 shade(V in [[stage_in]],
+                          texture2d<float> base [[texture(0), function_constant(hasBase)]],
+                          sampler s [[sampler(0)]]) {
+        float4 c = float4(1.0);
+        if (hasBase) { c = base.sample(s, in.uv); }
+        if (hasAny) { c.a = 0.5; }
+        return c;
+    }
+    """)
+
+
+@pytest.mark.parametrize(
+    ("backend", "patterns"),
+    [
+        (
+            "metal",
+            [
+                r"constant bool hasBase \[\[function_constant\(4\)\]\];",
+                r"constant bool hasNormal \[\[function_constant\(5\)\]\];",
+                r"base \[\[texture\(0\)\]\] \[\[function_constant\(hasBase\)\]\]",
+            ],
+        ),
+        (
+            "opengl",
+            [
+                r"layout\(constant_id = 4\) const bool hasBase",
+                r"layout\(constant_id = 5\) const bool hasNormal",
+            ],
+        ),
+        ("vulkan", [("hasBase", "SpecId 4"), ("hasNormal", "SpecId 5")]),
+    ],
+)
+def test_function_constant_indices_fold_and_conditions_stay(
+    tmp_path, backend, patterns
+):
+    code = _translate(tmp_path, METAL_FUNCTION_CONSTANTS, ".metal", backend)
+    for pattern in patterns:
+        assert _matches(code, pattern), (pattern, code)
+
+
+def test_function_constant_indices_compile_as_metal(tmp_path):
+    if not shutil.which("xcrun"):
+        pytest.skip("the Metal toolchain is not installed")
+    code = _translate(tmp_path, METAL_FUNCTION_CONSTANTS, ".metal", "metal")
+    (tmp_path / "a.metal").write_text(code, encoding="utf-8")
+    result = subprocess.run(
+        ["xcrun", "-sdk", "macosx", "metal", "-c", "a.metal", "-o", "a.air"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_function_constant_index_naming_a_specialization_constant_is_refused(tmp_path):
+    source = METAL_FUNCTION_CONSTANTS.replace(
+        "[[function_constant(FunctionConstantNormal)]]",
+        "[[function_constant(hasBase)]]",
+    )
+    with pytest.raises(BindingIndexUnresolvedError, match="hasBase"):
+        _translate(tmp_path, source, ".metal", "metal")

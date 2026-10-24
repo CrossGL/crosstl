@@ -15,7 +15,7 @@ from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
-from .binding_constants import fold_binding_constants
+from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -103,6 +103,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "BindingIndexUnresolvedError",
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
@@ -169,7 +170,11 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    User functions named like texture or image built-ins are first renamed, with the calls that resolve to them
+    Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
+    ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
+    :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
+    declare (:mod:`.binding_constants`).
+    User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
@@ -232,8 +237,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
-    fold_binding_constants(program)
     rename_colliding_functions(program)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)

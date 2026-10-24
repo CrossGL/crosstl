@@ -43,13 +43,13 @@ from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
+from .color_attachments import color_attachment_semantic, enumerator_index_values
 from .comparison_samplers import collect_comparison_sampler_ids
 from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
-from .enumerator_values import enumerator_values
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
@@ -3543,10 +3543,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         for enum in enums:
             if isinstance(enum, EnumNode):
                 self.register_metal_enum_arithmetic_contract(enum)
-        self.metal_enumerator_values = enumerator_values(
-            [enum for enum in enums if isinstance(enum, EnumNode)],
-            lambda value: self.generate_expression(value, False),
-        )
+        self.metal_enum_index_values = enumerator_index_values(enums)
         emitted_typedefs = []
         for alias in typedefs:
             if not isinstance(alias, TypeAliasNode):
@@ -23064,7 +23061,9 @@ float {scalar}(float value) {{
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
-                out = self.dynamic_fragment_output_semantic(name, args)
+                out = self.dynamic_fragment_output_semantic(
+                    name, args, context_kind=context_kind
+                )
             if out is None:
                 if args:
                     out = f"{name}({', '.join(args)})"
@@ -23081,19 +23080,13 @@ float {scalar}(float value) {{
             text = text[2:].lstrip()
         return text
 
-    def dynamic_fragment_output_semantic(self, name, args):
+    def dynamic_fragment_output_semantic(self, name, args, context_kind=None):
         if name == "color" and args:
-            index = None
-            if re.fullmatch(r"\d+", args[0]):
-                index = int(args[0])
-            else:
-                # An attachment named by an enumerator of the shared header.
-                index = (getattr(self, "metal_enumerator_values", None) or {}).get(
-                    args[0]
-                )
-            if index is not None:
-                return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
-            return "gl_FragColor"
+            return color_attachment_semantic(
+                args[0],
+                is_input=context_kind == "parameter",
+                enumerator_values=getattr(self, "metal_enum_index_values", {}),
+            )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
             return "gl_FragDepth"
         return None
