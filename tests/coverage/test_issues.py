@@ -126,9 +126,10 @@ def test_first_run_files_tracking_and_bug_issues():
     )
     assert bug.labels[0] == "bug"
     assert (
-        "python -m tools.coverage run --backend hlsl --direction output --feature b"
+        "python -m tools.coverage run --backend hlsl --direction output --feature b --keep probes"
         in bug.body
     )
+    assert "`probes/hlsl-output/b/` then holds the probe" in bug.body
 
 
 class _Repository(issues.GitHub):

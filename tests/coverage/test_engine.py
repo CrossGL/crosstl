@@ -236,6 +236,60 @@ def test_a_run_validates_each_distinct_source_once(monkeypatch):
     assert runner._verdicts is None
 
 
+def test_kept_folders_are_file_names_that_two_features_never_share():
+    from tools.coverage.model import kept_folder
+
+    assert kept_folder("glsl", "input", "abs") == "glsl-input/abs"
+    rust = kept_folder("rust", "output", "Float::abs")
+    assert (
+        rust.startswith("rust-output/Float_abs-")
+        and len(rust) == len("rust-output/Float_abs-") + 8
+    )
+    assert rust != kept_folder("rust", "output", "Float:abs")
+
+
+def test_a_kept_run_writes_each_probe_and_its_translations(monkeypatch, tmp_path):
+    from tools.coverage.model import Param
+
+    vec3 = Type("float", (3,))
+    feature = Feature(
+        "glsl", "function", "abs", Signature(vec3, (Param(vec3),)), crossgl="abs"
+    )
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, stage="compute", entry="", target="": validators.Verdict(
+            True, ""
+        ),
+    )
+    stale = tmp_path / "glsl-output" / "abs" / "translated.frag"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("from an earlier run")
+    results = runner.run(
+        [(feature, "output", "glsl"), (feature, "input", "glsl")],
+        workers=1,
+        keep=tmp_path,
+    )
+    assert [r.outcome for r in results] == ["supported", "supported"]
+    kept = {
+        str(path.relative_to(tmp_path)): path.read_text()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert sorted(kept) == [
+        "glsl-input/abs/crossgl.cgl",
+        "glsl-input/abs/probe.comp",
+        "glsl-input/abs/translated.comp",
+        "glsl-output/abs/native.comp",
+        "glsl-output/abs/probe.cgl",
+        "glsl-output/abs/translated.comp",
+    ]
+    assert "abs(" in kept["glsl-output/abs/probe.cgl"]
+    assert "#version" in kept["glsl-output/abs/translated.comp"]
+    assert runner._kept is None
+
+
 def test_fetch_rejects_a_changed_upstream_file(monkeypatch, tmp_path):
     monkeypatch.setenv("CROSSTL_COVERAGE_CACHE", str(tmp_path))
     source = upstream.SOURCES["glsl"]
@@ -323,7 +377,7 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(validators, "can_lower", lambda language, target="": True)
     measured = []
 
-    def run(jobs, workers=None):
+    def run(jobs, workers=None, keep=None):
         measured.extend((f.name, direction) for f, direction, _ in jobs)
         return [Result(f, direction, "supported") for f, direction, _ in jobs]
 

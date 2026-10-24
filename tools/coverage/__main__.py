@@ -38,6 +38,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--output", type=Path, default=Path("coverage.json"))
     run.add_argument(
+        "--keep",
+        type=Path,
+        metavar="DIR",
+        help="write each probe and CrossTL's translations of it to DIR/<language>-<direction>/<feature>/",
+    )
+    run.add_argument(
         "--jobs", type=int, default=0, help="worker processes; default: up to 8"
     )
     run.add_argument(
@@ -143,7 +149,7 @@ def _run(args: argparse.Namespace) -> int:
             if language not in backends:
                 continue
             jobs += [(feature, direction, language) for feature in feature_list]
-    results = runner.run(jobs, args.jobs or None)
+    results = runner.run(jobs, args.jobs or None, keep=args.keep)
     if args.execute:
         results, used = execution.run(results)
         executed = sum(1 for r in results if r.runtime)
@@ -162,6 +168,8 @@ def _run(args: argparse.Namespace) -> int:
                 f"{result.feature.language} {result.direction} {result.feature.name} {result.outcome}{detail}"
             )
     print(f"wrote {args.output}")
+    if args.keep:
+        print(f"kept the probes and their translations in {args.keep}")
     return 0
 
 

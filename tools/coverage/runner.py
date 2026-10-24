@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
 from . import execution, probes, spirv_input, validators
-from .model import ROUND_TRIPS, Feature, Result
+from .model import ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import lower
 
 OUTPUT_BACKENDS = {
@@ -88,11 +89,23 @@ def translate(source: str, suffix: str, backend: str, source_backend: str) -> st
 # already checked, so a run validates each distinct source once. The directory lives for one run and is shared by its
 # worker processes; a verdict is never reused across runs, where the tool might differ.
 _verdicts: str | None = None
+# Where ``run --keep`` writes each probe and CrossTL's translations of it; set in each worker process like
+# ``_verdicts``.
+_kept: str | None = None
 
 
-def _remember(directory: str | None) -> None:
-    global _verdicts
-    _verdicts = directory
+def _remember(verdicts: str | None, kept: str | None = None) -> None:
+    global _verdicts, _kept
+    _verdicts, _kept = verdicts, kept
+
+
+def _keep(
+    feature: Feature, direction: str, language: str, name: str, text: str
+) -> None:
+    if _kept:
+        folder = Path(_kept, kept_folder(language, direction, feature.name))
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(text)
 
 
 def _verdict(
@@ -154,6 +167,7 @@ def _native_rejection(feature: Feature, language: str) -> str:
         native = probes.build(feature, language)
     except probes.ProbeError:
         return ""
+    _keep(feature, "output", language, "native" + native.suffix, native.source)
     verdict = _validated(
         language, native.source, feature.stage, native.entry, feature.target
     )
@@ -178,6 +192,7 @@ def run_output(feature: Feature, language: str) -> Result:
         return result("refused", str(error))
     except probes.ProbeError as error:
         return result("untested", str(error))
+    _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
     rejected = _native_rejection(feature, language)
     if rejected:
         return result("untested", f"the probe itself is rejected: {rejected}")
@@ -190,6 +205,13 @@ def run_output(feature: Feature, language: str) -> Result:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
+    _keep(
+        feature,
+        "output",
+        language,
+        "translated" + validators.suffix(language, feature.stage),
+        translated,
+    )
     if not validators.available(language, feature.target):
         tool = (
             validators.missing(language, feature.target) or validators.TOOLS[language]
@@ -224,6 +246,7 @@ def run_input(feature: Feature, language: str) -> Result:
             probe = probes.build(feature, language)
     except probes.ProbeError as error:
         return result("untested", str(error))
+    _keep(feature, "input", language, "probe" + probe.suffix, probe.source)
     if not validators.available(language, feature.target):
         tool = (
             validators.missing(language, feature.target) or validators.TOOLS[language]
@@ -241,6 +264,7 @@ def run_input(feature: Feature, language: str) -> Result:
         # imports the probe to CrossGL and, for OpenCL C, lowers its kernel parameters for the target in one call.
         if emitted == language:
             crossgl = translate(probe.source, probe.suffix, "cgl", backend)
+            _keep(feature, "input", language, "crossgl.cgl", crossgl)
             translated = translate(crossgl, ".cgl", OUTPUT_BACKENDS[language], "cgl")
         else:
             translated = translate(
@@ -250,6 +274,13 @@ def run_input(feature: Feature, language: str) -> Result:
         return result("refused", str(error))
     except Broken as error:
         return result("wrong", str(error))
+    _keep(
+        feature,
+        "input",
+        language,
+        "translated" + validators.suffix(emitted, feature.stage),
+        translated,
+    )
     verdict = _validated(emitted, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
@@ -263,6 +294,12 @@ def run_input(feature: Feature, language: str) -> Result:
 
 def _job(job: tuple[Feature, str, str]) -> Result:
     feature, direction, language = job
+    if _kept:
+        # Files an earlier run kept for this probe would sit beside this run's as if they belonged to it.
+        shutil.rmtree(
+            Path(_kept, kept_folder(language, direction, feature.name)),
+            ignore_errors=True,
+        )
     return (
         run_output(feature, language)
         if direction == "output"
@@ -271,18 +308,25 @@ def _job(job: tuple[Feature, str, str]) -> Result:
 
 
 def run(
-    jobs: list[tuple[Feature, str, str]], workers: int | None = None
+    jobs: list[tuple[Feature, str, str]],
+    workers: int | None = None,
+    keep: Path | None = None,
 ) -> list[Result]:
-    """Run every ``(feature, direction, language)`` job; results come back in job order."""
+    """Run every ``(feature, direction, language)`` job; results come back in job order.
+
+    With ``keep``, each job writes its probe and CrossTL's translations of it to the job's :func:`.model.kept_folder`
+    under ``keep``.
+    """
     workers = workers or min(8, os.cpu_count() or 1)
+    kept = str(keep) if keep else None
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-verdicts-") as verdicts:
         if workers == 1 or len(jobs) < 2:
-            _remember(verdicts)
+            _remember(verdicts, kept)
             try:
                 return [_job(job) for job in jobs]
             finally:
                 _remember(None)
         with ProcessPoolExecutor(
-            max_workers=workers, initializer=_remember, initargs=(verdicts,)
+            max_workers=workers, initializer=_remember, initargs=(verdicts, kept)
         ) as pool:
             return list(pool.map(_job, jobs, chunksize=4))
