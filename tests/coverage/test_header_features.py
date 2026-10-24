@@ -79,6 +79,25 @@ def test_metal_header_parse_drops_attribute_macros():
     ]
 
 
+METAL_REFERENCE_HEADER = """
+template <typename T, int K>
+METAL_FUNC METAL_CONSTEXPR_SINCE_MTL_410 T determinant(const thread  matrix<T, K, K> &a)
+{
+}
+METAL_FUNC float frexp(float x, thread int &exp)
+{
+}
+"""
+
+
+def test_metal_header_parse_reads_const_references_as_values():
+    # MSL 4.1 passes determinant's matrix by const reference; only a reference the function may write is out.
+    assert list(metal.declarations("metal_matrix", METAL_REFERENCE_HEADER)) == [
+        ("determinant", "float", ["float3x3"]),
+        ("frexp", "float", ["float", "out int"]),
+    ]
+
+
 METAL_MATRIX_HEADER = """
 template <typename T, int Cols, int Rows>
 METAL_FUNC METAL_CONSTEXPR_SINCE_MTL_410 matrix<T, Cols, Rows> operator*(T a, const device coherent(device) matrix<T, Cols, Rows> &b)
