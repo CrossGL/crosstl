@@ -67,6 +67,7 @@ from ..dispatch_region_contract import (
     codegen_dispatch_region,
     with_dispatch_region_header,
 )
+from ..float_limit_constants import render_float_limit_constant
 from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
@@ -242,6 +243,7 @@ from .hlsl_narrow_system_values import (
     hlsl_narrow_compute_system_value_bridge,
 )
 from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
@@ -1715,6 +1717,8 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             "metal_math.h",
             "metal_stdlib",
             "metal_stdlib.h",
+            # Apple's platform-conditional macros, which shared Metal and host headers include.
+            "targetconditionals.h",
         }
     )
     METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES = frozenset(
@@ -12136,6 +12140,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return
                 if name and render_standard_math_constant(name, "directx") is not None:
                     return
+                if name and render_float_limit_constant(name, "directx") is not None:
+                    return
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -15172,6 +15178,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "packed",
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
+            # MSL's half texture element type; the image format attribute gives HLSL its element type.
+            "metal_texture_element_half",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
         return str(getattr(attr, "name", "")).lower() in metadata
@@ -28288,13 +28296,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return name
 
     def hlsl_standard_math_constant_expression(self, name):
-        # HLSL does not define the C/Metal NAN macro. Preserve a stable quiet
-        # binary32 NaN without depending on undefined division behavior.
-        literal = (
-            "asfloat(0x7fc00000u)"
-            if name == "NAN"
-            else render_standard_math_constant(name, "directx")
-        )
+        # HLSL defines none of the C/Metal float limit macros (NAN, INFINITY,
+        # FLT_MAX, ...). Render them from their exact binary32 encodings.
+        literal = render_float_limit_constant(
+            name, "directx"
+        ) or render_standard_math_constant(name, "directx")
         if literal is None:
             return None
 
@@ -32181,6 +32187,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_hlsl_global_resource_type(self, mapped_type):
         mapped_type = str(mapped_type)
+        # Read array suffixes from the end. A repeated suffix expression
+        # re-segments a long malformed tail before it can reject the name.
+        suffix_end = len(mapped_type)
+        while suffix_end > 0 and mapped_type[suffix_end - 1] == "]":
+            open_bracket = mapped_type.rfind("[", 0, suffix_end)
+            if open_bracket < 0:
+                break
+            inner = mapped_type[open_bracket + 1 : suffix_end - 1]
+            if re.fullmatch(r"\s*(?:\w+\s*)?", inner) is None:
+                break
+            suffix_end = open_bracket
+            while suffix_end > 0 and mapped_type[suffix_end - 1].isspace():
+                suffix_end -= 1
+        sampler_type = mapped_type[:suffix_end]
         return (
             mapped_type.startswith("Texture")
             or self.is_hlsl_feedback_texture_type(mapped_type)
@@ -32191,8 +32211,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.is_hlsl_constant_buffer_type(mapped_type)
             or self.is_hlsl_texture_buffer_type(mapped_type)
             or self.is_hlsl_readonly_buffer_type(mapped_type)
-            or re.sub(r"(\s*\[\s*\w*\s*\])+$", "", mapped_type)
-            in ["SamplerState", "SamplerComparisonState"]
+            or sampler_type in ["SamplerState", "SamplerComparisonState"]
         )
 
     def hlsl_requires_rwtexture_cube_alias(self, variables):
@@ -38546,7 +38565,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
         if shader_type == "vertex" and return_type == "float4":
             return "gl_Position"
-        if shader_type == "fragment" and return_type == "float4":
+        if shader_type == "fragment" and is_render_target_value_type(return_type):
+            # A fragment function's value return is colour attachment 0 (MSL 5.2.3.4, GLSL 4.60 section 4.4.2),
+            # whatever its numeric scalar or vector type.
             return "gl_FragColor"
         return None
 
@@ -43776,6 +43797,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         attr_name = getattr(attr, "name", None)
         if not attr_name or getattr(attr, "arguments", None):
             return False
+        # Vulkan block kinds mark how a ConstantBuffer<T> is fed; they never name an array size.
+        if str(attr_name).lower() in {"push_constant", "shader_record"}:
+            return False
         if (
             is_image_format_attribute(attr)
             or self.is_resource_binding_attribute(attr)
@@ -43908,6 +43932,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_resource_array_hint_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
+            # ConstantBuffer<T> name[] is a runtime-sized array of constant-buffer descriptors (shader model 5.1).
+            or self.is_hlsl_constant_buffer_type(vtype)
             or texel_buffer_base_type(vtype) is not None
             or self.is_hlsl_readonly_buffer_type(vtype)
             or self.is_hlsl_uav_buffer_type(vtype)

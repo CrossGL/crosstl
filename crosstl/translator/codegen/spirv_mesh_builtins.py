@@ -31,6 +31,8 @@ _PRIMITIVE_MEMBERS = (
     ("gl_Layer", "int", "gl_Layer"),
     ("gl_ViewportIndex", "int", "gl_ViewportIndex"),
     ("gl_CullPrimitiveEXT", "bool", "gl_CullPrimitiveEXT"),
+    # GL_EXT_fragment_shading_rate's per-primitive rate (SPV_KHR_fragment_shading_rate).
+    ("gl_PrimitiveShadingRateEXT", "int", "gl_PrimitiveShadingRateEXT"),
 )
 _INDEX_ARRAYS = {
     "PrimitivePointIndicesEXT": "gl_PrimitivePointIndicesEXT",
