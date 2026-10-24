@@ -3163,6 +3163,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             self.is_user_function_name(function_name)
         ):
             return self.generate_columnwise_matrix_builtin_call(node, function_name)
+        packed_dot = self.PACKED_DOT4ADD_FUNCTIONS.get(normalized_name)
+        if packed_dot is not None and not self.is_user_function_name(function_name):
+            return self.generate_packed_dot4add_call(node, function_name, packed_dot)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:
@@ -3211,6 +3214,26 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if not arg_expr.startswith("&"):
             arg_expr = f"&{arg_expr}"
         return f"workgroupUniformLoad({arg_expr})"
+
+    # HLSL dot4add_i8packed(a, b, acc) and dot4add_u8packed(a, b, acc) add the
+    # packed 4x8-bit dot product of a and b to acc. WGSL has the dot product
+    # alone, as dot4I8Packed and dot4U8Packed.
+    PACKED_DOT4ADD_FUNCTIONS = {
+        "dot4add_i8packed": "dot4I8Packed",
+        "dot4add_u8packed": "dot4U8Packed",
+    }
+
+    def generate_packed_dot4add_call(self, node, function_name, mapped_name):
+        """HLSL ``dot4add_*8packed(a, b, acc)`` as WGSL ``(acc + dot4*8Packed(a, b))``."""
+        if len(node.arguments) != 3:
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly 3 arguments; "
+                f"got {len(node.arguments)}"
+            )
+        left, right, accumulator = (
+            self.generate_expression(argument) for argument in node.arguments
+        )
+        return f"({accumulator} + {mapped_name}({left}, {right}))"
 
     def is_user_function_name(self, name):
         return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
