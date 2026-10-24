@@ -193,12 +193,53 @@ def test_64_bit_integers_are_read_through_32_bit_buffers_in_hlsl():
         Type("uint"),
         Type("int64"),
     )
-    source = probes.build(exchange, "hlsl").source
+    source = probes.build(exchange, "hlsl", one_input=False).source
     assert "int64_t a1 = (int64_t)iin[i + 0u];" in source
     assert "obj.InterlockedExchange64(a0, a1);" in source
-    assert (
-        "int64_t a1 = int64_t(iin[i + 0u]);" in probes.build(exchange, "crossgl").source
+    crossgl = probes.build(exchange, "crossgl", one_input=False).source
+    assert "int64_t a1 = int64_t(iin[i + 0u]);" in crossgl
+    # Read with the uint argument, from one buffer, the int64 goes through int.
+    one = probes.build(exchange, "hlsl").source
+    assert "int64_t a1 = (int64_t)(int)uin[i + 1u];" in one and "iin" not in one
+
+
+LDEXP = Signature(Type("float"), (Param(Type("float")), Param(Type("int"))))
+
+
+@pytest.mark.parametrize("language", ["glsl", "hlsl", "metal", "slang", "wgsl"])
+def test_a_compute_probe_reads_scalars_of_several_types_from_one_buffer(language):
+    # The conformance harness binds one input buffer, so where it runs the feature's language the probe reads its
+    # integers from the float buffer, squared to stay small and non-negative.
+    ldexp = Feature(language, "function", "ldexp", LDEXP, crossgl="ldexp")
+    native = probes.build(ldexp, language).source
+    crossgl = probes.build(ldexp, "crossgl").source
+    assert "iin" not in native + crossgl
+    assert "int((fin[i + 1u] * fin[i + 1u]))" in crossgl
+    assert "(fin[i + 1u] * fin[i + 1u])" in native
+
+
+def test_integers_of_two_signednesses_are_read_from_the_uint_buffer():
+    extract = feature(
+        "bitfieldExtract", Type("uint"), Type("uint"), Type("int"), Type("int")
     )
+    source = probes.build(extract, "glsl").source
+    assert "iin" not in source and "fin" not in source
+    assert "int a2 = int(uin[i + 2u]);" in source
+
+
+def test_scalars_keep_a_buffer_per_type_where_no_probe_runs():
+    ldexp = Feature("cuda", "function", "ldexp", LDEXP, crossgl="ldexp")
+    for language in ("cuda", "crossgl"):
+        source = probes.build(ldexp, language).source
+        assert "int a1 = iin[i + 0u];" in source
+    ldexp = feature("ldexp", Type("float"), Type("float"), Type("int"))
+    assert "iin" in probes.build(ldexp, "glsl", one_input=False).source
+    fragment = replace(ldexp, stage="fragment")
+    assert "iin" in probes.build(fragment, "glsl").source
+    # A buffer the call takes whole keeps its type.
+    passed = feature("f", Type("uint"), Param(Type("uint"), "buffer"), Type("float"))
+    source = probes.build(passed, "glsl").source
+    assert "uint uin[]" in source and "float a1 = fin[i + 0u];" in source
 
 
 @pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")
