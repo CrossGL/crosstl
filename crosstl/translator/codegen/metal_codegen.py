@@ -413,6 +413,7 @@ from .relational_builtins import lower_relational_builtins, metal_logical_not_op
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import collect_resource_array_size_hints
 from .sampler_pairs import canonicalize_separate_textures
+from .sizeof_calls import sizeof_call_bytes
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -11850,6 +11851,10 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                     ),
                     expr.args,
                 )
+
+            sizeof_bytes = sizeof_call_bytes(self, func_name, expr.args, "metal")
+            if sizeof_bytes is not None:
+                return str(sizeof_bytes)
 
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
