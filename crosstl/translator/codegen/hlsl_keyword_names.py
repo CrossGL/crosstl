@@ -573,5 +573,6 @@ def legalize_hlsl_keyword_names(ast):
     # rename, or the generator no longer finds the sampler and drops its record.
     annotations = getattr(ast, "annotations", None) or {}
     for record in annotations.get("fixed_samplers") or ():
-        record["name"] = renamer.values.get(record["name"], record["name"])
+        if record["name"] in renamer.values:
+            record["name"] = renamer.values[record["name"]]
     return ast
