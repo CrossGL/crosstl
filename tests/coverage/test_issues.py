@@ -262,6 +262,30 @@ def test_causes_keep_the_digits_of_names():
     assert first != second
 
 
+def test_causes_keep_the_digits_of_template_arguments():
+    # Slang writes HLSL's float3x4 as matrix<float,3,4>; transposed shapes are different causes, as in HLSL.
+    detail = (
+        "probe.slang:{}:5: error[E30019]: type mismatch in expression: expected an expression of "
+        "type 'matrix<float,{},{}>', got 'matrix<float,{},{}>'"
+    )
+    three_by_four = causes.cause({"detail": detail.format(12, 3, 4, 4, 3)})
+    four_by_three = causes.cause({"detail": detail.format(14, 4, 3, 3, 4)})
+    assert three_by_four == detail.format("N", 3, 4, 4, 3).replace(":5:", ":N:")
+    assert three_by_four != four_by_three
+    assert causes.cause({"detail": "probe.cu(7): error: too many arguments (3)"}) == (
+        "probe.cu(N): error: too many arguments (N)"
+    )
+
+
+def test_titles_drop_the_glslang_location():
+    detail = "ERROR: probe.frag:2: 'location' : SPIR-V requires location for user input/output"
+    row = _row("glsl", "output", [_feature("textureSize", "wrong", detail=detail)])
+    [bug] = [a for a in issues.plan(_report(row), []) if a.key.startswith("wrong/")]
+    assert bug.title == (
+        "GLSL output: 'location' : SPIR-V requires location for user input/output"
+    )
+
+
 def test_causes_keep_an_operator_spelling():
     detail = "error: cannot index into a value of type `[]`"
     feature = {"name": "vector_extract_dynamic", "crossgl": "[]", "detail": detail}

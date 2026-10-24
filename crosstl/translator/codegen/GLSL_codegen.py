@@ -224,12 +224,18 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_ray_queries import (
+    glsl_ray_desc_declaration,
+    glsl_ray_query_constant_expression,
+    glsl_ray_query_initialize_flags,
+)
 from .glsl_refusals import (
     OpenGLLoweringRefused,
     input_attachment_refusal_reason,
     patch_parameter_refusal_reason,
     stageless_entry_refusal_reason,
 )
+from .glsl_scalar_block_layout import scalar_block_layout_extension_line
 from .glsl_shadow_lod import (
     SHADOW_LOD_EXTENSION_SAMPLERS,
     is_zero_lod_literal,
@@ -1640,19 +1646,17 @@ class GLSLCodeGen(
         "callable",
     }
     RAY_QUERY_METHOD_MAP = {
-        "Initialize": ("rayQueryInitializeEXT", None),
         "TraceRayInline": ("rayQueryInitializeEXT", None),
         "Proceed": ("rayQueryProceedEXT", None),
         "Abort": ("rayQueryTerminateEXT", None),
-        "Terminate": ("rayQueryTerminateEXT", None),
-        "GenerateIntersection": ("rayQueryGenerateIntersectionEXT", None),
-        "ConfirmIntersection": ("rayQueryConfirmIntersectionEXT", None),
+        "CommitProceduralPrimitiveHit": ("rayQueryGenerateIntersectionEXT", None),
+        "CommitNonOpaqueTriangleHit": ("rayQueryConfirmIntersectionEXT", None),
         "RayTMin": ("rayQueryGetRayTMinEXT", None),
         "RayFlags": ("rayQueryGetRayFlagsEXT", None),
         "WorldRayOrigin": ("rayQueryGetWorldRayOriginEXT", None),
         "WorldRayDirection": ("rayQueryGetWorldRayDirectionEXT", None),
         "CandidateType": ("rayQueryGetIntersectionTypeEXT", "false"),
-        "CommittedType": ("rayQueryGetIntersectionTypeEXT", "true"),
+        "CommittedStatus": ("rayQueryGetIntersectionTypeEXT", "true"),
         "CandidatePrimitiveIndex": (
             "rayQueryGetIntersectionPrimitiveIndexEXT",
             "false",
@@ -1661,8 +1665,18 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionPrimitiveIndexEXT",
             "true",
         ),
-        "CandidateInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
-        "CommittedInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
+        # HLSL semantics: InstanceID is the application-defined custom index,
+        # InstanceIndex the instance's position in the top-level structure.
+        "CandidateInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "false",
+        ),
+        "CommittedInstanceID": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
+        "CommittedInstanceIndex": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
         "CandidateGeometryIndex": (
             "rayQueryGetIntersectionGeometryIndexEXT",
             "false",
@@ -1671,19 +1685,11 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionGeometryIndexEXT",
             "true",
         ),
-        "CandidateInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
-            "false",
-        ),
-        "CommittedInstanceCustomIndex": (
-            "rayQueryGetIntersectionInstanceCustomIndexEXT",
-            "true",
-        ),
-        "CandidateInstanceShaderBindingTableRecordOffset": (
+        "CandidateInstanceContributionToHitGroupIndex": (
             "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
             "false",
         ),
-        "CommittedInstanceShaderBindingTableRecordOffset": (
+        "CommittedInstanceContributionToHitGroupIndex": (
             "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
             "true",
         ),
@@ -1703,7 +1709,7 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionObjectRayDirectionEXT",
             "true",
         ),
-        "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
+        "CandidateTriangleRayT": ("rayQueryGetIntersectionTEXT", "false"),
         "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
         "CandidateTriangleBarycentrics": (
             "rayQueryGetIntersectionBarycentricsEXT",
@@ -1729,7 +1735,11 @@ class GLSLCodeGen(
             "rayQueryGetIntersectionTriangleVertexPositionsEXT",
             "true",
         ),
-        "CandidateAABBOpaque": ("rayQueryGetIntersectionCandidateAABBOpaqueEXT", None),
+        # DXR asks whether the candidate is non-opaque; GLSL whether it is opaque.
+        "CandidateProceduralPrimitiveNonOpaque": (
+            "rayQueryGetIntersectionCandidateAABBOpaqueEXT",
+            None,
+        ),
         "CandidateObjectToWorld": (
             "rayQueryGetIntersectionObjectToWorldEXT",
             "false",
@@ -1763,39 +1773,46 @@ class GLSLCodeGen(
             "true",
         ),
     }
+    # Ray query methods with a bool result, so `!rq.Proceed()` has a typed operand.
+    RAY_QUERY_BOOL_METHODS = frozenset(
+        {
+            "Proceed",
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+            "CandidateProceduralPrimitiveNonOpaque",
+        }
+    )
     RAY_QUERY_POSITION_FETCH_METHODS = {
         "CandidateTriangleVertexPositions",
         "CommittedTriangleVertexPositions",
     }
     RAY_QUERY_METHOD_ARITIES = {
-        "Initialize": (4, 7),
         "TraceRayInline": (4, 7),
         "Proceed": (0,),
         "Abort": (0,),
-        "Terminate": (0,),
-        "GenerateIntersection": (1,),
-        "ConfirmIntersection": (0,),
+        "CommitProceduralPrimitiveHit": (1,),
+        "CommitNonOpaqueTriangleHit": (0,),
         "RayTMin": (0,),
         "RayFlags": (0,),
         "WorldRayOrigin": (0,),
         "WorldRayDirection": (0,),
         "CandidateType": (0,),
-        "CommittedType": (0,),
+        "CommittedStatus": (0,),
         "CandidatePrimitiveIndex": (0,),
         "CommittedPrimitiveIndex": (0,),
         "CandidateInstanceID": (0,),
         "CommittedInstanceID": (0,),
         "CandidateGeometryIndex": (0,),
         "CommittedGeometryIndex": (0,),
-        "CandidateInstanceCustomIndex": (0,),
-        "CommittedInstanceCustomIndex": (0,),
-        "CandidateInstanceShaderBindingTableRecordOffset": (0,),
-        "CommittedInstanceShaderBindingTableRecordOffset": (0,),
+        "CandidateInstanceIndex": (0,),
+        "CommittedInstanceIndex": (0,),
+        "CandidateInstanceContributionToHitGroupIndex": (0,),
+        "CommittedInstanceContributionToHitGroupIndex": (0,),
         "CandidateObjectRayOrigin": (0,),
         "CandidateObjectRayDirection": (0,),
         "CommittedObjectRayOrigin": (0,),
         "CommittedObjectRayDirection": (0,),
-        "CandidateRayT": (0,),
+        "CandidateTriangleRayT": (0,),
         "CommittedRayT": (0,),
         "CandidateTriangleBarycentrics": (0,),
         "CommittedTriangleBarycentrics": (0,),
@@ -1803,7 +1820,7 @@ class GLSLCodeGen(
         "CommittedTriangleFrontFace": (0,),
         "CandidateTriangleVertexPositions": (1,),
         "CommittedTriangleVertexPositions": (1,),
-        "CandidateAABBOpaque": (0,),
+        "CandidateProceduralPrimitiveNonOpaque": (0,),
         "CandidateObjectToWorld": (0,),
         "CommittedObjectToWorld": (0,),
         "CandidateObjectToWorld3x4": (0,),
@@ -4062,6 +4079,9 @@ class GLSLCodeGen(
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
+        scalar_layout = scalar_block_layout_extension_line(self, ast)
+        if scalar_layout is not None:
+            lines.append(scalar_layout)
         return lines
 
     def uses_glsl_debug_printf(self, ast):
@@ -9318,6 +9338,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
@@ -19778,8 +19799,25 @@ class GLSLCodeGen(
             call_args.append(committed)
         args = self.ray_query_initialize_arguments(operation, args)
         args = [self.generate_expression(arg) for arg in args]
+        if operation == "TraceRayInline" and len(args) > 1:
+            args[1] = glsl_ray_query_initialize_flags(self, query, args[1])
         call_args.extend(args)
-        return f"{function_name}({', '.join(call_args)})"
+        call = f"{function_name}({', '.join(call_args)})"
+        if operation == "CandidateProceduralPrimitiveNonOpaque":
+            return f"(!{call})"
+        return call
+
+    def is_bool_ray_query_call(self, expr):
+        if isinstance(expr, RayQueryOpNode):
+            return getattr(expr, "operation", None) in self.RAY_QUERY_BOOL_METHODS
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        callee = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee, MemberAccessNode):
+            return False
+        if callee.member not in self.RAY_QUERY_BOOL_METHODS:
+            return False
+        return self.is_ray_query_type(self.expression_result_type(callee.object))
 
     def can_lower_ray_query_receiver(self, operation, query):
         receiver_type = self.expression_result_type(query)
@@ -19817,7 +19855,7 @@ class GLSLCodeGen(
         return f"{' or '.join(str(arity) for arity in allowed_arities)} arguments"
 
     def ray_query_initialize_arguments(self, operation, args):
-        if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
+        if operation != "TraceRayInline" or len(args) != 4:
             return args
 
         acceleration, ray_flags, cull_mask, ray_desc = args
@@ -36603,6 +36641,8 @@ complex64_t crossgl_complex64_mod_assign(
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
+        if self.is_bool_ray_query_call(expr):
+            return "bool"
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
             return (
@@ -39352,6 +39392,9 @@ complex64_t crossgl_complex64_mod_assign(
             return storage_read
         if expr is None:
             return ""
+        ray_query_constant = glsl_ray_query_constant_expression(self, expr)
+        if ray_query_constant is not None:
+            return ray_query_constant
         if isinstance(expr, PointerReinterpretNode):
             target_type = self.type_name_string(
                 getattr(getattr(expr, "target_type", None), "pointee_type", None)

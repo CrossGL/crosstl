@@ -3132,7 +3132,8 @@ def test_codegen_rayquery_stage_roundtrip_drops_native_shader_attribute():
 
     assert "ray_generation" in output.lower()
     assert "@ shader" not in output
-    assert "rayQuery rq;" in output
+    # The query keeps its DXR type and flags in CrossGL.
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in output
     assert "rq.TraceRayInline(accel, RAY_FLAG_NONE, 255, ray);" in output
     assert "rq.Proceed()" in output
     assert "rq.CommitNonOpaqueTriangleHit();" in output

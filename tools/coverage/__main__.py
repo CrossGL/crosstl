@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import compare, features, issues, publish, report, runner, validators
+from . import compare, execution, features, issues, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -44,9 +44,16 @@ def _parser() -> argparse.ArgumentParser:
         "--offline", action="store_true", help="use cached upstream sources only"
     )
     run.add_argument(
+        "--execute",
+        action="store_true",
+        help="also run supported compute probes on the conformance harness's runtimes and compare them with the "
+        "native probe",
+    )
+    run.add_argument(
         "--strict",
         action="store_true",
-        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested",
+        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested, "
+        "and with --execute when no runtime runs a language's executable probes",
     )
     merging = commands.add_parser(
         "merge",
@@ -128,10 +135,23 @@ def _run(args: argparse.Namespace) -> int:
         if args.feature:
             feature_list = [f for f in feature_list if f.name in args.feature]
         for direction in directions:
-            if direction == "input" and language not in runner.INPUT_BACKENDS:
+            backends = (
+                runner.INPUT_BACKENDS
+                if direction == "input"
+                else runner.OUTPUT_BACKENDS
+            )
+            if language not in backends:
                 continue
             jobs += [(feature, direction, language) for feature in feature_list]
     results = runner.run(jobs, args.jobs or None)
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results, used)
+        if args.strict and idle:
+            print(f"error: no runtime executes {', '.join(idle)}", file=sys.stderr)
+            return 2
     data = report.build(results, languages, directions)
     report.write(data, args.output)
     print(report.summary(data))
@@ -196,7 +216,14 @@ def _tools() -> int:
     rows = [("language", "directions", "tool", "found")]
     for language in LANGUAGES:
         tool = validators.TOOLS[language]
-        directions = "output, input" if language in runner.INPUT_BACKENDS else "output"
+        directions = ", ".join(
+            direction
+            for direction, backends in (
+                ("output", runner.OUTPUT_BACKENDS),
+                ("input", runner.INPUT_BACKENDS),
+            )
+            if language in backends
+        )
         if validators.available(language):
             found = validators.version(tool) or "yes, no version reported"
         else:

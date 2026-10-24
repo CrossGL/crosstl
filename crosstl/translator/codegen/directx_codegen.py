@@ -243,6 +243,11 @@ from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
 )
+from .hlsl_ray_queries import (
+    hlsl_ray_query_expression,
+    hlsl_ray_query_helpers,
+    hlsl_ray_query_type,
+)
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
@@ -4174,6 +4179,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 self.generic_struct_specializations,
             )
         )
+        self.infer_hlsl_global_types(global_vars)
         self.prepare_directx_compile_time_globals(ast, global_vars)
         self.hlsl_lowered_struct_resource_members = (
             self.collect_hlsl_lowered_struct_resource_members(structs, functions)
@@ -4850,6 +4856,13 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
                 } and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
+            if id(node) in self.hlsl_inferred_global_node_ids:
+                if not qualifier.startswith("static"):
+                    qualifier = "static " + qualifier
+                initializer = self.generate_expression_with_expected(
+                    node.initial_value, node.var_type
+                )
+                declaration += f" = {initializer}"
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
@@ -5221,6 +5234,7 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin):
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
+            + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
         )
         return (
@@ -15067,6 +15081,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         value = self.generate_expression_with_expected(stmt.expression, return_type)
         return self.generate_hlsl_return_value_statement(value, indent)
+
+    def infer_hlsl_global_types(self, global_vars):
+        """Resolve untyped globals before declaration and expression lowering."""
+        self.hlsl_inferred_global_node_ids = set()
+        for node in global_vars:
+            if not hasattr(node, "var_type") or node.var_type is not None:
+                continue
+            vtype = inferred_value_type(
+                self, getattr(node, "initial_value", None), C_FAMILY
+            )
+            if not vtype:
+                self.refuse_lowering(
+                    f"global declaration: the type of '{getattr(node, 'name', '?')}' "
+                    "is not written and cannot be inferred from its initializer"
+                )
+            node.var_type = vtype
+            node.vtype = vtype
+            self.global_variable_types[node.name] = vtype
+            self.hlsl_inferred_global_node_ids.add(id(node))
 
     def local_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)
@@ -26675,6 +26708,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         storage_read = self.hlsl_half_storage.read(expr)
         if storage_read is not None:
             return storage_read
+        ray_query = hlsl_ray_query_expression(self, expr)
+        if ray_query is not None:
+            return ray_query
         unavailable = hlsl_unavailable_builtin(self, expr)
         if unavailable is not None:
             return unavailable
@@ -34401,8 +34437,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "CommitNonOpaqueTriangleHit": "void",
             "CommitProceduralPrimitiveHit": "void",
             "CandidateType": "uint",
-            "CommittedType": "uint",
             "CommittedStatus": "uint",
+            "CandidateProceduralPrimitiveNonOpaque": "bool",
             "CandidatePrimitiveIndex": "uint",
             "CommittedPrimitiveIndex": "uint",
             "CandidateInstanceID": "uint",
@@ -34415,8 +34451,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "CandidateObjectRayDirection": "float3",
             "CommittedObjectRayOrigin": "float3",
             "CommittedObjectRayDirection": "float3",
-            "CandidateRayT": "float",
+            "CandidateTriangleRayT": "float",
             "CommittedRayT": "float",
+            "CandidateInstanceContributionToHitGroupIndex": "uint",
+            "CommittedInstanceContributionToHitGroupIndex": "uint",
             "CandidateObjectRayTMin": "float",
             "CandidateTriangleBarycentrics": "float2",
             "CommittedTriangleBarycentrics": "float2",
@@ -34437,8 +34475,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "CommitNonOpaqueTriangleHit",
                 "CommitProceduralPrimitiveHit",
                 "CandidateType",
-                "CommittedType",
                 "CommittedStatus",
+                "CandidateProceduralPrimitiveNonOpaque",
                 "CandidatePrimitiveIndex",
                 "CommittedPrimitiveIndex",
                 "CandidateInstanceID",
@@ -34451,8 +34489,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "CandidateObjectRayDirection",
                 "CommittedObjectRayOrigin",
                 "CommittedObjectRayDirection",
-                "CandidateRayT",
+                "CandidateTriangleRayT",
                 "CommittedRayT",
+                "CandidateInstanceContributionToHitGroupIndex",
+                "CommittedInstanceContributionToHitGroupIndex",
                 "CandidateObjectRayTMin",
                 "CandidateTriangleBarycentrics",
                 "CommittedTriangleBarycentrics",
@@ -34731,7 +34771,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_ray_query_receiver(query_expr, shader_type, operation)
 
         expected_arg_counts = {
-            "TraceRayInline": {4},
+            # Seven operands are the GLSL rayQueryInitializeEXT shape, whose
+            # ray operands are packed into a RayDesc on emission.
+            "TraceRayInline": {4, 7},
             "CommitProceduralPrimitiveHit": {1},
         }
         default_expected_counts = {0}
@@ -34761,13 +34803,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 shader_type,
                 "RayQuery.TraceRayInline",
             )
-            self.validate_hlsl_ray_exact_type_argument(
-                args[3],
-                shader_type,
-                "RayQuery.TraceRayInline",
-                "ray descriptor",
-                "RayDesc",
-            )
+            if len(args) == 4:
+                self.validate_hlsl_ray_exact_type_argument(
+                    args[3],
+                    shader_type,
+                    "RayQuery.TraceRayInline",
+                    "ray descriptor",
+                    "RayDesc",
+                )
         elif operation == "CommitProceduralPrimitiveHit":
             self.validate_hlsl_ray_scalar_float_argument(
                 args[0],
@@ -54639,6 +54682,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        ray_query_type = hlsl_ray_query_type(vtype_str)
+        if ray_query_type is not None:
+            return ray_query_type
 
         aliases = getattr(self, "hlsl_type_aliases", {})
         if vtype_str in aliases:

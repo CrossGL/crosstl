@@ -1762,7 +1762,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "struct SomeStruct {",
             "void Fun()",
-            "rayQuery RayQ1 = RayQuery<0>();",
+            "RayQuery<0> RayQ1 = RayQuery<0>();",
             "void SomeStruct_DummyMethod(in SomeStruct __this) {",
             "SomeStruct_DummyMethod(Payload);",
         ),

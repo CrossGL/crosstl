@@ -1225,11 +1225,11 @@ def test_parse_ray_query_type_and_functions_roundtrip():
 
     assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
     assert "rayQueryEXT rq;" in crossgl
-    assert "rq.Initialize(" in crossgl
+    assert "rq.TraceRayInline(" in crossgl
     assert "bool active = rq.Proceed();" in crossgl
-    assert "uint hitType = rq.CommittedType();" in crossgl
+    assert "uint hitType = rq.CommittedStatus();" in crossgl
     assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl
-    assert "uint committedInstance = rq.CommittedInstanceID();" in crossgl
+    assert "uint committedInstance = rq.CommittedInstanceIndex();" in crossgl
     assert "uint candidateGeometry = rq.CandidateGeometryIndex();" in crossgl
     assert "vec3 committedOrigin = rq.CommittedObjectRayOrigin();" in crossgl
     assert "vec3 candidateDirection = rq.CandidateObjectRayDirection();" in crossgl
@@ -1238,19 +1238,18 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "vec3 worldDirection = rq.WorldRayDirection();" in crossgl
     assert "uint rayFlags = rq.RayFlags();" in crossgl
     assert "float rayTMin = rq.RayTMin();" in crossgl
-    assert "uint customIndex = rq.CommittedInstanceCustomIndex();" in crossgl
+    assert "uint customIndex = rq.CommittedInstanceID();" in crossgl
     assert (
-        "uint sbtOffset = rq.CandidateInstanceShaderBindingTableRecordOffset();"
-        in crossgl
+        "uint sbtOffset = rq.CandidateInstanceContributionToHitGroupIndex();" in crossgl
     )
     assert "vec2 barycentrics = rq.CandidateTriangleBarycentrics();" in crossgl
     assert "bool frontFace = rq.CommittedTriangleFrontFace();" in crossgl
-    assert "bool aabbOpaque = rq.CandidateAABBOpaque();" in crossgl
+    assert "bool aabbOpaque = (!rq.CandidateProceduralPrimitiveNonOpaque());" in crossgl
     assert "vec3 trianglePositions[3];" in crossgl
     assert "rq.CandidateTriangleVertexPositions(trianglePositions);" in crossgl
     assert "rq.CommittedTriangleVertexPositions(trianglePositions);" in crossgl
-    assert "rq.GenerateIntersection(1.0);" in crossgl
-    assert "rq.ConfirmIntersection();" in crossgl
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in crossgl
+    assert "rq.CommitNonOpaqueTriangleHit();" in crossgl
     assert "rq.Abort();" in crossgl
     assert "rayQueryInitializeEXT(" not in crossgl
     assert "rayQueryProceedEXT(rq)" not in crossgl
@@ -1304,8 +1303,11 @@ def test_parse_ray_query_type_and_functions_roundtrip():
         "vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);" in glsl
     )
     assert "bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);" in glsl
+    # CrossGL asks the DXR question (is the candidate non-opaque?), so the
+    # GLSL opaque query comes back doubly negated.
     assert (
-        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);" in glsl
+        "bool aabbOpaque = (!(!rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq)));"
+        in glsl
     )
     assert "vec3 trianglePositions[3];" in glsl
     assert (
@@ -1320,7 +1322,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "rayQueryConfirmIntersectionEXT(rq);" in glsl
     assert "rayQueryTerminateEXT(rq);" in glsl
     assert ".Proceed(" not in glsl
-    assert ".CommittedType(" not in glsl
+    assert ".CommittedStatus(" not in glsl
 
 
 def test_parse_ray_query_transform_matrices_roundtrip_with_glsl_orientation():

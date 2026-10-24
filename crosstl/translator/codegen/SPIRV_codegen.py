@@ -60,6 +60,7 @@ from ..matrix_shape import (
     length_method_object,
     matrix_type_spelling,
 )
+from ..ray_query_vocabulary import ray_flag_value, ray_query_type_flags
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.shader_records import (
     is_shader_record_buffer,
@@ -115,6 +116,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .relational_builtins import lower_relational_builtins
+from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_folding import (
@@ -187,6 +189,12 @@ from .spirv_shading_rate import (
     shading_rate_builtin_info,
     shading_rate_flag_value,
     shading_rate_semantic_builtin,
+)
+from .spirv_short_circuit import (
+    SHORT_CIRCUIT_OPERATORS,
+    evaluate_loop_condition,
+    lower_short_circuit_logical,
+    lower_short_circuit_ternary,
 )
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -693,6 +701,8 @@ class VulkanSPIRVCodeGen(
         self.shared_binding_nodes = set()
         # Descriptor slots of resources bound by HLSL register or vk::binding, by node id.
         self.hlsl_descriptor_slots = {}
+        # Descriptor slots of the current entry point's buffer/texture/sampler parameters, by parameter name.
+        self.entry_descriptor_slots = {}
         # Uniform-block arrays of matrix columns, by array type id, with the matrix type a load rebuilds.
         self.matrix_column_arrays = {}
         self.entry_point_resource_binding_baseline = None
@@ -1116,8 +1126,14 @@ class VulkanSPIRVCodeGen(
 
         self.require_capability("RayQueryKHR")
         self.require_extension("SPV_KHR_ray_query")
-        id_value = self.get_id()
-        self.emit(f"%{id_value} = OpTypeRayQueryKHR")
+        # One opaque type serves every RayQuery<FLAGS>: SPIR-V allows a single
+        # OpTypeRayQueryKHR, and the flags are applied at initialization.
+        opaque = next(iter(self.ray_query_types.values()), None)
+        if opaque is None:
+            id_value = self.get_id()
+            self.emit(f"%{id_value} = OpTypeRayQueryKHR")
+        else:
+            id_value = opaque.id
 
         spirv_id = SpirvId(id_value, SpirvType(cache_key), cache_key)
         self.ray_query_types[cache_key] = spirv_id
@@ -8282,7 +8298,9 @@ class VulkanSPIRVCodeGen(
 
     def ray_query_candidate_getter_info(self, operation: str):
         getters = {
-            "CandidateAABBOpaque": (
+            # Negated after the read: DXR asks whether the candidate is
+            # non-opaque, SPIR-V whether it is opaque.
+            "CandidateProceduralPrimitiveNonOpaque": (
                 "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR",
                 "bool",
             ),
@@ -8291,14 +8309,14 @@ class VulkanSPIRVCodeGen(
 
     def ray_query_candidate_getter_operations(self):
         return {
-            "CandidateAABBOpaque",
+            "CandidateProceduralPrimitiveNonOpaque",
         }
 
     def ray_query_intersection_getter_info(self, operation: str):
         getters = {
             "CandidateType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
-            "CommittedType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
-            "CandidateRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CommittedStatus": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CandidateTriangleRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
             "CommittedRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
             "CandidatePrimitiveIndex": (
                 "OpRayQueryGetIntersectionPrimitiveIndexKHR",
@@ -8308,27 +8326,29 @@ class VulkanSPIRVCodeGen(
                 "OpRayQueryGetIntersectionPrimitiveIndexKHR",
                 "uint",
             ),
+            # HLSL semantics: InstanceID is the application-defined custom
+            # index, InstanceIndex the instance's position (InstanceId).
             "CandidateInstanceID": (
-                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
                 "uint",
             ),
             "CommittedInstanceID": (
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+                "uint",
+            ),
+            "CandidateInstanceIndex": (
                 "OpRayQueryGetIntersectionInstanceIdKHR",
                 "uint",
             ),
-            "CandidateInstanceCustomIndex": (
-                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+            "CommittedInstanceIndex": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
                 "uint",
             ),
-            "CommittedInstanceCustomIndex": (
-                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
-                "uint",
-            ),
-            "CandidateInstanceShaderBindingTableRecordOffset": (
+            "CandidateInstanceContributionToHitGroupIndex": (
                 "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
                 "uint",
             ),
-            "CommittedInstanceShaderBindingTableRecordOffset": (
+            "CommittedInstanceContributionToHitGroupIndex": (
                 "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
                 "uint",
             ),
@@ -8433,17 +8453,17 @@ class VulkanSPIRVCodeGen(
     def ray_query_intersection_getter_operations(self):
         return {
             "CandidateType",
-            "CommittedType",
-            "CandidateRayT",
+            "CommittedStatus",
+            "CandidateTriangleRayT",
             "CommittedRayT",
             "CandidatePrimitiveIndex",
             "CommittedPrimitiveIndex",
             "CandidateInstanceID",
             "CommittedInstanceID",
-            "CandidateInstanceCustomIndex",
-            "CommittedInstanceCustomIndex",
-            "CandidateInstanceShaderBindingTableRecordOffset",
-            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateInstanceIndex",
+            "CommittedInstanceIndex",
+            "CandidateInstanceContributionToHitGroupIndex",
+            "CommittedInstanceContributionToHitGroupIndex",
             "CandidateObjectRayOrigin",
             "CommittedObjectRayOrigin",
             "CandidateObjectRayDirection",
@@ -8498,6 +8518,11 @@ class VulkanSPIRVCodeGen(
         id_value = self.get_id()
         self.emit(f"%{id_value} = {opcode} %{result_type.id} %{query_pointer.id}")
         self.value_types[id_value] = result_type
+        if operation == "CandidateProceduralPrimitiveNonOpaque":
+            negated = self.get_id()
+            self.emit(f"%{negated} = OpLogicalNot %{result_type.id} %{id_value}")
+            self.value_types[negated] = result_type
+            return SpirvId(negated, result_type.type)
         return SpirvId(id_value, result_type.type)
 
     def process_ray_query_intersection_getter(
@@ -8793,6 +8818,35 @@ class VulkanSPIRVCodeGen(
             return None
         return acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax
 
+    def ray_query_flags_with_type_flags(
+        self, query_pointer: SpirvId, ray_flags: SpirvId
+    ) -> Optional[SpirvId]:
+        """*ray_flags* combined with the flags of the query's RayQuery<FLAGS> type."""
+        query_type = self.pointer_pointee_type(query_pointer)
+        type_name = getattr(getattr(query_type, "type", None), "base_type", "")
+        type_flags = ray_query_type_flags(type_name)
+        if type_flags is None:
+            self.refuse_lowering(
+                f"SPIR-V RayQuery type '{type_name}' has template flags that are not "
+                "ray flags"
+            )
+            return None
+        type_value = ray_flag_value(type_flags)
+        if not type_value:
+            return ray_flags
+        uint_type = self.register_primitive_type("uint")
+        operand_value = self.constant_values_by_id.get(ray_flags.id)
+        if isinstance(operand_value, int) and not isinstance(operand_value, bool):
+            return self.register_constant(operand_value | type_value, uint_type)
+        type_constant = self.register_constant(type_value, uint_type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpBitwiseOr %{uint_type.id} %{ray_flags.id} "
+            f"%{type_constant.id}"
+        )
+        self.value_types[id_value] = uint_type
+        return SpirvId(id_value, uint_type.type)
+
     def process_ray_query_initialize(self, query_pointer: SpirvId, arguments) -> None:
         expressions = self.ray_query_initialize_argument_expressions(arguments)
         if expressions is None:
@@ -8820,6 +8874,9 @@ class VulkanSPIRVCodeGen(
 
         if None in {acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax}:
             return None
+        ray_flags = self.ray_query_flags_with_type_flags(query_pointer, ray_flags)
+        if ray_flags is None:
+            return None
 
         self.emit(
             f"OpRayQueryInitializeKHR %{query_pointer.id} %{acceleration.id} "
@@ -8834,10 +8891,7 @@ class VulkanSPIRVCodeGen(
                 "Abort",
                 "CommitNonOpaqueTriangleHit",
                 "CommitProceduralPrimitiveHit",
-                "ConfirmIntersection",
                 "Proceed",
-                "GenerateIntersection",
-                "Terminate",
                 "TraceRayInline",
             }
             | self.ray_query_state_getter_operations()
@@ -8870,10 +8924,7 @@ class VulkanSPIRVCodeGen(
         supported_argument_counts = {
             "Proceed": 0,
             "Abort": 0,
-            "Terminate": 0,
-            "ConfirmIntersection": 0,
             "CommitNonOpaqueTriangleHit": 0,
-            "GenerateIntersection": 1,
             "CommitProceduralPrimitiveHit": 1,
             "TraceRayInline": {4, 7},
         }
@@ -8910,15 +8961,15 @@ class VulkanSPIRVCodeGen(
         if operation == "TraceRayInline":
             return self.process_ray_query_initialize(query_pointer, arguments)
 
-        if operation in {"Abort", "Terminate"}:
+        if operation == "Abort":
             self.emit(f"OpRayQueryTerminateKHR %{query_pointer.id}")
             return None
 
-        if operation in {"ConfirmIntersection", "CommitNonOpaqueTriangleHit"}:
+        if operation == "CommitNonOpaqueTriangleHit":
             self.emit(f"OpRayQueryConfirmIntersectionKHR %{query_pointer.id}")
             return None
 
-        if operation in {"GenerateIntersection", "CommitProceduralPrimitiveHit"}:
+        if operation == "CommitProceduralPrimitiveHit":
             hit_t = self.ray_query_float_operand(
                 arguments[0], "hit distance", operation=operation
             )
@@ -13837,7 +13888,9 @@ class VulkanSPIRVCodeGen(
 
     def is_ray_query_type_name(self, type_str: str) -> bool:
         compact = re.sub(r"\s+", "", str(type_str))
-        return compact == "RayQuery" or compact.startswith("RayQuery<")
+        return compact in {"RayQuery", "rayQuery", "rayQueryEXT"} or compact.startswith(
+            "RayQuery<"
+        )
 
     def structured_buffer_type_info(self, type_str: str):
         type_str = re.sub(r"\s+", "", str(type_str))
@@ -14486,6 +14539,13 @@ class VulkanSPIRVCodeGen(
         runtime_parameters: List[Tuple[VariableNode, SpirvId, SpirvId]],
         execution_model: Optional[str],
     ):
+        self.entry_descriptor_slots = plan_entry_descriptor_slots(
+            self,
+            [param for param, _param_type, _value_type in runtime_parameters],
+            lambda param: self.is_storage_resource_parameter(param)
+            or self.is_entry_point_descriptor_parameter(param)
+            or self.is_bound_uniform_value_parameter(param, execution_model),
+        )
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
             if self.is_storage_resource_parameter(param):
@@ -14514,6 +14574,7 @@ class VulkanSPIRVCodeGen(
             self.register_declared_resource_metadata(
                 param, local_variable, param_value_type
             )
+        self.entry_descriptor_slots = {}
 
     def resource_parameter_qualifier_names(self, param) -> set:
         return {
@@ -15647,6 +15708,19 @@ class VulkanSPIRVCodeGen(
 
         if type_str in self.struct_types:
             return self.struct_types[type_str]
+        elif type_str == "RayDesc":
+            # DXR's built-in ray description, which TraceRayInline unpacks.
+            float_type = self.register_primitive_type("float")
+            vec3_type = self.register_vector_type(float_type, 3)
+            return self.register_struct_type(
+                "RayDesc",
+                [
+                    (vec3_type, "Origin"),
+                    (float_type, "TMin"),
+                    (vec3_type, "Direction"),
+                    (float_type, "TMax"),
+                ],
+            )
         else:
             self.refuse_lowering(f"Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
@@ -16914,6 +16988,19 @@ class VulkanSPIRVCodeGen(
         finally:
             self.enum_struct_registration_stack.remove(enum_name)
 
+    def generic_argument_text(self, argument) -> str:
+        """A generic argument as source text; flag expressions such as ``A | B`` too."""
+        if isinstance(argument, BinaryOpNode):
+            operator = getattr(argument, "operator", getattr(argument, "op", ""))
+            left = self.generic_argument_text(argument.left)
+            right = self.generic_argument_text(argument.right)
+            return f"({left} {operator} {right})"
+        if isinstance(argument, IdentifierNode):
+            return argument.name
+        if isinstance(argument, LiteralNode):
+            return str(argument.value)
+        return self.convert_type_node_to_string(argument)
+
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if isinstance(type_node, FunctionCallNode):
@@ -16950,7 +17037,7 @@ class VulkanSPIRVCodeGen(
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(
-                    self.convert_type_node_to_string(arg) for arg in generic_args
+                    self.generic_argument_text(arg) for arg in generic_args
                 )
                 return f"{type_node.name}<{args}>"
             return type_node.name
@@ -20601,6 +20688,8 @@ class VulkanSPIRVCodeGen(
         self, node: VariableNode, *, allow_binding_reassignment: bool = False
     ) -> Tuple[int, int]:
         hlsl_slot = self.hlsl_descriptor_slots.get(id(node))
+        if hlsl_slot is None:
+            hlsl_slot = self.entry_descriptor_slots.get(getattr(node, "name", None))
         if hlsl_slot is not None:
             self.used_resource_bindings.add(hlsl_slot)
             return hlsl_slot
@@ -20684,10 +20773,16 @@ class VulkanSPIRVCodeGen(
                 node,
                 getattr(node, "name", "resource"),
             )
+        stage_of = {
+            id(node): str(stage_name)
+            for stage_name, stage in (getattr(ast, "stages", None) or {}).items()
+            for node in getattr(stage, "local_variables", []) or []
+        }
         self.hlsl_descriptor_slots = reserve_hlsl_descriptor_slots(
             self,
             self.global_descriptor_binding_nodes(ast),
             skip=lambda node: is_push_constant_block(self, node),
+            scope=lambda node: stage_of.get(id(node)),
         )
 
     def explicit_descriptor_binding(self, node: VariableNode) -> Optional[int]:
@@ -28358,12 +28453,9 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_loop_control_expression(node.condition)
-        if condition is None:
-            condition = self.register_constant(True, self.primitive_types["bool"])
-        condition = self.ensure_bool_value(condition)
-
-        self.create_loop_merge(merge_label, continue_label)
+        condition = evaluate_loop_condition(
+            self, node.condition, header_label, merge_label, continue_label
+        )
         self.create_conditional_branch(condition, body_label, merge_label)
 
         self.emit(f"%{body_label.id} = OpLabel")
@@ -29092,12 +29184,9 @@ class VulkanSPIRVCodeGen(
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_loop_control_expression(node.condition)
-        if condition is None:
-            condition = self.register_constant(True, self.primitive_types["bool"])
-        condition = self.ensure_bool_value(condition)
-
-        self.create_loop_merge(merge_label, continue_label)
+        condition = evaluate_loop_condition(
+            self, node.condition, header_label, merge_label, continue_label
+        )
         self.create_conditional_branch(condition, body_label, merge_label)
 
         self.emit(f"%{body_label.id} = OpLabel")
@@ -29600,6 +29689,10 @@ class VulkanSPIRVCodeGen(
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, BinaryOpNode):
+            if expr.op in SHORT_CIRCUIT_OPERATORS:
+                short_circuit = lower_short_circuit_logical(self, expr)
+                if short_circuit is not None:
+                    return short_circuit
             if expr.op in {"&", "|", "^"}:
                 expected_type = self.bitwise_expression_operand_type(
                     self.infer_expression_result_type(expr.left),
@@ -29659,6 +29752,9 @@ class VulkanSPIRVCodeGen(
             return self.unary_operation(expr.op, operand.type, operand)
 
         elif isinstance(expr, TernaryOpNode):
+            short_circuit = lower_short_circuit_ternary(self, expr)
+            if short_circuit is not None:
+                return short_circuit
             condition = self.process_expression(expr.condition)
             true_value = self.process_expression(expr.true_expr)
             false_value = self.process_expression(expr.false_expr)

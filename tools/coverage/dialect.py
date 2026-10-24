@@ -6,7 +6,10 @@ builder in :mod:`.probes` talks to a dialect and never to a language directly.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from .model import (
+    BYTES,
     NARROW_SCALARS,
     PACKED_BYTES,
     POINTER_SIZED,
@@ -17,6 +20,16 @@ from .model import (
 
 # A storage buffer as ``(element type spelling, name)``; buffer ``k`` is bound at binding ``k``.
 Buffer = tuple[str, str]
+
+
+class Handle(NamedTuple):
+    """An argument the language makes itself, such as an event or a queue that another built-in returns: the
+    argument, the statements before the call that make it, and the declarations before the entry point it needs.
+    """
+
+    argument: str
+    lines: tuple[str, ...] = ()
+    declarations: tuple[str, ...] = ()
 
 
 class ProbeError(ValueError):
@@ -56,9 +69,10 @@ class Dialect:
     # HLSL builds matrices from rows and indexes rows; the others use columns.
     rows_first = False
     _PREFIX = {"float": "", "double": "d", "int": "i", "uint": "u", "bool": "b"}
-    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, PACKED_BYTES and POINTER_SIZED.
+    # Whether the dialect spells the scalars in WIDE_INTEGERS, NARROW_SCALARS, BYTES, PACKED_BYTES and POINTER_SIZED.
     wide_integers = False
     narrow_scalars = False
+    byte_scalars = False
     packed_bytes = False
     pointer_sized = False
     # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
@@ -79,6 +93,8 @@ class Dialect:
             raise ProbeError(f"no 64-bit integer probe for {self.language} yet")
         if kind.scalar in NARROW_SCALARS and not self.narrow_scalars:
             raise ProbeError(f"no 16-bit probe for {self.language} yet")
+        if kind.scalar in BYTES and not self.byte_scalars:
+            raise ProbeError(f"no 8-bit probe for {self.language} yet")
         if kind.scalar in PACKED_BYTES and not self.packed_bytes:
             raise ProbeError(f"{self.language} has no packed 8-bit integer types")
         if kind.scalar in POINTER_SIZED and not self.pointer_sized:
@@ -113,6 +129,10 @@ class Dialect:
     def cast(self, kind: Type, value: str) -> str:
         return f"{self.type(kind)}({value})"
 
+    def array(self, kind: Type, parts: list[str]) -> str:
+        """An array of the type ``kind`` holding ``parts``, for a parameter that takes one."""
+        raise ProbeError(f"no probe for {self.language} array parameters yet")
+
     def literal(self, kind: Type) -> str:
         """A constant of ``kind``, for an argument the language requires to be a constant expression."""
         if kind == STRING:
@@ -127,6 +147,8 @@ class Dialect:
             "uint": "0u",
             "uint16": "0u",
             "uint64": "0u",
+            "int8": "0",
+            "uint8": "0u",
             "int8x4_packed": "0u",
             "uint8x4_packed": "0u",
         }
@@ -139,7 +161,7 @@ class Dialect:
         """An argument of ``kind`` that the language requires to be a constant expression. An unsigned scalar is a
         count, a size or an index, and one is the smallest value all of them take: a cluster size must be a power of
         two (SPIR-V 1.6, OpGroupNonUniformRotateKHR)."""
-        if kind.scalar in ("uint", "uint16", "uint64") and not kind.shape:
+        if kind.scalar in ("uint", "uint16", "uint64", "uint8") and not kind.shape:
             return self.one
         return self.literal(kind)
 
@@ -194,6 +216,13 @@ class Dialect:
     def call(self, name: str, arguments: list[str]) -> str:
         return f"{name}({', '.join(arguments)})"
 
+    def assignment(
+        self, name: str, kind: Type, arguments: list[str]
+    ) -> tuple[list[str], str] | None:
+        """For a function this dialect writes as an assignment rather than a call, the statements that compute its
+        result of type ``kind``, and the local that holds it; None for a call."""
+        return None
+
     def out_argument(self, name: str) -> str:
         return name
 
@@ -215,8 +244,17 @@ class Dialect:
         """The workgroup variable ``name``, for a parameter that takes one."""
         return name
 
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        """How a probe makes an argument of the opaque type ``kind`` in a local ``name``, or ``None`` when the
+        language has no built-in that makes one."""
+        return None
+
     def inout_argument(self) -> str:
         return "outp[i]"
+
+    def buffer_argument(self, name: str) -> str:
+        """The whole input buffer ``name``, for a parameter that takes a runtime-sized array."""
+        return name
 
     def to_int(self, condition: str) -> str:
         return f"{condition} ? 1 : 0"

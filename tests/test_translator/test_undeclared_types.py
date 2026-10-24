@@ -210,3 +210,22 @@ shader Bounded {
 
 def test_trait_bounds_are_not_type_uses():
     assert undeclared_type_uses(_program(BOUNDED)) == []
+
+
+RAY_QUERIES = """
+shader RayQueries {
+    compute {
+        void main() {
+            RayQuery<RAY_FLAG_FORCE_OPAQUE> opaque;
+            RayQuery<RAY_FLAG_CULL_OPAQUE | RAY_FLAG_SKIP_TRIANGLES> culled;
+            StructuredBuffer<Missing> values;
+        }
+    }
+}
+"""
+
+
+def test_ray_query_flags_are_values_not_type_uses():
+    # The flags of RayQuery<FLAGS> are values; other template arguments are still types.
+    uses = undeclared_type_uses(_program(RAY_QUERIES))
+    assert [name for name, _node in uses] == ["Missing"]

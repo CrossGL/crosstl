@@ -1,15 +1,17 @@
 name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
-# feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The
-# Linux job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga
-# and slangc. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures
-# Rust with rust-gpu, and the macOS job measures Metal with xcrun metal. The report job merges the reports and adds
-# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
-# coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart
-# drawn from it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
-# (tools/coverage/issues.py); pull requests only print its plan, and the comment job posts their change against
-# main on the pull request.
+# feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
+# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc,
+# and OpenCL C input with the runner image's clang-18 and DXC, and runs the GLSL and SPIR-V compute probes on Mesa's
+# llvmpipe and lavapipe. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one
+# measures Rust with rust-gpu, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on
+# the GPU. Both runs go through Core's conformance harness (tools/coverage/execution.py). The report job merges the
+# reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage`
+# branch with coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the
+# trend chart drawn from it; main itself never receives generated files. The issues job then reconciles the tracking
+# and bug issues (tools/coverage/issues.py); pull requests only print its plan, and the comment job posts their change
+# against main on the pull request.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -25,6 +27,9 @@ env:
   # tools/coverage/upstream.py reads spirv_std from the same release.
   RUST_GPU_VERSION: "0.11.0"
   RUST_GPU_COMMIT: "62401280ab4b512c734ad1aceee7553385e17418"
+  # The SPIR-V targets tools/coverage/rustgpu.py compiles probes for: mesh and task probes need Vulkan 1.2. The list
+  # is space-separated because it is part of a cache key, and cache keys cannot contain commas.
+  RUST_GPU_TARGETS: "vulkan1.1 vulkan1.2"
 
 on:
   push:
@@ -41,7 +46,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: coverage-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -75,7 +80,7 @@ jobs:
           changed="$(git diff --name-only HEAD^1 HEAD)"
           engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
           declare -A paths=(
-            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$'
+            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
             [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
             [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/'
           )
@@ -88,7 +93,7 @@ jobs:
           done
 
   linux:
-    name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang)
+    name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang, OpenCL C)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -101,10 +106,11 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      # numpy and moderngl run supported GLSL and SPIR-V compute probes through Core's conformance harness.
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e . numpy==2.5.4 moderngl==5.13.0 glcontext==3.1.0
 
       - name: Install pinned Linux DXC
         uses: ./.github/actions/install-linux-dxc
@@ -113,6 +119,13 @@ jobs:
 
       - name: Install pinned glslang and SPIRV-Tools
         uses: ./.github/actions/install-shader-validators
+
+      # Mesa's llvmpipe (OpenGL 4.5 through EGL) and lavapipe (Vulkan), with the headers the harness's vkrun needs.
+      - name: Install Mesa llvmpipe and lavapipe
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers
+          recommends: "false"
 
       - name: Restore naga
         id: naga
@@ -152,10 +165,13 @@ jobs:
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          # The clang whose opencl-c.h tools/coverage/upstream.py pins.
+          CROSSTL_COVERAGE_CLANG: clang-18
+          CROSSTL_CONFORMANCE_MESA: host
         run: |
-          python -m tools.coverage run --strict --jobs 4 \
+          python -m tools.coverage run --strict --execute --jobs 4 \
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
-            --output coverage-linux.json
+            --backend opencl --output coverage-linux.json
 
       - uses: actions/upload-artifact@v7
         with:
@@ -196,7 +212,7 @@ jobs:
           pip install -e .
 
       # nvcc compiles without a GPU, so the CUDA compiler and runtime headers are all the probes need.
-      - name: Install nvcc 13.0
+      - name: Add the CUDA apt repository
         if: matrix.backend == 'cuda'
         run: |
           set -euo pipefail
@@ -205,20 +221,23 @@ jobs:
             https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           echo "d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba  $keyring" | sha256sum --check --strict
           sudo dpkg -i "$keyring"
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            cuda-nvcc-13-0=13.0.88-1 cuda-crt-13-0=13.0.88-1 cuda-cudart-dev-13-0=13.0.96-1
           echo /usr/local/cuda-13.0/bin >> "$GITHUB_PATH"
-          /usr/local/cuda-13.0/bin/nvcc --version
+
+      - name: Install nvcc 13.0
+        if: matrix.backend == 'cuda'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: cuda-nvcc-13-0=13.0.88-1 cuda-crt-13-0=13.0.88-1 cuda-cudart-dev-13-0=13.0.96-1
+          recommends: "false"
 
       # hipcc 5.7.1 and its clang 17 come from Ubuntu's archive, the versions tools/coverage/upstream.py pins the HIP
       # headers to. It compiles for a named AMD target, so no GPU is needed either.
       - name: Install hipcc 5.7.1
         if: matrix.backend == 'hip'
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y -qq --no-install-recommends hipcc=5.7.1-3 libamdhip64-dev=5.7.1-3
-          hipcc --version
+        uses: ./.github/actions/apt-install
+        with:
+          packages: hipcc=5.7.1-3 libamdhip64-dev=5.7.1-3
+          recommends: "false"
 
       # The Mojo compiler and MAX's GPU package, at the release tools/coverage/upstream.py reads Mojo's standard library
       # from. They live in their own environment, and the wheels are pinned by digest.
@@ -288,7 +307,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/rust-gpu
-          key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ runner.os }}
+          key: rust-gpu-${{ env.RUST_GPU_COMMIT }}-${{ env.RUST_GPU_TARGETS }}-${{ runner.os }}
 
       - name: Install rust-gpu ${{ env.RUST_GPU_VERSION }}
         run: |
@@ -303,7 +322,7 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal --component rust-src,rustc-dev,llvm-tools
           if [ ! -f target/release/librustc_codegen_spirv.so ]; then
             cargo build --release -p rustc_codegen_spirv
-            cargo run --release -p compiletests -- --target-env vulkan1.1 lang/core/intrinsics/log10
+            cargo run --release -p compiletests -- --target-env "${RUST_GPU_TARGETS// /,}" lang/core/intrinsics/log10
             # Keep only what a probe compiles against.
             find target/release -mindepth 1 -maxdepth 1 ! -name librustc_codegen_spirv.so -exec rm -rf {} +
             find target/compiletest-deps -type d -name incremental -prune -exec rm -rf {} +
@@ -355,10 +374,10 @@ jobs:
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e . numpy==2.5.4 pyobjc-framework-Metal==12.2.2
 
       - name: Measure coverage
-        run: python -m tools.coverage run --strict --jobs 3 --backend metal --output coverage-metal.json
+        run: python -m tools.coverage run --strict --execute --jobs 3 --backend metal --output coverage-metal.json
 
       - uses: actions/upload-artifact@v7
         with:

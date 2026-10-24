@@ -72,6 +72,7 @@ from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .scalar_swizzles import expand_scalar_swizzles
 from .shader_records import (
     ShaderRecordBufferUnsupportedError,
     refuse_shader_record_buffers,
@@ -177,7 +178,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`). For OpenGL, SPIR-V
+    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
+    scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
@@ -245,6 +247,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     canonicalize_texture_swizzles(program)
+    expand_scalar_swizzles(program)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
