@@ -334,6 +334,8 @@ def test_float16_aliases_emit_slang_half_types():
         ("u64", "uint64_t"),
         ("int8", "int8_t"),
         ("uint8", "uint8_t"),
+        ("int32", "int"),
+        ("uint32", "uint"),
         ("int64", "int64_t"),
         ("uint64", "uint64_t"),
         ("i8vec2", "vector<int8_t, 2>"),
