@@ -100,7 +100,6 @@ from crosstl.translator.semantics import UnsizedArrayUnsupportedError
 from tests.lowering_refusal_helpers import (
     emitter_refusal,
     hlsl_partial_output,
-    refused_hlsl,
 )
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -5896,7 +5895,7 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
-def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -5910,22 +5909,18 @@ def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_hlsl(
-        crosstl.translate,
+    hlsl = crosstl.translate(
         str(shader_path),
         backend="directx",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "DirectX cannot lower 2 constructs" in refusal
-    assert (
-        "input attachment declaration: 'sceneColor' uses subpassInput; "
-        "subpassInput resources require Vulkan subpass lowering"
-    ) in refusal
-    assert (
-        "input attachment load: subpassLoad requires Vulkan subpass input lowering"
-    ) in refusal
+    # Direct3D has no input attachments: the attachment is bound as a texture and read at the pixel.
+    assert "Texture2D sceneColor : register(t0);" in hlsl
+    assert re.search(r"float4 (\w+) : SV_Position", hlsl), hlsl
+    assert re.search(r"sceneColor\.Load\(int3\(int2\(\w+\.xy\), 0\)\)", hlsl), hlsl
+    assert "subpass" not in hlsl.lower()
 
 
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
@@ -17121,8 +17116,22 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
-        ("fragment", "float", "gl_FragColor", "0.0", "SV_TARGET", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
+        (
+            "fragment",
+            "bool",
+            "gl_FragColor",
+            "true",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
+        (
+            "fragment",
+            "mat2",
+            "gl_FragColor",
+            "mat2(1.0)",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         (
@@ -17564,7 +17573,11 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
     ("member_decl", "hlsl_semantic", "expected_type"),
     [
         ("float position @ gl_Position", "SV_POSITION", "float4"),
-        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
+        (
+            "bool color @ gl_FragColor",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         (

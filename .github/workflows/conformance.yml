@@ -81,16 +81,35 @@ jobs:
     name: Select conformance legs
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
     outputs:
       run: ${{ steps.select.outputs.run }}
-      legs: ${{ steps.select.outputs.legs }}
+      legs: ${{ steps.select.outputs.legs || '[]' }}
+      tested: ${{ steps.queue.outputs.tested }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check whether the merge queue tested this commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The merge queue moves main to the commit its merge group tested, so a
+          # push to main would repeat a run that already passed on that commit.
+          # When the lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
+          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # A skipped selection leaves `run` empty, so every leg and the harness skip too.
       - name: Select legs
         id: select
+        if: steps.queue.outputs.tested != 'true'
         env:
           # macOS and Windows runners are scarce, so a pull request runs them only while it is labelled ci:full.
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}

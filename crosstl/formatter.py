@@ -154,13 +154,14 @@ class CodeFormatter:
             or "// crosstl-immutable-storage:" in code
             or "// crosstl-dispatch-region:" in code
             or "// crosstl-combined-samplers:" in code
+            or "// crosstl-fixed-samplers:" in code
         ):
             # Structured provenance must remain a single parseable comment line.
             style = json.dumps(
                 {
                     "BasedOnStyle": style,
                     "CommentPragmas": (
-                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:)"
+                        "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:|crosstl-fixed-samplers:)"
                     ),
                 }
             )

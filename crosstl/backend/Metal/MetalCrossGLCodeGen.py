@@ -47,6 +47,7 @@ from .aggregate_scalar_conversions import (
 )
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
+from .color_attachments import color_attachment_semantic, enumerator_index_values
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
 from .dependent_builtins import (
@@ -54,6 +55,7 @@ from .dependent_builtins import (
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
+from .external_functions import refuse_external_function_calls
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .MetalAst import *
 from .MetalLexer import *
@@ -64,7 +66,14 @@ from .preprocessor import (
     MetalTemplateSpecializationError,
 )
 from .scoped_member_types import resolve_concrete_scoped_member_type
-from .simd_header_types import SIMD_HEADER_TYPES
+from .simd_aliases import SIMD_TYPE_ALIASES
+from .sparse_color import (
+    METAL_SPARSE_TEXTURE_METHODS,
+    import_sparse_color_assignment,
+    import_sparse_color_member,
+    refuse_sparse_color_reference,
+    refuse_sparse_color_type,
+)
 from .static_member_calls import unresolved_static_member_call_owner
 from .texture_method_results import (
     is_depth_texture_name,
@@ -76,17 +85,7 @@ from .texture_types import (
     combined_texture_type,
 )
 from .type_layout import metal_type_layout
-
-# MSL texture member functions that return sparse_color<T>: the texel and whether its tile is resident.
-METAL_SPARSE_TEXTURE_METHODS = frozenset(
-    {
-        "sparse_sample",
-        "sparse_sample_compare",
-        "sparse_read",
-        "sparse_gather",
-        "sparse_gather_compare",
-    }
-)
+from .unscoped_enums import unscoped_enumerator_owners
 
 
 class MetalCallableAliasLoweringError(ValueError):
@@ -1105,8 +1104,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "ulong2",
         "ulong3",
         "ulong4",
-        # vector_float4(...) and its siblings construct the simd.h type, as float4(...) does.
-        *SIMD_HEADER_TYPES,
+        # <simd/simd.h> names Metal's vector and matrix types with these aliases too.
+        *SIMD_TYPE_ALIASES,
     }
     pixel_data_type_wrappers = {
         "r8unorm",
@@ -1211,6 +1210,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         "saturate",
         "cross",
         "faceforward",
+        # Lowered or refused per target by translator.semantics.metal_math_spellings.
+        "powr",
+        "exp10",
+        "tanpi",
+        "asinpi",
+        "acospi",
+        "atanpi",
+        "atan2pi",
     }
     materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
@@ -1772,21 +1779,6 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             "packed_uint2": "uvec2",
             "packed_uint3": "uvec3",
             "packed_uint4": "uvec4",
-            # SIMD types
-            "simd_float2": "vec2",
-            "simd_float3": "vec3",
-            "simd_float4": "vec4",
-            "simd_float2x2": "mat2",
-            "simd_float3x3": "mat3",
-            "simd_float4x4": "mat4",
-            "simd_int2": "ivec2",
-            "simd_int3": "ivec3",
-            "simd_int4": "ivec4",
-            "simd_uint2": "uvec2",
-            "simd_uint3": "uvec3",
-            "simd_uint4": "uvec4",
-            # simd.h aliases commonly found in shared Metal headers
-            **SIMD_HEADER_TYPES,
             # Matrix Types - float
             "float2x2": "mat2",
             "float2x3": "mat2x3",
@@ -1900,6 +1892,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             # Sampler type
             "sampler": "sampler",
         }
+        # <simd/simd.h> aliases map like the Metal types they name.
+        self.type_map.update(
+            {
+                alias: self.type_map[metal_type]
+                for alias, metal_type in SIMD_TYPE_ALIASES.items()
+                if metal_type in self.type_map
+            }
+        )
         self.type_aliases = {}
         self.type_alias_qualifiers = {}
         self.type_alias_pointee_qualifiers = {}
@@ -2210,7 +2210,22 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         static_member = self.render_static_struct_member_identifier(name)
         if static_member is not None:
             return static_member
+        enum_owner = (getattr(self, "unscoped_enumerator_owners", None) or {}).get(name)
+        if enum_owner is not None and not self.unscoped_enumerator_is_shadowed(name):
+            return f"{enum_owner}::{self.sanitize_identifier(name)}"
+        scoped = str(name).rsplit("::", 1)
+        if len(scoped) == 2 and tuple(scoped) in (
+            getattr(self, "enumerator_names", None) or ()
+        ):
+            # E::A of a declared enum is CrossGL's own spelling.
+            return f"{scoped[0]}::{self.sanitize_identifier(scoped[1])}"
         return self.sanitize_identifier(name)
+
+    def unscoped_enumerator_is_shadowed(self, name):
+        """Whether a variable of the program declares ``name``, which then hides the enumerator."""
+        return name in (
+            getattr(self, "current_variable_types", None) or {}
+        ) or name in (getattr(self, "global_variable_types", None) or {})
 
     def constructor_identifier_is_shadowed(self, name):
         if self.current_constructor_scope_index is None:
@@ -3367,8 +3382,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
     def generate(self, ast):
         """Render ``ast`` as a CrossGL program.
 
-        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully.
+        Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully, and
+        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
         """
+        refuse_external_function_calls(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -3549,6 +3566,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         for enum in enums:
             if isinstance(enum, EnumNode):
                 self.register_metal_enum_arithmetic_contract(enum)
+        self.metal_enum_index_values = enumerator_index_values(enums)
         emitted_typedefs = []
         for alias in typedefs:
             if not isinstance(alias, TypeAliasNode):
@@ -3571,6 +3589,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 enum.name for enum in enums if isinstance(enum, EnumNode) and enum.name
             }
             anonymous_enum_index = 0
+            emitted_enums = []
             for enum in enums:
                 if isinstance(enum, EnumNode):
                     enum_name = enum.name
@@ -3582,14 +3601,23 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                                 enum_name = candidate
                                 used_enum_names.add(candidate)
                                 break
-                    code += f"    enum {enum_name} {{\n"
-                    for member_name, member_value in enum.members:
-                        if member_value is not None:
-                            value = self.generate_expression(member_value, False)
-                            code += f"        {member_name} = {value},\n"
-                        else:
-                            code += f"        {member_name},\n"
-                    code += "    };\n\n"
+                    emitted_enums.append((enum, enum_name))
+            # Unscoped enumerators are names of the enclosing scope; CrossGL spells them E::A.
+            self.unscoped_enumerator_owners = unscoped_enumerator_owners(emitted_enums)
+            self.enumerator_names = {
+                (enum_name, member)
+                for enum, enum_name in emitted_enums
+                for member, _value in enum.members
+            }
+            for enum, enum_name in emitted_enums:
+                code += f"    enum {enum_name} {{\n"
+                for member_name, member_value in enum.members:
+                    if member_value is not None:
+                        value = self.generate_expression(member_value, False)
+                        code += f"        {member_name} = {value},\n"
+                    else:
+                        code += f"        {member_name},\n"
+                code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
                 previous_type_resolution_context = self.current_type_resolution_context
@@ -10366,6 +10394,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         decl += f" = {initializer}"
                 code += f"{decl};\n"
             elif isinstance(stmt, AssignmentNode):
+                sparse_color = import_sparse_color_assignment(
+                    self, stmt, is_main, indent
+                )
+                if sparse_color is not None:
+                    code += sparse_color
+                    continue
                 declaration = getattr(stmt, "left", None)
                 if isinstance(declaration, VariableNode) and getattr(
                     declaration, "vtype", None
@@ -12097,6 +12131,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             if expr.vtype:
                 return self.format_decl(expr, include_semantic=False)
             else:
+                sparse_reference = refuse_sparse_color_reference(self, expr)
+                if sparse_reference is not None:
+                    return sparse_reference
                 constant = self.render_integral_constant_binding(expr.name)
                 if constant is not None:
                     return constant
@@ -12506,6 +12543,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
             return f"{callee}({args})"
         elif isinstance(expr, MethodCallNode):
+            sparse_member = import_sparse_color_member(self, expr, is_main)
+            if sparse_member is not None:
+                return sparse_member
             wide_vector = self.wide_vector_expression_info(expr.object)
             if wide_vector is not None:
                 raise MetalWideVectorLoweringError(
@@ -18747,6 +18787,9 @@ float {scalar}(float value) {{
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+        sparse_color = refuse_sparse_color_type(self, metal_type)
+        if sparse_color is not None:
+            return sparse_color
 
         metal_type = self.substitute_template_type_text(metal_type)
         metal_type = self.substitute_template_value_text(metal_type)
@@ -18871,6 +18914,13 @@ float {scalar}(float value) {{
         if sampled_resource_type:
             return f"{sampled_resource_type}{suffix}"
 
+        if base.startswith("xhalf"):
+            # The xhalf names are a sample convention for half, not MSL types:
+            # a typedef the program declares, such as `typedef float xhalf;`,
+            # decides what they mean.
+            declared = self.resolve_type_alias(base)
+            if declared != base:
+                return f"{self.map_type(declared)}{suffix}"
         mapped = self.type_map.get(base)
         if mapped is not None:
             return f"{mapped}{suffix}"
@@ -23176,7 +23226,9 @@ float {scalar}(float value) {{
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
-                out = self.dynamic_fragment_output_semantic(name, args)
+                out = self.dynamic_fragment_output_semantic(
+                    name, args, context_kind=context_kind
+                )
             if out is None:
                 if args:
                     out = f"{name}({', '.join(args)})"
@@ -23193,12 +23245,13 @@ float {scalar}(float value) {{
             text = text[2:].lstrip()
         return text
 
-    def dynamic_fragment_output_semantic(self, name, args):
+    def dynamic_fragment_output_semantic(self, name, args, context_kind=None):
         if name == "color" and args:
-            if re.fullmatch(r"\d+", args[0]):
-                index = int(args[0])
-                return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
-            return "gl_FragColor"
+            return color_attachment_semantic(
+                args[0],
+                is_input=context_kind == "parameter",
+                enumerator_values=getattr(self, "metal_enum_index_values", {}),
+            )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
             return "gl_FragDepth"
         return None

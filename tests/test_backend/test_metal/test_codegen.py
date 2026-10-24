@@ -13232,7 +13232,11 @@ def test_codegen_component_updates_accept_enum_and_ptrdiff_contracts():
     assert f"uint {helper}(inout uvec4 value, uint lane, uint right)" in normalized
     assert f"{helper}(values, lane, LocalStep);" in normalized
     assert f"{helper}(values, lane, delta);" in normalized
-    assert f"{helper}_resource(values, First, lane, Delta);" in normalized
+    # Unscoped enumerators are written as CrossGL's scoped E::A.
+    assert (
+        f"{helper}_resource(values, ResourceIndex::First, lane, ResourceIndex::Delta);"
+        in normalized
+    )
     assert (
         f"uint {helper}_resource(device uvec4* data, "
         "uint element_index, uint lane, uint right)" in normalized

@@ -36,6 +36,7 @@ from .OpenglAst import (
     WhileNode,
 )
 from .shadow_textures import retype_shadow_textures
+from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
 
 try:
@@ -3814,6 +3815,10 @@ class GLSLToCrossGLConverter:
         subgroup_call = import_subgroup_call(self, name, node.args)
         if subgroup_call is not None:
             return subgroup_call
+
+        sparse_call = import_sparse_texture_call(self, name, node.args)
+        if sparse_call is not None:
+            return sparse_call
 
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)
