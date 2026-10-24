@@ -1054,6 +1054,10 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
         in step
     )
     assert "--output-dir .quantized-metal-native/affine" in step
+    # Report-mode runs execute drifted entries and name them; strict runs refuse them.
+    assert (
+        "${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}" in step
+    )
     assert "if:" not in step and "continue-on-error" not in step
     assert job.index("Compile every pinned quantized Metal artifact") < job.index(
         "Verify affine Metal numerical roundtrip"

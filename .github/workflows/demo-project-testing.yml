@@ -9237,6 +9237,7 @@ jobs:
           --bundle-root .quantized-metal-sources
           --contract demos/integrations/mlx/contracts/quantized.metal-roundtrip.json
           --output-dir .quantized-metal-native/affine
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain quantized Metal native compilation evidence
         if: always()
