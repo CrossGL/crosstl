@@ -28,6 +28,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..diagnostics import TranslationDiagnostic
 from ..matrix_shape import matrix_type_spelling
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
@@ -37,6 +38,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .cuda_refusals import CudaLoweringRefused
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -142,6 +144,11 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asfloat": "float",
     "asint": "int",
     "asuint": "uint",
+}
+
+CUDA_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
 }
 
 CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
@@ -2808,6 +2815,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 node.name,
@@ -3523,6 +3532,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
         target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -3550,6 +3566,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         result_type = self.cuda_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None
+
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and CUDA converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise CudaLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
@@ -6338,6 +6373,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 code = generate_ordered_conditional_match(
                     self, node, self.indent_level, "CUDA"
                 )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             reason = self.cuda_match_error_reason(error)
             code = (
@@ -6516,6 +6553,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 result_name,
