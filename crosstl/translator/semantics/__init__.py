@@ -63,6 +63,7 @@ from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
     lower_metal_ray_dispatch,
 )
+from .metal_math_spellings import lower_metal_math_spellings
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -233,6 +234,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_intrinsic_named_functions(program)
     fold_binding_constants(program)
     rename_colliding_functions(program)
+    lower_metal_math_spellings(program, report.target)
     canonicalize_texture_swizzles(program)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
