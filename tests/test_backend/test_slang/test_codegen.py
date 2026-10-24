@@ -4275,7 +4275,7 @@ def test_generic_prefix_struct_and_bitfield_codegen_from_official_tests_reparse(
     cgl_translator.parse(generated_code)
 
 
-def test_groupshared_globals_preserved_in_crossgl():
+def test_groupshared_globals_preserved_in_crossgl(tmp_path):
     """Slang groupshared globals must survive import to CrossGL (issue #2638)."""
     code = """
     RWStructuredBuffer<float> outp;
@@ -4298,13 +4298,9 @@ def test_groupshared_globals_preserved_in_crossgl():
     cgl_translator.parse(generated_code)
 
     # Public translate API (same path as the issue reproducer).
-    import tempfile
-    from pathlib import Path as P
-
-    with tempfile.TemporaryDirectory() as tmp:
-        source = P(tmp) / "gs.slang"
-        source.write_text(code)
-        via_api = translate(str(source), backend="cgl")
+    source = tmp_path / "gs.slang"
+    source.write_text(code)
+    via_api = translate(str(source), backend="cgl")
     assert "groupshared float s;" in via_api
     assert "groupshared float a[4];" in via_api
 
