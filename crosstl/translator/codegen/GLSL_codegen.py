@@ -40253,10 +40253,16 @@ complex64_t crossgl_complex64_mod_assign(
                 resource_call_args,
                 call_node=expr,
             )
+            # A specialized generic call takes its arguments as the specialization's concrete parameters.
             argument_func_name = (
                 self.glsl_function_declaration_name(resolved_overload)
                 if resolved_overload is not None
-                else private_materialized_call_name or original_func_name
+                else private_materialized_call_name
+                or (
+                    specialized_source_name
+                    if specialized_source_name in self.function_parameter_infos
+                    else original_func_name
+                )
             )
             argument_parameter_infos = (
                 self.glsl_function_parameter_infos(resolved_overload)
