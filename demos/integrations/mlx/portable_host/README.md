@@ -892,6 +892,55 @@ python -m demos.integrations.mlx.portable_host.verify_block_masked_mm \
   --mlx-root mlx-upstream --packages host-packages --output-dir block-masked-mm
 ```
 
+## Convolutions
+
+`Convolution::eval_gpu`, which `mx.conv1d`, `mx.conv2d`, `mx.conv3d`,
+`mx.conv_general` and the transposed convolutions reach, lives in `conv.inc`
+and routes every convolution as conv.cpp does. The host runs the explicit
+GEMM routes and the separable 1-D one: `explicit_gemm_conv_ND_gpu` unfolds the
+input with `naive_unfold_nd` in row tiles and multiplies each tile with the
+steel GEMM (or its split-K kernels, as `steel_matmul` chooses), the grouped
+`explicit_gemm_conv_group_ND_gpu` copies the weights into per-group rows,
+unfolds with `naive_unfold_transpose_nd` and multiplies all groups in one
+batched `steel_matmul_regular` launch, and `depthwise_conv_1D_gpu` runs
+`depthwise_conv_1d`. The implicit GEMM, winograd, depthwise 2-D, padded-channel
+and 3-D special routes are refused by name before any launch, and an empty
+output launches nothing.
+
+Two launch choices differ from conv.cpp without changing a value. The unfold
+and depthwise kernels read only `thread_position_in_grid` and
+`threads_per_grid`, so they run as one-thread workgroups over conv.cpp's exact
+thread grid: Direct3D and OpenGL cannot clip the partial workgroups of
+conv.cpp's `dispatch_threads`. The host has no `maxBufferLength`, so an unfold
+tile holds at most the elements every translated launch is bounded by and at
+most 65535 rows; `MLX_CONV_UNFOLD_TILE_ROWS` still caps it as in conv.cpp.
+The host also reports no working-set size, so it refuses every product
+conv.cpp would send to winograd once `winograd_batch_step` allowed it.
+
+`conv_layout.py` mirrors conv.cpp's routing, checks each unfold and depthwise
+launch against it and proves every read and write in bounds; `gemm_layout`
+accepts the grouped product's batch strides and row pitch exactly as conv.cpp
+passes them. Entries translate into the `conv` cache with the options of
+`test_current_conv`.
+
+The `MLX quantized host` jobs translate the verification entries and the GEMM
+entries they reach, then run `verify_conv.py` through `mx.conv_general`. Its
+16 cases cover every element type, every unfold rank, both explicit routes
+with input and kernel dilation, flips, uneven padding, row tiles with a
+partial last tile, a split-K product, copied inputs, the separable kernel,
+two refused routes and an empty output. Every output must match the exact
+float64 reference bit for bit, and float32 outputs must also equal MLX's CPU
+backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.conv_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.conv_packages products \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_conv \
+  --mlx-root mlx-upstream --packages host-packages --output-dir conv
+```
+
 ## Block Quantization
 
 The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization

@@ -337,7 +337,7 @@ def leading_dimension(value, minor, rows):
     )
 
 
-def _check_params(info, params, shape, strides):
+def _check_params(info, params, shape, strides, groups=1):
     bm, bn, bk = info["bm"], info["bn"], info["bk"]
     if any(type(value) is not int for value in params.values()):
         raise ValueError("Steel GEMM parameters must be integers")
@@ -368,10 +368,40 @@ def _check_params(info, params, shape, strides):
         "swizzle_log": 0,
         "gemm_k_iterations_aligned": k // bk,
     }
+    if groups > 1:
+        expected.update(grouped_params(m, n, k, groups))
+        if (
+            info["transposeA"]
+            or not info["transposeB"]
+            or info["constants"]["use_out_source"]
+            or shape != [1]
+            or strides != [0, 0]
+        ):
+            raise ValueError("Grouped steel GEMM differs from conv.cpp's")
     if any(params[name] != value for name, value in expected.items()) or not all(
         leading_dimension(*operand) for operand in leading
     ):
         raise ValueError("Steel GEMM parameters differ from matmul.cpp's")
+
+
+def grouped_params(m, n, k, groups):
+    """conv.cpp explicit_gemm_conv_group_ND_gpu's steel_matmul_regular values.
+
+    Each of ``groups`` output batches multiplies one group's K-column slice
+    of the unfolded rows with that group's N x K weights and writes N columns
+    of rows ``ldd`` = groups * N apart; the kernel steps between groups by
+    GEMMParams' batch strides, since a batch shape of {1} leaves has_batch
+    false. The host passes A's and B's zero batch strides, which the kernel
+    reads only with has_batch.
+    """
+    return {
+        "lda": k * groups,
+        "ldb": k,
+        "ldd": n * groups,
+        "batch_stride_a": k,
+        "batch_stride_b": n * k,
+        "batch_stride_d": n,
+    }
 
 
 def plan(entry, counts, parameters, threads, execution):
@@ -382,14 +412,19 @@ def plan(entry, counts, parameters, threads, execution):
     strides = parameters.get("batch_strides")
     if not isinstance(params, dict) or set(params) != set(PARAMS_FIELDS):
         raise ValueError("Steel GEMM parameters are missing")
-    _check_params(info, params, shape, strides)
-    m, n, k, ndim = params["M"], params["N"], params["K"], params["batch_ndim"]
-    batches = math.prod(shape)
     if not isinstance(execution, dict) or set(execution) != {
         "workgroupCount",
         "workgroupSize",
     }:
         raise ValueError("Steel GEMM launch geometry is missing")
+    # More output batches than the batch shape holds: conv.cpp's grouped
+    # explicit GEMM, whose batch shape is {1}.
+    count = list(execution["workgroupCount"])
+    groups = count[2] if len(count) == 3 and type(count[2]) is int else 1
+    groups = groups if shape == [1] and groups > 1 else 1
+    _check_params(info, params, shape, strides, groups)
+    m, n, k, ndim = params["M"], params["N"], params["K"], params["batch_ndim"]
+    batches = groups if groups > 1 else math.prod(shape)
     if (
         list(execution["workgroupSize"]) != list(workgroup_size(entry))
         or list(execution["workgroupCount"])
@@ -428,8 +463,14 @@ def plan(entry, counts, parameters, threads, execution):
         extents["C"] = (m - 1) * addmm["ldc"] + (n - 1) * addmm["fdc"] + 1
         operands.append(("C", strides[2 * ndim :]))
     for name, values in operands:
-        if _batch_end(shape, values) + extents[name] > counts[name]:
+        end = _batch_end(shape, values)
+        if groups > 1:
+            # The kernel offsets batch z by z times GEMMParams' batch stride.
+            end = (groups - 1) * params[f"batch_stride_{name.lower()}"]
+        if end + extents[name] > counts[name]:
             raise ValueError(f"Steel GEMM {name} batch exceeds its buffer")
+    if groups > 1 and (groups - 1) * n + (m - 1) * params["ldd"] + n > counts["D"]:
+        raise ValueError("Steel GEMM D batch exceeds its buffer")
     metadata = {
         "source": info["source"],
         "M": m,
@@ -440,6 +481,8 @@ def plan(entry, counts, parameters, threads, execution):
         "batches": batches,
         "constants": info["constants"],
     }
+    if groups > 1:
+        metadata["groups"] = groups
     if addmm:
         return {**metadata, "addmm": addmm}
     return {**metadata, "inert": dict(INERT_ADDMM)}

@@ -82,6 +82,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Power",
                     "ArcTan2",
                     "Convolution",
+                    "FFT",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
@@ -124,7 +125,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 11
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 12
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
@@ -146,6 +147,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     )
     assert (backend / "crosstl_scatter.inc").read_bytes() == (
         Path(prepare.__file__).with_name("scatter.inc").read_bytes()
+    )
+    assert (backend / "crosstl_conv.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("conv.inc").read_bytes()
     )
     assert (
         "NO_GPU_MULTI(Compiled)" not in (backend / "crosstl_primitives.cpp").read_text()
@@ -194,7 +198,8 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     for name in ("Power", "ArcTan2"):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
-    assert "NO_GPU(Convolution)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Convolution)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(FFT)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2

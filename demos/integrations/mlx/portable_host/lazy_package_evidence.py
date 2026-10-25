@@ -1,8 +1,8 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
 Scans, small row reductions, small column reductions, GEMV, dot-product,
-steel GEMM, split-K GEMM, GatherMM, SegmentedMM and BlockMaskedMM kernels are
-translated from the pinned sources on first use, so no static index lists
+steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM and
+convolution kernels are translated from the pinned sources on first use, so no static index lists
 their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
 metadata, and by comparing the recorded artifact with the unchanged cached
@@ -18,6 +18,7 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import (
     block_masked_mm_layout,
     column_small_layout,
+    conv_layout,
     dot_layout,
     gather_mm_layout,
     gather_mv_layout,
@@ -39,6 +40,10 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
 )
+from demos.integrations.mlx.portable_host.conv_packages import (
+    CACHE_DIRECTORY as CONV_CACHE,
+)
+from demos.integrations.mlx.portable_host.conv_packages import ConvPackageCache
 from demos.integrations.mlx.portable_host.dot_packages import (
     CACHE_DIRECTORY as DOT_CACHE,
 )
@@ -92,6 +97,7 @@ MATRIX_FAMILIES = {
     "dot": dot_layout.ENTRY_PREFIXES,
     "gemm": gemm_layout.ENTRY_PREFIXES,
     "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
+    "conv": conv_layout.ENTRY_PREFIXES,
 }
 FAMILIES = ("scan", "small-row", "small-column", *MATRIX_FAMILIES)
 GEOMETRY = ("workgroupCount", "workgroupSize")
@@ -154,6 +160,7 @@ class LazyPackages:
             "gemm-splitk": SplitKPackageCache(
                 mlx_root, packages / SPLITK_CACHE, target
             ),
+            "conv": ConvPackageCache(mlx_root, packages / CONV_CACHE, target),
         }
 
     def packages(self, event):

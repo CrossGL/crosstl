@@ -37,6 +37,7 @@ from demos.integrations.mlx.portable_host import (
     column_small_layout,
     compiled_dispatch,
     compiled_layout,
+    conv_dispatch,
     copy_dispatch,
     copy_layout,
     divmod_dispatch,
@@ -101,6 +102,10 @@ from demos.integrations.mlx.portable_host.compiled_packages import (
     CACHE_DIRECTORY as COMPILED_CACHE,
 )
 from demos.integrations.mlx.portable_host.compiled_packages import CompiledPackageCache
+from demos.integrations.mlx.portable_host.conv_packages import (
+    CACHE_DIRECTORY as CONV_CACHE,
+)
+from demos.integrations.mlx.portable_host.conv_packages import ConvPackageCache
 from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
 from demos.integrations.mlx.portable_host.copy_packages import (
     ENTRIES as LAZY_COPY_ENTRIES,
@@ -601,6 +606,12 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # Convolution's unfold and separable depthwise kernels.
+        self.convs = (
+            ConvPackageCache(mlx_root, self.directory / CONV_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -817,6 +828,8 @@ class HostRuntime:
             if name.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
                 kind = block_masked_mm_layout.kind_of(name)
                 return int(block_masked_mm_dispatch.cache_for(self, kind) is not None)
+            if conv_dispatch.is_entry(name):
+                return int(self.convs is not None)
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
@@ -1037,6 +1050,8 @@ class HostRuntime:
             return block_masked_mm_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
+        if conv_dispatch.is_entry(entry):
+            return conv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
             return gather_mm_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

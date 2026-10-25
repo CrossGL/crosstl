@@ -74,6 +74,7 @@ def adapted_sources(original, primitives, events):
         "GatherMM",
         "SegmentedMM",
         "BlockMaskedMM",
+        "Convolution",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -159,6 +160,7 @@ else()
         "crosstl_segmented_mm.inc": (HERE / "segmented_mm.inc").read_bytes(),
         "crosstl_block_masked_mm.inc": (HERE / "block_masked_mm.inc").read_bytes(),
         "crosstl_scatter.inc": (HERE / "scatter.inc").read_bytes(),
+        "crosstl_conv.inc": (HERE / "conv.inc").read_bytes(),
     }
 
 

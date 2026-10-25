@@ -650,7 +650,9 @@ def test_runtime_and_host_adapter_route_normalization():
         "// So does the port of BlockMaskedMM's masked products.\n"
         '#include "mlx/backend/no_gpu/crosstl_block_masked_mm.inc"\n'
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
-        '#include "mlx/backend/no_gpu/crosstl_scatter.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_scatter.inc"\n'
+        "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
+        '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

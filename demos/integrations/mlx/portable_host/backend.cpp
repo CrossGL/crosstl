@@ -3786,7 +3786,6 @@ void dispatch_steel_gemm_splitk(
   require_entry(accum);
   array C_split({split_k_partitions, M, N}, float32, nullptr, {});
   C_split.set_data(allocator::malloc(C_split.nbytes()));
-  out.set_data(allocator::malloc(out.nbytes()));
   // GEMMSpiltKParams in params.h order.
   std::vector<int32_t> params = {
       M,
@@ -3853,10 +3852,12 @@ struct GemmAddmmParams {
 };
 static_assert(sizeof(GemmAddmmParams) == 24, "GEMMAddMMParams layout");
 
-// matmul.cpp steel_matmul_axpby. The host reports no Apple GPU architecture
-// and no NAX unit, so GEMM_TPARAM_MACRO takes its medium-device tile and the
-// split-K case uses the threshold of 1024 tiles.
-void dispatch_steel_gemm(
+// matmul.cpp steel_matmul_regular_axpby: one steel_gemm_fused launch writing
+// ``out``, whose buffer the caller provides. The host reports no Apple GPU
+// architecture, so GEMM_TPARAM_MACRO takes its medium-device tile.
+// ``batch_strides`` holds A's and B's batch strides, and C's after them with
+// an epilogue.
+void dispatch_steel_gemm_regular(
     const array& a,
     const array& b,
     array& out,
@@ -3866,18 +3867,15 @@ void dispatch_steel_gemm(
     size_t batch_size_out,
     int64_t lda,
     int64_t ldb,
+    int64_t ldd,
     bool transpose_a,
     bool transpose_b,
-    Shape batch_shape,
-    const Strides& A_batch_stride,
-    const Strides& B_batch_stride,
+    const Shape& batch_shape,
+    const Strides& batch_strides,
+    int64_t A_batch_stride,
+    int64_t B_batch_stride,
+    int64_t matrix_stride_out,
     const AddmmEpilogue* epilogue = nullptr) {
-  const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
-  if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
-    dispatch_steel_gemm_splitk(
-        a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);
-    return;
-  }
   constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;
   const bool has_batch = batch_shape.size() > 1;
   const bool use_out_source =
@@ -3898,19 +3896,10 @@ void dispatch_steel_gemm(
   const uint64_t tiles_m = (uint64_t(M) + bm - 1) / bm;
   if (out.size() > max_matmul_elements || batch_size_out > 65535 || tiles_n > 65535 ||
       tiles_m > 65535 || lda < 0 || lda > int64_t(max_matmul_elements) || ldb < 0 ||
-      ldb > int64_t(max_matmul_elements) || batch_shape.empty() || batch_shape.size() > 16 ||
-      A_batch_stride.size() != batch_shape.size() ||
-      B_batch_stride.size() != batch_shape.size() ||
-      (epilogue && epilogue->batch_stride.size() != batch_shape.size())) {
+      ldb > int64_t(max_matmul_elements) || ldd < 0 || ldd > int64_t(max_matmul_elements) ||
+      batch_shape.empty() || batch_shape.size() > 16 ||
+      batch_strides.size() != (epilogue ? 3 : 2) * batch_shape.size()) {
     throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
-  }
-  out.set_data(allocator::malloc(out.nbytes()));
-  Strides batch_strides = A_batch_stride;
-  batch_strides.insert(batch_strides.end(), B_batch_stride.begin(), B_batch_stride.end());
-  // steel_matmul_axpby<true> appends C's batch strides.
-  if (epilogue) {
-    batch_strides.insert(
-        batch_strides.end(), epilogue->batch_stride.begin(), epilogue->batch_stride.end());
   }
   // GEMMParams in params.h order, each widened to int64.
   std::vector<int64_t> params = {
@@ -3919,12 +3908,12 @@ void dispatch_steel_gemm(
       K,
       lda,
       ldb,
-      N,
+      ldd,
       int64_t(tiles_n),
       int64_t(tiles_m),
-      A_batch_stride.back(),
-      B_batch_stride.back(),
-      int64_t(M) * N,
+      A_batch_stride,
+      B_batch_stride,
+      matrix_stride_out,
       0,
       K / bk,
       int64_t(batch_shape.size())};
@@ -3936,8 +3925,10 @@ void dispatch_steel_gemm(
       {"B", storage, data(b), matmul_span(b), 0},
       {"D", storage, out.data<void>(), out.size(), 1},
       {"params", "int64", params.data(), params.size(), 0},
-      {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
-      {"batch_strides", "int64", batch_strides.data(), batch_strides.size(), 0},
+      {"batch_shape", "int32", const_cast<int32_t*>(batch_shape.data()), batch_shape.size(),
+       0},
+      {"batch_strides", "int64", const_cast<int64_t*>(batch_strides.data()),
+       batch_strides.size(), 0},
   };
   GemmAddmmParams addmm_params{};
   if (use_out_source) {
@@ -3961,6 +3952,49 @@ void dispatch_steel_gemm(
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
   }
+}
+
+// matmul.cpp steel_matmul_axpby after its batch collapse. The host reports no
+// NAX unit, so the split-K case uses the threshold of 1024 tiles; otherwise
+// one regular launch writes ``out``, whose buffer the caller provides.
+void dispatch_steel_gemm(
+    const array& a,
+    const array& b,
+    array& out,
+    int M,
+    int N,
+    int K,
+    size_t batch_size_out,
+    int64_t lda,
+    int64_t ldb,
+    bool transpose_a,
+    bool transpose_b,
+    Shape batch_shape,
+    const Strides& A_batch_stride,
+    const Strides& B_batch_stride,
+    const AddmmEpilogue* epilogue = nullptr) {
+  const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
+  if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
+    dispatch_steel_gemm_splitk(
+        a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);
+    return;
+  }
+  if (batch_shape.empty() || A_batch_stride.size() != batch_shape.size() ||
+      B_batch_stride.size() != batch_shape.size() ||
+      (epilogue && epilogue->batch_stride.size() != batch_shape.size())) {
+    throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
+  }
+  Strides batch_strides = A_batch_stride;
+  batch_strides.insert(batch_strides.end(), B_batch_stride.begin(), B_batch_stride.end());
+  // steel_matmul_axpby<true> appends C's batch strides.
+  if (epilogue) {
+    batch_strides.insert(
+        batch_strides.end(), epilogue->batch_stride.begin(), epilogue->batch_stride.end());
+  }
+  dispatch_steel_gemm_regular(
+      a, b, out, M, N, K, batch_size_out, lda, ldb, N, transpose_a, transpose_b,
+      batch_shape, batch_strides, A_batch_stride.back(), B_batch_stride.back(),
+      int64_t(M) * N, epilogue);
 }
 
 // matmul.cpp dot_product: 512-thread groups of 32 items each write one float32
@@ -4180,6 +4214,7 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
       throw std::invalid_argument(
           "CrossTL complex64 matmul supports matrix-vector products only.");
     }
+    out.set_data(allocator::malloc(out.nbytes()));
     dispatch_steel_gemm(
         a, b, out, M, N, K, batch_size_out, a_cols, b_cols, a_transposed, b_transposed,
         batch_shape, A_batch_stride, B_batch_stride);
@@ -4254,6 +4289,7 @@ void AddMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         batch_shape, A_batch_stride, B_batch_stride, &epilogue);
     return;
   }
+  out.set_data(allocator::malloc(out.nbytes()));
   dispatch_steel_gemm(
       a, b, out, M, N, K, batch_size_out, a_cols, b_cols, transpose_a, transpose_b,
       batch_shape, A_batch_stride, B_batch_stride, &epilogue);
@@ -4380,3 +4416,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_block_masked_mm.inc"
 // And the port of the general Scatter, which tiles and orders its launches.
 #include "mlx/backend/no_gpu/crosstl_scatter.inc"
+// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.
+#include "mlx/backend/no_gpu/crosstl_conv.inc"

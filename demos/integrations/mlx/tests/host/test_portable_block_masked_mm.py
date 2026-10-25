@@ -14,9 +14,9 @@ from demos.integrations.mlx.portable_host import (
     prepare,
     runtime,
     upstream_matrix_packages,
-    verify_matmul,
 )
 from demos.integrations.mlx.portable_host import verify_block_masked_mm as verify
+from demos.integrations.mlx.portable_host import verify_matmul
 from demos.integrations.mlx.tests.kernels import test_current_gemm_masked as gemm_gate
 from demos.integrations.mlx.tests.kernels import test_current_gemv_masked as gemv_gate
 
@@ -582,7 +582,9 @@ def test_backend_ports_block_masked_mm_eval_gpu():
         "// So does the port of BlockMaskedMM's masked products.\n"
         '#include "mlx/backend/no_gpu/crosstl_block_masked_mm.inc"\n'
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
-        '#include "mlx/backend/no_gpu/crosstl_scatter.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_scatter.inc"\n'
+        "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
+        '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
     )
     start = port.index("void BlockMaskedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
