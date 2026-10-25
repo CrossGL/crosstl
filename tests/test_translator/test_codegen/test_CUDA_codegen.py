@@ -19480,3 +19480,33 @@ def test_unsized_scalar_constructors_keep_functional_casts():
     cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     assert "return double(float(int(uint(value))));" in cuda_code
+
+
+def test_fixed_width_integers_include_cstdint(tmp_path):
+    source_code = """
+    shader Wide {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uint* outp;
+
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                uint64_t w = uint64_t(uin[i]) * uint64_t(3);
+                uint16_t h = uint16_t(uin[i]);
+                uint8_t b = uint8_t(uin[i]);
+                outp[i] = uint(w) + uint(h) + uint(b);
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    cuda_code = CudaCodeGen().generate(ast)
+
+    assert "#include <cstdint>" in cuda_code
+    assert cuda_code.index("#include <cstdint>") < cuda_code.index("uint64_t")
+    assert "uint64_t" in cuda_code
+    assert "uint16_t" in cuda_code
+    assert "uint8_t" in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)

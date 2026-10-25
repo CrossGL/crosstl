@@ -183,6 +183,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "get_local_size": "gl_WorkGroupSize",
         "get_num_groups": "gl_NumWorkGroups",
     }
+    # OpenCL 2.0 defines get_local_linear_id() as
+    # (lid.z * lsize.y + lid.y) * lsize.x + lid.x, which is the local
+    # invocation index every compute target already exposes.
+    OPENCL_LINEAR_ID_MAP = {
+        "get_local_linear_id": "gl_LocalInvocationIndex",
+    }
     # OpenCL fence flags name the address spaces a fence orders; each maps to
     # the CrossGL fence over the same memory. More than one flag, or a flag
     # that is not a literal, needs the fence over all memory.
@@ -1090,6 +1096,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             component = self.opencl_dimension_component(args[0])
             if component is not None:
                 return f"(gl_NumWorkGroups.{component} * gl_WorkGroupSize.{component})"
+        if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
+            return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
         if base is None or len(args) != 1:
             return None

@@ -8,11 +8,8 @@ the one case whose HLSL form is fixed, and refuses the others before the DirectX
 * A task shader that launches mesh groups without a payload (``EmitMeshTasksEXT(x, y, z)`` and no
   ``taskPayloadSharedEXT`` variable) becomes ``DispatchMesh(x, y, z, payload)`` with a 4-byte ``groupshared``
   struct no stage reads: HLSL's ``DispatchMesh`` always takes a payload, and DXC rejects a zero-sized one.
-* A ``taskPayloadSharedEXT`` variable is refused: HLSL needs it passed to ``DispatchMesh`` and received as the mesh
-  entry's ``in payload`` parameter, which is not implemented yet.
-* A mesh entry point without ``out vertices`` / ``out indices`` parameters, whose outputs are GLSL-style
-  module-scope arrays (``gl_MeshVerticesEXT``, ``gl_PrimitiveTriangleIndicesEXT``, ``out`` blocks), is refused:
-  lowering them to entry parameters is not implemented yet.
+  A ``taskPayloadSharedEXT`` payload, and a mesh stage's module-scope output arrays, have already become
+  ``DispatchMesh`` arguments and entry parameters (:mod:`.glsl_mesh_stages`).
 * Ray payloads, hit attributes and callable data declared as variables (``rayPayloadEXT``, ``rayPayloadInEXT``,
   ``hitAttributeEXT``, ``callableDataEXT``, ``callableDataInEXT``) are refused: DXR takes them as entry parameters
   and ``TraceRay`` / ``CallShader`` arguments of struct type, and the lowering is not implemented yet.
@@ -48,7 +45,6 @@ _RAY_INTERFACE_ATTRIBUTES = {
     "callabledatainnv": "callableDataInEXT",
 }
 _TASK_PAYLOAD_ATTRIBUTES = frozenset({"taskpayloadsharedext", "taskpayloadsharednv"})
-_MESH_OUTPUT_ROLES = frozenset({"vertices", "indices", "primitives"})
 _PAYLOAD_STRUCT = "CrossGLMeshPayload"
 _PAYLOAD_VARIABLE = "crossglMeshPayload"
 
@@ -117,27 +113,6 @@ def _refuse_ray_interfaces(program):
                 )
 
 
-def _refuse_global_mesh_outputs(program):
-    for stage in _stages(program):
-        if getattr(stage, "stage", None) is not A.ShaderStage.MESH:
-            continue
-        entry = getattr(stage, "entry_point", None)
-        if entry is None:
-            continue
-        if any(
-            _names(parameter) & _MESH_OUTPUT_ROLES
-            for parameter in getattr(entry, "parameters", None) or []
-        ):
-            continue
-        raise HlslStageInterfaceUnsupportedError(
-            "mesh",
-            "mesh-output-variables",
-            "the entry declares no out vertices/indices parameters; its outputs are module-scope variables "
-            "(GLSL gl_MeshVerticesEXT, gl_Primitive*IndicesEXT and out arrays), and lowering them to HLSL "
-            "mesh output parameters is not implemented yet",
-        )
-
-
 def _task_payload_variable(program, stage):
     for variable in _variables(program, stage):
         if _names(variable) & _TASK_PAYLOAD_ATTRIBUTES:
@@ -165,14 +140,8 @@ def _supply_dispatch_mesh_payloads(program):
     for stage in _stages(program):
         if getattr(stage, "stage", None) not in _TASK_STAGES:
             continue
-        payload = _task_payload_variable(program, stage)
-        if payload is not None:
-            raise HlslStageInterfaceUnsupportedError(
-                _stage_name(stage),
-                "task-payload-variable",
-                f"'{payload.name}' is a taskPayloadSharedEXT variable; HLSL passes the payload to DispatchMesh and "
-                "the mesh entry receives it as an in payload parameter, which is not implemented yet",
-            )
+        if _task_payload_variable(program, stage) is not None:
+            continue
         functions = [*(getattr(stage, "local_functions", None) or []), *shared]
         if getattr(stage, "entry_point", None) is not None:
             functions.append(stage.entry_point)
@@ -213,5 +182,4 @@ def legalize_hlsl_stage_interfaces(program, target):
         return
     lower_glsl_ray_interfaces(program)
     _refuse_ray_interfaces(program)
-    _refuse_global_mesh_outputs(program)
     _supply_dispatch_mesh_payloads(program)

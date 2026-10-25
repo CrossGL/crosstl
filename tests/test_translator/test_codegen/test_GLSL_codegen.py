@@ -2421,7 +2421,8 @@ def test_glsl_global_function_constants_emit_scalar_specializations_and_validate
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in generated
     assert "layout(constant_id = 20) const bool has_w = false;" in generated
     assert "layout(constant_id = 21) const int mode = 2;" in generated
@@ -20767,6 +20768,61 @@ def test_glsl_user_defined_mad_function_is_preserved():
     assert "vec3 mad(vec3 value, vec3 scale, vec3 bias)" in generated_code
     assert "vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));" in generated_code
     assert "((vec3(0.25) * vec3(2.0)) + vec3(0.5))" not in generated_code
+
+
+def test_translate_hlsl_packed_dot4add_to_glsl_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    signed_lanes = "((ivec4(int({})) << ivec4(24, 16, 8, 0)) >> ivec4(24))"
+    unsigned_lanes = "((uvec4(uint({})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))"
+    a = "a[gl_GlobalInvocationID.x]"
+    b = "b[gl_GlobalInvocationID.x]"
+    assert (
+        f"(int(acc) + int(dot(vec4({signed_lanes.format(a)}), "
+        f"vec4({signed_lanes.format(b)}))))"
+    ) in generated
+    assert (
+        f"(uint(0u) + uint(dot(vec4({unsigned_lanes.format(a)}), "
+        f"vec4({unsigned_lanes.format(b)}))))"
+    ) in generated
+    assert "dot4add_" not in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "dot4add")
+
+
+def test_glsl_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint a = 1u;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
