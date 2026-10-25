@@ -1615,6 +1615,103 @@ void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 
+// One launch's part of every gathered slice: a source view rebased to the
+// part's first element, its slice sizes and its offset within the slice.
+struct GatherSliceTile {
+  uint64_t source_offset;
+  uint64_t output_offset;
+  uint64_t elements;
+  std::vector<int32_t> shape;
+  std::vector<int32_t> slices;
+};
+
+// The kernel enumerates a slice along one launch axis. A larger slice splits
+// over its leading axes into parts that each fit that axis; a part keeps the
+// kernel's source offsets because its view starts at the part's first element.
+std::vector<GatherSliceTile> gather_slice_tiles(
+    const std::vector<int32_t>& shape,
+    const std::vector<int64_t>& strides,
+    const std::vector<int32_t>& slices,
+    const std::vector<int32_t>& axes) {
+  constexpr uint64_t limit = 65535;
+  uint64_t total = 1;
+  for (auto size : slices) {
+    total *= uint64_t(size);
+  }
+  if (total <= limit) {
+    return {{0, 0, total, shape, slices}};
+  }
+  // The split axis is the first whose trailing slice fits one launch axis.
+  size_t split = 0;
+  uint64_t suffix = total / uint64_t(slices[0]);
+  while (suffix > limit) {
+    suffix /= uint64_t(slices[++split]);
+  }
+  for (auto axis : axes) {
+    // A rebased view would change how a gathered axis wraps negative indices.
+    if (size_t(axis) <= split && slices[axis] > 1) {
+      throw std::invalid_argument("CrossTL gather cannot split a slice across a gathered axis.");
+    }
+  }
+  const uint64_t extent = limit / suffix;
+  std::vector<GatherSliceTile> tiles;
+  std::vector<uint64_t> coordinates(split + 1);
+  for (uint64_t first = 0; first < total;) {
+    uint64_t remaining = first / suffix;
+    for (size_t axis = split + 1; axis-- > 0;) {
+      coordinates[axis] = remaining % uint64_t(slices[axis]);
+      remaining /= uint64_t(slices[axis]);
+    }
+    const uint64_t count =
+        std::min<uint64_t>(extent, uint64_t(slices[split]) - coordinates[split]);
+    GatherSliceTile tile{0, first, count * suffix, shape, slices};
+    for (size_t axis = 0; axis <= split; ++axis) {
+      tile.source_offset += coordinates[axis] * uint64_t(strides[axis]);
+      tile.shape[axis] -= static_cast<int32_t>(coordinates[axis]);
+      tile.slices[axis] = axis == split ? static_cast<int32_t>(count) : 1;
+    }
+    tiles.push_back(std::move(tile));
+    first += count * suffix;
+  }
+  return tiles;
+}
+
+// Launch one index slab's part of every slice, in slice order.
+void dispatch_gather_parts(
+    const std::string& entry,
+    std::vector<CrosstlMlxBuffer>& buffers,
+    const std::vector<GatherSliceTile>& tiles,
+    std::vector<int32_t>& src_shape,
+    std::vector<int32_t>& slices,
+    uint8_t* src_data,
+    size_t src_itemsize,
+    uint64_t src_span,
+    uint8_t* out_data,
+    size_t out_itemsize,
+    uint64_t dim0,
+    uint64_t tile_count) {
+  for (const auto& part : tiles) {
+    std::copy(part.shape.begin(), part.shape.end(), src_shape.begin());
+    std::copy(part.slices.begin(), part.slices.end(), slices.begin());
+    buffers[0].data = src_data + part.source_offset * src_itemsize;
+    buffers[0].count = src_span - part.source_offset;
+    const uint64_t elements = tile_count * part.elements;
+    buffers[1].data = out_data + part.output_offset * out_itemsize;
+    buffers[1].count = elements;
+    const CrosstlMlxLaunch launch{
+        {static_cast<uint32_t>(dim0), static_cast<uint32_t>(tile_count / dim0),
+         static_cast<uint32_t>(part.elements)}, {1, 1, 1}};
+    char error[2048] = {};
+    const int status = dispatch_callback.load()(
+        entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()),
+        elements, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native gather failed: ") + error);
+    }
+  }
+}
+
 void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
@@ -1691,7 +1788,7 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   uint64_t slice_size = 1;
   for (auto size : slices) {
-    if (size < 1 || slice_size > 65535 / uint64_t(size)) {
+    if (size < 1 || slice_size > max_storage_elements / uint64_t(size)) {
       throw std::invalid_argument("CrossTL gather slice size exceeds its bounds.");
     }
     slice_size *= size;
@@ -1701,14 +1798,19 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
       out.size() != index_size * slice_size) {
     throw std::invalid_argument("CrossTL gather output does not match index and slice sizes.");
   }
+  const auto tiles = gather_slice_tiles(src_shape, src_strides, slices, axes);
+  // The kernel places each slice by the launch's slice extent, so a split slice
+  // launches one index position at a time.
+  const uint64_t index_limit = tiles.size() == 1 ? 65535 : 1;
+  auto* const src_data = static_cast<uint8_t*>(const_cast<void*>(src.data<void>()));
   // Rebase exact rectangular index slabs; source indexing and slice order are unchanged.
   size_t split_axis = 0;
   uint64_t suffix = idx_ndim ? index_size / inputs[1].shape(0) : 1;
-  while (suffix > 65535) {
+  while (suffix > index_limit) {
     ++split_axis;
     suffix /= inputs[1].shape(split_axis);
   }
-  const uint64_t axis_limit = split_axis == 0 ? 65535 : 65535 / suffix;
+  const uint64_t axis_limit = split_axis == 0 ? index_limit : index_limit / suffix;
   for (uint64_t first = 0; first < index_size;) {
     std::vector<int32_t> tile_shape(inputs[1].shape().begin(), inputs[1].shape().end());
     std::vector<uint64_t> coordinates(idx_ndim);
@@ -1745,21 +1847,11 @@ void Gather::eval_gpu(const std::vector<array>& inputs, array& out) {
           offset * indices[i].itemsize();
       buffers[11 + i].count = span;
     }
-    const uint64_t elements = tile_count * slice_size;
-    buffers[1].data = out.data<uint8_t>() + first * slice_size * out.itemsize();
-    buffers[1].count = elements;
     const uint64_t dim0 = idx_ndim ? tile_shape[0] : 1;
-    const CrosstlMlxLaunch launch{
-        {static_cast<uint32_t>(dim0), static_cast<uint32_t>(tile_count / dim0),
-         static_cast<uint32_t>(slice_size)}, {1, 1, 1}};
-    char error[2048] = {};
-    const int status = dispatch_callback.load()(
-        entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()),
-        elements, &launch, error, sizeof(error));
-    error[sizeof(error) - 1] = '\0';
-    if (status != 0) {
-      throw std::runtime_error(std::string("CrossTL native gather failed: ") + error);
-    }
+    dispatch_gather_parts(
+        entry, buffers, tiles, src_shape, slices, src_data, src.itemsize(), src_span,
+        out.data<uint8_t>() + first * slice_size * out.itemsize(), out.itemsize(),
+        dim0, tile_count);
     first += tile_count;
   }
 }

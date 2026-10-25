@@ -195,6 +195,17 @@ ENTRIES = {
         "steel_segmented_mm_tn_float32_float32_bm64_bn64_bk16_wm2_wn2_segments_contiguous_t_align_M_n_align_N_n",
         "steel_segmented_mm_tt_float32_float32_bm64_bn64_bk16_wm2_wn2_segments_contiguous_t_align_M_n_align_N_n",
     ),
+    "blas-gather-blocks": (
+        "steel_gather_mm_nt_bfloat16_bfloat16_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_n_align_K_t",
+        "steel_gather_mm_nt_bfloat16_bfloat16_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_bfloat16_bfloat16_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_n_align_K_t",
+        "steel_gather_mm_nt_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_n_align_K_t",
+        "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_t_align_K_t",
+    ),
 }
 
 

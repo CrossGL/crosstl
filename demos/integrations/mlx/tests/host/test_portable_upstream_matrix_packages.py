@@ -112,7 +112,11 @@ def test_only_the_blas_jobs_warm_their_matrix_kernels_before_the_tests():
     step = job["steps"][names.index("Translate the upstream BLAS matrix kernels")]
     assert step["if"] == "startsWith(matrix.group, 'blas')"
     blas = {group for group in ops.GROUPS if group.startswith("blas")}
-    assert set(warm.ENTRIES) == blas == {"blas", "blas-wide", "blas-gather"}
+    assert (
+        set(warm.ENTRIES)
+        == blas
+        == {"blas", "blas-wide", "blas-gather", "blas-gather-blocks"}
+    )
     assert names.index(step["name"]) < names.index(
         "Execute unchanged upstream op tests"
     )

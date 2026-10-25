@@ -358,6 +358,7 @@ UPSTREAM_TESTS = (
             "test_gather_matmul_grad",
             "test_gather_mm_sorted",
             "test_gather_mm_sorted_vjp",
+            "test_gather_mm_blocks",
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
@@ -421,7 +422,12 @@ NO_DISPATCH_TESTS = frozenset(
 # products with NumPy's, so the CPU run is not their reference.
 GPU_ONLY_TESTS = frozenset(
     "test_blas.TestBlas." + name
-    for name in ("test_dot_product", "test_wide_matmul", "test_wide_addmm")
+    for name in (
+        "test_dot_product",
+        "test_wide_matmul",
+        "test_wide_addmm",
+        "test_gather_mm_blocks",
+    )
 )
 # CI runs each group in its own job. The normalization gradients move tens of
 # millions of elements through the host, about as long as every other test, and
@@ -431,6 +437,9 @@ GPU_ONLY_TESTS = frozenset(
 # about a hundred and fifty matrix kernels, which their jobs translate ahead of
 # the run (upstream_matrix_packages); the wide products and the gathered and
 # segmented ones each take about as long as the other BLAS tests together.
+# The gathered blocks test takes almost as long on its own: it gathers weight
+# slices of more than 65,535 elements in parts and casts its operands between
+# float32 and the half types in thousands of copy launches.
 GROUP_PREFIXES = {
     "normalization": "test_fast.",
     "reductions": "test_reduce.",
@@ -453,6 +462,7 @@ GROUP_TESTS = {
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
     ),
+    "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
 }
 
 

@@ -323,9 +323,7 @@ def audit_result(np, event, inputs, source, indices, expected, grid, metadata):
     require(target in {"metal", "directx", "opengl"}, "Unknown gather target")
     request = event["details"]["request"]
     audit_values = (
-        audit_element_values
-        if gather_storage.extended(dtype)
-        else audit_word_values
+        audit_element_values if gather_storage.extended(dtype) else audit_word_values
     )
     audit_values(np, event, inputs, expected, dtype, target)
     actual = event["gatherValues"]
@@ -415,14 +413,29 @@ def audit_batches(np, events, expected_source, expected_indices, expected):
         )
         for index in expected_indices
     ]
-    first, actual = 0, []
+    # A slice wider than one launch axis takes one launch per part, each for
+    # one index position, with the source rebased to the part's first element.
+    slice_size = expected.size // max(1, index_layouts[0].size)
+    first, covered, actual = 0, 0, []
     for event in events:
         source, indices, values = audit_event(np, event)
+        origin = [
+            full - part for full, part in zip(expected_source.shape, source.shape)
+        ]
         require(
-            source.shape == expected_source.shape
+            source.ndim == expected_source.ndim
+            and all(start >= 0 for start in origin)
             and gather_workloads.words(np, source)
-            == gather_workloads.words(np, expected_source),
+            == gather_workloads.words(
+                np, expected_source[tuple(slice(start, None) for start in origin)]
+            ),
             "Gather source upload does not belong to its workload",
+        )
+        part = math.prod(event["gatherMetadata"]["sliceSizes"])
+        require(
+            (part == slice_size and covered == 0 and not any(origin))
+            or (part < slice_size and indices[0].size == 1),
+            "Gather slice parts do not tile their slice",
         )
         require(
             event["gatherMetadata"]["sourceStrides"]
@@ -455,10 +468,13 @@ def audit_batches(np, events, expected_source, expected_indices, expected):
             ),
             "Gather workload index layout changed",
         )
-        first += size
+        covered += part
+        if covered == slice_size:
+            first, covered = first + size, 0
         actual.extend(values)
     require(
         first == index_layouts[0].size
+        and covered == 0
         and actual == gather_workloads.words(np, expected),
         "Gather batches do not cover the complete workload in order",
     )
