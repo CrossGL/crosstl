@@ -74,6 +74,7 @@ from .wgsl_entry_outputs import (
     lower_entry_output_parameters,
 )
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
     SHIFT_OPERATORS,
@@ -746,6 +747,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
+        lower_integer_builtin_inputs(
+            ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
+        )
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
