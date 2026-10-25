@@ -1054,22 +1054,35 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
         elif node.operation == "atomic_dec" and len(args) == 1:
-            args.append("-1")
+            args.append(self.negate_atomic_operand(node.args[0], "1"))
         elif node.operation in self.OPENCL_ATOMIC_SUB_OPERATIONS and len(args) >= 2:
             # CrossGL has no atomicSub, so subtract by adding the negated
             # operand; both return the value the memory held before.
-            args[1] = self.negate_atomic_operand(args[1])
+            args[1] = self.negate_atomic_operand(node.args[0], args[1])
         return f"{operation}({', '.join(args)})"
 
     OPENCL_ATOMIC_SUB_OPERATIONS = frozenset(
         {"atomic_sub", "atomic_fetch_sub", "atomic_fetch_sub_explicit"}
     )
+    OPENCL_ATOMIC_UINT_TYPES = frozenset({"u32", "uint", "unsigned int", "atomic_uint"})
+
+    def negate_atomic_operand(self, pointer, operand):
+        """``-operand``, or ``0u - operand`` on uint memory: WGSL has no unary minus on u32."""
+        text = operand.strip()
+        pointee = self.indexed_expression_type(self.expression_declared_type(pointer))
+        if (
+            pointee
+            and self.strip_type_qualifiers(pointee) in self.OPENCL_ATOMIC_UINT_TYPES
+        ):
+            if text.isdigit():
+                text += "u"
+            return f"0u - {self.parenthesize_atomic_operand(text)}"
+        return f"-{self.parenthesize_atomic_operand(text)}"
 
     @staticmethod
-    def negate_atomic_operand(operand):
-        text = operand.strip()
+    def parenthesize_atomic_operand(text):
         if text.isidentifier() or re.fullmatch(r"[0-9][0-9A-Za-z_.]*", text):
-            return f"-{text}"
+            return text
         if text.startswith("(") and text.endswith(")"):
             depth = 0
             for index, char in enumerate(text):
@@ -1078,8 +1091,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 if depth == 0 and index < len(text) - 1:
                     break
             else:
-                return f"-{text}"
-        return f"-({text})"
+                return text
+        return f"({text})"
 
     def format_opencl_builtin_call(self, func_name, args):
         if func_name == "get_global_size" and len(args) == 1:

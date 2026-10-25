@@ -581,8 +581,37 @@ def test_opencl_atomic_subtraction_lowers_to_atomic_add_of_negated_operand():
     assert "atomicAdd(outp[i], -1);" in crossgl
     assert "atomicAdd(outp[i], -v)" in crossgl
     assert "atomicAdd(outp[i], -(v - 2))" in crossgl
-    assert "atomicAdd(counts[i], -3u)" in crossgl
+    assert "atomicAdd(counts[i], 0u - 3u)" in crossgl
 
     hlsl = HLSLCodeGen().generate(cgl_ast)
     assert "atomicSub" not in hlsl
     assert "InterlockedAdd(outp[i], -1" in hlsl
+
+
+def test_opencl_atomic_subtraction_on_uint_memory_subtracts_from_unsigned_zero(
+    tmp_path,
+):
+    source = """
+        kernel __attribute__((reqd_work_group_size(64, 1, 1)))
+        void probe(global uint *counts, global uint *res, uint v) {
+          local uint tmp[64];
+          uint l = get_local_id(0);
+          tmp[l] = 100u;
+          barrier(CLK_LOCAL_MEM_FENCE);
+          uint d = atomic_dec(&tmp[l]);
+          uint a = atomic_sub(&counts[l], v);
+          uint b = atomic_fetch_sub(&tmp[l], 1);
+          res[l] = a + b + d;
+        }
+        """
+
+    crossgl = generate_crossgl(source)
+    assert "atomicAdd(tmp[l], 0u - 1u)" in crossgl
+    assert "atomicAdd(counts[l], 0u - v)" in crossgl
+    assert crossgl.count("0u - 1u") == 2
+
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    glsl = crosstl.translate(str(opencl_path), backend="glsl", format_output=False)
+    assert "atomicAdd(probe_tmp[l], (0u - 1u))" in glsl
+    assert "atomicAdd(counts[l], (0u - v))" in glsl
