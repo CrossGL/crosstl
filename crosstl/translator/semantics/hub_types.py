@@ -53,6 +53,7 @@ _SCALARS = {
     "f32": FLOAT32,
     "half": HubType("f", 16),
     "f16": HubType("f", 16),
+    "float16": HubType("f", 16),
     "float16_t": HubType("f", 16),
     "min16float": HubType("f", 16),
     "double": HubType("f", 64),
