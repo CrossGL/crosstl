@@ -455,6 +455,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "texturequerylod",
         "texturesize",
         "texelfetch",
+        "texelfetchoffset",
         "imagesize",
     }
     BARRIER_FUNCTION_NAMES = {
@@ -3908,6 +3909,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self.generate_image_dimensions_call(args)
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
+        if normalized_name == "texelfetchoffset":
+            return self.generate_texel_fetch_offset_call(function_name, args)
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
@@ -4150,6 +4153,20 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
+            f"{self.generate_expression(level)})"
+        )
+
+    def generate_texel_fetch_offset_call(self, function_name, args):
+        """``texelFetchOffset(t, P, lod, offset)`` reads the texel at ``P + offset`` (GLSL 4.60 section 8.9.2)."""
+        if len(args) != 4:
+            raise ValueError(
+                "WGSL target supports texelFetchOffset() calls with exactly 4 "
+                f"arguments; got {len(args)} for {function_name}"
+            )
+        texture, coords, level, offset = args
+        return (
+            f"textureLoad({self.generate_expression(texture)}, "
+            f"({self.generate_expression(coords)} + {self.generate_expression(offset)}), "
             f"{self.generate_expression(level)})"
         )
 
