@@ -33433,6 +33433,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "fragment",
             "instance",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -39264,8 +39265,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             attr_name = self.hlsl_stage_attribute_name(attr)
             if not attr_name:
                 continue
-            # Metal's max_total_threads_per_threadgroup only bounds the size that numthreads fixes in HLSL.
-            if attr_name in {"numthreads", "max_total_threads_per_threadgroup"}:
+            # Metal's max_total_threads_per_threadgroup only bounds the size that numthreads fixes in HLSL, and
+            # max_total_threadgroups_per_mesh_grid only bounds the DispatchMesh grid.
+            if attr_name in {
+                "numthreads",
+                "max_total_threads_per_threadgroup",
+                "max_total_threadgroups_per_mesh_grid",
+            }:
                 continue
 
             arguments = getattr(attr, "arguments", []) or []
