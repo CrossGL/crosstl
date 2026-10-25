@@ -388,6 +388,7 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
     rename_metal_keyword_parameters,
 )
+from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
@@ -4252,6 +4253,9 @@ class MetalCodeGen(
         if node.name in self.generic_struct_definitions:
             return None
         if node.name in self.lowered_glsl_buffer_block_struct_names:
+            return None
+        if is_metal_library_struct(node):
+            # <metal_stdlib> declares it; a second declaration is ambiguous.
             return None
         if node.name in self.glsl_buffer_block_struct_names:
             code = self.glsl_buffer_block_diagnostic("Metal", node.name, None, None)
