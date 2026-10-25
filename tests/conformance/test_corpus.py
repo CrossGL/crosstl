@@ -268,6 +268,28 @@ def test_glsl_environment_checks_ray_stages_with_vulkan_rules():
     assert checks.glsl_environment(["mesh"]) == []
 
 
+def test_glsl_specialization_macros_are_defined_after_version(tmp_path):
+    artifact = tmp_path / "unit.glsl"
+    text = (
+        "// record\n#version 450 core\n"
+        "/* CrossGL specialization metadata: name=has_map; constant_id=0;\n"
+        " * required_override=true; encoding_default=false;\n"
+        " * source_macro=CROSSGL_SPECIALIZE_has_map */\n"
+        "void main() {}\n"
+    )
+    artifact.write_text(text)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    source = Path(checks.glsl_specialized_source(artifact, text, scratch))
+    assert source.read_text().splitlines()[1:4] == [
+        "#version 450 core",
+        "#define CROSSGL_SPECIALIZE_has_map false",
+        "#line 3",
+    ]
+    plain = "#version 450 core\nvoid main() {}\n"
+    assert checks.glsl_specialized_source(artifact, plain, scratch) == artifact
+
+
 def test_essl_artifacts_must_declare_glsl_es_300(tmp_path):
     desktop = tmp_path / "desktop.essl.glsl"
     desktop.write_text("#version 450\nvoid main() {}\n")

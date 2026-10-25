@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
+from . import operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -149,6 +150,7 @@ HLSL = {
         "float2x2 m = float2x2(fin[i], 2.0, 1.0, 3.0);\nfloat2 v = mul(m, float2(1.0, fin[i]));\n"
         "outp[i] = v.y;"
     ),
+    **operators.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -471,6 +473,7 @@ WGSL = {
     "matrix-vector-product": Template(
         "let m = mat2x2<f32>(fin[i], 1.0, 2.0, 3.0);\nlet v = m * vec2<f32>(1.0, fin[i]);\noutp[i] = v.y;"
     ),
+    **operators.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

@@ -209,23 +209,37 @@ def test_only_pull_requests_without_labels_are_labelled():
     assert not any(path.startswith("pulls/6/") for _, path, _ in recorder.calls)
 
 
+def _workflow(name):
+    return yaml.safe_load(
+        (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    )
+
+
 def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
-    workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "labels.yml").read_text(encoding="utf-8")
-    )
-    assert "pull_request_target" not in workflow[True]
+    workflow = _workflow("pull-request-labels.yml")
+    # Scheduled runs start hours late here, so pushes to main do most of the work.
+    # Only events whose code is main's may hold the write token.
+    assert set(workflow[True]) == {"push", "schedule", "workflow_dispatch"}
+    assert workflow[True]["push"] == {"branches": ["main"]}
     assert workflow[True]["schedule"]
-    job = workflow["jobs"]["pull-requests"]
-    assert job["if"] == (
-        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
-    )
+    (job,) = workflow["jobs"].values()
+    assert "if" not in job
     assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
     checkout = job["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"] == {"persist-credentials": False}
     assert "--pull-requests --apply" in job["steps"][-1]["run"]
+
+
+def test_label_set_changes_apply_only_from_main():
+    workflow = _workflow("labels.yml")
+    assert "schedule" not in workflow[True]
+    assert set(workflow["jobs"]) == {"plan", "sync"}
     assert workflow["jobs"]["sync"]["if"] == (
         "github.event_name == 'push' || github.event_name == 'workflow_dispatch'"
+    )
+    assert "--apply" not in "".join(
+        step.get("run", "") for step in workflow["jobs"]["plan"]["steps"]
     )
 
 

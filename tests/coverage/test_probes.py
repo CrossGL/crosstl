@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from tools.coverage import probes, validators
+from tools.coverage.features import metal
 from tools.coverage.features.common import prototype
 from tools.coverage.model import (
     COOP_COLUMNS,
@@ -92,6 +93,11 @@ def test_probe_refuses_what_it_cannot_express():
         probes.build(feature("NMin", VEC3, VEC3, VEC3, crossgl=""), "crossgl")
     with pytest.raises(probes.ProbeError, match="double"):
         probes.build(feature("abs", Type("double"), Type("double")), "metal")
+
+
+def test_an_operation_crossgl_writes_as_an_expression_fills_its_holes():
+    clamp = feature("NClamp", VEC3, VEC3, VEC3, VEC3, crossgl="fmin(fmax({}, {}), {})")
+    assert "vec3 r = fmin(fmax(a0, a1), a2);" in probes.build(clamp, "crossgl").source
 
 
 def test_an_interpolant_is_read_straight_from_a_shader_input():
@@ -303,6 +309,15 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     crossgl = probes.build(IMAGE_ATOMIC, "crossgl").source
     assert "        layout(r32ui) uniform uimage2D u0;" in crossgl
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
+
+
+def test_a_glsl_probe_passes_a_shadow_sampler_for_a_depth_comparison():
+    shadow = feature(
+        "texture", Type("float"), Type.other("sampler2DShadow"), Type("float", (3,))
+    )
+    source = probes.build(shadow, "glsl").source
+    assert "layout(binding = 8) uniform sampler2DShadow u0;" in source
+    assert "float r = texture(u0, a1);" in source
 
 
 def test_a_subpass_input_names_its_input_attachment():
@@ -719,6 +734,29 @@ def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():
     source = probes.build(add, "metal").source
     assert "device atomic_int* outp [[buffer(1)]]" in source
     assert "atomic_fetch_add_explicit(&outp[i], a1, memory_order_relaxed);" in source
+
+
+def test_metal_atomic_load_and_store_probes_call_crossgl_load_and_store():
+    load, store = metal.parse(
+        "metal_atomic atomic_load_explicit int(inout int, memory_order)\n"
+        "metal_atomic atomic_store void(inout int, int)\n"
+    )
+    assert "atomic_load_explicit(&outp[i], memory_order_relaxed);" in (
+        probes.build(load, "metal").source
+    )
+    crossgl = probes.build(load, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicLoad(outp[i])" in crossgl
+    assert "atomic_store(&outp[i], a1);" in probes.build(store, "metal").source
+    assert "atomicStore(outp[i], a1);" in probes.build(store, "crossgl").source
+
+
+def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
+    (wide,) = metal.parse("metal_atomic atomic_min void(inout ulong, ulong)\n")
+    assert "atomic_min(&outp[i], a1);" in probes.build(wide, "metal").source
+    crossgl = probes.build(wide, "crossgl").source
+    assert "buffer uint64_t* outp;" in crossgl
+    assert "atomicMin(outp[i], a1);" in crossgl
 
 
 CUDA_SIGNATURES = [

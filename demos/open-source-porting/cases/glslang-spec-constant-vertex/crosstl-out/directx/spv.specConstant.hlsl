@@ -12,8 +12,8 @@ static const uint dupScale = 2u;
 static const int gl_MaxImageUnits = 8;
 
 struct VertexInput {
-    float4 ucol[arraySize]: TEXCOORD0;
-    float4 dupUcol[dupArraySize]: TEXCOORD5;
+    float4 ucol[5]: TEXCOORD0;
+    float4 dupUcol[12]: TEXCOORD5;
 };
 struct VertexOutput {
     float4 color: TEXCOORD0;

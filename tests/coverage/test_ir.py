@@ -1,4 +1,4 @@
-from tools.coverage import ir, report
+from tools.coverage import causes, ir, report
 from tools.coverage.model import Feature, Result, Signature, Type
 
 FLOAT = Type("float")
@@ -98,3 +98,25 @@ def test_a_feature_with_no_id_borrows_the_glsl_id_of_its_crossgl_spelling():
     features = by_name(entry)
     assert list(features) == ["GLSL.std.450:Frexp"]
     assert features["GLSL.std.450:Frexp"]["members"] == ["glsl/frexp", "wgsl/frexp"]
+
+
+def test_a_gap_names_its_member_as_the_feature_of_its_cause():
+    detail = 'probe.cu(9): error: no instance of overloaded function "{}" matches'
+    entry = ir.build(
+        [
+            row(
+                "cuda",
+                *(
+                    (name, "wrong", {"detail": detail.format(name)})
+                    for name in ("atomicAdd_block", "atomicOr_block")
+                ),
+            ),
+        ]
+    )
+    groups = causes.grouped(entry)
+    assert [(text, [f["name"] for f in features]) for text, features in groups] == [
+        (
+            'cuda: probe.cu(N): error: no instance of overloaded function "<feature>" matches',
+            ["cuda/atomicAdd_block", "cuda/atomicOr_block"],
+        )
+    ]

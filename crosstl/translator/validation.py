@@ -479,6 +479,7 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "domain": "domain",
     "local_size": "threadgroup_size",
     "max_total_threads_per_threadgroup": "max_total_threads_per_threadgroup",
+    "max_total_threadgroups_per_mesh_grid": "max_total_threadgroups_per_mesh_grid",
     "maxprimitivecount": "maxprimitivecount",
     "maxvertexcount": "maxvertexcount",
     "numthreads": "threadgroup_size",
@@ -966,9 +967,13 @@ def floating_coordinate_dimension(type_name):
     return dimensions.get(type_name)
 
 
+# 16-bit float scalars: the CrossGL name and the HLSL/GLSL spellings that codegen maps it to.
+_HALF_SCALAR_TYPES = frozenset({"float16", "float16_t", "min16float"})
+
+
 def is_floating_scalar_type(type_name):
     """Return true for known scalar floating-point types."""
-    return str(type_name) in {"float", "half", "double"}
+    return str(type_name) in {"float", "half", "double"} | _HALF_SCALAR_TYPES
 
 
 def is_integer_scalar_type(type_name):
@@ -978,7 +983,10 @@ def is_integer_scalar_type(type_name):
 
 def is_numeric_scalar_type(type_name):
     """Return true for known scalar numeric types."""
-    return str(type_name) in {"float", "half", "double", "int", "uint"}
+    return (
+        str(type_name) in {"float", "half", "double", "int", "uint"}
+        or str(type_name) in _HALF_SCALAR_TYPES
+    )
 
 
 def expression_debug_name(expr):
