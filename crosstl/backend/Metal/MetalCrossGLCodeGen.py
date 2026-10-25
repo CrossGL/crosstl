@@ -44,7 +44,11 @@ from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from ..switch_clauses import ordered_switch_clauses
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
-from .color_attachments import color_attachment_semantic, enumerator_index_values
+from .color_attachments import (
+    color_attachment_semantic,
+    enumerator_index_values,
+    framebuffer_fetch_struct_names,
+)
 from .comparison_samplers import collect_comparison_sampler_ids
 from .dependent_builtins import (
     NOT_DEPENDENT,
@@ -3554,6 +3558,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             if isinstance(enum, EnumNode):
                 self.register_metal_enum_arithmetic_contract(enum)
         self.metal_enum_index_values = enumerator_index_values(enums)
+        self.metal_fetched_struct_names = framebuffer_fetch_struct_names(
+            functions,
+            [
+                struct_node.name
+                for struct_node in structs
+                if isinstance(struct_node, StructNode)
+            ],
+        )
         emitted_typedefs = []
         for alias in typedefs:
             if not isinstance(alias, TypeAliasNode):
@@ -3675,6 +3687,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         member,
                         owner=self.map_struct_name(struct_node.name),
                         static_member_types=static_member_types,
+                        semantic_context=(
+                            {"kind": "fetched_member"}
+                            if struct_node.name in getattr(
+                                self, "metal_fetched_struct_names", ()
+                            )
+                            else None
+                        ),
                     )
                     if self.metal_packed_member(member) and not decl.startswith(
                         "static "
@@ -9412,15 +9431,20 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
-    def format_struct_member_decl(self, member, owner=None, static_member_types=None):
+    def format_struct_member_decl(
+        self, member, owner=None, static_member_types=None, semantic_context=None
+    ):
         """Render a struct field while preserving compile-time member constants.
 
         ``static_member_types`` types the struct's own static members while an
         unresolved default such as ``OUT_TILE_SIZE + FILTER_SIZE - 1`` of an
         explicit specialization renders, so arithmetic between them keeps its
-        declared type.
+        declared type. ``semantic_context`` is ``{"kind": "fetched_member"}``
+        for a structure a fragment function reads attachments through.
         """
-        declaration = self.format_decl(member, include_semantic=True)
+        declaration = self.format_decl(
+            member, include_semantic=True, semantic_context=semantic_context
+        )
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(member, "qualifiers", []) or []
@@ -23190,7 +23214,7 @@ float {scalar}(float value) {{
         if name == "color" and args:
             return color_attachment_semantic(
                 args[0],
-                is_input=context_kind == "parameter",
+                is_input=context_kind in ("parameter", "fetched_member"),
                 enumerator_values=getattr(self, "metal_enum_index_values", {}),
             )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
