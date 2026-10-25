@@ -46,6 +46,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - Structure member extents named by constants, such as `float data[Total];` with `constant constexpr size_t Total = X * Y * Z;` declared after the structure, are folded to integers on every target.
 - The Metal importer resolves the `<simd/simd.h>` aliases such as `simd::float4`, `simd_float4x4` and `vector_float3`, declares the `<metal_stdlib>` plain-data structures a source uses without declaring, such as the tessellation factor and indirect argument records, and imports `atomic_fetch_sub_explicit` as an atomic add of the negated value instead of copying the call.
 - HLSL implicit vector truncation in assignments and initializers becomes a leading-component swizzle on every target.
+- SPIR-V output lowers Metal structures with device, constant, threadgroup or thread pointer members to resource handles, as HLSL and GLSL output do. On all three targets such a member may hold a null pointer that is overwritten before every use, and a thread pointer member may point into a fixed-size local array.
 
 ### Fixed
 

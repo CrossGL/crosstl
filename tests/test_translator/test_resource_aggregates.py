@@ -960,3 +960,303 @@ def test_resource_aggregate_gate_requires_native_execution():
             workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/**",
         )
+
+
+def _validate_spirv_assembly(spv_asm: str, tmp_path: Path) -> None:
+    assert "Unknown type" not in spv_asm
+    assert "OpAccessChain" in spv_asm
+    if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+        return
+    import subprocess
+
+    asm_path = tmp_path / "module.spvasm"
+    bin_path = tmp_path / "module.spv"
+    asm_path.write_text(spv_asm, encoding="utf-8")
+    subprocess.run(
+        ["spirv-as", "--target-env", "vulkan1.1", str(asm_path), "-o", str(bin_path)],
+        check=True,
+    )
+    subprocess.run(
+        ["spirv-val", "--target-env", "vulkan1.1", str(bin_path)],
+        check=True,
+    )
+
+
+def test_buffer_cursor_issue_1544_lowers_across_directx_opengl_and_vulkan(tmp_path):
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct BufferCursor {
+    const device float* input;
+    device float* output;
+};
+
+kernel void copy_cursor(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    uint lane = tid & 3u;
+    BufferCursor cursor = { input + 1, output };
+    cursor.output[lane] = cursor.input[lane];
+}
+"""
+    shader = tmp_path / "cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_float" in hlsl
+    assert "crosstl_resource_store_float" in hlsl
+    assert "crosstl_resource_shift_float" in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "crosstl_resource_store_float" in glsl
+    assert "crosstl_resource_shift_float" in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "form",
+    ["member-assign", "brace-init", "branch-init", "ctor-init"],
+)
+def test_overwritten_null_aggregate_fields_lower_across_targets(tmp_path, form):
+    if form == "member-assign":
+        decl = "struct BufferCursor { const device float* input; };"
+        body = """
+    BufferCursor cursor;
+    cursor.input = nullptr;
+    cursor.input = input;
+    output[0] = cursor.input[0];
+"""
+    elif form == "brace-init":
+        decl = "struct BufferCursor { const device float* input; };"
+        body = """
+    BufferCursor cursor = { nullptr };
+    cursor.input = input + 1;
+    output[0] = cursor.input[0];
+"""
+    elif form == "branch-init":
+        decl = "struct BufferCursor { const device float* input; };"
+        body = """
+    BufferCursor cursor = { nullptr };
+    if (tid == 0u) {
+        cursor.input = input;
+    } else {
+        cursor.input = input + 1;
+    }
+    output[0] = cursor.input[0];
+"""
+    else:
+        decl = """
+struct BufferCursor {
+    const device float* input;
+    BufferCursor() : input(nullptr) {}
+};
+"""
+        body = """
+    BufferCursor cursor;
+    cursor.input = input;
+    output[0] = cursor.input[0];
+"""
+
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+{decl}
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{{{body}}}
+"""
+    shader = tmp_path / f"null_{form}.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_make_float(-1)" in hlsl
+    assert "crosstl_resource_load_float" in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_make_float(-1)" in glsl
+    assert "crosstl_resource_load_float" in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "BufferCursor cursor; cursor.input = nullptr; output[0] = cursor.input[0];",
+        "BufferCursor cursor = { nullptr }; if (tid == 0u) { cursor.input = input; } output[0] = cursor.input[0];",
+        "BufferCursor cursor = { nullptr }; cursor.input = cursor.input + 1; output[0] = 0.0f;",
+        "BufferCursor cursor = { input }; for (uint i = 0; i < 4u; i++) { output[i] = cursor.input[i]; cursor.input = nullptr; }",
+        "BufferCursor cursor = { input }; uint i = 0; while (i < 4u) { output[i] = cursor.input[i]; cursor.input = nullptr; i++; }",
+        "BufferCursor cursor = { input }; switch (tid) { case 0: cursor.input = nullptr; case 1: output[0] = cursor.input[0]; break; default: break; }",
+    ],
+)
+@pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
+def test_potentially_null_aggregate_dereference_is_rejected(tmp_path, body, backend):
+    source = f"""#include <metal_stdlib>
+using namespace metal;
+struct BufferCursor {{ const device float* input; }};
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{{
+    {body}
+}}
+"""
+    shader = tmp_path / "bad_null.metal"
+    shader.write_text(source, encoding="utf-8")
+    with pytest.raises(ResourceAggregateError, match="null-pointer-dereference"):
+        translate(str(shader), backend=backend, format_output=False)
+
+
+def test_null_aggregate_proof_refuses_recursive_helpers(tmp_path):
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct BufferCursor { const device float* input; };
+float first(BufferCursor cursor, uint n);
+float second(BufferCursor cursor, uint n) {
+    return n == 0u ? cursor.input[0] : first(cursor, n - 1u);
+}
+float first(BufferCursor cursor, uint n) { return second(cursor, n); }
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    BufferCursor cursor = { nullptr };
+    cursor.input = input;
+    output[0] = first(cursor, tid);
+}
+"""
+    shader = tmp_path / "recursive_null.metal"
+    shader.write_text(source, encoding="utf-8")
+    with pytest.raises(ResourceAggregateError, match="recursive-call"):
+        translate(str(shader), backend="directx", format_output=False)
+
+
+def test_aggregate_without_null_skips_null_proof(tmp_path):
+    # Without an explicit null, an unassigned slot is not reported as null,
+    # so loop-initialized aggregates keep lowering as before.
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct BufferCursor { const device float* input; };
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    BufferCursor cursors[2];
+    for (uint i = 0; i < 2u; i++) { cursors[i].input = input + i; }
+    output[tid] = cursors[1].input[0];
+}
+"""
+    shader = tmp_path / "loop_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_float" in hlsl
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+
+
+def test_function_local_pointer_aggregate_fields_lower_across_targets(tmp_path):
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct LocalCursor {
+    const thread float* reader;
+    thread float* writer;
+};
+
+kernel void run_local(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    float scratch[4];
+    scratch[0] = input[0] + 2.0f;
+    scratch[1] = input[1] + 4.0f;
+    scratch[2] = 0.0f;
+    scratch[3] = 0.0f;
+    LocalCursor cursor = { &scratch[0] + 1, &scratch[2] };
+    LocalCursor copy = cursor;
+    copy.writer[0] = copy.reader[0] * 3.0f;
+    output[0] = scratch[2];
+}
+"""
+    shader = tmp_path / "local_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_local_load_float" in hlsl
+    assert "crosstl_local_store_float" in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_local_load_float" in glsl
+    assert "crosstl_local_store_float" in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "vulkan"])
+def test_project_report_refuses_selected_aggregate_resource(tmp_path, target):
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct BadCursor {
+    const device float* value;
+};
+
+kernel void select_cursor(
+    const device float* a [[buffer(0)]],
+    const device float* b [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    uint tid [[thread_position_in_grid]])
+{
+    BadCursor cursor = { (tid == 0u) ? a : b };
+    output[0] = cursor.value[0];
+}
+"""
+    (tmp_path / "bad_cursor.metal").write_text(source, encoding="utf-8")
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("bad_cursor.metal",),
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(1, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    diag = report["diagnostics"][0]
+    assert diag["code"] == "project.translate.resource-aggregate-unsupported"
+    assert "conditional-pointer-selection" in diag["message"]
+
+
+def test_spirv_codegen_refuses_unlowered_pointer_aggregate_member():
+    from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+    from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+
+    ast = parse("""shader T {
+        struct UnloweredCursor { device float* data; }
+        vertex {
+            UnloweredCursor main() {
+                UnloweredCursor c;
+                return c;
+            }
+        }
+    }""")
+    with pytest.raises(
+        SpirvLoweringRefused,
+        match=r"Pointer-bearing aggregate member 'UnloweredCursor\.data'",
+    ) as exc_info:
+        VulkanSPIRVCodeGen().generate(ast)
+    assert "Unknown type" not in str(exc_info.value)
