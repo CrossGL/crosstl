@@ -763,20 +763,6 @@ shader SlangMeshTaskValidator {
 """
 
 
-SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
-shader SlangWorkgroupCountValidator {
-    RWStructuredBuffer<uint> groupCounts;
-    compute {
-        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-        void main(uint3 gid @ gl_GlobalInvocationID) {
-            uvec3 groups = gl_NumWorkGroups;
-            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y;
-        }
-    }
-}
-"""
-
-
 SLANG_STORAGE_BUFFER_COMPUTE_SHADER = """
 shader SlangStorageBufferValidator {
     struct Particle {
@@ -793,6 +779,20 @@ shader SlangStorageBufferValidator {
             uint i = gl_GlobalInvocationID.x;
             masses[i] = particles[i].position.x + particles[i].mass + *masses;
             atomicAdd(counters[0], 1u);
+        }
+    }
+}
+"""
+
+
+SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
+shader SlangWorkgroupCountValidator {
+    RWStructuredBuffer<uint> groupCounts;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            uvec3 groups = gl_NumWorkGroups;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y;
         }
     }
 }
@@ -2914,39 +2914,6 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
         )
 
 
-def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
-    shader_path = tmp_path / "slang_workgroup_count.slang"
-    spirv_path = tmp_path / "slang_workgroup_count.spv"
-
-    code = SlangCodeGen().generate(
-        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
-    )
-    assert "uint3 groups = WorkgroupCount();" in code
-    assert "groups.x + WorkgroupCount().y" in code
-    assert "gl_NumWorkGroups" not in code
-    shader_path.write_text(code, encoding="utf-8")
-
-    slangc = _require_tool("slangc")
-    spirv_val = _require_tool("spirv-val")
-    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
-    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
-    _run_validator(
-        [
-            slangc,
-            "-target",
-            "spirv",
-            "-entry",
-            "main",
-            "-stage",
-            "compute",
-            "-o",
-            str(spirv_path),
-            str(shader_path),
-        ]
-    )
-    _run_validator([spirv_val, str(spirv_path)])
-
-
 def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
     """``buffer T* name`` is a structured buffer at its own binding, not a pointer parameter (#2921)."""
     shader_path = tmp_path / "slang_storage_buffers.slang"
@@ -2992,6 +2959,39 @@ def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
         slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
     )
     assert "Ptr<" not in hlsl_path.read_text(encoding="utf-8")
+
+
+def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_workgroup_count.slang"
+    spirv_path = tmp_path / "slang_workgroup_count.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
+    )
+    assert "uint3 groups = WorkgroupCount();" in code
+    assert "groups.x + WorkgroupCount().y" in code
+    assert "gl_NumWorkGroups" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
+    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
 
 
 @pytest.mark.parametrize(
