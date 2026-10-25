@@ -56,6 +56,8 @@ from demos.integrations.mlx.portable_host import (
     arg_reduce_layout,
     compiled_evidence,
     copy_evidence,
+    cross_entropy_evidence,
+    cross_entropy_layout,
     divmod_evidence,
     elementwise_evidence,
     gather_evidence,
@@ -97,6 +99,12 @@ from demos.integrations.mlx.portable_host.copy_packages import (
     ENTRIES as LAZY_COPY_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CACHE_DIRECTORY as CROSS_ENTROPY_CACHE,
+)
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CrossEntropyPackageCache,
+)
 from demos.integrations.mlx.portable_host.divmod_dispatch import (
     ENTRY_PREFIXES as DIVMOD_PREFIXES,
 )
@@ -145,9 +153,10 @@ from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_id
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 # Whole-module tests beyond the core operations: losses, initializers, linear
-# algebra, einsum paths, FFT helpers and tree utilities. Each reaches the GPU;
-# linear algebra factorizations run on the MLX CPU stream as upstream directs,
-# and their operands and checks run through the host.
+# algebra, einsum paths, FFT helpers and tree utilities, and the fused
+# cross-entropy tests of test_fast. Each reaches the GPU; linear algebra
+# factorizations run on the MLX CPU stream as upstream directs, and their
+# operands and checks run through the host.
 MODULE_TESTS = tuple(
     f"{module}.{case}.test_{name}"
     for module, case, names in (
@@ -156,6 +165,8 @@ MODULE_TESTS = tuple(
             "TestLosses",
             (
                 "binary_cross_entropy",
+                # The GPU loss runs the fused cross_entropy.metal rows.
+                "cross_entropy",
                 "cosine_similarity_loss",
                 "gaussian_nll_loss",
                 "hinge_loss",
@@ -213,11 +224,13 @@ MODULE_TESTS = tuple(
             "TestFFT",
             ("fftfreq", "fftshift", "fftshift_errors", "ifftshift", "rfftfreq"),
         ),
+        # This reaches the fused cross-entropy rows of every float dtype from
+        # one to the most simdgroups. test_cross_entropy_grad's composed
+        # reference gradient scatters along axes of more than 65,535 elements,
+        # which the host's axis scatter does not tile yet.
+        ("test_fast", "TestFast", ("cross_entropy",)),
     )
     for name in names
-)
-MODULE_PREFIXES = tuple(
-    dict.fromkeys(name.split(".", 1)[0] + "." for name in MODULE_TESTS)
 )
 
 UPSTREAM_TESTS = (
@@ -330,15 +343,13 @@ UPSTREAM_TESTS = (
             # This also reaches row_reduce_looped through the on-demand row index.
             "test_sum",
         )
-    )
-    + (
+    ) + (
         # These reach lazily translated arg reductions of every real dtype, and
         # of the flattened array in a threadgroup of thirteen simdgroups.
         "test_ops.TestOps.test_argmin_argmax",
         "test_reduce.TestReduce.test_arg_reduce",
         "test_bf16.TestBF16.test_arg_reduction_ops",
-    )
-    + (
+    ) + (
         # These reach lazily translated whole-array, row and column sums,
         # products and extrema of every integer, float and Boolean dtype, over
         # permuted, expanded and negative-stride views, and empty outputs.
@@ -355,15 +366,13 @@ UPSTREAM_TESTS = (
         "test_reduce.TestReduce.test_long_column",
         # This reaches Boolean all and any reductions of signed zeros.
         "test_reduce.TestReduce.test_and_or_negative_zero",
-    )
-    + (
+    ) + (
         # These reach lazily translated block and looped softmax and logsumexp
         # rows, precise 16-bit softmax, and transposed and broadcast inputs.
         "test_ops.TestOps.test_softmax",
         "test_ops.TestOps.test_logsumexp",
         "test_ops.TestOps.test_logsumexp_shape",
-    )
-    + (
+    ) + (
         # These reach lazily translated single-block sorts and argsorts of
         # contiguous, strided, broadcast and reversed views, and multi-block
         # tile sorts, partitions and merges up to a 2^22-element row.
@@ -376,8 +385,7 @@ UPSTREAM_TESTS = (
         # and float32 arrays over several axes, with NaN in any position.
         "test_ops.TestOps.test_median",
         "test_ops.TestOps.test_median_nan",
-    )
-    + (
+    ) + (
         # This reaches lazily translated binary searches of contiguous,
         # strided, reversed and empty sequences, and of transposed, sliced
         # and broadcast values, through searchsorted.metal.
@@ -387,8 +395,7 @@ UPSTREAM_TESTS = (
         # This reaches the kernels MLX generates for the fused tapes of
         # mx.unique's compiled helpers, with sorts and scans.
         "test_ops.TestOps.test_unique",
-    )
-    + (
+    ) + (
         # These reach lazily translated contiguous and strided, forward and
         # reverse, inclusive and exclusive scans of float32, int32, int64 and
         # complex64, log-add-exp scans, and size-one axes of any stride.
@@ -396,8 +403,7 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_logcumsumexp",
         "test_ops.TestOps.test_scans_complex_exclusive",
         "test_ops.TestOps.test_scan_size_one_axis",
-    )
-    + (
+    ) + (
         # These reach lazily translated single-row and looped RMS and layer
         # normalization of every float dtype, their gradient kernels with and
         # without a weight, and the column sums of the weight gradients.
@@ -410,8 +416,7 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_no_bias",
         "test_fast.TestFast.test_layer_norm_grad_no_params",
         "test_fast.TestFast.test_layer_norm_grad_params",
-    )
-    + tuple(
+    ) + tuple(
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
         # and AddMM epilogues of every float dtype, complex64 GEMV, unaligned,
         # batched, broadcast, transposed and strided operands and empty
@@ -449,8 +454,7 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    )
-    + MODULE_TESTS
+    ) + MODULE_TESTS
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -487,6 +491,7 @@ RETAINED_VALUES = (
     *sort_dispatch.PREFIXES,
     searchsorted_dispatch.PREFIX,
     *norm_layout.PREFIXES,
+    cross_entropy_layout.PREFIX,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     "all_reduce_",
@@ -535,8 +540,6 @@ GROUP_PREFIXES = {
     "normalization": "test_fast.",
     "reductions": "test_reduce.",
     "blas": "test_blas.",
-    # The module tests run in one job; the norm sweep is the longest of them.
-    "modules": MODULE_PREFIXES,
 }
 GROUP_TESTS = {
     "reduction-dtypes": ("test_reduce.TestReduce.test_dtypes",),
@@ -557,6 +560,8 @@ GROUP_TESTS = {
     ),
     "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
     "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
+    # The module tests run in one job; the norm sweep is the longest of them.
+    "modules": MODULE_TESTS,
 }
 
 
@@ -937,6 +942,20 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         # weight placeholders and native modules; the upstream tests compare
         # the values with MLX's composed normalization.
         norm_evidence.audit_event(event, norms)
+        lazy_checked.add(i)
+        owners[i] += 1
+    cross_entropies = CrossEntropyPackageCache(
+        args.mlx_root, args.packages / CROSS_ENTROPY_CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in cross_entropy_layout.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op cross-entropy targets another backend")
+        # Derives the cached package again and checks the uploads, class
+        # indices, guards and native modules; the upstream tests compare the
+        # values with MLX's composed reference.
+        cross_entropy_evidence.audit_event(event, cross_entropies)
         lazy_checked.add(i)
         owners[i] += 1
     lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)

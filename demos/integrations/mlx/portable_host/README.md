@@ -2251,19 +2251,36 @@ gradient without a weight must leave its `gw` placeholder unwritten; launches
 over more than 65,536 row elements keep their extents and digests. The tests
 compare the values with MLX's composed normalization.
 The `modules` group runs whole-module tests beyond the core operations
-(`MODULE_TESTS`): thirteen `test_losses` tests, nine `test_einsum` tests,
+(`MODULE_TESTS`): fourteen `test_losses` tests, nine `test_einsum` tests,
 `test_init`'s `test_orthogonal`, `test_sparse_zeros_per_row` and
 `test_uniform`, fifteen `test_linalg` tests (Cholesky, LU, QR, SVD, inverses,
 determinants, solves, cross products and the real and complex norms),
-`test_tree`'s `test_merge` and `test_supported_trees`, and `test_fft`'s
+`test_tree`'s `test_merge` and `test_supported_trees`, `test_fft`'s
 `test_fftfreq`, `test_fftshift`, `test_fftshift_errors`, `test_ifftshift` and
-`test_rfftfreq`. The linear-algebra factorizations run on the MLX CPU stream,
-as upstream directs; their operands, products and checks run through the
-host. The other tests of these modules are not part of the group: the FFT
-tests need an FFT port, `test_init`'s identity and sparse initializers need
-scatters of more element types, `test_losses`' `test_cross_entropy` needs the
-fused cross-entropy kernel, and the einsum test sweep needs long-column
-reductions.
+`test_rfftfreq`, and `test_fast`'s `test_cross_entropy`. The linear-algebra factorizations run on the MLX
+CPU stream, as upstream directs; their operands, products and checks run
+through the host. The other tests of these modules are not part of the group:
+the FFT tests need an FFT port, `test_init`'s identity and sparse initializers
+need scatters of more element types, the einsum test sweep needs long-column
+reductions, and `test_fast`'s `test_cross_entropy_grad` composes its reference
+gradient from axis scatters of more than 65,535 elements, which the host does
+not tile yet. The host's own cross-entropy gradient matches the MLX CPU's
+composed one for those shapes.
+`nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
+`test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
+`cross_entropy.metal`:
+`cross_entropy_<type>` and `cross_entropy_vjp_<type>` for every float dtype,
+one package per threadgroup width (`ceil(ceil(n / 4) / 32) * 32` threads,
+clamped to 32..1024, as `cross_entropy_dims` launches them). The ports of
+`CrossEntropy` and `CrossEntropyVJP::eval_gpu` live in `cross_entropy.inc`;
+the forward primitive keeps MLX's composed fallback on the CPU only, as the
+Metal backend does. The composed fallback subtracts the target logit from a
+float32 logsumexp and loses the loss of equal logits of magnitude 1e20, which
+the fused kernel keeps by subtracting the logit gap first. MLX does not bound
+the class indices; the host refuses a launch with an index outside
+`[-n, n)` rather than read past its row. Every dispatch must name its cached
+package, upload its retained operands and keep its output guard; launches over
+more than 65,536 logits keep their extents and digests.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch, except `test_layer_norm_dim_check`, which rejects its

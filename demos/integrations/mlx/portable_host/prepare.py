@@ -38,12 +38,14 @@ COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View"
 CAST_PRIMITIVES = ("AsType",)
 # Unary primitives MLX instantiates only for complex64 operands.
 COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
-# Fast primitives normalization.inc ports; the forward ones keep MLX's CPU
-# fallback, and every one of them is a multi-output primitive.
-FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm")
-NORMALIZATION_PRIMITIVES = (*FALLBACK_PRIMITIVES, "LayerNormVJP", "RMSNormVJP")
+# Fast primitives normalization.inc and cross_entropy.inc port; the forward
+# ones keep MLX's CPU fallback, and every one of them is a multi-output
+# primitive.
+FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm", "CrossEntropy")
+NORMALIZATION_PRIMITIVES = ("LayerNorm", "RMSNorm", "LayerNormVJP", "RMSNormVJP")
+CROSS_ENTROPY_PRIMITIVES = ("CrossEntropy", "CrossEntropyVJP")
 # fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors.
-FAST_PRIMITIVES = (*NORMALIZATION_PRIMITIVES, "ConvertFP8")
+FAST_PRIMITIVES = (*NORMALIZATION_PRIMITIVES, *CROSS_ENTROPY_PRIMITIVES, "ConvertFP8")
 
 
 def replace_once(text, before, after):
@@ -161,6 +163,7 @@ else()
         "crosstl_block_masked_mm.inc": (HERE / "block_masked_mm.inc").read_bytes(),
         "crosstl_scatter.inc": (HERE / "scatter.inc").read_bytes(),
         "crosstl_conv.inc": (HERE / "conv.inc").read_bytes(),
+        "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
     }
 
 

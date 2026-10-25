@@ -39,6 +39,8 @@ from demos.integrations.mlx.portable_host import (
     compiled_layout,
     conv_dispatch,
     copy_dispatch,
+    cross_entropy_dispatch,
+    cross_entropy_layout,
     copy_layout,
     divmod_dispatch,
     dot_dispatch,
@@ -111,6 +113,12 @@ from demos.integrations.mlx.portable_host.copy_packages import (
     ENTRIES as LAZY_COPY_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CACHE_DIRECTORY as CROSS_ENTROPY_CACHE,
+)
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CrossEntropyPackageCache,
+)
 from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD_CACHE
 from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
 from demos.integrations.mlx.portable_host.divmod_packages import (
@@ -493,6 +501,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # Fused cross-entropy rows translate each entry at its width.
+        self.cross_entropies = (
+            CrossEntropyPackageCache(
+                mlx_root, self.directory / CROSS_ENTROPY_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gathers = (
             GatherPackageCache(mlx_root, self.directory / "gather", self.target)
             if mlx_root is not None
@@ -812,6 +828,11 @@ class HostRuntime:
             if name in norm_layout.ENTRIES and self.norms is not None:
                 return 1
             if (
+                name in cross_entropy_layout.ENTRIES
+                and self.cross_entropies is not None
+            ):
+                return 1
+            if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
             ):
@@ -997,6 +1018,10 @@ class HostRuntime:
             )
         if entry in norm_layout.ENTRIES:
             return norm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry in cross_entropy_layout.ENTRIES:
+            return cross_entropy_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if self.lazy_copy(entry):
             return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if self.lazy_elementwise(entry):

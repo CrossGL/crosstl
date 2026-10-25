@@ -4418,3 +4418,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_scatter.inc"
 // And the port of Convolution, whose explicit GEMM routes use the steel GEMM.
 #include "mlx/backend/no_gpu/crosstl_conv.inc"
+// And the port of the fused cross-entropy, which shares the row helpers.
+#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"

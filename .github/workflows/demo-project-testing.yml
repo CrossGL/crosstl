@@ -2799,13 +2799,13 @@ jobs:
             normalization,
             reductions,
             blas,
-            modules,
             reduction-dtypes,
             reduction-permutations,
             blas-wide,
             blas-gather,
             blas-gather-blocks,
             blas-masked,
+            modules,
           ]
         target: [opengl, directx, metal]
         include:

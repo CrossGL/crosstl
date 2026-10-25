@@ -652,7 +652,9 @@ def test_runtime_and_host_adapter_route_normalization():
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
         '#include "mlx/backend/no_gpu/crosstl_scatter.inc"\n'
         "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
-        '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_conv.inc"\n'
+        "// And the port of the fused cross-entropy, which shares the row helpers.\n"
+        '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"
