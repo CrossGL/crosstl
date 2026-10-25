@@ -4607,6 +4607,49 @@ class TestCudaCodeGen:
         assert "float3 hi = fmaxf(a, b);" not in cuda_code
         assert "float3 capped = fminf(a, nextWeight());" not in cuda_code
 
+    def test_scalar_min_max_keeps_integer_and_double_operands(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint x = gl_GlobalInvocationID.x;
+                    int y = int(x);
+                    uint a = min(x, 32u);
+                    int b = max(y, 3);
+                    uint mixed = min(y, 32u);
+                    int64_t w = 7;
+                    uint64_t uw = 7u;
+                    double d = 1.5;
+                    double wide = max(d, 2.0);
+                    float f = 0.5;
+                    float narrow = min(f, 1.0);
+                    int64_t wide64 = max(w, 3);
+                    uint64_t big = min(uw, 3u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint a = min(x, 32u);" in cuda_code
+        assert "int b = max(y, 3);" in cuda_code
+        assert "uint mixed = min(static_cast<unsigned int>(y), 32u);" in cuda_code
+        assert "double wide = fmax(d, 2.0);" in cuda_code
+        assert "float narrow = fminf(f, 1.0);" in cuda_code
+        assert "int64_t wide64 = max(w, static_cast<long long>(3));" in cuda_code
+        assert (
+            "uint64_t big = min(uw, static_cast<unsigned long long>(3u));" in cuda_code
+        )
+        assert "fminf(x, 32u)" not in cuda_code
+        assert "fmaxf(y, 3)" not in cuda_code
+        assert "fminf(d, 2.0)" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_mix_builtin_lowers_vector_cases_to_cuda_helpers(self):
         source_code = """
         shader TestShader {
