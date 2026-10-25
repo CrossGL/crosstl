@@ -57,6 +57,7 @@ from .dependent_builtins import (
     unbound_template_type_names,
 )
 from .external_functions import refuse_external_function_calls
+from .library_structs import declare_referenced_library_structs
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .MetalAst import *
@@ -146,6 +147,11 @@ class MetalBuiltinOverloadResolutionError(ValueError):
             f"{function_name}({signature}); candidates are "
             f"{', '.join(self.candidates)}"
         )
+
+
+def parse_metal_structs(source):
+    """Parse Metal ``source`` and return its structure declarations."""
+    return MetalParser(MetalLexer(source).tokenize()).parse().structs
 
 
 class MetalBuiltinResultTypeResolutionError(ValueError):
@@ -970,6 +976,18 @@ class MetalAtomicLoadLoweringError(ValueError):
             "Cannot lower Metal atomic_load_explicit without changing its "
             f"semantics: {reason}"
         )
+
+
+class MetalAtomicFetchSubLoweringError(ValueError):
+    """Raised when an atomic subtraction has no CrossGL atomic addition of the same width."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-fetch-sub-unsupported"
+    missing_capabilities = ("metal.atomic-fetch-sub-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(f"Cannot lower Metal atomic_fetch_sub_explicit: {reason}")
 
 
 class MetalAtomicCompareExchangeLoweringError(ValueError):
@@ -3379,6 +3397,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
         """
         refuse_external_function_calls(ast)
+        declare_referenced_library_structs(ast, parse_metal_structs)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -12603,6 +12622,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         else ""
                     )
                     if coord and value:
+                        value = self.storage_image_write_value(
+                            expr.object, expr.args[0], value
+                        )
                         return f"imageStore({obj}, {coord}, {value})"
                     return f"{obj}.write({args})"
                 return self.unsupported_sampled_texture_write(
@@ -13238,6 +13260,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             value = self.generate_expression(args[1], is_main)
             return f"atomicStore({target}, {value})"
         unscoped_name = str(name).split("::")[-1]
+        if (
+            unscoped_name == "atomic_fetch_sub_explicit"
+            and unscoped_name not in self.user_function_names
+            and not self.metal_user_function_overloads(name)
+            and len(args) >= 2
+        ):
+            return self.metal_atomic_fetch_sub(args, is_main, source_location)
         mapped = self.metal_atomic_intrinsics.get(unscoped_name)
         if mapped is None or unscoped_name in self.user_function_names:
             return None
@@ -13248,6 +13277,38 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         target = self.generate_metal_atomic_target(args[0], is_main)
         value = self.generate_expression(args[1], is_main)
         return f"{mapped}({target}, {value})"
+
+    def metal_atomic_fetch_sub(self, args, is_main, source_location=None):
+        """Spell ``atomic_fetch_sub_explicit(object, operand, order)`` as ``atomicAdd`` of the negated operand.
+
+        CrossGL, GLSL and HLSL have no atomic subtraction. Metal's integer atomics wrap modulo 2^N (MSL 3.2
+        section 6.15.4.5), so adding the two's-complement negation stores and returns the same values; negating a
+        float operand is exact.
+        """
+        element = self.atomic_element_type(
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.metal_pointer_pointee_type_once(
+                        self.expression_metal_type(args[0])
+                    )
+                    or ""
+                )
+            )
+        )
+        element = self.map_type(element) if element else None
+        if element not in {"int", "uint", "float"}:
+            raise MetalAtomicFetchSubLoweringError(
+                "requires an atomic_int, atomic_uint or atomic_float object",
+                source_location,
+            )
+        target = self.generate_metal_atomic_target(args[0], is_main)
+        value = self.generate_expression(args[1], is_main)
+        operand_type = self.expression_metal_type(args[1])
+        if not operand_type or self.map_type(operand_type) != element:
+            value = f"{element}({value})"
+        if element == "uint":
+            return f"atomicAdd({target}, 0u - {value})"
+        return f"atomicAdd({target}, -({value}))"
 
     def generate_metal_atomic_target(self, expr, is_main):
         # Metal addresses an atomic as a pointer (`&buffer[i]` or a pointer var);
@@ -19777,6 +19838,9 @@ float {scalar}(float value) {{
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        if base in SIMD_TYPE_ALIASES:
+            # <simd/simd.h> reserves these names for the Metal types they alias.
+            return f"{SIMD_TYPE_ALIASES[base]}{suffix}"
         if (
             "<" not in base
             and ":" not in base
@@ -19825,6 +19889,9 @@ float {scalar}(float value) {{
                 suffix = alias_suffix + suffix
         finally:
             self.current_type_resolution_context = previous_context
+        if base in SIMD_TYPE_ALIASES:
+            # A user alias may resolve to a <simd/simd.h> name such as float4.
+            base = SIMD_TYPE_ALIASES[base]
         return f"{base}{suffix}"
 
     def atomic_element_type(self, metal_type):
@@ -22672,7 +22739,11 @@ float {scalar}(float value) {{
             if atomic_name.startswith("metal::"):
                 atomic_name = atomic_name[len("metal::") :]
             if (
-                atomic_name in {"atomic_load_explicit", *self.metal_atomic_intrinsics}
+                atomic_name in {
+                    "atomic_load_explicit",
+                    "atomic_fetch_sub_explicit",
+                    *self.metal_atomic_intrinsics,
+                }
                 and len(expr.args)
                 == (2 if atomic_name == "atomic_load_explicit" else 3)
                 and not self.metal_user_function_overloads(expr.name)
@@ -22718,6 +22789,23 @@ float {scalar}(float value) {{
         if is_depth_texture_name(base_name):
             return f"{call}.x"
         return call
+
+    def storage_image_write_value(self, texture_expr, value_expr, value):
+        """Spell the implicit conversion of a texture ``write`` value to the texel type.
+
+        ``write(Tv color, ...)`` takes the texel type of the texture (MSL 3.2 section 6.12.16); a scalar argument
+        converts to it like any scalar-to-vector initialisation (MSL 3.2 section 2.12), so ``tex.write(0, c)``
+        stores ``float4(0.0)`` in a ``texture2d<float, access::write>``.
+        """
+        texel_type = self.metal_texture_method_result_type(texture_expr, "read")
+        value_type = self.expression_metal_type(value_expr)
+        if not texel_type or not value_type:
+            return value
+        value_type = self.metal_source_overload_value_type(value_type) or value_type
+        if self.metal_scalar_arithmetic_type_info(value_type) is None:
+            # Only a scalar converts implicitly; a vector value already has the texel type.
+            return value
+        return f"{self.map_type(self.normalized_metal_type(texel_type))}({value})"
 
     def metal_texture_method_result_type(self, texture_expr, method):
         """The MSL type of ``texture.method(...)`` when the texture's type fixes it, else ``None``."""

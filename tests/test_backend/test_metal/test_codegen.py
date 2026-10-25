@@ -5842,7 +5842,8 @@ def test_codegen_access_qualified_1d_storage_textures():
     assert "vec4 c = imageLoad(line, tid);" in result
     assert "imageStore(line, tid, c);" in result
     assert "uint v = imageLoad(counters, uvec2(tid, 0));" in result
-    assert "imageStore(counters, uvec2(tid, 0), v);" in result
+    # The scalar texel value converts to the uint4 texel type (MSL 3.2 section 2.12).
+    assert "imageStore(counters, uvec2(tid, 0), uvec4(v));" in result
 
     shader_ast = parse_crossgl(result)
     assert shader_ast is not None
@@ -6198,6 +6199,28 @@ def test_codegen_simd_namespace_types():
     assert "mat4x2 m42" in result
     assert "f16mat3 h3" in result
     assert "float3x3" not in result
+
+
+def test_codegen_simd_alias_members_resolve_builtin_overloads_and_subscripts():
+    """Builtin overloads and subscripts see simd aliases as the Metal types they name."""
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct Uniforms {
+        simd::float4 plane;
+        simd_float4x4 transform;
+        vector_float3 axis;
+    };
+    kernel void k(device float *out [[buffer(0)]],
+                  constant Uniforms &u [[buffer(1)]],
+                  uint id [[thread_position_in_grid]]) {
+        float4 p = float4(1.0);
+        out[id] = dot(u.plane, p) + u.transform[3].x + length(u.axis);
+    }
+    """
+    result = convert(code)
+    assert "dot(u.plane, p) + u.transform[3].x + length(u.axis)" in result
+    assert "simd" not in result.split("shader", 1)[1]
 
 
 def test_codegen_function_constants_and_argument_buffers():
