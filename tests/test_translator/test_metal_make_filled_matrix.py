@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.backend.import_refusals import MetalImportRefused
 
 SOURCE = """
 #include <metal_stdlib>
@@ -77,6 +78,29 @@ kernel void probe(device float* fin [[buffer(0)]], device float3* outp [[buffer(
     crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
     assert "make_filled_matrix_float_3(buffer_load(fin, id.x))[0]" in crossgl
     assert "return mat3(value);" in crossgl
+
+
+@pytest.mark.parametrize(
+    "buffer_type, call",
+    [
+        ("bfloat", "make_filled_matrix<bfloat, 2>(fin[id.x])[1][0]"),
+        ("float", "make_filled_matrix<float, 5>(fin[id.x])[4][4]"),
+        ("float", "make_filled_matrix<float, N>(fin[id.x])[1][0]"),
+    ],
+)
+def test_matrix_crossgl_cannot_spell_is_refused(tmp_path, buffer_type, call):
+    path = tmp_path / "refused.metal"
+    path.write_text(f"""
+#include <metal_stdlib>
+using namespace metal;
+constant int N = 3;
+kernel void probe(device {buffer_type}* fin [[buffer(0)]], device float* outp [[buffer(1)]],
+                  uint3 id [[thread_position_in_grid]]) {{
+    outp[id.x] = float({call});
+}}
+""")
+    with pytest.raises(MetalImportRefused, match="make_filled_matrix<"):
+        crosstl.translate(str(path), backend="cgl", format_output=False)
 
 
 def test_metal_round_trip_has_no_make_filled_matrix_call(tmp_path):
