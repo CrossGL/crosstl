@@ -50,6 +50,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -2993,6 +2994,24 @@ class SlangCodeGen(LoweringRefusalMixin):
                 or self.slang_mesh_output_parameter_role(attr)
             ):
                 continue
+            if str(getattr(attr, "name", "")).lower() == "builtin":
+                # ``@builtin(global_invocation_id)`` names the same value as ``@gl_GlobalInvocationID``.
+                builtin_name = glsl_builtin_name(attr)
+                if builtin_name == "gl_SampleMask":
+                    # WGSL's sample_mask is a fragment input and an output, like SV_Coverage; GLSL splits it into
+                    # gl_SampleMaskIn and the output-only gl_SampleMask.
+                    return "SV_Coverage"
+                if builtin_name is not None:
+                    return builtin_name
+                arguments = getattr(attr, "arguments", None) or [""]
+                written = getattr(arguments[0], "name", None) or getattr(
+                    arguments[0], "value", arguments[0]
+                )
+                self.refuse_lowering(
+                    f"Slang has no system value for the unknown built-in @builtin({written}) "
+                    f"on '{getattr(node, 'name', '')}'"
+                )
+                return None
             if hasattr(attr, "name"):
                 if attr.name == "gl_FragData":
                     index = frag_data_attachment_index(node)
@@ -6054,6 +6073,13 @@ class SlangCodeGen(LoweringRefusalMixin):
                         if shader_type == "compute"
                         else None
                     )
+                    num_workgroups_alias = self.slang_num_workgroups_parameter_alias(
+                        param, param_type, semantic, shader_type
+                    )
+                    if num_workgroups_alias is not None:
+                        local_alias_declarations.append(num_workgroups_alias)
+                        emitted_param_names.add(param.name)
+                        continue
                     if dispatch_thread_id_bridge is not None:
                         declaration, local_alias, native_name = (
                             dispatch_thread_id_bridge
@@ -6673,6 +6699,34 @@ class SlangCodeGen(LoweringRefusalMixin):
         else:
             local_alias = f"uint2 {source_name} = {native_name}.xy;"
         return declaration, local_alias, native_name
+
+    def slang_num_workgroups_parameter_alias(
+        self, parameter, param_type, semantic, shader_type
+    ):
+        """Bind a ``gl_NumWorkGroups`` entry parameter from ``WorkgroupCount()``.
+
+        Slang has no system-value semantic for the dispatch size, so the parameter becomes a local read from the
+        ``WorkgroupCount()`` intrinsic in a compute entry point and is refused in other entry points.
+        """
+        if semantic is None or str(semantic).lower() != "gl_numworkgroups":
+            return None
+        name = getattr(parameter, "name", None)
+        if shader_type is None:
+            return None
+        if shader_type != "compute":
+            self.refuse_lowering(
+                f"Slang has no system value for the gl_NumWorkGroups parameter '{name}' "
+                f"of a {shader_type} entry point; WorkgroupCount() is read in compute "
+                "entry points only"
+            )
+            return None
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix or base_type != "uint3":
+            self.refuse_lowering(
+                f"Slang gl_NumWorkGroups parameter '{name}' must be a uvec3, not {param_type}"
+            )
+            return None
+        return f"uint3 {name} = WorkgroupCount();"
 
     def slang_unique_local_identifier(self, candidate, used_names):
         while candidate in used_names:
