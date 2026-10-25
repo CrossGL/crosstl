@@ -28,6 +28,7 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.base import NESTED_STRUCTS
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -324,6 +325,9 @@ class CrossGL(Dialect):
         if name == SUBSCRIPT:
             vector, index = arguments
             return f"{vector}[{index}]"
+        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument.
+        if "{}" in name:
+            return name.format(*arguments)
         return super().call(name, arguments)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
@@ -496,6 +500,7 @@ CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
     "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),
@@ -515,8 +520,11 @@ CONSTRUCTS: dict[str, Template] = {
     "workgroup-id": Template("outp[i] = float(gl_WorkGroupID.x);"),
     "local-invocation-index": Template("outp[i] = float(gl_LocalInvocationIndex);"),
     "num-workgroups": Template("outp[i] = float(gl_NumWorkGroups.x);"),
+    # The native probes bind the block at slot 3, past the buffers, and so does the CrossGL probe, so that a host binds
+    # the translation the way it binds the native probe.
     "uniform-buffer": Template(
-        "outp[i] = fin[i] * scale;", prelude="cbuffer Params {\n    float scale;\n};"
+        "outp[i] = fin[i] * scale;",
+        prelude="cbuffer Params @binding(3) {\n    float scale;\n};",
     ),
     "read-only-buffer": Template("outp[i] = rin[i];", "readonly buffer float* rin;"),
     "sampled-texture": Template(

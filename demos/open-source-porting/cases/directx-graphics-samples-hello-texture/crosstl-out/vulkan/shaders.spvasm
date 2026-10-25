@@ -29,12 +29,12 @@ OpDecorate %12 Binding 0
 OpDecorate %15 DescriptorSet 0
 OpDecorate %15 Binding 1
 OpDecorate %20 BuiltIn Position
-OpDecorate %22 Location 1
+OpDecorate %22 Location 5
 OpDecorate %24 Location 0
-OpDecorate %29 Location 1
+OpDecorate %29 Location 5
 OpDecorate %46 Location 0
 OpDecorate %47 BuiltIn FragCoord
-OpDecorate %49 Location 1
+OpDecorate %49 Location 5
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

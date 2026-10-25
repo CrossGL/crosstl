@@ -736,12 +736,34 @@ class MojoToCrossGLConverter:
         if not global_variables:
             return ""
 
+        emitted = [
+            variable
+            for variable in global_variables
+            if isinstance(variable, VariableDeclarationNode)
+            and not self.is_comptime_dtype_alias(variable)
+        ]
+        if not emitted:
+            return ""
+
         code = "    // Global Variables\n"
-        for variable in global_variables:
-            if not isinstance(variable, VariableDeclarationNode):
-                continue
+        for variable in emitted:
             code += f"    {self.generate_variable_declaration(variable)};\n"
         return code + "\n"
+
+    def is_comptime_dtype_alias(self, variable):
+        """Return True for `comptime name = DType.x` (or `alias`) declarations.
+
+        These name a Mojo element type, not a value. Type positions already
+        resolve them through ``dtype_aliases``, so they have no CrossGL value
+        to declare.
+        """
+        if not (
+            getattr(variable, "is_comptime", False)
+            or getattr(variable, "is_alias", False)
+        ):
+            return False
+        name = getattr(variable, "name", None)
+        return isinstance(name, str) and name in self.dtype_aliases
 
     def generate_selected_gpu_kernel_global_variables(self, ast, kernel_names):
         if not kernel_names:
