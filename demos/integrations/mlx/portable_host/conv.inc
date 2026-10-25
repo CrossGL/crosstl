@@ -2,8 +2,9 @@
 // convolution as conv.cpp does. It runs the explicit GEMM routes, which unfold
 // the input with naive_unfold_nd (groups == 1) or naive_unfold_transpose_nd
 // and multiply the unfolded rows with the steel GEMM, the separable
-// depthwise_conv_1d kernel and the implicit GEMM routes, which run
-// steel_conv's implicit_gemm_conv_2d and implicit_gemm_conv_3d. Every other
+// depthwise_conv_1d kernel, the small-kernel depthwise_conv_2d kernel and the
+// implicit GEMM routes, which run steel_conv's implicit_gemm_conv_2d and
+// implicit_gemm_conv_3d. Every other
 // route conv.cpp takes is refused by name before any launch. Each launch binds
 // the buffers and values conv.cpp binds; conv_layout checks the unfold,
 // depthwise and implicit GEMM launches against the same routing and
@@ -18,8 +19,10 @@
 // conv.cpp's dispatch_threads leaves. The host has no maxBufferLength, so an
 // unfold tile holds at most the elements every translated launch is bounded
 // by and at most 65535 rows, the Z workgroups of one launch; conv.cpp's
-// MLX_CONV_UNFOLD_TILE_ROWS still caps it further. The implicit GEMM kernels
-// run with conv.cpp's threadgroups and parameters.
+// MLX_CONV_UNFOLD_TILE_ROWS still caps it further. depthwise_conv_2d and the
+// implicit GEMM kernels run with conv.cpp's threadgroups and parameters; the
+// host names each depthwise_conv_2d pipeline by conv.cpp's hash name, whose
+// translated entry has those function constants frozen.
 
 #include "mlx/backend/metal/kernels/steel/conv/params.h"
 
@@ -377,6 +380,39 @@ void conv_implicit_gemm(
   conv_launch(entry, buffers, out.size(), launch);
 }
 
+// conv.cpp depthwise_conv_2D_gpu: (tc, tw, th) threadgroups, the function
+// constants named by conv.cpp's pipeline hash name.
+void dispatch_depthwise_conv_2d(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<2>& conv_params) {
+  const char* storage = matmul_storage(out.dtype());
+  const int tc = 8;
+  const int tw = 8;
+  const int th = 4;
+  std::string entry = std::string("depthwise_conv_2d_") + storage + "_ker_h_" +
+      std::to_string(conv_params.wS[0]) + "_ker_w_" + std::to_string(conv_params.wS[1]) +
+      "_str_h_" + std::to_string(conv_params.str[0]) + "_str_w_" +
+      std::to_string(conv_params.str[1]) + "_tgp_h_" + std::to_string(th) + "_tgp_w_" +
+      std::to_string(tw) + "_do_flip_" + (conv_params.flip ? "t" : "n");
+  require_entry(entry);
+  MLXConvParams<2> params = conv_params;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"in", storage, data(in), matmul_span(in), 0},
+      {"wt", storage, data(wt), matmul_span(wt), 0},
+      {"out", storage, out.data<void>(), out.size(), 1},
+      {"params", "uint8", &params, sizeof(params), 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {conv_groups(conv_params.C / tc), conv_groups((conv_params.oS[1] + tw - 1) / tw),
+       conv_groups(
+           ((static_cast<int64_t>(conv_params.oS[0]) + th - 1) / th) * conv_params.N)},
+      {uint32_t(tc), uint32_t(tw), uint32_t(th)}};
+  conv_launch(entry, buffers, out.size(), launch);
+}
+
 // conv.cpp dispatch_conv_2D_gpu. The host has no recommendedMaxWorkingSetSize
 // for winograd_batch_step, so it refuses every product conv.cpp would send to
 // winograd once the working set allowed.
@@ -398,7 +434,7 @@ void conv_dispatch_2d(
         conv_params.wS[1] <= 7 && conv_params.str[0] <= 2 && conv_params.str[1] <= 2 &&
         conv_params.wt_strides[1] == conv_params.wS[1] && conv_params.C % 16 == 0 &&
         conv_params.C == conv_params.O) {
-      conv_unported("depthwise_conv_2D_gpu");
+      return dispatch_depthwise_conv_2d(in, wt, out, conv_params);
     }
     if ((C_per_group <= 4 || C_per_group % 16 == 0) &&
         (O_per_group <= 16 || O_per_group % 16 == 0)) {

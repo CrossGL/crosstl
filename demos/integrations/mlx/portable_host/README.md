@@ -903,12 +903,14 @@ steel GEMM (or its split-K kernels, as `steel_matmul` chooses), the grouped
 `explicit_gemm_conv_group_ND_gpu` copies the weights into per-group rows,
 unfolds with `naive_unfold_transpose_nd` and multiplies all groups in one
 batched `steel_matmul_regular` launch, `depthwise_conv_1D_gpu` runs
-`depthwise_conv_1d`, and `implicit_gemm_conv_2D_gpu` and
+`depthwise_conv_1d`, `depthwise_conv_2D_gpu` runs one `depthwise_conv_2d`
+launch of conv.cpp's `(8, 8, 4)` threadgroups (also for the 1-D depthwise
+convolutions conv_1D_gpu sends there), and `implicit_gemm_conv_2D_gpu` and
 `implicit_gemm_conv_3D_gpu` run one steel_conv `implicit_gemm_conv_2d` or
 `implicit_gemm_conv_3d` launch with conv.cpp's tiles, loaders and helper
 parameters, including the 2-D implicit GEMM that conv_1D_gpu reaches. The
-general implicit GEMM, winograd, depthwise 2-D, padded-channel and 3-D
-special routes are refused by name before any launch, and an empty output
+general implicit GEMM, winograd, padded-channel and 3-D special routes are
+refused by name before any launch, and an empty output
 launches nothing.
 
 Two launch choices differ from conv.cpp without changing a value. The unfold
@@ -927,9 +929,18 @@ feed only output columns the kernel never stores, and the host binds them as
 poisoned storage after the weights, so the translated reads stay inside
 their binding and no poison can reach a stored output.
 
+`depthwise_conv_2d` reads its kernel extent, strides, tile and flip from
+Metal function constants. The host names each pipeline by conv.cpp's hash
+name (`depthwise_conv_2d_float32_ker_h_3_ker_w_3_str_h_1_str_w_1_tgp_h_4_tgp_w_8_do_flip_n`)
+and translates it with those constants frozen, so every target compiles the
+specialization conv.cpp builds. The kernel indexes its threadgroup tile with
+`simd_gid * 32 + simd_lid`, so DirectX and OpenGL translate it with a 32-lane
+software subgroup, and its `MLXConvParams<2>` constant reference binds as a
+std140 uniform block on OpenGL and a constant buffer on DirectX.
+
 `conv_layout.py` mirrors conv.cpp's routing, checks each unfold, depthwise and
-implicit GEMM launch against it, recomputes the entry, threadgroups and
-`ImplicitGemmConv{2,3}DParams` conv.cpp chooses, and proves every read and
+implicit GEMM launch against it, recomputes the entry, function constants,
+threadgroups and `ImplicitGemmConv{2,3}DParams` conv.cpp chooses, and proves every read and
 write in bounds; `gemm_layout` accepts the grouped product's batch strides
 and row pitch exactly as conv.cpp passes them. Entries translate into the
 `conv` cache with the options of `test_current_conv` and, for steel_conv,
@@ -937,13 +948,14 @@ and row pitch exactly as conv.cpp passes them. Entries translate into the
 
 The `MLX quantized host` jobs translate the verification entries and the GEMM
 entries they reach, then run `verify_conv.py` through `mx.conv_general`. Its
-26 cases cover every element type, every unfold rank, both explicit routes
+32 cases cover every element type, every unfold rank, both explicit routes
 with input and kernel dilation, flips, uneven padding, row tiles with a
 partial last tile, a split-K product, copied inputs, the separable kernel,
 the 1-D, 2-D and 3-D implicit GEMM routes with the general, small-filter,
 large-filter and one- and three-channel loaders, 64 x 64 tiles, partial 2-D
-grouped and 3-D tiles that read past the weights, three refused routes and an
-empty output. Every output must match the exact float64 reference bit for
+grouped and 3-D tiles that read past the weights, depthwise 2-D kernels from
+1 x 1 to 7 x 7 with strides, flips, partial tiles and the 1-D view, three
+refused routes and an empty output. Every output must match the exact float64 reference bit for
 bit, and float32 outputs must also equal MLX's CPU
 backend.
 

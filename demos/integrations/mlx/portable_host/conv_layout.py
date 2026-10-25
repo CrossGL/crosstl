@@ -5,8 +5,10 @@ mlx/backend/metal/conv.cpp does. Its explicit GEMM routes unfold the input
 with ``naive_unfold_nd`` (``groups == 1``) or ``naive_unfold_transpose_nd``
 and multiply the unfolded rows with the steel GEMM, whose launches
 ``gemm_layout`` checks; fully separable 1-D convolutions run
-``depthwise_conv_1d``; and the implicit GEMM routes run steel_conv's
-``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d``. ``route`` mirrors
+``depthwise_conv_1d``; small-kernel depthwise 2-D convolutions run
+``depthwise_conv_2d`` with conv.cpp's function constants; and the implicit
+GEMM routes run steel_conv's ``implicit_gemm_conv_2d`` and
+``implicit_gemm_conv_3d``. ``route`` mirrors
 conv.cpp's routing, and ``plan`` checks every launch against it and proves
 each read and write in bounds before a translated kernel runs.
 
@@ -15,7 +17,10 @@ The unfold and depthwise kernels read only ``thread_position_in_grid`` and
 conv.cpp's exact thread grid: Direct3D and OpenGL cannot clip the partial
 workgroups conv.cpp's ``dispatch_threads`` leaves.
 ``depthwise_conv_1d_*_large`` serves inputs of more than 2^31 - 1 elements,
-which every host launch's bound excludes. The implicit GEMM kernels run with
+which every host launch's bound excludes. ``depthwise_conv_2d`` runs with
+conv.cpp's ``(8, 8, 4)`` threadgroups and its function constants frozen into
+each translated entry, which the host names as conv.cpp's pipeline hash
+names. The implicit GEMM kernels run with
 conv.cpp's threadgroups; their weight loaders read whole ``BN``-row tiles,
 so the last tile of the last group reads rows past the weights, which only
 feed output columns the kernel never stores. The host binds those rows as
@@ -43,9 +48,28 @@ UNFOLD_PATTERN = re.compile(
     r"(?P<dtype>float32|float16|bfloat16)_(?P<spatial>[123])"
 )
 DW1_PATTERN = re.compile(r"depthwise_conv_1d_(?P<dtype>float32|float16|bfloat16)")
+# conv.cpp depthwise_conv_2D_gpu's pipeline hash name: the kernel and its
+# function constants.
+DW2_PATTERN = re.compile(
+    r"(?P<source>depthwise_conv_2d_(?P<dtype>float32|float16|bfloat16))"
+    r"_ker_h_(?P<ker_h>\d+)_ker_w_(?P<ker_w>\d+)"
+    r"_str_h_(?P<str_h>\d+)_str_w_(?P<str_w>\d+)"
+    r"_tgp_h_(?P<tgp_h>\d+)_tgp_w_(?P<tgp_w>\d+)_do_flip_(?P<do_flip>[tn])"
+)
+# depthwise_conv_2D_gpu: (tc, tw, th) threadgroups over (C / tc,
+# ceil(oW / tw), ceil(oH / th) * N), with tgp_h = th and tgp_w = tw.
+DW2_TC, DW2_TW, DW2_TH = 8, 8, 4
+DW2_WORKGROUP = (DW2_TC, DW2_TW, DW2_TH)
+# conv.cpp routes kernels up to 7x7 with strides up to 2 to depthwise_conv_2d.
+DW2_MAX_KERNEL = 7
+DW2_MAX_STRIDE = 2
+# depthwise_conv_2d's threadgroup tile ins[TGH * TGW * TGC].
+DW2_TILE_H = DW2_TH * 2 + 6
+DW2_TILE_W = DW2_TW * 2 + 6
 ENTRY_PREFIXES = (
     "naive_unfold_",
     "depthwise_conv_1d_",
+    "depthwise_conv_2d_",
     "implicit_gemm_conv_2d_",
     "implicit_gemm_conv_3d_",
 )
@@ -54,13 +78,15 @@ WORKGROUP = (1, 1, 1)
 PARAMETERS = {
     "unfold": ("in", "out", "params", "row_offset"),
     "dw1": ("in", "w", "out", "strides", "kernel_size"),
+    "dw2": ("in", "wt", "out", "params"),
     # steel_conv's A, B, C, params and gemm_params.
     "implicit": ("A", "B", "C", "params", "gemm_params"),
 }
-OUTPUTS = {"unfold": "out", "dw1": "out", "implicit": "C"}
+OUTPUTS = {"unfold": "out", "dw1": "out", "dw2": "out", "implicit": "C"}
 ARRAYS = {
     "unfold": ("in", "out"),
     "dw1": ("in", "w", "out"),
+    "dw2": ("in", "wt", "out"),
     "implicit": ("A", "B", "C"),
 }
 SCALAR_TYPES = {
@@ -115,12 +141,26 @@ OPENGL_INDEX_RANGE_ASSERTIONS = {
         "in_offset + gid.x",
     ),
     "dw1": (),
+    "dw2": (
+        "n * params.in_strides[0]",
+        "in_offset + ih * params.in_strides[1] + iw * params.in_strides[2] + tg_c",
+        "in_load + c_per_thr * thr_c + cc",
+        "c * params.wt_strides[0]",
+        "wt + wt_h * ker_w + wt_w",
+        "n * params.out_strides[0] + oh * params.out_strides[1]"
+        " + ow * params.out_strides[2]",
+        "out_ + c",
+    ),
 }
+# depthwise_conv_2d reads MLXConvParams<2> through a constant reference, which
+# OpenGL binds as a std140 uniform block and DirectX as a constant buffer.
+PARAMS_BLOCK_SIZES = {"opengl": 448, "directx": 432}
 # The routes of conv.cpp's eval_gpu the host runs.
 PORTED_ROUTES = (
     "explicit_gemm_conv_ND_gpu",
     "explicit_gemm_conv_group_ND_gpu",
     "depthwise_conv_1D_gpu",
+    "depthwise_conv_2D_gpu",
     "implicit_gemm_conv_2D_gpu",
     "implicit_gemm_conv_3D_gpu",
 )
@@ -140,6 +180,9 @@ def signature(entry):
         match = DW1_PATTERN.fullmatch(entry)
         if match:
             return {"kind": "dw1", "transpose": False, "dtype": match["dtype"]}
+        match = DW2_PATTERN.fullmatch(entry)
+        if match:
+            return _dw2_signature(entry, match)
         model = steel.BY_NAME.get(entry)
         if model is not None:
             return {
@@ -152,6 +195,61 @@ def signature(entry):
     raise ValueError("Unsupported convolution entry")
 
 
+def _dw2_signature(entry, match):
+    constants = {
+        name: int(match[name])
+        for name in ("ker_h", "ker_w", "str_h", "str_w", "tgp_h", "tgp_w")
+    }
+    constants["do_flip"] = match["do_flip"] == "t"
+    if (
+        not all(1 <= constants[name] <= DW2_MAX_KERNEL for name in ("ker_h", "ker_w"))
+        or not all(
+            1 <= constants[name] <= DW2_MAX_STRIDE for name in ("str_h", "str_w")
+        )
+        or (constants["tgp_h"], constants["tgp_w"]) != (DW2_TH, DW2_TW)
+        or dw2_entry(constants, match["dtype"]) != entry
+    ):
+        raise ValueError("Unsupported depthwise 2-D convolution specialization")
+    return {
+        "kind": "dw2",
+        "transpose": False,
+        "dtype": match["dtype"],
+        "spatial": 2,
+        "source": match["source"],
+        "constants": constants,
+    }
+
+
+def dw2_entry(constants, dtype):
+    """conv.cpp's depthwise_conv_2D_gpu pipeline hash name."""
+    c = constants
+    return (
+        f"depthwise_conv_2d_{dtype}_ker_h_{c['ker_h']}_ker_w_{c['ker_w']}"
+        f"_str_h_{c['str_h']}_str_w_{c['str_w']}"
+        f"_tgp_h_{c['tgp_h']}_tgp_w_{c['tgp_w']}"
+        f"_do_flip_{'t' if c['do_flip'] else 'n'}"
+    )
+
+
+def dw2_constants(p):
+    """The function constants depthwise_conv_2D_gpu sets for ``p``."""
+    return {
+        "ker_h": p["wS"][0],
+        "ker_w": p["wS"][1],
+        "str_h": p["str"][0],
+        "str_w": p["str"][1],
+        "tgp_h": DW2_TH,
+        "tgp_w": DW2_TW,
+        "do_flip": bool(p["flip"]),
+    }
+
+
+def source_entry(entry):
+    """The conv.metal or steel_conv entry point ``entry`` translates."""
+    info = signature(entry)
+    return info["source"] if info["kind"] == "dw2" else entry
+
+
 def source(entry):
     """The pinned source that instantiates ``entry``."""
     info = signature(entry)
@@ -161,7 +259,9 @@ def source(entry):
 def workgroup_size(entry):
     """The workgroup size the host launches ``entry`` with."""
     info = signature(entry)
-    return info["model"].workgroup_size if info["kind"] == "implicit" else WORKGROUP
+    if info["kind"] == "implicit":
+        return info["model"].workgroup_size
+    return DW2_WORKGROUP if info["kind"] == "dw2" else WORKGROUP
 
 
 def output(entry):
@@ -170,8 +270,8 @@ def output(entry):
 
 def assertion_kind(entry):
     info = signature(entry)
-    if info["kind"] == "dw1":
-        return "dw1"
+    if info["kind"] in {"dw1", "dw2"}:
+        return info["kind"]
     return "unfold_transpose" if info["transpose"] else "unfold"
 
 
@@ -704,6 +804,80 @@ def _plan_implicit(entry, info, counts, parameters, threads, execution):
     }
 
 
+def _check_dw2_params(p):
+    scalars = ("N", "C", "O", "groups")
+    vectors = ("iS", "wS", "oS", "str", "pad", "kdil", "idil")
+    if (
+        any(type(p[name]) is not int for name in scalars)
+        or any(len(p[name]) != 2 for name in vectors)
+        or min(p["N"], p["C"]) < 1
+        or any(min(p[name]) < 1 for name in ("iS", "wS", "oS", "str"))
+        or min(p["pad"]) < 0
+    ):
+        raise ValueError("Convolution parameters are invalid")
+    in_shape = [p["N"], *p["iS"], p["C"]]
+    wt_shape = [p["O"], *p["wS"], 1]
+    out_shape = [p["N"], *p["oS"], p["O"]]
+    if not all(
+        _implicit_strides(p, shape, name)
+        for shape, name in (
+            (in_shape, "in_strides"),
+            (wt_shape, "wt_strides"),
+            (out_shape, "out_strides"),
+        )
+    ):
+        raise ValueError("Convolution strides differ from conv.cpp's contiguous arrays")
+    # The kernel forms its tile coordinates and offsets in int.
+    for i in range(2):
+        reach = (p["oS"][i] + DW2_TW) * p["str"][i] + p["pad"][i] + p["wS"][i]
+        if reach > SIGNED_MAX:
+            raise ValueError("Convolution coordinates exceed signed range")
+    for shape in (in_shape, wt_shape, out_shape):
+        if math.prod(shape) > MAX_ELEMENTS:
+            raise ValueError("Convolution arrays exceed their bounds")
+    return in_shape, wt_shape, out_shape
+
+
+def _plan_dw2(entry, info, counts, parameters, threads, execution):
+    """depthwise_conv_2D_gpu's launch, its constants and every access bound."""
+    p = parameters["params"]
+    in_shape, wt_shape, out_shape = _check_dw2_params(p)
+    if _route_2d(p) != "depthwise_conv_2D_gpu":
+        raise ValueError("Convolution depthwise 2-D differs from conv.cpp's routing")
+    constants = info["constants"]
+    if dw2_constants(p) != constants:
+        raise ValueError("Convolution depthwise 2-D constants differ from conv.cpp's")
+    # The threadgroup tile holds span_h x span_w pixels of TGC channels.
+    span_h = constants["tgp_h"] * constants["str_h"] + constants["ker_h"] - 1
+    span_w = constants["tgp_w"] * constants["str_w"] + constants["ker_w"] - 1
+    if span_h > DW2_TILE_H or span_w > DW2_TILE_W:
+        raise ValueError("Convolution depthwise 2-D tile exceeds its threadgroup")
+    blocks_h = -(-p["oS"][0] // DW2_TH)
+    grid = [p["C"] // DW2_TC, -(-p["oS"][1] // DW2_TW), blocks_h * p["N"]]
+    if (
+        not isinstance(execution, dict)
+        or set(execution) != {"workgroupCount", "workgroupSize"}
+        or list(execution["workgroupSize"]) != list(DW2_WORKGROUP)
+        or list(execution["workgroupCount"]) != grid
+        or not all(1 <= value <= MAX_GROUPS for value in grid)
+    ):
+        raise ValueError("Convolution launch differs from conv.cpp's threadgroups")
+    total = math.prod(out_shape)
+    if threads != total or counts["out"] != total:
+        raise ValueError("Convolution output differs from conv.cpp's")
+    # Tile loads read in-bounds pixels of the group's TGC channels; channel c
+    # reads wt[c * wt_strides[0] + h * ker_w + w] and writes in-bounds pixels.
+    if counts["in"] < math.prod(in_shape) or counts["wt"] < math.prod(wt_shape):
+        raise ValueError("Convolution depthwise 2-D operand exceeds its buffer")
+    return {
+        "kind": "dw2",
+        "route": "depthwise_conv_2D_gpu",
+        "constants": dict(constants),
+        "grid": grid,
+        "span": [span_h, span_w],
+    }
+
+
 def plan(entry, counts, parameters, threads, execution):
     """Validate one launch against conv.cpp's routing and return its metadata."""
     info = signature(entry)
@@ -711,4 +885,6 @@ def plan(entry, counts, parameters, threads, execution):
         return _plan_unfold(info, counts, parameters, threads, execution)
     if info["kind"] == "implicit":
         return _plan_implicit(entry, info, counts, parameters, threads, execution)
+    if info["kind"] == "dw2":
+        return _plan_dw2(entry, info, counts, parameters, threads, execution)
     return _plan_dw1(counts, parameters, threads, execution)

@@ -1,7 +1,7 @@
 """Execute translated MLX convolution packages and commit guarded MLX outputs.
 
-One dispatcher serves the unfold kernels, the separable depthwise kernel and
-steel_conv's implicit GEMM kernels. Each launch is checked against
+One dispatcher serves the unfold kernels, the separable and 2-D depthwise
+kernels and steel_conv's implicit GEMM kernels. Each launch is checked against
 ``conv_layout``'s plan, run through its translated package with guarded
 outputs, and recorded in the trace before the MLX output changes. The steel
 GEMM launches of the explicit routes take ``gemm_dispatch`` and
@@ -12,7 +12,11 @@ import ctypes
 import hashlib
 import struct
 
-from crosstl.project import build_native_loader_dispatch_request, pack_storage_records
+from crosstl.project import (
+    build_native_loader_dispatch_request,
+    pack_storage_records,
+    pack_uniform_block,
+)
 from demos.integrations.mlx.portable_host import conv_layout as layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.matmul_dispatch import (
@@ -73,9 +77,25 @@ RECORDS = {
 }
 
 
-def _record(binding, name, record, spatial):
-    """One C struct parameter as its reflected storage record or int words."""
+# How OpenGL and DirectX bind a C struct read through a constant reference.
+UNIFORM_LAYOUTS = {"opengl": "std140", "directx": "hlsl-constant-buffer"}
+
+
+def _record(binding, name, record, spatial, target):
+    """One C struct parameter as its reflected storage record, block or words."""
     scalar = binding["scalarLayout"]
+    if target in UNIFORM_LAYOUTS and (
+        scalar.get("storageLayout") == UNIFORM_LAYOUTS[target]
+    ):
+        # depthwise_conv_2d's MLXConvParams<2>: a uniform block of its fields.
+        if (
+            name != "params"
+            or binding.get("kind") != "constant-buffer"
+            or scalar.get("blockSizeBytes") != layout.PARAMS_BLOCK_SIZES[target]
+        ):
+            raise ValueError(f"{LABEL} reflected parameter block differs")
+        words = pack_uniform_block(scalar, record)
+        return {"dtype": "uint32", "shape": [len(words)], "values": words}
     if scalar.get("elementStrideBytes") != RECORDS[name][spatial]:
         raise ValueError(f"{LABEL} reflected parameter record differs")
     if scalar.get("elementType") == "record":
@@ -114,7 +134,7 @@ def _inputs(host, entry, descriptor, storage, parameters):
         bound.add(name)
         if name in RECORDS:
             inputs[binding["name"]] = _record(
-                binding, name, parameters[name], info["spatial"]
+                binding, name, parameters[name], info["spatial"], host.target
             )
         else:
             inputs[binding["name"]] = encode_binding(

@@ -4,8 +4,11 @@ Every case runs one ``mx.conv_general`` call, which ``Convolution::eval_gpu``
 routes as conv.cpp does: explicit GEMM convolutions unfold the input with
 ``naive_unfold_nd`` or ``naive_unfold_transpose_nd`` in row tiles and multiply
 each tile with the steel GEMM or its split-K kernels, fully separable 1-D
-convolutions run ``depthwise_conv_1d``, implicit GEMM convolutions run one
-``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d`` launch, and an empty
+convolutions run ``depthwise_conv_1d``, small-kernel depthwise 2-D
+convolutions (and the 1-D ones conv.cpp sends there) run one
+``depthwise_conv_2d`` launch of conv.cpp's specialization, implicit GEMM
+convolutions run one ``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d``
+launch, and an empty
 output launches nothing. Three cases reach routes the host does not port yet,
 which it refuses by name before any launch.
 
@@ -246,6 +249,62 @@ CASES = (
         "dense",
         None,
     ),
+    # depthwise_conv_2D_gpu: partial (8, 8, 4) tiles, strides, flips, every
+    # kernel extent up to 7, a pointwise kernel and conv_1D_gpu's 2-D view.
+    (
+        "depthwise-2d-padded",
+        "float32",
+        (2, 9, 13, 16),
+        (16, 3, 3, 1),
+        dict(groups=16, padding=((1, 1), (1, 1))),
+        "dense",
+        None,
+    ),
+    (
+        "depthwise-2d-strided-flip",
+        "float16",
+        (1, 15, 18, 32),
+        (32, 5, 5, 1),
+        dict(groups=32, stride=2, padding=((2, 1), (2, 2)), flip=True),
+        "dense",
+        None,
+    ),
+    (
+        "depthwise-2d-7x7",
+        "bfloat16",
+        (1, 16, 20, 16),
+        (16, 7, 7, 1),
+        dict(groups=16, stride=(2, 1), padding=((3, 3), (3, 3)), flip=True),
+        "dense",
+        None,
+    ),
+    (
+        "depthwise-2d-3x5-copied",
+        "float32",
+        (1, 6, 11, 16),
+        (16, 3, 5, 1),
+        dict(groups=16, stride=(1, 2)),
+        "moved",
+        None,
+    ),
+    (
+        "depthwise-2d-pointwise",
+        "float16",
+        (3, 4, 5, 48),
+        (48, 1, 1, 1),
+        dict(groups=48),
+        "dense",
+        None,
+    ),
+    (
+        "depthwise-2d-from-1d",
+        "float32",
+        (1, 12, 16),
+        (16, 3, 1),
+        dict(groups=16, padding=((1,), (1,))),
+        "dense",
+        None,
+    ),
     # Routes the host does not port yet.
     (
         "refused-general-2d",
@@ -266,11 +325,11 @@ CASES = (
         None,
     ),
     (
-        "refused-depthwise-2d",
+        "refused-pad-and-slice-3d",
         "float32",
-        (1, 12, 16),
-        (16, 3, 1),
-        dict(groups=16, padding=((1,), (1,))),
+        (1, 3, 4, 4, 4),
+        (4, 2, 2, 2, 4),
+        {},
         "dense",
         None,
     ),
@@ -279,7 +338,6 @@ CASES = (
 )
 UNPORTED = {
     "implicit_gemm_conv_2D_general_gpu",
-    "depthwise_conv_2D_gpu",
     "winograd_conv_2D_gpu",
     "pad_in_channels_conv_2D_gpu",
     "pad_and_slice_conv_3D_gpu",
@@ -388,6 +446,11 @@ def case_record(case):
         return {**record, "copies": 0}
     if route == "depthwise_conv_1D_gpu":
         entry = layout.dw1_entry(dtype)
+        return {**record, "convEntries": [entry], "launches": [entry]}
+    if route == "depthwise_conv_2D_gpu":
+        # conv_1D_gpu dispatches 1-D depthwise convolutions with 2-D parameters.
+        planar = layout.as_2d(params) if len(in_shape) == 3 else params
+        entry = layout.dw2_entry(layout.dw2_constants(planar), dtype)
         return {**record, "convEntries": [entry], "launches": [entry]}
     if route in IMPLICIT_ROUTES:
         # conv_1D_gpu dispatches its implicit GEMM with 2-D parameters.
@@ -585,9 +648,16 @@ def _covered(records):
     infos = [
         layout.signature(entry) for record in records for entry in record["convEntries"]
     ]
+    depthwise = [info for info in infos if info["kind"] == "dw2"]
     return (
         set(layout.PORTED_ROUTES) <= routes
         and len(routes & UNPORTED) >= 3
+        and {info["dtype"] for info in depthwise} == set(layout.DTYPES)
+        and {info["constants"]["do_flip"] for info in depthwise} == {False, True}
+        and any(
+            record["route"] == "depthwise_conv_2D_gpu" and len(record["inShape"]) == 3
+            for record in records
+        )
         and "none" in routes
         and {info["dtype"] for info in infos} == set(layout.DTYPES)
         and {info["spatial"] for info in infos if info["kind"] == "unfold"}

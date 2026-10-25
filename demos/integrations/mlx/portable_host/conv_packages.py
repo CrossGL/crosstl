@@ -3,7 +3,9 @@
 ``naive_unfold_nd``, ``naive_unfold_transpose_nd`` and ``depthwise_conv_1d``
 come from the pinned conv.metal with the options of its current-tree kernel
 gate (``test_current_conv``), at the one-thread workgroups conv_layout
-launches. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
+launches. ``depthwise_conv_2d`` comes from the same source at conv.cpp's
+threadgroups, one entry per conv.cpp pipeline with its function constants
+frozen. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
 steel_conv.metal and steel_conv_3d.metal with the options of
 ``test_current_steel_conv``. Run as a module, it translates entries into a
 host package directory's cache ahead of execution, several processes at a
@@ -26,6 +28,9 @@ from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 
 # The directory under a host package root that HostRuntime caches entries in.
 CACHE_DIRECTORY = "conv"
+# depthwise_conv_2d indexes its threadgroup tile with simd_gid * 32 + simd_lid,
+# the linear thread index of 32-lane SIMD groups.
+SIMD_SIZE = 32
 # test_current_conv: the depthwise kernels accumulate into `float o = 0.`,
 # which GLSL and HLSL compilers may fold away; the software binary32 addition
 # keeps Metal's +0.0.
@@ -57,8 +62,11 @@ def project_config(root, output_dir, target, entry):
     if info["kind"] == "implicit":
         return implicit_project_config(root, output_dir, target, entry)
     target_options = {}
-    if info["kind"] == "dw1" and target in {"opengl", "directx"}:
+    if info["kind"] in {"dw1", "dw2"} and target in {"opengl", "directx"}:
         target_options[target] = {"binary32_additive_profile": ADDITIVE_PROFILE}
+    if info["kind"] == "dw2" and target in {"opengl", "directx"}:
+        target_options[target]["software_subgroup_width"] = SIMD_SIZE
+    source_entry = layout.source_entry(entry)
     assertions = []
     if target == "opengl":
         assertions = [
@@ -79,8 +87,12 @@ def project_config(root, output_dir, target, entry):
         include_dirs=(".",),
         targets=(target,),
         output_dir=output_dir,
-        entry_points={layout.SOURCE: (entry,)},
-        entry_workgroup_size_rules={layout.SOURCE: {entry: layout.WORKGROUP}},
+        entry_points={layout.SOURCE: (source_entry,)},
+        entry_workgroup_size_rules={
+            layout.SOURCE: {source_entry: layout.workgroup_size(entry)}
+        },
+        specialization_constants=dict(info.get("constants", {})),
+        freeze_specialization_constants=info["kind"] == "dw2",
         index_range_assertions=assertions,
         source_options={
             "metal": {
@@ -113,6 +125,9 @@ class ConvPackageCache(TranslatedEntryCache):
 
     def source_path(self, entry):
         return layout.source(entry)
+
+    def source_entry(self, entry):
+        return layout.source_entry(entry)
 
     def workgroup_size(self, entry):
         return layout.workgroup_size(entry)

@@ -49,9 +49,15 @@ ROUTES = {
     "implicit-2d-wide-tiles": "implicit_gemm_conv_2D_gpu",
     "implicit-3d": "implicit_gemm_conv_3D_gpu",
     "implicit-3d-partial": "implicit_gemm_conv_3D_gpu",
+    "depthwise-2d-padded": "depthwise_conv_2D_gpu",
+    "depthwise-2d-strided-flip": "depthwise_conv_2D_gpu",
+    "depthwise-2d-7x7": "depthwise_conv_2D_gpu",
+    "depthwise-2d-3x5-copied": "depthwise_conv_2D_gpu",
+    "depthwise-2d-pointwise": "depthwise_conv_2D_gpu",
+    "depthwise-2d-from-1d": "depthwise_conv_2D_gpu",
     "refused-general-2d": "implicit_gemm_conv_2D_general_gpu",
     "refused-pad-in-channels": "pad_in_channels_conv_2D_gpu",
-    "refused-depthwise-2d": "depthwise_conv_2D_gpu",
+    "refused-pad-and-slice-3d": "pad_and_slice_conv_3D_gpu",
     "empty-batch": "none",
 }
 
@@ -84,6 +90,8 @@ def launches(record):
     (entry,) = record["convEntries"]
     if record["route"] in verify.IMPLICIT_ROUTES:
         return [implicit_launch(record)]
+    if record["route"] == "depthwise_conv_2D_gpu":
+        return [depthwise_2d_launch(record)]
     points = math.prod(p["wS"])
     total = p["N"] * math.prod(p["oS"])
     rows = verify._unfold_rows(
@@ -122,6 +130,28 @@ def implicit_launch(record):
     }
     parameters = {"params": p, "gemm_params": gemm}
     return entry, counts, parameters, counts["C"], execution
+
+
+def depthwise_2d_launch(record):
+    """The depthwise_conv_2d launch conv.inc makes for ``record``."""
+    (entry,) = record["convEntries"]
+    p = copy.deepcopy(record["params"])
+    if len(p["iS"]) == 1:
+        p = layout.as_2d(p)
+    counts = {
+        "in": math.prod(record["inShape"]),
+        "wt": math.prod(record["wtShape"]),
+        "out": math.prod(record["outShape"]),
+    }
+    execution = {
+        "workgroupCount": [
+            p["C"] // 8,
+            -(-p["oS"][1] // 8),
+            -(-p["oS"][0] // 4) * p["N"],
+        ],
+        "workgroupSize": [8, 8, 4],
+    }
+    return entry, counts, {"params": p}, counts["out"], execution
 
 
 def test_signature_names_every_ported_entry():
@@ -265,6 +295,11 @@ def test_cases_cover_every_ported_route():
     assert not verify._covered(
         [record for record in placed if record["route"] != "depthwise_conv_1D_gpu"]
     )
+    # The depthwise 2-D cases cover every dtype, both flips and the 1-D view.
+    for name in ("depthwise-2d-7x7", "depthwise-2d-from-1d"):
+        assert not verify._covered(
+            [record for record in placed if record["name"] != name]
+        )
     assert BY_NAME["explicit-1d-splitk"]["productEntries"][0].startswith(
         "steel_gemm_splitk_"
     )
@@ -348,6 +383,124 @@ def test_depthwise_plan_rejects_launches_that_differ_from_conv_cpp(fault):
     fault(counts, parameters, execution)
     with pytest.raises(ValueError):
         layout.plan(entry, counts, parameters, threads, execution)
+
+
+DW2_CONSTANTS = {
+    "ker_h": 3,
+    "ker_w": 5,
+    "str_h": 1,
+    "str_w": 2,
+    "tgp_h": 4,
+    "tgp_w": 8,
+    "do_flip": True,
+}
+
+
+def test_depthwise_2d_entries_name_conv_cpp_pipelines():
+    for dtype in layout.DTYPES:
+        entry = layout.dw2_entry(DW2_CONSTANTS, dtype)
+        assert entry == (
+            f"depthwise_conv_2d_{dtype}_ker_h_3_ker_w_5_str_h_1_str_w_2"
+            "_tgp_h_4_tgp_w_8_do_flip_t"
+        )
+        assert layout.signature(entry) == {
+            "kind": "dw2",
+            "transpose": False,
+            "dtype": dtype,
+            "spatial": 2,
+            "source": f"depthwise_conv_2d_{dtype}",
+            "constants": DW2_CONSTANTS,
+        }
+        assert layout.source_entry(entry) in gate.DW2_ENTRIES
+        assert layout.source(entry) == layout.SOURCE
+        assert layout.workgroup_size(entry) == layout.DW2_WORKGROUP
+        assert layout.host_parameters(entry) == ("in", "wt", "out", "params")
+        assert layout.output(entry) == "out"
+        assert layout.parameter_type(entry, "params") == "uint8"
+        assert layout.parameter_type(entry, "wt") == dtype
+        assert conv_dispatch.is_entry(entry)
+    assert layout.DW2_WORKGROUP == gate.DW2_WORKGROUP
+    assert set(DW2_CONSTANTS) == set(gate.CONSTANT_IDS)
+    for key in gate.DW2_VARIANTS:
+        constants = gate._dw2_constants(key)
+        entry = layout.dw2_entry(constants, "float16")
+        assert layout.signature(entry)["constants"] == constants
+    base = layout.dw2_entry(DW2_CONSTANTS, "float32")
+    for entry in (
+        base.replace("ker_h_3", "ker_h_8"),
+        base.replace("ker_h_3", "ker_h_03"),
+        base.replace("ker_w_5", "ker_w_0"),
+        base.replace("str_w_2", "str_w_3"),
+        base.replace("tgp_h_4", "tgp_h_8"),
+        base.replace("tgp_w_8", "tgp_w_4"),
+        base.replace("do_flip_t", "do_flip_x"),
+        base.replace("float32", "int32"),
+        base + "_large",
+    ):
+        with pytest.raises(ValueError, match="Unsupported"):
+            layout.signature(entry)
+
+
+def test_depthwise_2d_constants_follow_conv_cpp():
+    record = BY_NAME["depthwise-2d-strided-flip"]
+    assert layout.dw2_constants(record["params"]) == {
+        "ker_h": 5,
+        "ker_w": 5,
+        "str_h": 2,
+        "str_w": 2,
+        "tgp_h": 4,
+        "tgp_w": 8,
+        "do_flip": True,
+    }
+    one = BY_NAME["depthwise-2d-from-1d"]
+    (entry,) = one["convEntries"]
+    assert layout.signature(entry)["constants"]["ker_w"] == 1
+    planar = layout.as_2d(one["params"])
+    assert planar["in_strides"] == [12 * 16, 16, 0, 1]
+    assert layout.route(one["params"]) == layout.route(planar)
+
+
+@pytest.mark.parametrize(
+    "fault, message",
+    (
+        # conv.cpp sends only groups == C == O, C % 16 == 0 here.
+        (lambda c, p, e: p["params"].update(O=16), "strides|routing"),
+        (lambda c, p, e: p["params"].update(kdil=[2, 1]), "routing"),
+        (lambda c, p, e: p["params"].update(flip=False), "constants"),
+        (lambda c, p, e: p["params"].update(str=[1, 2]), "constants"),
+        (lambda c, p, e: p["params"]["in_strides"].__setitem__(1, 0), "strides"),
+        (lambda c, p, e: p["params"]["wt_strides"].__setitem__(0, 24), "strides"),
+        (lambda c, p, e: e["workgroupCount"].__setitem__(2, 1), "threadgroups"),
+        (lambda c, p, e: e.update(workgroupSize=[1, 1, 1]), "threadgroups"),
+        (lambda c, p, e: e["workgroupCount"].__setitem__(0, 8), "threadgroups"),
+        (lambda c, p, e: c.update(out=c["out"] + 1), "output"),
+        (lambda c, p, e: c.update(wt=c["wt"] - 1), "exceeds its buffer"),
+        (lambda c, p, e: c.update({"in": c["in"] - 1}), "exceeds its buffer"),
+    ),
+)
+def test_depthwise_2d_plan_rejects_launches_that_differ_from_conv_cpp(fault, message):
+    entry, counts, parameters, threads, execution = copy.deepcopy(
+        launches(BY_NAME["depthwise-2d-strided-flip"])[0]
+    )
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    assert metadata["grid"] == [4, 2, 2] and metadata["span"] == [12, 20]
+    fault(counts, parameters, execution)
+    with pytest.raises(ValueError, match=message):
+        layout.plan(entry, counts, parameters, threads, execution)
+
+
+def test_depthwise_2d_plan_requires_the_entry_conv_cpp_names():
+    entry, counts, parameters, threads, execution = launches(
+        BY_NAME["depthwise-2d-padded"]
+    )[0]
+    flipped = layout.dw2_entry(
+        {**layout.signature(entry)["constants"], "do_flip": True}, "float32"
+    )
+    with pytest.raises(ValueError, match="constants"):
+        layout.plan(flipped, counts, parameters, threads, execution)
+    # A 1-D depthwise launch keeps conv_1D_gpu's zero width stride.
+    one = launches(BY_NAME["depthwise-2d-from-1d"])[0]
+    assert layout.plan(*one)["grid"] == [2, 1, 3]
 
 
 CTYPES = {
@@ -541,6 +694,7 @@ def test_dispatch_packs_the_parameter_record():
             "params",
             parameters["params"],
             3,
+            "metal",
         )
     # MLXConvParams holds 64-bit strides, so it is never reflected as int words.
     with pytest.raises(ValueError, match="record differs"):
@@ -555,7 +709,70 @@ def test_dispatch_packs_the_parameter_record():
             "params",
             parameters["params"],
             3,
+            "metal",
         )
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_dispatch_binds_the_depthwise_2d_parameter_block(monkeypatch, target):
+    entry, counts, parameters, threads, execution = launches(
+        BY_NAME["depthwise-2d-padded"]
+    )[0]
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    supplied, memory = native_buffers(entry, counts, parameters)
+    storage = conv_dispatch._storage(entry, supplied, counts, parameters, metadata)
+    assert set(storage) == {"in", "wt", "out"}
+    monkeypatch.setattr(
+        conv_dispatch,
+        "encode_binding",
+        lambda dtype, words, *_: {"dtype": dtype, "values": list(words)},
+    )
+    packed = []
+    monkeypatch.setattr(
+        conv_dispatch,
+        "pack_uniform_block",
+        lambda scalar, values: packed.append(("block", values)) or [1, 2],
+    )
+    monkeypatch.setattr(
+        conv_dispatch,
+        "pack_storage_records",
+        lambda scalar, records: packed.append(("record", records[0])) or [3],
+    )
+    descriptor = _descriptor(entry, target)
+    params = next(
+        binding
+        for binding in descriptor["bindings"]
+        if binding["name"] == "params_binding"
+    )
+    if target != "metal":
+        # A constant reference: a std140 block or an HLSL constant buffer.
+        params["kind"] = "constant-buffer"
+        params["scalarLayout"] = {
+            "storageLayout": conv_dispatch.UNIFORM_LAYOUTS[target],
+            "blockSizeBytes": gate.PARAMS_BLOCK_SIZES[target],
+        }
+    inputs, observed, output, bound = conv_dispatch._inputs(
+        _Host(target), entry, descriptor, storage, parameters
+    )
+    kind = "record" if target == "metal" else "block"
+    assert packed == [(kind, parameters["params"])]
+    assert bound == {"in", "wt", "out", "params"} and output == "out_binding"
+    if target == "metal":
+        return
+    assert layout.PARAMS_BLOCK_SIZES == gate.PARAMS_BLOCK_SIZES
+    assert inputs["params_binding"] == {
+        "dtype": "uint32",
+        "shape": [2],
+        "values": [1, 2],
+    }
+    params["scalarLayout"]["blockSizeBytes"] += 16
+    with pytest.raises(ValueError, match="block differs"):
+        conv_dispatch._inputs(_Host(target), entry, descriptor, storage, parameters)
+    params["scalarLayout"]["blockSizeBytes"] -= 16
+    params["kind"] = "buffer"
+    with pytest.raises(ValueError, match="block differs"):
+        conv_dispatch._inputs(_Host(target), entry, descriptor, storage, parameters)
+    del memory
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
@@ -608,7 +825,7 @@ def test_packages_follow_the_conv_gate(tmp_path):
     root = Path("/pinned")
     entries = {entry for record in RECORDS for entry in record["convEntries"]}
     for entry in sorted(entries):
-        if layout.signature(entry)["kind"] == "implicit":
+        if layout.signature(entry)["kind"] in {"implicit", "dw2"}:
             continue
         for target in ("metal", "directx", "opengl"):
             config = conv_packages.ConvPackageCache(root, tmp_path, target)
@@ -645,6 +862,52 @@ def test_packages_follow_the_conv_gate(tmp_path):
     assert set(conv_packages.product_entries()) == {
         entry for record in RECORDS for entry in record["productEntries"]
     }
+
+
+def test_depthwise_2d_packages_freeze_conv_cpp_constants(tmp_path):
+    root = Path("/pinned")
+    entries = sorted(
+        entry
+        for record in RECORDS
+        for entry in record["convEntries"]
+        if layout.signature(entry)["kind"] == "dw2"
+    )
+    assert len(entries) == 6
+    for entry in entries:
+        info = layout.signature(entry)
+        source = info["source"]
+        for target in ("metal", "directx", "opengl"):
+            cache = conv_packages.ConvPackageCache(root, tmp_path, target)
+            assert cache.source_entry(entry) == source
+            built = cache.project_config("out", entry)
+            assert built.entry_points == {layout.SOURCE: (source,)}
+            (rules,) = built.entry_workgroup_size_rules.values()
+            assert {name: tuple(map(int, size)) for name, size in rules.items()} == {
+                source: gate.DW2_WORKGROUP
+            }
+            assert dict(built.specialization_constants) == info["constants"]
+            assert built.freeze_specialization_constants is True
+            assert [
+                item.to_json()["expression"] for item in built.index_range_assertions
+            ] == (
+                list(gate.OPENGL_INDEX_RANGE_ASSERTIONS["dw2"])
+                if target == "opengl"
+                else []
+            )
+            options = built.source_options["metal"].get("target_options", {})
+            expected = {}
+            if target in gate.SOFTWARE_SUBGROUP_TARGETS:
+                expected = {
+                    "binary32_additive_profile": gate.ADDITIVE_PROFILE,
+                    "software_subgroup_width": gate.SIMD_SIZE,
+                }
+            assert options.get(target, {}) == expected
+    # The other conv.metal entries keep their unspecialized translation.
+    unfold = conv_packages.ConvPackageCache(root, tmp_path, "opengl").project_config(
+        "out", layout.unfold_entry(False, "float32", 2)
+    )
+    assert unfold.freeze_specialization_constants is False
+    assert dict(unfold.specialization_constants) == {}
 
 
 def test_implicit_packages_follow_the_steel_conv_gate(tmp_path):
@@ -957,6 +1220,8 @@ def _direct(np, x, w, record):
         "group-1d-transpose-tiled",
         "group-2d-transpose",
         "depthwise-1d",
+        "depthwise-2d-strided-flip",
+        "depthwise-2d-from-1d",
     ),
 )
 def test_reference_follows_the_convolution_definition(name):
@@ -991,9 +1256,22 @@ def test_backend_ports_convolution_eval_gpu():
     for name in (
         *layout.PARAMETERS["unfold"],
         *layout.PARAMETERS["dw1"],
+        *layout.PARAMETERS["dw2"],
         *layout.PARAMETERS["implicit"],
     ):
         assert f'{{"{name}", ' in port, name
+    assert "return dispatch_depthwise_conv_2d(in, wt, out, conv_params);" in port
+    depthwise = port[port.index("void dispatch_depthwise_conv_2d(") :]
+    depthwise = depthwise[: depthwise.index("\n}\n")]
+    for text in (
+        "const int tc = 8;",
+        "const int tw = 8;",
+        "const int th = 4;",
+        "{uint32_t(tc), uint32_t(tw), uint32_t(th)}};",
+        'std::string("depthwise_conv_2d_") + storage + "_ker_h_" +',
+        '"_do_flip_" + (conv_params.flip ? "t" : "n");',
+    ):
+        assert text in depthwise, text
     two = port[port.index("void conv_dispatch_2d(") :]
     two = two[: two.index("\n}\n")]
     assert two.count("return conv_implicit_gemm(in, wt, out, conv_params);") == 2
