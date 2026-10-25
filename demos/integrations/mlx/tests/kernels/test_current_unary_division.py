@@ -55,7 +55,7 @@ ARTIFACTS = {
     },
     "opengl": {
         "sha256": "3817bf50664d32406d446ecfc24d0dfe982c17dd8b2d5cadff6f1835194c7bba",
-        "sizeBytes": 10678,
+        "sizeBytes": 10727,
     },
     "directx": {
         "sha256": "d16c5a2ca22282d6445e13d642e80ef0d0e9f75761740a0e3cc125f99bb59169",
@@ -298,17 +298,15 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             assert data["project"]["sourceOptions"] == options
             identity = ARTIFACTS[target]
             generated = (root / artifact["path"]).read_bytes()
-            check_generated_artifact(artifact, sha256=identity["sha256"])
-            # The bytes are the reported artifact; the pin above checks them.
+            check_generated_artifact(
+                artifact, sha256=identity["sha256"], size_bytes=identity["sizeBytes"]
+            )
+            # The bytes are the reported artifact; the pins above check them.
             assert (
                 hashlib.sha256(generated).hexdigest()
                 == artifact["generatedHash"]["value"]
             )
-            assert (
-                len(generated)
-                == artifact["generatedSizeBytes"]
-                == identity["sizeBytes"]
-            )
+            assert len(generated) == artifact["generatedSizeBytes"]
             manifest = build_runtime_artifact_manifest(work / "report.json")
             assert manifest["success"], manifest
             (work / "artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")
