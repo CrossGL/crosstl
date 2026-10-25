@@ -4,6 +4,7 @@
 to emit the variable as an ordinary local, so the function returned 1 on every call.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -82,7 +83,8 @@ def test_wgsl_keeps_the_counter_in_a_private_variable(tmp_path):
 
 def test_metal_passes_the_counter_to_the_function(tmp_path):
     code = _translate(tmp_path, COUNTER, "metal")
-    flat = _flat(code)
+    # clang-format binds the reference to the name; without it the generator writes ``int& name``.
+    flat = re.sub(r"(\w)& (\w)", r"\1 &\2", _flat(code))
     assert "int counter(thread int &counter_c) {" in flat, code
     assert "int a = counter(counter_c); int b = counter(counter_c);" in flat, code
     if shutil.which("xcrun") is None:
@@ -93,7 +95,21 @@ def test_metal_passes_the_counter_to_the_function(tmp_path):
 
 def test_spirv_keeps_the_counter_in_private_storage(tmp_path):
     code = _translate(tmp_path, COUNTER, "vulkan")
-    assert "%counter_c = OpVariable %_ptr_Private_int Private" in code, code
+    # The ids are symbolic when spirv-tools reformat the module and numeric otherwise, so resolve them by name.
+    name = re.search(r'OpName (%\S+) "counter_c"', code)
+    assert name is not None, code
+    variable = re.search(
+        rf"^\s*{re.escape(name.group(1))} = OpVariable (%\S+) Private\b",
+        code,
+        re.MULTILINE,
+    )
+    assert variable is not None, code
+    pointer = rf"^\s*{re.escape(variable.group(1))} = OpTypePointer Private (%\S+)$"
+    pointee = re.search(pointer, code, re.MULTILINE)
+    assert pointee is not None, code
+    assert re.search(
+        rf"^\s*{re.escape(pointee.group(1))} = OpTypeInt 32 1$", code, re.MULTILINE
+    ), code
     assembler = shutil.which("spirv-as")
     validator = shutil.which("spirv-val")
     if assembler is None or validator is None:
