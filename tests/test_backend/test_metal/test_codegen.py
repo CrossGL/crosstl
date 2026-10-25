@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import MetalImportRefused
 from crosstl.backend.Metal.MetalAst import BinaryOpNode as MetalBinaryOpNode
 from crosstl.backend.Metal.MetalAst import CastNode as MetalCastNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
@@ -5842,7 +5843,8 @@ def test_codegen_access_qualified_1d_storage_textures():
     assert "vec4 c = imageLoad(line, tid);" in result
     assert "imageStore(line, tid, c);" in result
     assert "uint v = imageLoad(counters, uvec2(tid, 0));" in result
-    assert "imageStore(counters, uvec2(tid, 0), v);" in result
+    # The scalar texel value converts to the uint4 texel type (MSL 3.2 section 2.12).
+    assert "imageStore(counters, uvec2(tid, 0), uvec4(v));" in result
 
     shader_ast = parse_crossgl(result)
     assert shader_ast is not None
@@ -6198,6 +6200,28 @@ def test_codegen_simd_namespace_types():
     assert "mat4x2 m42" in result
     assert "f16mat3 h3" in result
     assert "float3x3" not in result
+
+
+def test_codegen_simd_alias_members_resolve_builtin_overloads_and_subscripts():
+    """Builtin overloads and subscripts see simd aliases as the Metal types they name."""
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct Uniforms {
+        simd::float4 plane;
+        simd_float4x4 transform;
+        vector_float3 axis;
+    };
+    kernel void k(device float *out [[buffer(0)]],
+                  constant Uniforms &u [[buffer(1)]],
+                  uint id [[thread_position_in_grid]]) {
+        float4 p = float4(1.0);
+        out[id] = dot(u.plane, p) + u.transform[3].x + length(u.axis);
+    }
+    """
+    result = convert(code)
+    assert "dot(u.plane, p) + u.transform[3].x + length(u.axis)" in result
+    assert "simd" not in result.split("shader", 1)[1]
 
 
 def test_codegen_function_constants_and_argument_buffers():
@@ -8459,7 +8483,10 @@ def test_codegen_payload_and_hit_attributes():
     assert "@hit_attribute" in result
 
 
-def test_codegen_mesh_object_io():
+def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
+    # A mesh function writes its outputs through a metal::mesh parameter and an object function dispatches mesh
+    # threadgroups through mesh_grid_properties; the importer used to print both verbatim as plain functions.
+    # tests/test_backend/test_metal/test_mesh_import.py covers the mesh functions it imports.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8472,14 +8499,17 @@ def test_codegen_mesh_object_io():
     mesh void mesh_main(threadgroup ObjPayload* payload [[payload]],
                         uint3 tid [[thread_position_in_threadgroup]]) { }
     """
-    result = convert(code)
-    assert "object_main" in result
-    assert "mesh_main" in result
-    assert "@payload" in result
-    assert "@gl_WorkGroupID" in result
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    assert "Metal object function 'object_main'" in str(refusal.value)
+    assert (
+        "Metal mesh function 'mesh_main' must take exactly one metal::mesh parameter, found 0"
+        in str(refusal.value)
+    )
 
 
-def test_codegen_mesh_output_functions():
+def test_codegen_mesh_function_calling_hlsl_mesh_intrinsics_is_refused():
+    # MSL has no SetMeshOutputCounts, SetVertex or SetPrimitive; a mesh function writes through metal::mesh.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8490,10 +8520,8 @@ def test_codegen_mesh_output_functions():
         SetPrimitive(0, 0);
     }
     """
-    result = convert(code)
-    assert "SetMeshOutputCounts" in result
-    assert "SetVertex" in result
-    assert "SetPrimitive" in result
+    with pytest.raises(MetalImportRefused, match="exactly one metal::mesh parameter"):
+        convert(code)
 
 
 def test_codegen_expands_preprocessor_define():

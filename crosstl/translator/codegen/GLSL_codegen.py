@@ -199,6 +199,7 @@ from .enum_utils import (
 )
 from .exponent_builtins import emit_glsl_exponent_helpers, glsl_exponent_call
 from .extended_arithmetic_builtins import glsl_extended_arithmetic_call
+from .fixed_sampler_contracts import fixed_sampler_records, with_glsl_fixed_samplers
 from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
@@ -230,8 +231,13 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
+from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
+from .glsl_helper_stage_guards import (
+    glsl_helper_stage_macros,
+    wrap_glsl_helper_stage_guard,
+)
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -264,6 +270,7 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_stage_distances import (
     distance_input_alias,
     distance_output_epilogue,
@@ -504,6 +511,7 @@ from .resource_arrays import (
 )
 from .resource_helper_calls import is_read_only_helper_expression
 from .sampler_pairs import (
+    COMBINED_SAMPLER_PAIRS,
     lower_combined_sampler_pairs,
     with_combined_sampler_header,
 )
@@ -8782,6 +8790,12 @@ class GLSLCodeGen(
         )
         if immutable:
             code = with_immutable_storage_header(code, immutable)
+        code = with_glsl_fixed_samplers(
+            code,
+            fixed_sampler_records(ast),
+            getattr(self, "combined_sampler_pairs", ()),
+            ast,
+        )
         return with_dispatch_region_header(code, region)
 
     GLSL_EARLY_EXIT_RETRY_REASONS = frozenset(
@@ -8821,6 +8835,9 @@ class GLSLCodeGen(
         ast = lower_private_vector_views(ast, "opengl")
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
+        )
+        self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
+            COMBINED_SAMPLER_PAIRS, []
         )
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -9534,9 +9551,11 @@ class GLSLCodeGen(
         # Stage inputs and outputs become globals in GLSL, where they share one namespace with variables,
         # functions and the members of unnamed blocks (GLSL 4.60 section 4.2.7). The whole program is consulted so
         # that stages translated one at a time name their varyings alike.
-        self.stage_io_reserved_value_names = self.collect_glsl_global_identifier_names(
-            ast, None
-        ) | set(self.function_return_types)
+        self.stage_io_reserved_value_names = (
+            self.collect_glsl_global_identifier_names(ast, None)
+            | set(self.function_return_types)
+            | glsl_entry_resource_parameter_names(self, ast)
+        )
         self.fragment_input_struct_names = self.stage_parameter_struct_names(
             ast, "fragment"
         )
@@ -10221,6 +10240,7 @@ class GLSLCodeGen(
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
+        helper_stage_macros = glsl_helper_stage_macros(self, ast)
         deferred_top_level_helpers_by_stage = (
             self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
         )
@@ -10305,11 +10325,16 @@ class GLSLCodeGen(
                 "ray_miss",
                 "ray_callable",
             }:
-                for specialized_func in resource_specializations:
-                    code += self.generate_function(
+                specialized_code = "".join(
+                    self.generate_function(
                         specialized_func,
                         stage_context=helper_stage_context,
                     )
+                    for specialized_func in resource_specializations
+                )
+                code += wrap_glsl_helper_stage_guard(
+                    self, specialized_code, func, helper_stage_macros
+                )
             if self.glsl_has_resource_function_specializations(
                 getattr(func, "name", None)
             ) and self.glsl_function_has_structured_buffer_parameter(func):
@@ -10339,7 +10364,9 @@ class GLSLCodeGen(
                 if qualifier_name in self.GLSL_STAGE_GUARD_MACROS:
                     code += self.wrap_stage_guard(specialized_code, qualifier_name)
                 else:
-                    code += specialized_code
+                    code += wrap_glsl_helper_stage_guard(
+                        self, specialized_code, func, helper_stage_macros
+                    )
                 continue
 
             if (
@@ -10381,7 +10408,9 @@ class GLSLCodeGen(
                 )
                 if getattr(func, "name", None) in self.glsl_generic_helper_refusals:
                     self.glsl_generic_helper_code[func.name] = function_code
-                code += function_code
+                code += wrap_glsl_helper_stage_guard(
+                    self, function_code, func, helper_stage_macros
+                )
 
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
@@ -18371,25 +18400,31 @@ class GLSLCodeGen(
         layout = f"layout(constant_id = {constant_id}) "
         if value is None:
             value_code = self.zero_value_expression(const_type)
+            macro = glsl_specialization_macro_name(name)
             metadata = (
                 "/* CrossGL specialization metadata: "
                 f"name={name}; constant_id={constant_id}; "
                 "required_override=true; "
-                f"encoding_default={value_code} */\n"
+                f"encoding_default={value_code}; source_macro={macro} */\n"
             )
+            # A driver compiling the source has no specialization, so the host supplies the value the way OpenGL
+            # programs select variants: as a macro defined after #version, like MTLFunctionConstantValues for MSL.
             fallback = (
-                f'#error "specialization constant {name} has no default: '
-                'compile this shader to SPIR-V and specialize it"\n'
+                f"#elif defined({macro})\n"
+                f"const {declaration} = {mapped_type}({macro});\n"
+                "#else\n"
+                f'#error "specialization constant {name} has no default: define {macro} '
+                'or compile this shader to SPIR-V and specialize it"\n'
             )
         else:
             value_code = self.generate_constant_expression(value, const_type)
             metadata = ""
-            fallback = f"const {declaration} = {value_code};\n"
+            fallback = f"#else\nconst {declaration} = {value_code};\n"
         # constant_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.5,
         # GL_ARB_gl_spirv, GL_KHR_vulkan_glsl); a driver compiling the source keeps the default value.
         return (
             f"{GLSL_SPIRV_GUARD}{metadata}{layout}const {declaration} = {value_code};\n"
-            f"#else\n{fallback}#endif\n"
+            f"{fallback}#endif\n"
         )
 
     def glsl_builtin_specialization_constant_declaration(
@@ -19608,6 +19643,12 @@ class GLSLCodeGen(
             layout_name="max_primitives",
         )
 
+        declared = self.glsl_mesh_output_array_limits(func)
+        if max_vertices is None:
+            max_vertices = declared.get("vertices")
+        if max_primitives is None:
+            max_primitives = declared.get("primitives")
+
         layout_parts = []
         if output_primitive:
             layout_parts.append(output_primitive)
@@ -19619,6 +19660,24 @@ class GLSLCodeGen(
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_mesh_output_array_limits(self, func):
+        """The vertex and primitive limits that a mesh entry's output arrays declare.
+
+        GL_EXT_mesh_shader requires ``max_vertices`` and ``max_primitives`` in the output layout; without the
+        attributes, the ``@vertices``, ``@primitives`` and ``@indices`` array sizes give them, as they do in HLSL.
+        """
+        limits = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if not self.is_mesh_output_parameter(param):
+                continue
+            count = self.mesh_output_parameter_count_value(param)
+            if count is None:
+                continue
+            role = self.mesh_output_parameter_role(param)
+            key = "vertices" if role == "vertices" else "primitives"
+            limits[key] = max(count, limits.get(key, 0))
+        return limits
 
     def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
         return self.glsl_stage_consistent_layout_value(
@@ -20149,6 +20208,44 @@ class GLSLCodeGen(
 
             infos[param.name] = info
         return infos
+
+    def generate_glsl_mesh_payload_parameter_declaration(self, func):
+        """Declare a mesh entry's payload parameter as the ``taskPayloadSharedEXT`` block it reads.
+
+        GL_EXT_mesh_shader passes the task stage's ``EmitMeshTasksEXT`` payload to every mesh workgroup through a
+        ``taskPayloadSharedEXT`` variable; the entry body keeps reading it under the parameter's name.
+        """
+        payloads = [
+            param
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if self.is_glsl_mesh_payload_parameter(param)
+        ]
+        if not payloads:
+            return ""
+        if len(payloads) > 1:
+            raise ValueError(
+                "GLSL mesh entry declares more than one payload parameter: "
+                + ", ".join(param.name for param in payloads)
+            )
+        param = payloads[0]
+        param_type = self.map_type(
+            self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+        )
+        declaration = format_c_style_array_declaration(param_type, param.name)
+        return f"taskPayloadSharedEXT {declaration};\n"
+
+    def is_glsl_mesh_payload_parameter(self, param):
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(param, "attributes", []) or []
+        }
+        names.update(
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        )
+        return bool(names & {"mesh_payload", "meshpayload", "payload"})
 
     def generate_mesh_output_parameter_declarations(self, mesh_outputs):
         code = ""
@@ -21381,6 +21478,8 @@ class GLSLCodeGen(
             code += self.generate_mesh_output_parameter_declarations(
                 mesh_output_parameters
             )
+        if shader_type == "mesh":
+            code += self.generate_glsl_mesh_payload_parameter_declaration(func)
 
         stage_layout = self.generate_stage_layout(
             shader_type, func, stage_layout_qualifiers

@@ -206,11 +206,11 @@ def test_spirv_maps_instructions_to_glsl_overloads():
     assert len(features["Atan2"].signature.params) == 2
 
 
-def test_spirv_explains_unreachable_and_unspelled_instructions():
+def test_spirv_explains_unreachable_instructions_and_spells_nan_aware_ones():
     features = by_name(spirv.parse(GRAMMAR, GLSL_EXCERPT))
+    # NMin takes min's operands and is CrossGL's NaN-aware fmin.
     assert features["NMin"].signature.params[1].type == Type("float", (3,))
-    assert features["NMin"].crossgl == ""
-    assert "NaN" in features["NMin"].note
+    assert features["NMin"].crossgl == "fmin"
     assert features["UMulExtended"].signature is None
     assert features["UMulExtended"].note
 

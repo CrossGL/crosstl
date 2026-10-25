@@ -279,6 +279,11 @@ def run_output(feature: Feature, language: str) -> Result:
     verdict = _validated(language, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", verdict.log)
+    ignored = (
+        spirv_input.ignores_nan(feature, translated) if language == "spirv" else ""
+    )
+    if ignored:
+        return result("wrong", ignored)
     # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
     if _runs(feature, language) and not feature.counterpart:
         try:

@@ -247,7 +247,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.array_parameters`). For GLSL, an entry point's stage inputs and built-in values that its body writes are
     copied into locals, since GLSL inputs are read-only (:mod:`.written_stage_inputs`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
-    (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D and Vulkan
+    (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D, Vulkan and OpenGL
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
     prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
