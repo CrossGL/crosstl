@@ -1670,6 +1670,9 @@ def _stage_interface_keys(node):
     for attr in attributes:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
         if _is_cross_stage_semantic_name(attr_name):
+            # A semantic without an index has index 0: D3D links COLOR to COLOR0.
+            if not attr_name[-1].isdigit():
+                attr_name += "0"
             keys.append(("semantic", attr_name))
     return tuple(keys)
 

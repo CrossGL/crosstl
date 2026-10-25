@@ -290,7 +290,8 @@ def test_spirv_stage_structure_members_after_an_array_take_later_locations(tmp_p
         for target, value in re.findall(r"OpDecorate %(\w+) Location (\d+)", code)
         if names.get(target, target).startswith(prefix)
     }
-    assert locations == {"N": "1", "id": "3"}
+    # Normal takes 1 and 2, TexCoord3 its fixed location 8.
+    assert locations == {"N": "1", "id": "8"}
     _validate_spirv(tmp_path, code)
 
 

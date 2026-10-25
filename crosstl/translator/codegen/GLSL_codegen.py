@@ -276,6 +276,11 @@ from .glsl_version_requirements import (
     resolve_version_line,
     with_es_default_precisions,
 )
+from .glsl_vertex_inputs import (
+    vertex_input_builtin,
+    vertex_input_layouts,
+    vertex_parameter_layouts,
+)
 from .glsl_wave_extended import (
     GLSL_CLUSTERED_BITWISE_OPERATIONS,
     GLSL_CLUSTERED_NUMERIC_OPERATIONS,
@@ -488,7 +493,7 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .stage_distance_layout import distance_semantic
-from .stage_io_semantic_locations import GLSL_SEMANTIC_LOCATIONS
+from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -2954,7 +2959,7 @@ class GLSLCodeGen(
             "gl_PrimitiveID": "gl_PrimitiveID",
             **{
                 semantic: f"layout(location = {location})"
-                for semantic, location in GLSL_SEMANTIC_LOCATIONS.items()
+                for semantic, location in SEMANTIC_LOCATIONS.items()
             },
             # Vertex outputs
             "gl_Position": "gl_Position",
@@ -22416,15 +22421,17 @@ class GLSLCodeGen(
             "task",
         }
 
-        def add_parameter(param, stage_name):
+        def is_input(param, stage_name):
             if stage_name == "mesh" and self.is_mesh_output_parameter(param):
-                return
+                return False
             if self.is_graphics_stage_output_parameter(param, stage_name):
-                return
+                return False
             if not self.is_stage_entry_value_parameter(param):
-                return
-            semantic = self.semantic_from_node(param)
-            if self.is_stage_builtin_semantic(semantic):
+                return False
+            return not self.is_stage_builtin_semantic(self.semantic_from_node(param))
+
+        def add_parameter(param, stage_name, layouts=None):
+            if not is_input(param, stage_name):
                 return
             patch_refusal = patch_parameter_refusal_reason(
                 param.name, self.type_name_string(self.resource_node_type(param))
@@ -22435,7 +22442,9 @@ class GLSLCodeGen(
 
             param_type = self.map_type(self.resource_node_type(param))
             input_name = self.glsl_module_identifier_name(param.name)
-            layout = self.stage_io_layout_for_node(param)
+            layout = (layouts or {}).get(id(param)) or self.stage_io_layout_for_node(
+                param
+            )
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 stage_name,
@@ -22445,7 +22454,7 @@ class GLSLCodeGen(
                 input_name,
             )
             prefix = self.stage_io_declaration_prefix(
-                param, "in", stage_name=stage_name
+                param, "in", layout=layout, stage_name=stage_name
             )
             if self.requires_flat_stage_input(stage_name, param_type):
                 prefix = self.with_flat_stage_input_qualifier(prefix)
@@ -22463,14 +22472,23 @@ class GLSLCodeGen(
                 else:
                     declarations.append(declaration)
 
+        def vertex_input_parameter_layouts(parameters, stage_name):
+            if stage_name != "vertex":
+                return {}
+            return vertex_parameter_layouts(
+                self, parameters, lambda param: is_input(param, stage_name)
+            )
+
         for func in getattr(ast, "functions", []) or []:
             qualifier_name = function_stage_name(func)
             if qualifier_name not in graphics_stages:
                 continue
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
-            for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
-                add_parameter(param, qualifier_name)
+            parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+            layouts = vertex_input_parameter_layouts(parameters, qualifier_name)
+            for param in parameters:
+                add_parameter(param, qualifier_name, layouts)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
             stage_name = normalize_stage_name(stage_type)
@@ -22481,11 +22499,13 @@ class GLSLCodeGen(
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is None:
                 continue
-            for param in (
+            parameters = (
                 getattr(entry_point, "parameters", getattr(entry_point, "params", []))
                 or []
-            ):
-                add_parameter(param, stage_name)
+            )
+            layouts = vertex_input_parameter_layouts(parameters, stage_name)
+            for param in parameters:
+                add_parameter(param, stage_name, layouts)
 
         if target_stage is None:
             return "".join(declarations)
@@ -23096,12 +23116,17 @@ class GLSLCodeGen(
 
     def generate_stage_input_declarations(self, node):
         code = ""
-        for member in getattr(node, "members", []) or []:
+        members = getattr(node, "members", []) or []
+        layouts = vertex_input_layouts(self, members)
+        for member in members:
+            if member.name not in layouts:
+                # A built-in value; its reads read the built-in.
+                continue
             member_type = self.member_type_name(member)
             member_name = self.vertex_input_member_emitted_name(
                 member
             ) or self.glsl_module_identifier_name(member.name)
-            layout = self.stage_io_layout_for_node(member)
+            layout = layouts[member.name]
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
@@ -23110,7 +23135,9 @@ class GLSLCodeGen(
                 member_type,
                 member_name,
             )
-            prefix = self.stage_io_declaration_prefix(member, "in", stage_name="vertex")
+            prefix = self.stage_io_declaration_prefix(
+                member, "in", layout=layout, stage_name="vertex"
+            )
             member_decl = format_c_style_array_declaration(member_type, member_name)
             declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
@@ -23423,7 +23450,8 @@ class GLSLCodeGen(
             else:
                 maps[param.name] = {
                     member.name: (
-                        self.vertex_input_member_emitted_name(member)
+                        vertex_input_builtin(self, member)
+                        or self.vertex_input_member_emitted_name(member)
                         or self.glsl_struct_member_name(type_name, member.name)
                     )
                     for member in getattr(struct, "members", [])

@@ -15,8 +15,10 @@ The harness assembles and validates that SPIR-V for the oldest Vulkan version wh
 one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not accept.
 
 The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that declare one
-input buffer run; a probe whose call takes no argument declares one it never reads. The other probes keep their
-validation result, and so does one that reads a clock or queries a ray query, because two runs of it need not agree.
+input buffer run; a probe whose call takes no argument declares one it never reads. When the native probe also declares
+one uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
+declare that block too. The other probes keep their validation result, and so does one that reads a clock or queries a
+ray query, because two runs of it need not agree.
 Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
 defines.
 """
@@ -24,6 +26,7 @@ defines.
 from __future__ import annotations
 
 import re
+import struct
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -42,10 +45,18 @@ WORDS = 16
 # Input elements one thread may read past its own: three 4x4 matrix arguments.
 SPAN = 48
 _INPUT = re.compile(r"\b(fin|iin|uin)\b")
+# The bytes of the constants block a probe declares: four 32-bit floats, one 16-byte std140 row, of which a probe reads
+# the first. The words differ so that a translation reading another offset computes something else.
+CONSTANTS = struct.pack("<4f", 2.5, -1.75, 3.25, 0.5)
 # llvmpipe implements OpenGL 4.5, so GLSL written for 4.60 runs as GLSL 4.50. A native probe that needs 4.60 is then
 # rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
 # use what 4.60 adds.
 _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
+# GLSL 4.60 took its group vote functions from ARB_shader_group_vote, which llvmpipe implements. At 4.50 they need
+# that extension, which names them with an ARB suffix.
+_GROUP_VOTE = re.compile(
+    r"\b(anyInvocation|allInvocations|allInvocationsEqual)(?=\s*\()"
+)
 # lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
@@ -86,9 +97,13 @@ def executable(result: Result) -> bool:
 
 def runnable(language: str, source: str) -> str:
     """``source`` as the runtime for ``language`` compiles it."""
-    if language == "glsl":
-        return _GLSL_460.sub("#version 450 core", source, count=1)
-    return source
+    if language != "glsl" or not _GLSL_460.search(source):
+        return source
+    version = "#version 450 core"
+    if _GROUP_VOTE.search(source):
+        version += "\n#extension GL_ARB_shader_group_vote : require"
+        source = _GROUP_VOTE.sub(r"\1ARB", source)
+    return _GLSL_460.sub(version, source, count=1)
 
 
 def runs(language: str) -> bool:
@@ -156,7 +171,7 @@ def difference(native, translated) -> str:
     )
 
 
-def _case(identity: str, path: Path, language: str, data, capture):
+def _case(identity: str, path: Path, language: str, data, constants, capture):
     import numpy as np
 
     from tests.conformance.cases import Case
@@ -176,20 +191,33 @@ def _case(identity: str, path: Path, language: str, data, capture):
         group=1,
         out_count=THREADS * WORDS,
         check=check,
+        constants=constants,
         src=path,
         lang=language,
     )
 
 
-def rebinding(runs_as: str, native: Path, translated: Path) -> str:
+def declares_constants(runs_as: str, path: Path) -> bool:
+    """Whether the probe at ``path`` declares the one constants block the harness can bind, besides its buffers."""
+    from tests.conformance.interface import InterfaceChanged, interface
+
+    try:
+        interface(path, runs_as, 1, True)
+    except InterfaceChanged:
+        return False
+    return True
+
+
+def rebinding(runs_as: str, native: Path, translated: Path, constants: bool) -> str:
     """Why the harness cannot bind the ``translated`` probe the way it binds the ``native`` one, or an empty string
-    when it can, or when it cannot bind the native probe either."""
+    when it can, or when it cannot bind the native probe either. ``constants`` says whether both get a constants
+    block."""
     from tests.conformance.interface import InterfaceChanged, interface
 
     objections = []
     for path in (native, translated):
         try:
-            interface(path, runs_as, 1)
+            interface(path, runs_as, 1, constants)
             objections.append("")
         except InterfaceChanged as error:
             objections.append(str(error))
@@ -230,8 +258,13 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
             paths.append(path)
-            cases.append(_case(f"{index:05d}-{role}", path, runs_as, data, outputs))
-        rebound[index] = rebinding(runs_as, *paths)
+        block = declares_constants(runs_as, paths[0])
+        constants = CONSTANTS if block else None
+        for role, path in zip(("native", "translated"), paths):
+            cases.append(
+                _case(f"{index:05d}-{role}", path, runs_as, data, constants, outputs)
+            )
+        rebound[index] = rebinding(runs_as, *paths, block)
     if not cases:
         return {}
     # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
