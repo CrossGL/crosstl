@@ -52,6 +52,7 @@ from ..host_workgroup_size import (
 )
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
+from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -3029,13 +3030,16 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
                     operand_type = self.type_name_string(operand_type)
-                operand = wgsl_logical_not_operand(operand, operand_type)
+                converted = wgsl_logical_not_operand(operand, operand_type)
+                if converted != operand:
+                    # A bool conversion is a constructor call, a primary.
+                    return f"!{converted}"
             if expr.operator == "-" and self.matrix_shape(
                 self.expression_type(expr.operand)
             ):
                 # WGSL has no unary minus on matrices; multiplying by -1 is exact.
                 return f"({operand} * -1.0)"
-            return f"{expr.operator}{operand}"
+            return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
