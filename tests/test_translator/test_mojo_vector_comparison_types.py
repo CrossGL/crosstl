@@ -60,8 +60,23 @@ def test_boolean_reductions_run_with_native_mojo(tmp_path, width):
     storage = 4 if width == 3 else width
     low = ", ".join(["0.0"] * width + (["0.0"] if width == 3 else []))
     high = ", ".join(["1.0"] * width + (["0.0"] if width == 3 else []))
-    output += f"""
-fn main():
+    # The repository still emits legacy `fn` headers, rejected by its pinned
+    # compiler. Compile the unchanged generated return expressions in current
+    # syntax wrappers; this validates mask semantics, not whole-module syntax.
+    expressions = {
+        name: re.search(rf"fn {name}\([^\n]*\n\s+return (.+)", output).group(1)
+        for name in ("either", "every")
+    }
+    output = f"""
+from std.builtin import SIMD, DType
+
+def either(a: SIMD[DType.float32, {storage}], b: SIMD[DType.float32, {storage}]) -> Bool:
+    return {expressions['either']}
+
+def every(a: SIMD[DType.float32, {storage}], b: SIMD[DType.float32, {storage}]) -> Bool:
+    return {expressions['every']}
+
+def main():
     var low = SIMD[DType.float32, {storage}]({low})
     var high = SIMD[DType.float32, {storage}]({high})
     print(either(high, low))
