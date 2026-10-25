@@ -23,6 +23,8 @@ from __future__ import annotations
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .half import _is_half_matrix
+from .hub_types import type_from_name
 from .opaque_structs import _is_opaque
 from .rewrite import child_slots, get_child, set_child
 
@@ -89,6 +91,9 @@ def _is_plain_type(type_node, structs, visiting=()) -> bool:
     if isinstance(type_node, A.NamedType):
         name = getattr(type_node, "name", None)
         struct = structs.get(name)
+        if struct is None and not getattr(type_node, "generic_args", None):
+            # Spellings the parser keeps as names, such as ``f16vec3`` and ``f16mat3``.
+            return type_from_name(name) is not None or _is_half_matrix(str(name))
         if (
             struct is None
             or getattr(type_node, "generic_args", None)

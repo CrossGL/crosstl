@@ -7185,8 +7185,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
@@ -23705,10 +23708,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {

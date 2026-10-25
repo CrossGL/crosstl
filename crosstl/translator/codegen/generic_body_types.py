@@ -4,8 +4,8 @@ A generic function's specialization (:func:`.generic_function_utils._ensure_gene
 copy whose signature takes the concrete types of the call. Its body kept the type parameters, so
 ``generic<T> T twice(T x) { T y = x + x; return y; }`` specialized for ``float`` declared ``T y``: the Metal and HLSL
 generators emitted that undeclared type, and the GLSL and SPIR-V generators refused it.
-:func:`substitute_body_types` gives every declaration, cast and constructor call in the body its concrete type, and
-every call with explicit generic arguments (``helper<T>(x)``) its concrete callee.
+:func:`substitute_body_types` gives every declaration, cast and constructor call in the body its concrete type,
+including ``vecN<T>`` ones, and every call with explicit generic arguments (``helper<T>(x)``) its concrete callee.
 """
 
 from __future__ import annotations
@@ -13,6 +13,10 @@ from __future__ import annotations
 from ..ast import ASTNode, FunctionCallNode, IdentifierNode
 from ..semantics.rewrite import child_slots, get_child
 from .enum_utils import substitute_generic_type_name
+from .generic_vector_deduction import (
+    concrete_generic_vector_name,
+    concrete_generic_vector_type,
+)
 
 __all__ = ["substitute_body_types"]
 
@@ -23,9 +27,19 @@ _TYPE_FIELDS = ("var_type", "vtype", "target_type", "const_type")
 def _substituted(generator, value, substitutions):
     if value is None:
         return None
+    vector = concrete_generic_vector_type(value, substitutions)
+    if vector is not None:
+        return vector
     name = generator.type_name_string(value)
     concrete = substitute_generic_type_name(name, substitutions)
     return None if concrete == name else concrete
+
+
+def _constructor_name(name, substitutions):
+    """The concrete callee of ``T(...)`` or ``vecN<T>(...)``, else ``None``."""
+    if name in substitutions:
+        return substitutions[name]
+    return concrete_generic_vector_name(name, substitutions)
 
 
 def _walk(node):
@@ -62,13 +76,13 @@ def substitute_body_types(generator, body, substitutions) -> int:
         if isinstance(node, FunctionCallNode):
             function = getattr(node, "function", None)
             name = function.name if isinstance(function, IdentifierNode) else None
-            concrete = substitutions.get(name)
+            concrete = _constructor_name(name, substitutions)
             if concrete is None and name and "<" in name:
                 # ``helper<T>(x)`` names the concrete ``helper<float>``.
                 concrete = substitute_generic_type_name(name, substitutions)
                 concrete = None if concrete == name else concrete
             if concrete is not None:
-                # ``T(0)`` constructs the concrete type.
+                # ``T(0)`` and ``vec2<T>(x, y)`` construct the concrete type.
                 function.name = concrete
                 function.identifier = concrete
                 changed += 1

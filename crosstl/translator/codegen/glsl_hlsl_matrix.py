@@ -916,6 +916,20 @@ class GLSLEmulatedMatrices:
         )
         return f"{self.generate_expression(target)} = {rendered}"
 
+    def glsl_hlsl_logical_result_type(self, func_name, args):
+        """The ``bool``/``bvecN`` result of HLSL ``and``/``or``: as wide as its widest operand."""
+        if func_name not in {"and", "or"} or len(args or []) != 2:
+            return None
+        if func_name in getattr(self, "function_return_types", {}):
+            return None
+        infos = [
+            self.glsl_value_type_info(self.glsl_source_expression_type(arg))
+            for arg in args
+        ]
+        if any(info is None for info in infos):
+            return None
+        return vector_type_name("bool", max(info["width"] for info in infos))
+
     def generate_glsl_hlsl_logical_intrinsic(self, func_name, args):
         """HLSL ``and``/``or`` on scalars and vectors (matrices are emulated).
 

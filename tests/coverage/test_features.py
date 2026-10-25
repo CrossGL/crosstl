@@ -1,3 +1,5 @@
+import pytest
+
 from tools.coverage import probes, validators
 from tools.coverage.features import glsl, hlsl, spirv, wgsl
 from tools.coverage.model import VOID, Param, Signature, Type
@@ -206,13 +208,79 @@ def test_spirv_maps_instructions_to_glsl_overloads():
     assert len(features["Atan2"].signature.params) == 2
 
 
-def test_spirv_explains_unreachable_and_unspelled_instructions():
+def test_spirv_explains_unreachable_instructions_and_spells_nan_aware_ones():
     features = by_name(spirv.parse(GRAMMAR, GLSL_EXCERPT))
+    # NMin takes min's operands and is CrossGL's NaN-aware fmin.
     assert features["NMin"].signature.params[1].type == Type("float", (3,))
-    assert features["NMin"].crossgl == ""
-    assert "NaN" in features["NMin"].note
+    assert features["NMin"].crossgl == "fmin"
     assert features["UMulExtended"].signature is None
     assert features["UMulExtended"].note
+
+
+CORE_GRAMMAR = """{"instructions": [
+ {"opname": "OpDPdx", "class": "Derivative"},
+ {"opname": "OpFOrdLessThan", "class": "Relational_and_Logical"},
+ {"opname": "OpSLessThan", "class": "Relational_and_Logical"},
+ {"opname": "OpULessThan", "class": "Relational_and_Logical"}
+]}"""
+CORE_GLSL = """
+== Vector Relational Functions
+
+[source,glsl]
+----
+bvec lessThan(vec x, vec y)
+bvec lessThan(ivec x, ivec y)
+bvec lessThan(uvec x, uvec y)
+----
+
+== Fragment Processing Functions
+
+[source,glsl]
+----
+genFType dFdx(genFType p)
+----
+"""
+CORE_TABLE = {
+    "OpDPdx": ("dFdx", ""),
+    "OpFOrdLessThan": ("lessThan", "float"),
+    "OpSLessThan": ("lessThan", "int"),
+    "OpULessThan": ("lessThan", "uint"),
+}
+
+
+def test_spirv_core_instructions_take_the_overload_that_selects_them(monkeypatch):
+    monkeypatch.setattr(spirv, "CORE", CORE_TABLE)
+    features = by_name(spirv.core(CORE_GRAMMAR, CORE_GLSL))
+    assert sorted(features) == sorted(CORE_TABLE)
+    for name, scalar in (
+        ("OpFOrdLessThan", "float"),
+        ("OpSLessThan", "int"),
+        ("OpULessThan", "uint"),
+    ):
+        feature = features[name]
+        assert feature.signature.params[0].type == Type(scalar, (3,))
+        assert (feature.crossgl, feature.spelling) == ("lessThan", "lessThan")
+        assert feature.group == "core-relational-and-logical"
+        assert spirv.is_core(feature)
+    # A derivative is probed in the fragment stage, as its GLSL function is.
+    assert (features["OpDPdx"].stage, features["OpDPdx"].group) == (
+        "fragment",
+        "core-derivative",
+    )
+
+
+def test_spirv_core_table_entries_must_exist_upstream(monkeypatch):
+    monkeypatch.setattr(spirv, "CORE", {"OpIAdd": ("lessThan", "")})
+    with pytest.raises(ValueError, match="OpIAdd is not an instruction"):
+        spirv.core(CORE_GRAMMAR, CORE_GLSL)
+    monkeypatch.setattr(spirv, "CORE", {"OpSLessThan": ("lessThan", "bool")})
+    with pytest.raises(ValueError, match="no overload on bool"):
+        spirv.core(CORE_GRAMMAR, CORE_GLSL)
+
+
+def test_spirv_glsl_std_450_instructions_are_not_core():
+    features = spirv.parse(GRAMMAR, GLSL_EXCERPT)
+    assert features and not any(spirv.is_core(f) for f in features)
 
 
 HLSL_TABLE = """

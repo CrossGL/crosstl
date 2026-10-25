@@ -2421,7 +2421,8 @@ def test_glsl_global_function_constants_emit_scalar_specializations_and_validate
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in generated
     assert "layout(constant_id = 20) const bool has_w = false;" in generated
     assert "layout(constant_id = 21) const int mode = 2;" in generated
