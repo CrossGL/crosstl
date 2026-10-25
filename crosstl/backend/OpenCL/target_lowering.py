@@ -282,8 +282,13 @@ def _opencl_target_contracts(cgl_ast):
             )
         )
 
+    # Before OpenCL C 2.0 these names are not reserved, so a call to a helper the
+    # program defines under one of them is an ordinary call.
+    defined_names = {
+        function.name for function in functions if _function_statements(function)
+    }
     for builtin_name in sorted(
-        called_names.intersection(_DEVICE_ENQUEUE_EVENT_BUILTINS)
+        called_names.intersection(_DEVICE_ENQUEUE_EVENT_BUILTINS) - defined_names
     ):
         contracts.append(
             OpenCLTargetUnsupportedContract(

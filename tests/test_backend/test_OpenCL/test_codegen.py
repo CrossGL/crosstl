@@ -278,6 +278,23 @@ def test_opencl_device_enqueue_event_builtins_are_refused(target):
     assert all(contract["action"] for contract in contracts)
 
 
+def test_opencl_helper_named_like_device_enqueue_event_builtin_is_not_refused():
+    # OpenCL C 1.2 does not reserve the device-side enqueue names.
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        uint retain_event(uint x) {
+            return x + 1u;
+        }
+
+        kernel void events(global uint* outp) {
+            uint i = get_global_id(0);
+            outp[i] = retain_event(i);
+        }
+        """)
+
+    validate_opencl_intermediate_for_target(cgl_ast, "opengl")
+    assert "u32 retain_event(u32 x)" in crossgl
+
+
 def test_opencl_vector_constructor_cast_codegen_reparse():
     crossgl = generate_crossgl("""
         __kernel void gaussian_filter(__read_only image2d_t srcImg,
