@@ -159,6 +159,7 @@ from .extended_arithmetic_builtins import (
     emit_metal_extended_arithmetic_helpers,
     metal_extended_arithmetic_call,
 )
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -392,6 +393,7 @@ from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
+from .metal_stage_input_builtins import split_metal_stage_input_builtins
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
     METAL_TEXEL_BUFFER_TYPES,
@@ -2014,6 +2016,7 @@ class MetalCodeGen(
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_metal_keyword_parameters(ast)
+        ast = split_metal_stage_input_builtins(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (
@@ -5754,9 +5757,14 @@ class MetalCodeGen(
                 func, raw_return_type, shader_type
             )
             if stage_output_parameters and return_type != "void":
-                raise ValueError(
-                    f"Metal {shader_type} function '{self.current_function_name}' "
-                    "cannot combine output parameters with a non-void return type"
+                stage_output_parameters.append(
+                    self.metal_stage_return_value_output(
+                        func,
+                        shader_type,
+                        raw_return_type,
+                        return_type,
+                        stage_output_parameters,
+                    )
                 )
         self.current_function_return_type = effective_return_type
         self.validate_metal_ray_stage_signature(func, shader_type, raw_return_type)
@@ -6223,7 +6231,16 @@ class MetalCodeGen(
         code += self.generate_metal_stage_output_parameter_locals(
             stage_output_parameters
         )
-        self.current_metal_stage_output_return_active = bool(stage_output_parameters)
+        self.current_metal_stage_output_return_active = (
+            self.metal_stage_output_return_state(
+                stage_output_struct_name,
+                stage_output_parameters,
+                reserved_parameter_names
+                | self.metal_function_local_variable_names(func),
+            )
+            if stage_output_parameters
+            else False
+        )
         stage_value_variables = [
             local_var
             for local_var in stage_local_variables or []
@@ -7220,6 +7237,10 @@ class MetalCodeGen(
         return declarations
 
     def metal_stage_output_parameter_attribute(self, parameter, stage_name):
+        if stage_name == "fragment":
+            color = metal_fragment_output_color_semantic(self, parameter)
+            if color is not None:
+                return f" [[{color}]]"
         semantic = self.semantic_from_node(parameter)
         if semantic is None and stage_name == "fragment":
             semantic = "gl_FragColor"
@@ -7242,6 +7263,8 @@ class MetalCodeGen(
     def generate_metal_stage_output_parameter_locals(self, parameters):
         code = ""
         for parameter in parameters:
+            if parameter.get("return_value"):
+                continue
             default_value = self.metal_default_value_expression(parameter["raw_type"])
             declaration = format_c_style_array_declaration(
                 parameter["mapped_type"],
@@ -7255,13 +7278,91 @@ class MetalCodeGen(
     ):
         if not parameters or not struct_name:
             return ""
-        result_name = self.unique_metal_generated_name("_crossglOutput", reserved_names)
-        code = f"    {struct_name} {result_name};\n"
-        for parameter in parameters:
+        state = self.metal_stage_output_return_state(
+            struct_name, parameters, reserved_names
+        )
+        return self.generate_metal_stage_output_return(state, "    ")
+
+    def metal_stage_output_return_state(self, struct_name, parameters, reserved_names):
+        """What a ``return`` of an entry point with stage output parameters builds."""
+        return {
+            "struct_name": struct_name,
+            "parameters": parameters,
+            "result_name": self.unique_metal_generated_name(
+                "_crossglOutput", reserved_names
+            ),
+        }
+
+    def generate_metal_stage_output_return(self, state, indent_str, value=None):
+        """Lines that fill the stage output structure from the output parameters and return it.
+
+        ``value`` is the generated return value of an entry point that also returns a value; it is stored
+        first, so the output parameters are read after it has been evaluated.
+        """
+        result_name = state["result_name"]
+        code = f"{indent_str}{state['struct_name']} {result_name};\n"
+        for parameter in state["parameters"]:
+            if parameter.get("return_value"):
+                if value is not None:
+                    code += (
+                        f"{indent_str}{result_name}.{parameter['name']} = {value};\n"
+                    )
+        for parameter in state["parameters"]:
+            if parameter.get("return_value"):
+                continue
             local_name = self.metal_local_identifier_name(parameter["name"])
-            code += f"    {result_name}.{parameter['name']} = {local_name};\n"
-        code += f"    return {result_name};\n"
+            code += f"{indent_str}{result_name}.{parameter['name']} = {local_name};\n"
+        code += f"{indent_str}return {result_name};\n"
         return code
+
+    def generate_metal_stage_output_early_return(self, state, indent_str, value=None):
+        """A ``return`` inside the body of an entry point with stage output parameters.
+
+        The braces scope the result variable, so several returns and the closing one do not collide.
+        """
+        inner = self.generate_metal_stage_output_return(state, indent_str + "  ", value)
+        return f"{indent_str}{{\n{inner}{indent_str}}}\n"
+
+    def metal_stage_return_value_output(
+        self, func, shader_type, raw_return_type, return_type, parameters
+    ):
+        """The member of the stage output structure that holds the entry point's return value.
+
+        HLSL entry points can return one output and write others through ``out`` parameters
+        (``float4 main(out float depth : SV_Depth) : SV_Target``). MSL returns every stage output in one
+        structure, so the return value becomes a member with the return semantic's attribute.
+        """
+        function_name = getattr(func, "name", "<anonymous>")
+        if str(raw_return_type) in self.structs_by_name:
+            raise ValueError(
+                f"Metal {shader_type} function '{function_name}' cannot combine "
+                "output parameters with a structure return type; MSL stage outputs "
+                "are the members of one returned structure"
+            )
+        semantic = self.function_return_semantic(func)
+        attribute = None
+        if shader_type == "fragment":
+            location = frag_data_attachment_index(func)
+            if location is not None:
+                attribute = f" [[color({location})]]"
+        if attribute is None and semantic is not None:
+            attribute = self.map_semantic(semantic)
+        if not attribute:
+            attribute = " [[position]]" if shader_type == "vertex" else " [[color(0)]]"
+        used = {parameter["name"] for parameter in parameters}
+        name = "_crossglReturn"
+        suffix = 2
+        while name in used:
+            name = f"_crossglReturn{suffix}"
+            suffix += 1
+        return {
+            "name": name,
+            "raw_type": raw_return_type,
+            "mapped_type": return_type,
+            "semantic": semantic,
+            "attribute": attribute,
+            "return_value": True,
+        }
 
     def validate_struct_member_semantic_types(self, struct_node):
         for member in getattr(struct_node, "members", []) or []:
@@ -8252,10 +8353,22 @@ class MetalCodeGen(
         elif isinstance(stmt, MatchNode):
             return self.generate_match(stmt, indent)
         elif isinstance(stmt, (ReturnNode, BackendReturnNode)):
+            stage_output_return = getattr(
+                self, "current_metal_stage_output_return_active", False
+            )
             if getattr(stmt, "value", None) is None:
-                if getattr(self, "current_metal_stage_output_return_active", False):
-                    return ""
+                if stage_output_return:
+                    return self.generate_metal_stage_output_early_return(
+                        stage_output_return, indent_str
+                    )
                 return f"{indent_str}return;\n"
+            if stage_output_return and not isinstance(stmt.value, list):
+                value = self.generate_expression_with_expected(
+                    stmt.value, self.current_function_return_type
+                )
+                return self.generate_metal_stage_output_early_return(
+                    stage_output_return, indent_str, value
+                )
             if isinstance(stmt.value, list):
                 code = ""
                 for i, return_stmt in enumerate(stmt.value):
@@ -10291,6 +10404,9 @@ class MetalCodeGen(
                     shape = self.metal_expression_emulated_matrix_shape(arg)
                     if shape is not None:
                         return f"bool{shape[1]}x{shape[2]}"
+                logical_type = self.metal_hlsl_logical_result_type(func_name, args)
+                if logical_type is not None:
+                    return logical_type
             if func_name == "select" and len(args) == 3:
                 for arg in args[:2]:
                     if self.metal_expression_emulated_matrix_shape(arg) is not None:

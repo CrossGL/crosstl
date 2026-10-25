@@ -5,6 +5,8 @@ name: Coverage comment
 # comment is posted here, where the token can write comments. This workflow always runs main's version of itself and
 # of tools/coverage: it checks out main, never the pull request, and reads only the run's coverage.json, which
 # `tools.coverage compare` treats as untrusted data. Values from the triggering run reach scripts through `env` only.
+# The comparison reads the merged commit's parents through the API, to name the pull requests that separate the main
+# it was measured on from the published coverage.
 
 on:
   workflow_run:
@@ -71,10 +73,13 @@ jobs:
         if: steps.report.outcome == 'success'
         env:
           REPORT: ${{ runner.temp }}/run/coverage.json
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json "$REPORT" > compare.md
+            python -m tools.coverage compare published.json "$REPORT" \
+              --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" > compare.md
           else
             echo "No published coverage to compare with yet." > compare.md
           fi
