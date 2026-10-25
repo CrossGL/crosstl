@@ -220,6 +220,10 @@ from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_helper_stage_guards import (
+    glsl_helper_stage_macros,
+    wrap_glsl_helper_stage_guard,
+)
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
@@ -9855,6 +9859,7 @@ class GLSLCodeGen(
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
+        helper_stage_macros = glsl_helper_stage_macros(self, ast)
         deferred_top_level_helpers_by_stage = (
             self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
         )
@@ -9939,11 +9944,16 @@ class GLSLCodeGen(
                 "ray_miss",
                 "ray_callable",
             }:
-                for specialized_func in resource_specializations:
-                    code += self.generate_function(
+                specialized_code = "".join(
+                    self.generate_function(
                         specialized_func,
                         stage_context=helper_stage_context,
                     )
+                    for specialized_func in resource_specializations
+                )
+                code += wrap_glsl_helper_stage_guard(
+                    self, specialized_code, func, helper_stage_macros
+                )
             if self.glsl_has_resource_function_specializations(
                 getattr(func, "name", None)
             ) and self.glsl_function_has_structured_buffer_parameter(func):
@@ -9973,7 +9983,9 @@ class GLSLCodeGen(
                 if qualifier_name in self.GLSL_STAGE_GUARD_MACROS:
                     code += self.wrap_stage_guard(specialized_code, qualifier_name)
                 else:
-                    code += specialized_code
+                    code += wrap_glsl_helper_stage_guard(
+                        self, specialized_code, func, helper_stage_macros
+                    )
                 continue
 
             if (
@@ -10015,7 +10027,9 @@ class GLSLCodeGen(
                 )
                 if getattr(func, "name", None) in self.glsl_generic_helper_refusals:
                     self.glsl_generic_helper_code[func.name] = function_code
-                code += function_code
+                code += wrap_glsl_helper_stage_guard(
+                    self, function_code, func, helper_stage_macros
+                )
 
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
