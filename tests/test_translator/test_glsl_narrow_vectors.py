@@ -114,6 +114,7 @@ shader NarrowScalarWrap {
             uint8_t ub = uint8_t(iin[1]);
             int16_t s = int16_t(iin[2]);
             uint16_t us = uint16_t(iin[3]);
+            int8_t k = int8_t(iin[4]);
             outp[0] = float(b * b);
             outp[1] = float(ub * ub);
             outp[2] = float(s * s);
@@ -122,13 +123,17 @@ shader NarrowScalarWrap {
             int8_t stored = b * b;
             outp[5] = float(stored);
             outp[6] = float(b + 100);
+            outp[7] = float(-ub);
+            outp[8] = float(~ub);
+            outp[9] = float(b << k);
         }
     }
 }
 """
 
-# iin = [13, 20, 200, 300]: 13*13 = 169 -> -87, 20*20 = 400 -> 144, 200*200 = 40000 -> -25536,
-# 300*300 = 90000 -> 24464, (-87) + 13 = -74, stored = -87, and int8_t(13) + 100 promotes to int (113).
+# iin = [13, 20, 200, 300, 4]: 13*13 = 169 -> -87, 20*20 = 400 -> 144, 200*200 = 40000 -> -25536,
+# 300*300 = 90000 -> 24464, (-87) + 13 = -74, stored = -87, int8_t(13) + 100 promotes to int (113),
+# -20 -> 236 and ~20 -> 235 as uint8_t, and 13 << 4 = 208 -> -48.
 SCALAR_WRAP_EXPECTED = (
     -87.0,
     144.0,
@@ -137,6 +142,9 @@ SCALAR_WRAP_EXPECTED = (
     -74.0,
     -87.0,
     113.0,
+    236.0,
+    235.0,
+    -48.0,
 )
 
 SCALAR_FRAGMENT = """
@@ -180,7 +188,9 @@ def test_vector_operations_keep_their_narrow_type():
     assert rule("*", U8, U8, left_literal=False, right_literal=False) == U8
     assert rule("+", U16X2, None, left_literal=False, right_literal=True) == U16X2
     assert rule("<<", U16X2, None, left_literal=False, right_literal=False) == U16X2
+    assert rule("<<", I8, I8, left_literal=False, right_literal=False) == I8
     assert narrow_vector_unary_result("~", U8X2) == U8X2
+    assert narrow_vector_unary_result("-", U8) == U8
 
 
 def test_promoting_operations_have_no_narrow_vector_type():
@@ -203,8 +213,27 @@ def test_promoting_operations_have_no_narrow_vector_type():
     assert rule(">>", None, U16X2, left_literal=False, right_literal=False) is None
     assert rule("<", U16X2, U16X2, left_literal=False, right_literal=False) is None
     assert rule("<", I8, I8, left_literal=False, right_literal=False) is None
-    assert narrow_vector_unary_result("~", U16) is None
+    assert rule("<<", I8, U8, left_literal=False, right_literal=False) is None
     assert narrow_vector_unary_result("!", U16X2) is None
+
+
+def test_promoting_sources_promote_narrow_scalars_only():
+    def rule(operator, left, right):
+        return narrow_vector_binary_result(
+            operator,
+            left,
+            right,
+            left_literal=False,
+            right_literal=False,
+            scalars_promote=True,
+        )
+
+    assert rule("*", I8, I8) is None
+    assert rule("<<", U8, U8) is None
+    assert rule("*", U16X2, U16) == U16X2
+    assert rule("<<", U16X2, U16X2) == U16X2
+    assert narrow_vector_unary_result("-", U16, scalars_promote=True) is None
+    assert narrow_vector_unary_result("~", U8X2, scalars_promote=True) == U8X2
 
 
 def test_narrow_vector_arithmetic_wraps_in_glsl():
@@ -253,6 +282,9 @@ def test_narrow_scalar_arithmetic_wraps_in_glsl():
     assert "intstored=bitfieldExtract((b*b),0,8);" in code
     assert "bitfieldExtract(int(bitfieldExtract(" not in code
     assert "outp[6]=float((b+100));" in code
+    assert "outp[7]=float(int(bitfieldExtract(uint((-int(ub))),0,8)));" in code
+    assert "outp[8]=float(int(bitfieldExtract(uint((~int(ub))),0,8)));" in code
+    assert "outp[9]=float(bitfieldExtract((b<<k),0,8));" in code
 
 
 def test_narrow_scalar_arithmetic_wraps_with_masks_in_webgl():
@@ -288,6 +320,43 @@ def test_glsl_input_roundtrip_wraps_narrow_scalar_product(tmp_path):
     translated = crosstl.translate(str(cgl_path), backend="opengl", format_output=False)
 
     assert "float(bitfieldExtract((v * v), 0, 8))" in translated
+
+
+@pytest.mark.parametrize(
+    ("suffix", "source"),
+    [
+        (
+            ".metal",
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "kernel void k(device const uchar* a [[buffer(0)]], device float* o [[buffer(1)]],\n"
+            "              uint i [[thread_position_in_grid]]) {\n"
+            "    uchar x = a[i];\n"
+            "    o[i] = float(x * x) + float(-x) + float(x << x);\n"
+            "}\n",
+        ),
+        (
+            ".cl",
+            "__kernel void k(__global const uchar* a, __global float* o) {\n"
+            "    int i = get_global_id(0);\n"
+            "    uchar x = a[i];\n"
+            "    o[i] = (float)(x * x) + (float)(-x) + (float)(x << x);\n"
+            "}\n",
+        ),
+    ],
+    ids=["metal", "opencl"],
+)
+def test_promoting_sources_keep_narrow_scalar_results_in_32_bits(
+    tmp_path, suffix, source
+):
+    # C++ [conv.prom] and C99 6.3.1.1 promote uchar operands, so x * x for x = 200 is 40000, not 64.
+    shader = tmp_path / f"k{suffix}"
+    shader.write_text(source, encoding="utf-8")
+
+    translated = crosstl.translate(str(shader), backend="opengl", format_output=False)
+
+    assert "(int(x) * int(x))" in translated
+    assert "bitfieldExtract(uint((int(x)" not in translated
 
 
 def _glslang():
@@ -403,6 +472,18 @@ def test_narrow_vector_arithmetic_wraps_on_the_gpu(tmp_path):
     assert _run_metal_kernel(metal, inputs, len(WRAP_EXPECTED)) == WRAP_EXPECTED
 
 
+def test_narrow_scalar_arithmetic_wraps_on_the_gpu(tmp_path):
+    metal = _metal_source_from_glsl(tmp_path, _generate(SCALAR_WRAP_PROBE))
+    inputs = [struct.pack("<5i", 13, 20, 200, 300, 4)]
+    count = len(SCALAR_WRAP_EXPECTED)
+
+    words = _run_metal_kernel(metal, inputs, count)
+
+    assert struct.unpack(f"<{count}f", struct.pack(f"<{count}I", *words)) == (
+        SCALAR_WRAP_EXPECTED
+    )
+
+
 def _opengl_context():
     moderngl = pytest.importorskip("moderngl")
     for kwargs in ({"require": 430, "backend": "egl"}, {"require": 430}):
@@ -418,7 +499,7 @@ def test_narrow_scalar_arithmetic_wraps_on_opengl():
     context = _opengl_context()
     try:
         shader = context.compute_shader(glsl)
-        in_buffer = context.buffer(struct.pack("<4i", 13, 20, 200, 300))
+        in_buffer = context.buffer(struct.pack("<5i", 13, 20, 200, 300, 4))
         out_buffer = context.buffer(reserve=4 * len(SCALAR_WRAP_EXPECTED))
         in_buffer.bind_to_storage_buffer(0)
         out_buffer.bind_to_storage_buffer(1)

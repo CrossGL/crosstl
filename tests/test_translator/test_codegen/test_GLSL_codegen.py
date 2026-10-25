@@ -45176,7 +45176,7 @@ def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
     assert "return int(bitfieldExtract(uint(70000u), 0, 16));" in normalized
     assert "return (bitfieldExtract(uint(65536u), 0, 16) != 0u);" in normalized
     assert "return bitfieldExtract((-value), 0, 16);" in normalized
-    assert "return (~int(value));" in normalized
+    assert "return int(bitfieldExtract(uint((~int(value))), 0, 16));" in normalized
     assert "return (!(value != 0u));" in normalized
     assert "return (+int(value));" in normalized
     assert "value = bitfieldExtract((value + 1u), 0, 16);" in normalized
