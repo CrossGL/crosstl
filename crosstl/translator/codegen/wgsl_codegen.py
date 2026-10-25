@@ -3636,9 +3636,15 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         selector_width = self.boolean_expression_width(node.arguments[2])
         if selector_width is None:
             return None
+        # Only values whose type is known can disagree with the selector; a value with no
+        # recorded type, such as a built-in call, is not taken to be a scalar.
         value_width = max(
-            self.vector_component_count(self.expression_type(arg)) or 1
-            for arg in node.arguments[:2]
+            (
+                self.vector_component_count(value_type) or 1
+                for value_type in map(self.expression_type, node.arguments[:2])
+                if value_type is not None
+            ),
+            default=selector_width,
         )
         if selector_width not in (1, value_width):
             raise ValueError(

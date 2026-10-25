@@ -220,7 +220,8 @@ def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
             vec3 b = vec3(1.0);
             vec3 r = mix(a, b, a.x > 0.5);
             vec3 s = mix(a, b, lessThan(a, b));
-            values[i] = r + s;
+            vec3 t = mix(normalize(a), normalize(b), lessThan(a, b));
+            values[i] = r + s + t;
         }
     }
 }"""
@@ -228,7 +229,19 @@ def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
 
     assert "mix(" not in wgsl
     assert wgsl.count("select(a, b, ") == 2
+    # Values with no recorded type are not taken to be scalars and refused.
+    assert "select(normalize(a), normalize(b), (a < b))" in wgsl
     _naga_validates(wgsl, tmp_path)
+
+
+def test_wgsl_boolean_mix_with_a_selector_of_another_width_is_refused():
+    source = SELECTS.replace(
+        "void main(uint i @gl_GlobalInvocationID) {",
+        "void main(uvec3 id @gl_GlobalInvocationID) {\n            uint i = id.x;",
+    ).replace("bvec3(c, false, true)", "bvec2(c, false)")
+
+    with pytest.raises(ValueError, match="2-component selector and 3-component values"):
+        WGSLCodeGen().generate(parse(source))
 
 
 def _naga_validates(code, tmp_path):
