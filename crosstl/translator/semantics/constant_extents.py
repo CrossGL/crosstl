@@ -8,11 +8,12 @@ generators print an extent as written and declare structures before constants. S
 names a constant reached HLSL, GLSL and MSL before the constant's declaration, which DXC, glslang and the Metal
 compiler reject ("use of undeclared identifier"). SPIR-V, which needs the value, refused it.
 
-:func:`fold_constant_extents` replaces each extent that is an integer expression of the program's integer constants
-and enumerators (combined with C's integer operators, as :mod:`.binding_constants` evaluates binding indices) by its
-value, for every target. An extent that names anything else is left to the generators: a specialization constant,
-which GLSL and SPIR-V keep symbolic and the others refuse, a name the program does not declare, or a name that a
-parameter or local declaration could shadow.
+:func:`fold_constant_extents` replaces each extent of a structure or constant-block member that is an integer
+expression of the program's integer constants and enumerators (combined with C's integer operators, as
+:mod:`.binding_constants` evaluates binding indices) by its value, for every target. Other declarations follow the
+constants in every generator's output and keep their spelling. An extent that names anything else is left to the
+generators: a specialization constant, which GLSL and SPIR-V keep symbolic and the others refuse, a name the program
+does not declare, or a name that a parameter or local declaration could shadow.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from __future__ import annotations
 from .. import ast as A
 from .binding_constants import _ConstantTable, _refers_to_names, _Unresolved
 from .declared_types import _nodes
+from .hub_types import iter_structs
 from .storage_blocks import _declared_names, _walk
 
 __all__ = ["fold_constant_extents"]
@@ -28,13 +30,19 @@ _CARRYING = frozenset({"cgl", "crossgl"})
 
 
 def fold_constant_extents(program, target) -> int:
-    """Replace the array extents of ``program`` that name integer constants by their values; returns how many."""
+    """Replace the member array extents of ``program`` that name integer constants by their values; returns how many."""
     if str(target or "").lower() in _CARRYING or not isinstance(program, A.ShaderNode):
         return 0
     table = shadowed = None
     changed = 0
     # Type nodes included: the extents sit in declared types, which the rewriting walk skips.
-    for node in list(_nodes(program)):
+    member_types = [
+        node
+        for container in iter_structs(program)
+        for member in getattr(container, "members", None) or []
+        for node in _nodes(member)
+    ]
+    for node in member_types:
         if not isinstance(node, A.ArrayType):
             continue
         size = getattr(node, "size", None)

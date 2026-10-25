@@ -63,36 +63,38 @@ def _program(source):
 def _extents(program):
     return [
         (
-            node.var_type.size.value
-            if isinstance(node.var_type.size, A.LiteralNode)
-            else node.var_type.size.name
+            member.member_type.size.value
+            if isinstance(member.member_type.size, A.LiteralNode)
+            else member.member_type.size.name
         )
-        for node in program.walk()
-        if isinstance(node, A.VariableNode) and isinstance(node.var_type, A.ArrayType)
+        for struct in program.structs
+        for member in struct.members
+        if isinstance(member.member_type, A.ArrayType)
     ]
 
 
-def test_shadowable_and_specialization_extents_are_kept():
+def test_shadowable_extents_are_kept():
     program = _program(
         "shader s {\n"
         "    const int N = 4;\n"
         "    const int M = 2;\n"
+        "    struct S { float shadowed[N]; float own[M]; };\n"
         "    compute {\n"
         "        void main() {\n"
         "            const int N = 8;\n"
-        "            float shadowed[N];\n"
-        "            float folded[M];\n"
+        "            S s;\n"
         "        }\n"
         "    }\n"
         "}\n"
     )
+    # N is also a local of main, so an extent that names it could mean either.
     assert fold_constant_extents(program, "directx") == 1
     assert _extents(program) == ["N", 2]
 
 
 def test_crossgl_output_keeps_the_names():
     program = _program(
-        "shader s { const int M = 2; compute { void main() { float a[M]; } } }"
+        "shader s { const int M = 2; struct S { float a[M]; }; compute { void main() { S s; } } }"
     )
     assert fold_constant_extents(program, "cgl") == 0
     assert _extents(program) == ["M"]
