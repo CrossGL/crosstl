@@ -51,6 +51,10 @@ def c_casts(unsigned: str) -> dict[str, Template]:
             "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\n"
             "outp[i] = (!p ? 1.0f : 0.0f) + (p == q ? 2.0f : 0.0f) + (p != q ? 4.0f : 0.0f);"
         ),
+        "bool-conversion": Template(
+            "bool p = iin[i] > 7;\nbool q = (bool)(iin[i] & 2);\n"
+            "outp[i] = (float)p + 2.0f * (float)(int)q;"
+        ),
         "increment-decrement": Template(
             OPERATORS["increment-decrement"].body.replace("float(", "(float)(")
         ),
@@ -114,6 +118,9 @@ WGSL = {
     "boolean-logic": Template(
         "let p = iin[i] > 7;\nlet q = (iin[i] & 1) == 1;\n"
         "outp[i] = select(0.0, 1.0, !p) + select(0.0, 2.0, p == q) + select(0.0, 4.0, p != q);"
+    ),
+    "bool-conversion": Template(
+        "let p = iin[i] > 7;\nlet q = bool(iin[i] & 2);\noutp[i] = f32(p) + 2.0 * f32(i32(q));"
     ),
     # WGSL increments and decrements only as statements.
     "increment-decrement": Template(
@@ -184,6 +191,9 @@ MOJO = {
         "var p: Bool = iin[i] > 7\nvar q: Bool = (iin[i] & 1) == 1\noutp[i] = (Float32(1.0) if not p else 0.0)"
         " + (Float32(2.0) if p == q else 0.0) + (Float32(4.0) if p != q else 0.0)"
     ),
+    "bool-conversion": Template(
+        "var p: Bool = iin[i] > 7\nvar q = Bool(iin[i] & 2)\noutp[i] = Float32(Int(p)) + 2.0 * Float32(Int(q))"
+    ),
     # Mojo has no increment or decrement operators.
     "increment-decrement": ABSENT,
     "float-to-integer": Template(
@@ -244,6 +254,10 @@ RUST = {
     "boolean-logic": Template(
         "let p = iin[i] > 7;\nlet q = (iin[i] & 1) == 1;\noutp[i] = (if !p { 1.0 } else { 0.0 })"
         " + (if p == q { 2.0 } else { 0.0 }) + (if p != q { 4.0 } else { 0.0 });"
+    ),
+    # Rust converts a boolean with ``as`` but has no conversion from a number to a boolean, so it compares instead.
+    "bool-conversion": Template(
+        "let p = iin[i] > 7;\nlet q = (iin[i] & 2) != 0;\noutp[i] = p as i32 as f32 + 2.0 * q as i32 as f32;"
     ),
     # Rust has no increment or decrement operators.
     "increment-decrement": ABSENT,

@@ -3957,6 +3957,32 @@ def test_codegen_is_helper_lane_intrinsic_from_sm66_imports_fragment_builtin():
     assert "IsHelperLane(" not in glsl
 
 
+def test_codegen_is_helper_lane_round_trips_to_hlsl():
+    # gl_HelperInvocation has no HLSL variable; DXC rejects it as undeclared, so the
+    # HLSL generator has to emit the Shader Model 6.6 intrinsic again.
+    fragment = generate_crossgl("""
+        float4 main(float4 color : COLOR0) : SV_Target0 {
+            bool helper = IsHelperLane();
+            return helper ? float4(0.0) : color;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(fragment))
+    assert "bool helper = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
+
+    compute = generate_crossgl("""
+        RWStructuredBuffer<int> outp : register(u1);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            bool r = IsHelperLane();
+            outp[id.x] = r ? 1 : 0;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
+    assert "bool r = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output
