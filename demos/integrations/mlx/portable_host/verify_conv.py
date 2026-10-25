@@ -35,7 +35,9 @@ TILE_ENV = "MLX_CONV_UNFOLD_TILE_ROWS"
 # (name, dtype, input shape, weight shape, options, view, tile rows). Options
 # are conv_general's stride, padding (low, high), kernel and input dilation,
 # groups and flip; "moved" inputs are channels-last views of channels-first
-# arrays, which conv.cpp copies before the unfold.
+# arrays, which conv.cpp copies before the unfold, and "expanded" inputs gain
+# their size-one width axis through expand_dims, whose stride is not the
+# dense one.
 CASES = (
     # Strided and dilated, uneven padding: a regular steel GEMM per tile.
     (
@@ -166,6 +168,18 @@ CASES = (
         (16, 3, 3, 16),
         dict(padding=((1, 1), (1, 1))),
         "dense",
+        None,
+    ),
+    # conv1d as conv2d over expand_dims views, as test_conv_1d_with_2d runs it:
+    # the size-one width axis keeps expand_dims' stride, which conv.cpp binds
+    # as it is and the port binds densely.
+    (
+        "implicit-2d-expanded-width",
+        "float32",
+        (2, 10, 1, 16),
+        (16, 3, 1, 16),
+        dict(padding=((1, 0), (1, 0))),
+        "expanded",
         None,
     ),
     # Three channels, strided with uneven padding, from a copied view.
@@ -554,6 +568,9 @@ def _input(mx, np, values, view, dtype):
     if view == "dense":
         array = mx.array(values.astype(np.float32), dtype=dtype)
         return array, array
+    if view == "expanded":
+        stored = mx.array(np.squeeze(values, axis=-2).astype(np.float32), dtype=dtype)
+        return stored, mx.expand_dims(stored, axis=-2)
     # A row-major channels-first array viewed channels-last. mx.array keeps a
     # NumPy view's strides, so the channels-first copy must be contiguous.
     first = np.ascontiguousarray(np.moveaxis(values, -1, 1), dtype=np.float32)
@@ -669,6 +686,7 @@ def _covered(records):
         )
         and any(record.get("tiles", 1) > 1 for record in records)
         and any(record["view"] == "moved" for record in records)
+        and any(record["view"] == "expanded" for record in records)
         and all(
             "outputHash" in record or record["route"] in UNPORTED | {"none"}
             for record in records

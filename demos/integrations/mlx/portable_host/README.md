@@ -928,6 +928,11 @@ reads rows past the weights; on Metal those reads land past the buffer. They
 feed only output columns the kernel never stores, and the host binds them as
 poisoned storage after the weights, so the translated reads stay inside
 their binding and no poison can reach a stored output.
+conv.cpp binds the strides of its row-contiguous operands as they are, and
+MLX leaves the stride of a size-one axis arbitrary: `mx.expand_dims` gives the
+new width axis of a 1-D input stride one. Only coordinate zero of such an axis
+is read, so the port binds the dense strides of the same buffer, and every
+route's checks see conv.cpp's contiguous layout.
 
 `depthwise_conv_2d` reads its kernel extent, strides, tile and flip from
 Metal function constants. The host names each pipeline by conv.cpp's hash

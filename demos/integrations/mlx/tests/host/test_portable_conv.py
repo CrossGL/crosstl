@@ -41,6 +41,7 @@ ROUTES = {
     "depthwise-1d-pointwise-copied": "depthwise_conv_1D_gpu",
     "depthwise-1d-long": "depthwise_conv_1D_gpu",
     "implicit-2d-small-filter": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-expanded-width": "implicit_gemm_conv_2D_gpu",
     "implicit-2d-channels-3": "implicit_gemm_conv_2D_gpu",
     "implicit-2d-channel-1-flipped": "implicit_gemm_conv_2D_gpu",
     "implicit-2d-grouped-partial": "implicit_gemm_conv_2D_gpu",
@@ -1009,6 +1010,7 @@ def test_implicit_plan_bounds_the_weight_tiles():
     # Eight-column tiles stop at O; wider tiles read whole tiles of each group.
     assert slack == {
         "implicit-2d-small-filter": 0,
+        "implicit-2d-expanded-width": 0,
         "implicit-2d-channels-3": 0,
         "implicit-2d-channel-1-flipped": 0,
         "implicit-2d-grouped-partial": 16 * 3 * 3 * 16,
@@ -1302,7 +1304,18 @@ def test_backend_ports_convolution_eval_gpu():
     assert one.index("dispatch_depthwise_conv_1d(") < one.index("conv_dispatch_2d(")
     assert one.index("conv_dispatch_2d(") < one.index("conv_explicit(in, wt, out")
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert backend.rstrip().endswith('#include "mlx/backend/no_gpu/crosstl_conv.inc"')
+    # Row-contiguous operands bind dense strides: MLX leaves a size-one
+    # axis's stride arbitrary, and only its coordinate zero is ever read.
+    port = (HOST / "conv.inc").read_text(encoding="utf-8")
+    start = port.index("array conv_row_contiguous(const array& x) {")
+    body = port[start : port.index("\n}\n", start)]
+    assert "return contiguous_copy(x);" in body
+    assert "dense[i] = dense[i + 1] * x.shape(i + 1);" in body
+    assert "view.copy_shared_buffer(x, dense, x.flags(), x.data_size());" in body
+    # The convolution port comes after the steel GEMM helpers it calls.
+    include = '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
+    assert backend.count(include) == 1
+    assert backend.index("void dispatch_steel_gemm_regular(") < backend.index(include)
     regular = backend[backend.index("void dispatch_steel_gemm_regular(") :]
     regular = regular[: regular.index("\n}\n")]
     assert "set_data" not in regular

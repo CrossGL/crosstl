@@ -36,7 +36,23 @@ namespace {
 
 // conv.cpp ensure_row_contiguous.
 array conv_row_contiguous(const array& x) {
-  return x.flags().row_contiguous ? x : contiguous_copy(x);
+  if (!x.flags().row_contiguous) {
+    return contiguous_copy(x);
+  }
+  // MLX leaves the stride of a size-one axis of a row-contiguous array
+  // arbitrary, and conv.cpp binds it as it is. Only coordinate zero of such
+  // an axis is ever read, so the dense strides name the same elements; the
+  // port binds them, and every route sees conv.cpp's contiguous layout.
+  Strides dense(x.ndim(), 1);
+  for (int i = int(x.ndim()) - 2; i >= 0; --i) {
+    dense[i] = dense[i + 1] * x.shape(i + 1);
+  }
+  if (dense == x.strides()) {
+    return x;
+  }
+  array view(x.shape(), x.dtype(), nullptr, {});
+  view.copy_shared_buffer(x, dense, x.flags(), x.data_size());
+  return view;
 }
 
 uint32_t conv_groups(int64_t value) {
