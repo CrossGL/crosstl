@@ -5,6 +5,7 @@ GLSL used to declare it without a location, Metal put ``[[position]]`` in the ``
 WGSL put ``@builtin(position)`` on a vertex input, and SPIR-V read the ``gl_Position`` output instead.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -53,6 +54,13 @@ def _flat(code):
     return " ".join(code.split())
 
 
+def _spirv_id(code, name):
+    """The result id of ``OpName <id> "name"``; symbolic with spirv-tools installed, numeric otherwise."""
+    match = re.search(rf'OpName (%\S+) "{re.escape(name)}"$', code, re.MULTILINE)
+    assert match is not None, code
+    return re.escape(match.group(1))
+
+
 def _run(command, cwd):
     result = subprocess.run(
         command, capture_output=True, text=True, cwd=cwd, check=False
@@ -97,8 +105,12 @@ def test_wgsl_vertex_input_is_a_location(tmp_path, source):
 
 def test_spirv_reads_an_input_variable_not_the_position_output(tmp_path):
     code = _translate(tmp_path, STRUCT_INPUT, "vulkan")
-    assert "OpDecorate %CrossGL_vertex_input_i_pos Location 0" in code, code
-    assert "OpLoad %v4float %gl_Position" not in code, code
+    position_input = _spirv_id(code, "CrossGL_vertex_input_i_pos")
+    assert re.search(
+        rf"^\s*OpDecorate {position_input} Location 0$", code, re.MULTILINE
+    ), code
+    position_output = _spirv_id(code, "gl_Position")
+    assert not re.search(rf"= OpLoad \S+ {position_output}$", code, re.MULTILINE), code
     assembler = shutil.which("spirv-as")
     validator = shutil.which("spirv-val")
     if assembler is None or validator is None:
@@ -115,7 +127,8 @@ def test_spirv_reads_an_input_variable_not_the_position_output(tmp_path):
     "source", [STRUCT_INPUT, PARAMETER_INPUT], ids=["struct", "parameter"]
 )
 def test_hlsl_keeps_the_sv_position_input_element(tmp_path, source):
-    flat = _flat(_translate(tmp_path, source, "directx"))
+    # Without clang-format the HLSL generator writes ``name: SEMANTIC``; normalise the spacing.
+    flat = re.sub(r"\s*:\s*", " : ", _flat(_translate(tmp_path, source, "directx")))
     if source is STRUCT_INPUT:
         assert "struct VSIn { float4 pos : SV_POSITION;" in flat, flat
     else:
