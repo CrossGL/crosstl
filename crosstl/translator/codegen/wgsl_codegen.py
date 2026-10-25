@@ -60,6 +60,7 @@ from .enum_utils import (
     sanitize_type_name,
 )
 from .fragment_output_targets import frag_data_attribute_index
+from .generic_struct_utils import named_struct_constructor_arguments
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
@@ -4587,6 +4588,22 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         return "workgroupBarrier()"
 
     def generate_constructor(self, node):
+        if node.named_arguments:
+            # Fields come from the source declaration: the emitted name of a
+            # structure such as ``filter`` is ``filter_``.
+            struct_name = self.struct_type_name(node.constructor_type)
+            struct = self._structs_by_name.get(struct_name)
+            fields = [
+                (member.name, member.member_type)
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
+            ]
+            arguments = named_struct_constructor_arguments(struct_name, node, fields)
+            args = ", ".join(
+                self.generate_expression_for_target(arg, field_type)
+                for arg, field_type in arguments
+            )
+            return f"{self.type_name_string(node.constructor_type)}({args})"
         if len(node.arguments) == 1:
             narrowed = self.generate_vector_narrowing_conversion(
                 node.constructor_type, node.arguments[0]

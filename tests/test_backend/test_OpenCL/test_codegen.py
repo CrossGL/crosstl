@@ -265,6 +265,68 @@ def test_opencl_local_memory_and_barrier_codegen_reparse():
     assert "out[gl_WorkGroupID.x] = scratch[0];" in crossgl
 
 
+def test_opencl_prefetch_is_dropped_as_a_hint():
+    crossgl = generate_crossgl("""
+        kernel void probe(global uint *uin, global uint *outp) {
+            uint i = get_global_id(0);
+            ulong n = (ulong)uin[i];
+            prefetch((const global float *)outp, n);
+            prefetch(outp + i, 4);
+            prefetch(&outp[get_global_id(0)], 1);
+            prefetch(outp, i > 0u ? 4 : 8);
+            prefetch(outp, sizeof(uint));
+            outp[i] = 0u;
+        }
+        """)
+
+    assert "prefetch" not in crossgl
+    assert "ptr<" not in crossgl
+    assert "&outp" not in crossgl
+    assert "?" not in crossgl
+    assert "4;" not in [line.strip() for line in crossgl.splitlines()]
+    assert "outp[i] = 0u;" in crossgl
+
+
+def test_opencl_prefetch_keeps_argument_side_effects():
+    crossgl = generate_crossgl("""
+        kernel void probe(global float *outp) {
+            uint i = get_global_id(0);
+            uint j = i;
+            uint n = 0u;
+            prefetch(outp, i++);
+            prefetch((const global float4 *)(outp + j++), n = 4u);
+            outp[i + j] = (float)n;
+        }
+        """)
+
+    assert "prefetch" not in crossgl
+    assert "ptr<" not in crossgl
+    assert "outp +" not in crossgl
+    effects = [crossgl.index(effect) for effect in ("i++", "j++", "n = 4u;")]
+    assert effects == sorted(effects)
+    assert effects[-1] < crossgl.index("outp[(i + j)]")
+
+
+def test_opencl_prefetch_translates_to_targets(tmp_path):
+    opencl_path = tmp_path / "prefetch.cl"
+    opencl_path.write_text("""
+        __attribute__((reqd_work_group_size(1, 1, 1)))
+        kernel void probe(global uint *uin, global uint *outp) {
+            uint i = get_global_id(0);
+            uint n = uin[i];
+            prefetch((const global float *)outp, n);
+            outp[i] = 0u;
+        }
+        """)
+
+    for backend in ("directx", "metal", "wgsl"):
+        output = crosstl.translate(
+            str(opencl_path), backend=backend, format_output=False
+        )
+        assert "prefetch" not in output
+        assert "outp[i] = 0u" in output
+
+
 def test_opencl_local_pointer_kernel_param_uses_workgroup_storage():
     crossgl = generate_crossgl("""
         kernel void local_arg_first(uint scale, local float *scratch, global float *out) {
