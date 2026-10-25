@@ -71,9 +71,12 @@ void fill(thread Tile<T, 2>& tile, T value) {{
   }}
 }}
 
+// Metal compilers since 32023.921 qualify decltype of a local with its
+// thread address space, which a return type cannot carry; a local can.
 template <typename U>
-U tripled(int v) {{
-  return U(v) * U(3);
+int tripled(int v) {{
+  U value = v * 3;
+  return value;
 }}
 
 template <typename T, typename M>

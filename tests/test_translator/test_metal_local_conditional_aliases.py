@@ -52,8 +52,10 @@ struct Tile {
   typedef typename Frag_t::frag_type frag_type;
   frag_type val_frags[R * C];
 
+  // As MLX's MMA tiles, the member names its thread address space, so its
+  // fragments bind to Frag's thread references on every Metal compiler.
   template <typename U, int stride>
-  void load(const device U* src) {
+  void load(const device U* src) thread {
     for (short i = 0; i < R * C; ++i) {
       Frag_t::load(val_frags[i], &src[i * 2 * stride], stride);
     }

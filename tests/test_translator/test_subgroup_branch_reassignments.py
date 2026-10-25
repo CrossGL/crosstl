@@ -40,11 +40,13 @@ CLAMP = """  if (rows > 2) {
     limit = min(rows, reach);
   }"""
 
+# The helper avoids HLSL intrinsic names: DXC binds a call to an intrinsic such as
+# ``step(int, int)`` even when the source declares that exact overload (#2109).
 TEMPLATE = """#include <metal_stdlib>
 using namespace metal;
 
 %(constants)s
-static inline int step(int value, int offset) {
+static inline int shifted(int value, int offset) {
   return simd_shuffle_down(value + offset, ushort(1));
 }
 
@@ -60,7 +62,7 @@ static inline int step(int value, int offset) {
   first = max(0, first - 1);
   int total = 0;
   for (int i = first; i < limit; i++) {
-    total += step(values[(group * 32 + lid) * 8 + uint(i)], i);
+    total += shifted(values[(group * 32 + lid) * 8 + uint(i)], i);
   }
   results[group * 32 + lid] = total;
 }

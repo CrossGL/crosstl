@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -396,13 +397,21 @@ def _translated_artifact(
     return artifact, artifact_path
 
 
+_REAL_PROJECTION_STORE = re.compile(
+    r"dst\[\([A-Za-z_][A-Za-z0-9_]* \+ uint\(i\)\)\] = \(src\[0\]\)\.real;"
+)
+
+
 def _validate_real_projection(artifact_path: Path) -> dict[str, Any]:
     source = artifact_path.read_text(encoding="utf-8")
-    expected_store = "dst[(index + uint(i))] = (src[0]).real;"
+    # The entry writes its ``index`` input, so the GLSL backend may store through a
+    # local copy of it; the store must still project ``src[0].real`` exactly once.
+    stores = _REAL_PROJECTION_STORE.findall(source)
     _require(
-        source.count(expected_store) == 1,
+        len(stores) == 1,
         "generated GLSL must store exactly one projection of src[0].real",
     )
+    expected_store = stores[0]
     _require(
         "float(src[0])" not in source and "float((src[0]))" not in source,
         "generated GLSL passed complex64_t directly to a float constructor",

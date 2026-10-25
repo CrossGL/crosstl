@@ -54,7 +54,7 @@ ARTIFACTS = {
         "sizeBytes": 6526,
     },
     "opengl": {
-        "sha256": "30ead42ade86308f13e26a58711178ec8ab4c58c107ff900a4c5a204d0a1faa4",
+        "sha256": "3817bf50664d32406d446ecfc24d0dfe982c17dd8b2d5cadff6f1835194c7bba",
         "sizeBytes": 10678,
     },
     "directx": {
@@ -299,7 +299,11 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             identity = ARTIFACTS[target]
             generated = (root / artifact["path"]).read_bytes()
             check_generated_artifact(artifact, sha256=identity["sha256"])
-            assert hashlib.sha256(generated).hexdigest() == identity["sha256"]
+            # The bytes are the reported artifact; the pin above checks them.
+            assert (
+                hashlib.sha256(generated).hexdigest()
+                == artifact["generatedHash"]["value"]
+            )
             assert (
                 len(generated)
                 == artifact["generatedSizeBytes"]
