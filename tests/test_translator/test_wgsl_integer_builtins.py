@@ -1,4 +1,4 @@
-"""Compute built-in inputs narrower than ``vec3<u32>`` are received as ``vec3<u32>`` in WGSL."""
+"""Integer built-in inputs whose source type is not WGSL's ``vec3<u32>`` or ``u32`` are received in that type."""
 
 import shutil
 import subprocess
@@ -55,6 +55,26 @@ def test_metal_scalar_and_two_component_thread_positions(tmp_path):
     assert "var g: u32 = u32(g_workgroup_id.x);" in wgsl
     # The source parameter is a local, which the body may write.
     assert "i += i_global_invocation_id;" in wgsl
+
+
+VERTEX = """#include <metal_stdlib>
+using namespace metal;
+struct Out { float4 position [[position]]; };
+vertex Out v(const device float4* positions [[buffer(0)]], uint vid [[vertex_id]],
+             uint iid [[instance_id]]) {
+    Out out;
+    out.position = positions[vid] + float4(float(iid));
+    return out;
+}
+"""
+
+
+def test_signed_vertex_and_instance_indices(tmp_path):
+    # CrossGL types gl_VertexID and gl_InstanceID int, as GLSL does; WGSL's built-ins are u32.
+    wgsl = translate(tmp_path, VERTEX, ".metal")
+    assert "@builtin(vertex_index) vid_vertex_index: u32" in wgsl
+    assert "@builtin(instance_index) iid_instance_index: u32" in wgsl
+    assert "var vid: i32 = i32(vid_vertex_index);" in wgsl
 
 
 def test_hlsl_signed_and_scalar_dispatch_ids(tmp_path):
