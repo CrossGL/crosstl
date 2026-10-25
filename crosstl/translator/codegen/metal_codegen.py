@@ -368,6 +368,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
 from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
@@ -3256,6 +3257,7 @@ class MetalCodeGen(
         code += self.generate_metal_wave_helpers()
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
+        code += emit_metal_bit_scan_helpers(self)
         code += emit_metal_texture_residency_helpers(self)
         code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
@@ -11919,6 +11921,9 @@ class MetalCodeGen(
             exponent_call = metal_exponent_call(self, func_name, expr.args)
             if exponent_call is not None:
                 return exponent_call
+            bit_scan_call = metal_bit_scan_call(self, func_name, expr.args)
+            if bit_scan_call is not None:
+                return bit_scan_call
             extended_arithmetic = metal_extended_arithmetic_call(
                 self, func_name, expr.args
             )
