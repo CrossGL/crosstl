@@ -297,12 +297,11 @@ def _plan_splitk(entry, info, counts, parameters, threads, execution):
     lda, ldb = params["lda"], params["ldb"]
     if not 1 <= min(m, n, k) <= max(m, n, k) <= MAX_ELEMENTS:
         raise ValueError("Split-K GEMM dimensions are invalid")
-    minor_a = m if info["transposeA"] else k
-    minor_b = k if info["transposeB"] else n
+    ta, tb = info["transposeA"], info["transposeB"]
     if (
         params != splitk_params(m, n, k, lda, ldb)
-        or not minor_a <= lda <= MAX_ELEMENTS
-        or not minor_b <= ldb <= MAX_ELEMENTS
+        or not gemm_layout.leading_dimension(lda, m if ta else k, k if ta else m)
+        or not gemm_layout.leading_dimension(ldb, k if tb else n, n if tb else k)
     ):
         raise ValueError("Split-K GEMM parameters differ from matmul.cpp's")
     if not gemm_layout.split_k(m, n, k, 1):

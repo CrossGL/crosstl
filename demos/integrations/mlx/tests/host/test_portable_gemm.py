@@ -277,6 +277,45 @@ def test_plan_rejects_launches_that_differ_from_mlx(fault, name):
         layout.plan(record["entry"], counts, parameters, counts["D"], execution)
 
 
+@pytest.mark.parametrize(
+    "a, b, accepted",
+    (
+        # test_matrix_vector_attn: K == 1 gives B's single row stride zero.
+        (([256, 1], [1, 1]), ([1, 16], [0, 1]), True),
+        # test_matrix_vector_broadcast: a broadcast vector folds into M with
+        # row stride zero.
+        (([32, 64], [0, 1]), ([64, 64], [64, 1]), True),
+        # Overlapping row strides stay rejected: the host fails closed on them.
+        (([32, 64], [1, 1]), ([64, 64], [64, 1]), False),
+    ),
+)
+def test_plan_accepts_matmul_cpp_leading_strides(a, b, accepted):
+    selected = layout.route("float32", *a, *b)
+    params = selected["params"]
+    assert (params["lda"], params["ldb"]) == (a[1][0], b[1][0])
+    m, n, k = params["M"], params["N"], params["K"]
+    counts = {
+        "A": (m - 1) * params["lda"] + k,
+        "B": (k - 1) * params["ldb"] + n,
+        "D": m * n,
+    }
+    parameters = {
+        "params": params,
+        "batch_shape": selected["batchShape"],
+        "batch_strides": selected["batchStrides"],
+    }
+    execution = {
+        "workgroupCount": [params["tiles_n"], params["tiles_m"], 1],
+        "workgroupSize": list(layout.workgroup_size(selected["entry"])),
+    }
+    if accepted:
+        metadata = layout.plan(selected["entry"], counts, parameters, m * n, execution)
+        assert (metadata["lda"], metadata["ldb"]) == (params["lda"], params["ldb"])
+    else:
+        with pytest.raises(ValueError, match="differ from matmul.cpp"):
+            layout.plan(selected["entry"], counts, parameters, m * n, execution)
+
+
 def test_plan_rejects_entries_mlx_would_not_select():
     record = BY_NAME["gemm-nn-aligned"]
     counts, parameters, execution = native_binding(record)

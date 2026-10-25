@@ -225,10 +225,8 @@ def _check_params(info, params):
     if (
         not 1 <= min(m, n, k) <= max(m, n, k) <= MAX_ELEMENTS
         or any(params[name] != value for name, value in expected.items())
-        or not 0 <= params["lda"] <= MAX_ELEMENTS
-        or not 0 <= params["ldb"] <= MAX_ELEMENTS
-        or (major_a > 1 and params["lda"] < minor_a)
-        or (major_b > 1 and params["ldb"] < minor_b)
+        or not gemm_layout.leading_dimension(params["lda"], minor_a, major_a)
+        or not gemm_layout.leading_dimension(params["ldb"], minor_b, major_b)
     ):
         raise ValueError("Segmented steel GEMM parameters differ from matmul.cpp's")
     return m, n, k

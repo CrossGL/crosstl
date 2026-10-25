@@ -298,16 +298,19 @@ def _check_common_params(info, params):
     if any(type(value) is not int for value in params.values()):
         raise ValueError("Gathered steel GEMM parameters must be integers")
     m, n, k = params["M"], params["N"], params["K"]
-    minor_a = m if info["transposeA"] else k
-    minor_b = k if info["transposeB"] else n
+    ta, tb = info["transposeA"], info["transposeB"]
     if (
         not 1 <= min(m, n, k) <= max(m, n, k) <= MAX_ELEMENTS
         or params["ldd"] != n
         or params["tiles_n"] != -(-n // info["bn"])
         or params["swizzle_log"] != 0
         or params["gemm_k_iterations_aligned"] != k // info["bk"]
-        or not minor_a <= params["lda"] <= MAX_ELEMENTS
-        or not minor_b <= params["ldb"] <= MAX_ELEMENTS
+        or not gemm_layout.leading_dimension(
+            params["lda"], m if ta else k, k if ta else m
+        )
+        or not gemm_layout.leading_dimension(
+            params["ldb"], k if tb else n, n if tb else k
+        )
     ):
         raise ValueError("Gathered steel GEMM parameters differ from matmul.cpp's")
     return m, n, k

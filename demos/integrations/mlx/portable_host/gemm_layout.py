@@ -317,6 +317,22 @@ def _batch_end(shape, strides):
     return sum((extent - 1) * stride for extent, stride in zip(shape, strides))
 
 
+def leading_dimension(value, minor, rows):
+    """Whether ``value`` is a stride matmul.cpp's check_transpose can pass.
+
+    check_transpose passes the stride of an operand's other axis as it is: it
+    covers the ``minor`` axis, or is zero when MLX broadcasts rows (a vector
+    folded into M), or is any bounded value when the operand has one row and
+    the kernel never steps by it. The callers bound every read by the
+    resulting extents separately.
+    """
+    return (
+        type(value) is int
+        and 0 <= value <= MAX_ELEMENTS
+        and (rows == 1 or value == 0 or value >= minor)
+    )
+
+
 def _check_params(info, params, shape, strides):
     bm, bn, bk = info["bm"], info["bn"], info["bk"]
     if any(type(value) is not int for value in params.values()):
@@ -334,9 +350,10 @@ def _check_params(info, params, shape, strides):
         or any(stride < 0 for stride in strides)
     ):
         raise ValueError("Steel GEMM dimensions are invalid")
-    # The leading dimensions cover the minor axis of each operand's layout.
-    minor_a = m if info["transposeA"] else k
-    minor_b = k if info["transposeB"] else n
+    leading = (
+        (params["lda"], m if info["transposeA"] else k, k if info["transposeA"] else m),
+        (params["ldb"], k if info["transposeB"] else n, n if info["transposeB"] else k),
+    )
     expected = {
         "ldd": n,
         "tiles_n": -(-n // bn),
@@ -347,10 +364,8 @@ def _check_params(info, params, shape, strides):
         "swizzle_log": 0,
         "gemm_k_iterations_aligned": k // bk,
     }
-    if (
-        any(params[name] != value for name, value in expected.items())
-        or not minor_a <= params["lda"] <= MAX_ELEMENTS
-        or not minor_b <= params["ldb"] <= MAX_ELEMENTS
+    if any(params[name] != value for name, value in expected.items()) or not all(
+        leading_dimension(*operand) for operand in leading
     ):
         raise ValueError("Steel GEMM parameters differ from matmul.cpp's")
 
