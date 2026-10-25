@@ -255,6 +255,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "dfdycoarse": "dpdyCoarse",
         "ddycoarse": "dpdyCoarse",
         "ddy_coarse": "dpdyCoarse",
+        # The GLSL importer writes fwidthFine and fwidthCoarse with underscores.
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},

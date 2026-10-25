@@ -51927,3 +51927,31 @@ def test_hlsl_hip_unsafe_record_layouts_fail_closed(
             format_output=False,
             source_backend="hip",
         )
+
+
+def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "(abs(ddx_fine(input.uv)) + abs(ddy_fine(input.uv)))" in generated_code
+    assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
+    assert "fwidth_fine(" not in generated_code
+    assert "fwidth_coarse(" not in generated_code
