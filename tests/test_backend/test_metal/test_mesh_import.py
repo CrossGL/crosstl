@@ -13,7 +13,9 @@ import subprocess
 import pytest
 
 import crosstl
+import crosstl.translator
 from crosstl.backend.import_refusals import MetalImportRefused
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.host_workgroup_size import HostDefinedWorkgroupSizeError
 
 TRIANGLES = """#include <metal_stdlib>
@@ -304,3 +306,22 @@ def test_imported_triangle_mesh_and_fragment_compile_with_dxc(tmp_path):
     for profile, entry in (("ms_6_5", "MSMain"), ("ps_6_5", "PSMain")):
         result = _run([dxc, "-T", profile, "-E", entry, str(shader)])
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_imported_triangle_mesh_and_fragment_link_as_glsl(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not available")
+    source = TRIANGLES + (
+        "fragment float4 fragMain(VOut in [[stage_in]]) "
+        "{ return float4(in.normal, 1.0); }\n"
+    )
+    crossgl = _translate(tmp_path, source, "cgl", {"threadgroup_size": (32, 1, 1)})
+    files = []
+    for stage, extension in (("mesh", "mesh"), ("fragment", "frag")):
+        code = GLSLCodeGen().generate_stage(crosstl.translator.parse(crossgl), stage)
+        path = tmp_path / f"pipeline.{extension}"
+        path.write_text(code, encoding="utf-8")
+        files.append(str(path))
+    result = _run([glslang, "--target-env", "vulkan1.3", "-l", *files])
+    assert result.returncode == 0, result.stdout + result.stderr
