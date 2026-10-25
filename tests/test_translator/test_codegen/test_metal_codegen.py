@@ -17784,8 +17784,8 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "float3 colors[2] [[COLOR]];" in generated_code
-    assert "float4 indexedColor [[user(Color0)]];" in generated_code
+    assert "float3 colors[2] [[attribute(13)]];" in generated_code
+    assert "float4 indexedColor [[attribute(13)]];" in generated_code
 
 
 def test_metal_local_array_declarations_use_c_style_order():
