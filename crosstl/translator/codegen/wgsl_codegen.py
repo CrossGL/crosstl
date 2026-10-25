@@ -4102,17 +4102,58 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 "WGSL target supports textureSize() calls with texture or "
                 f"texture/lod arguments; got {len(args)} argument(s)"
             )
+        texture_expr = self.generate_expression(args[0])
         dimensions = (
             "textureDimensions("
-            + ", ".join(self.generate_expression(arg) for arg in args)
+            + ", ".join(
+                [texture_expr] + [self.generate_expression(arg) for arg in args[1:]]
+            )
             + ")"
         )
-        expected_shape = self.vector_shape(self._current_expression_expected_type)
+        expected_type = self._current_expression_expected_type
+        expected_shape = self.vector_shape(expected_type)
+        texture_type = self.SAMPLED_TEXTURE_TYPE_MAP.get(
+            self.resource_type_name(self.expression_type(args[0])) or ""
+        )
+        if texture_type is None:
+            if expected_shape is not None:
+                element_type, size = expected_shape
+                if element_type == "f32":
+                    return f"vec{size}<f32>({dimensions})"
+            return dimensions
+
+        # CrossGL's textureSize follows GLSL: it returns int/ivecN, and an
+        # array texture's last component is its layer count. WGSL's
+        # textureDimensions returns u32/vecN<u32> without the layers.
+        base_type = re.sub(r"<[^>]*>$", "", texture_type)
+        if base_type.endswith("_array"):
+            dimensions = f"vec3<u32>({dimensions}, textureNumLayers({texture_expr}))"
+            size = 3
+        elif base_type.endswith("_1d"):
+            size = 1
+        elif base_type.endswith("_3d"):
+            size = 3
+        else:
+            size = 2
+
         if expected_shape is not None:
-            element_type, size = expected_shape
-            if element_type == "f32":
-                return f"vec{size}<f32>({dimensions})"
-        return dimensions
+            element_type = expected_shape[0]
+        else:
+            try:
+                element_type = (
+                    self.type_name_string(expected_type)
+                    if expected_type is not None
+                    else None
+                )
+            except ValueError:
+                element_type = None
+        if element_type not in {"i32", "u32", "f32"}:
+            element_type = "i32"
+        if element_type == "u32":
+            return dimensions
+        if size == 1:
+            return f"{element_type}({dimensions})"
+        return f"vec{size}<{element_type}>({dimensions})"
 
     def generate_image_dimensions_call(self, args):
         if len(args) != 1:
