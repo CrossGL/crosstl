@@ -40,7 +40,9 @@ class FragmentColourOutputUnsupportedError(TranslationDiagnostic):
 
 def name_fragment_colour_outputs(program, target=None):
     """Rewrite the ``COLORn`` fragment outputs of ``program`` to ``gl_FragData[n]``, in place."""
-    structs = {getattr(struct, "name", None): struct for struct in iter_structs(program)}
+    structs = {
+        getattr(struct, "name", None): struct for struct in iter_structs(program)
+    }
     output_structs = {}
     other_uses = {}
     for stage_key, stage in _stages(program):
@@ -103,7 +105,8 @@ def _colour_index(member):
 
 def _is_output(parameter):
     qualifiers = {
-        str(qualifier).lower() for qualifier in getattr(parameter, "qualifiers", None) or []
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", None) or []
     }
     return bool(qualifiers & {"out", "inout"})
 

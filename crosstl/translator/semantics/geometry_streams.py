@@ -43,8 +43,7 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
 from .stage_varyings import GLSL_TARGETS as _GLSL_TARGETS
 from .stage_varyings import SPIRV_TARGETS as _SPIRV_TARGETS
-from .stage_varyings import FreshNames
-from .stage_varyings import allocated_locations
+from .stage_varyings import FreshNames, allocated_locations
 from .stage_varyings import builtin as _builtin
 from .stage_varyings import call_statement as _call_statement
 from .stage_varyings import indexed as _indexed

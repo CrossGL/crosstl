@@ -70,7 +70,9 @@ def plan_entry_input_locations(codegen, parameters, execution_model):
     return planned
 
 
-def _struct_entries(codegen, members, metadata, distances, execution_model, storage_class):
+def _struct_entries(
+    codegen, members, metadata, distances, execution_model, storage_class
+):
     names, entries = [], []
     for member_type, member_name in members:
         node = metadata.get(member_name, {}).get("node")
@@ -86,7 +88,9 @@ def _struct_entries(codegen, members, metadata, distances, execution_model, stor
     return names, entries
 
 
-def _fixed_location(codegen, execution_model, storage_class, node, value_type, member_name):
+def _fixed_location(
+    codegen, execution_model, storage_class, node, value_type, member_name
+):
     """The explicit or semantic location of a value, ``None`` when it is allocated, ``False`` for a built-in."""
     semantic = codegen.entry_point_interface_semantic(
         execution_model, storage_class, node, value_type, member_name

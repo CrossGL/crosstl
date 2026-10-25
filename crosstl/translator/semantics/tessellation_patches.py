@@ -663,7 +663,11 @@ class _TessellationLowering:
             else:
                 self.refuse_value_member(struct, member)
                 location = neighbour_location(
-                    self.target, struct.name, member, allocated[member.name], self.refuse
+                    self.target,
+                    struct.name,
+                    member,
+                    allocated[member.name],
+                    self.refuse,
                 )
                 variable = varying_declaration(
                     self.fresh(f"te_out_{member.name}"),
