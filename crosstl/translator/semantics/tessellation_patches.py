@@ -58,6 +58,7 @@ from .stage_varyings import (
     GLSL_TARGETS,
     SPIRV_TARGETS,
     FreshNames,
+    allocated_locations,
     builtin,
     call_statement,
     explicit_location,
@@ -419,7 +420,7 @@ class _TessellationLowering:
                     "control points",
                     "input-patch-type",
                 )
-            sources, running = {}, 0
+            sources, allocated = {}, allocated_locations(element.members)
             for member in element.members:
                 name = builtin(member)
                 if name in _POINT_BUILTINS:
@@ -427,7 +428,11 @@ class _TessellationLowering:
                 else:
                     self.refuse_value_member(element, member)
                     location = neighbour_location(
-                        self.target, element.name, member, running, self.refuse
+                        self.target,
+                        element.name,
+                        member,
+                        allocated[member.name],
+                        self.refuse,
                     )
                     variable = varying_declaration(
                         self.fresh(f"tc_in_{member.name}"),
@@ -438,7 +443,6 @@ class _TessellationLowering:
                     )
                     declarations.append(variable)
                     sources[member.name] = indexed(variable.name)
-                running += location_span(member_type(member))
             cache[element.name] = sources
         return element, count, cache[element.name]
 
@@ -651,7 +655,7 @@ class _TessellationLowering:
         return statements
 
     def domain_outputs(self, struct, declarations):
-        writes, running = [], 0
+        writes, allocated = [], allocated_locations(struct.members)
         for member in struct.members:
             name = builtin(member)
             if name in _POINT_BUILTINS:
@@ -659,7 +663,7 @@ class _TessellationLowering:
             else:
                 self.refuse_value_member(struct, member)
                 location = neighbour_location(
-                    self.target, struct.name, member, running, self.refuse
+                    self.target, struct.name, member, allocated[member.name], self.refuse
                 )
                 variable = varying_declaration(
                     self.fresh(f"te_out_{member.name}"),
@@ -670,7 +674,6 @@ class _TessellationLowering:
                 )
                 declarations.append(variable)
                 writes.append(_member_copy(variable.name, member.name))
-            running += location_span(member_type(member))
         return writes
 
     # Shared.

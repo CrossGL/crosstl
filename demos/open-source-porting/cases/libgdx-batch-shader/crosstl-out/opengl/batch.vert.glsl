@@ -1,7 +1,7 @@
 #version 450 core
-in vec4 a_position;
-in vec4 a_color;
-in vec2 a_texCoord0;
+layout(location = 0) in vec4 a_position;
+layout(location = 1) in vec4 a_color;
+layout(location = 2) in vec2 a_texCoord0;
 out vec4 v_color;
 out vec2 v_texCoords;
 // Constant Buffers

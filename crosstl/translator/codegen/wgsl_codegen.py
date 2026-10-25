@@ -64,6 +64,7 @@ from .image_access_contracts import (
 )
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_numeric_types import (
@@ -713,6 +714,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
         self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
@@ -777,6 +779,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
         self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
@@ -1186,6 +1189,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             for struct in structs
             if getattr(struct, "name", "")
         }
+        self._fragment_output_struct_names = set()
         interface_struct_names = self.stage_interface_struct_names(
             ast, target_stage, structs_by_name
         )
@@ -1201,7 +1205,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             for member in getattr(struct, "members", []) or []:
                 if (struct_name, member.name) in self._stage_interface_builtin_members:
                     continue
-                binding_kind, location = self.member_stage_binding(member)
+                binding_kind, location = self.member_stage_binding(
+                    member, self.struct_member_direction(struct_name)
+                )
                 slot_count = self.stage_interface_location_slot_count(
                     getattr(member, "member_type", None)
                 )
@@ -1296,6 +1302,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             )
             if struct_name:
                 names.add(struct_name)
+                if stage_name == "fragment":
+                    self._fragment_output_struct_names.add(struct_name)
         return names
 
     def stage_interface_struct_type_name(self, type_node, structs_by_name):
@@ -1304,7 +1312,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return struct_name
         return None
 
-    def member_stage_binding(self, member):
+    def member_stage_binding(self, member, direction="generic"):
         for attr in getattr(member, "attributes", []) or []:
             semantic = str(getattr(attr, "name", attr))
             key = self.semantic_key(semantic)
@@ -1314,10 +1322,22 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 return "location", self.attribute_integer_argument(attr)
             if self.BUILTIN_SEMANTICS.get(key):
                 return "builtin", None
-            location = self.semantic_location(semantic, direction="generic")
+            location = self.attribute_location(attr, semantic, direction)
             if location is not None:
                 return "location", location
         return None, None
+
+    def struct_member_direction(self, struct_name):
+        """``"target"`` for the members of a structure a fragment entry point returns, else ``"generic"``."""
+        if struct_name in self._fragment_output_struct_names:
+            return "target"
+        return "generic"
+
+    def attribute_location(self, attr, semantic, direction):
+        if self.semantic_key(semantic) == "gl_fragdata":
+            # gl_FragData[n] names colour attachment n.
+            return self.attribute_integer_argument(attr)
+        return self.semantic_location(semantic, direction)
 
     def attribute_integer_argument(self, attr):
         arguments = getattr(attr, "arguments", []) or []
@@ -1814,8 +1834,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                     "declare textures, samplers, and storage resources as "
                     "module-scope bindings instead of user-struct fields"
                 )
-            attributes = self.wgsl_attributes(member.attributes, direction="generic")
-            binding_kind, explicit_location = self.member_stage_binding(member)
+            direction = self.struct_member_direction(node.name)
+            attributes = self.wgsl_attributes(member.attributes, direction=direction)
+            binding_kind, explicit_location = self.member_stage_binding(
+                member, direction
+            )
             builtin = self._stage_interface_builtin_members.get(
                 (node.name, member.name)
             )
@@ -6459,7 +6482,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 or self.vector_shape(return_type) is not None
             ):
                 return ("@location(0)",)
-        return_attributes = self.wgsl_attributes(attributes, direction="out")
+        return_attributes = self.wgsl_attributes(
+            attributes, direction="target" if stage_name == "fragment" else "out"
+        )
         return (return_attributes,) if return_attributes else ()
 
     def wgsl_attributes(self, attributes, direction="generic"):
@@ -6477,7 +6502,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 rendered.append(f"@builtin({builtin})")
                 continue
 
-            location = self.semantic_location(semantic, direction)
+            location = self.attribute_location(attr, semantic, direction)
             if location is not None:
                 rendered.append(f"@location({location})")
 
@@ -6513,31 +6538,20 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         return re.sub(r"[^a-z0-9_]+", "", semantic.lower())
 
     def semantic_location(self, semantic, direction):
+        """The location of a value with ``semantic`` (:mod:`.stage_io_semantic_locations`).
+
+        ``direction`` is ``"target"`` for a fragment output, whose ``COLORn`` names colour attachment ``n``.
+        """
         key = self.semantic_key(semantic)
-        if key in {"gl_fragcolor", "sv_target", "color"}:
-            return 0
+        target = re.fullmatch(r"(?:sv_target|gl_fragcolor)(\d*)", key)
+        if target is None and direction == "target":
+            target = re.fullmatch(r"color(\d*)", key)
+        if target is not None:
+            return int(target.group(1) or 0)
         if is_system_semantic_key(key):
             # System values are built-ins or refused, never user locations.
             return None
-        semantic_bases = {
-            "position": 0,
-            "normal": 1,
-            "texcoord": 2,
-            "uv": 2,
-            "tangent": 6,
-            "bitangent": 7,
-        }
-        for base, offset in semantic_bases.items():
-            if key == base:
-                return offset
-            if key.startswith(base):
-                suffix = key[len(base) :]
-                if suffix.isdigit():
-                    return offset + int(suffix)
-        numeric_suffix = re.search(r"(\d+)$", key)
-        if numeric_suffix:
-            return int(numeric_suffix.group(1))
-        return None
+        return shared_semantic_location(semantic)
 
     def next_binding_attributes(self, group="0"):
         binding = self.next_available_binding(group, self._global_binding_index)
