@@ -763,6 +763,45 @@ shader SlangMeshTaskValidator {
 """
 
 
+SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
+shader SlangWorkgroupCountValidator {
+    RWStructuredBuffer<uint> groupCounts;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            uvec3 groups = gl_NumWorkGroups;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y;
+        }
+    }
+}
+"""
+
+
+SLANG_INTEGER_WIDTH_VALIDATOR_SHADER = """
+shader SlangIntegerWidthValidator {
+    int64 widen(int64 x, u8vec4 y) {
+        return x + int64(y.x);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* uin;
+        buffer uvec4* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+            i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+            u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+            i64 e = i64(uin[i]);
+            vec2<i64> g = vec2<i64>(e, e);
+            int64 w = widen(e, u8vec4(a, a));
+            outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(g.x + w));
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -2876,6 +2915,74 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
             stage,
             "sm_6_3",
         )
+
+
+def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_workgroup_count.slang"
+    spirv_path = tmp_path / "slang_workgroup_count.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
+    )
+    assert "uint3 groups = WorkgroupCount();" in code
+    assert "groups.x + WorkgroupCount().y" in code
+    assert "gl_NumWorkGroups" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
+    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_8bit_and_64bit_integers_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_integer_widths.slang"
+    spirv_path = tmp_path / "slang_integer_widths.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_INTEGER_WIDTH_VALIDATOR_SHADER)
+    )
+    assert "int64_t widen(int64_t x, vector<uint8_t, 4> y)" in code
+    assert "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i])" in code
+    assert "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1)" in code
+    assert "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i])" in code
+    assert "int64_t e = int64_t(uin[i]);" in code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    # The HLSL target only re-emits source, so build SPIR-V and validate it.
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
 
 
 @pytest.mark.parametrize(

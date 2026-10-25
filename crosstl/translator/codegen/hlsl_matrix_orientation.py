@@ -102,43 +102,52 @@ class HLSLMatrixOrientation:
             return f"{scalar}{rows}" if width == columns else None
         return f"{scalar}{columns}" if width == rows else None
 
-    def componentwise_type(self, left_type, right_type):
-        """The type of CrossGL ``left op right`` for ``+``, ``-`` and ``/`` when either operand is a matrix.
+    def arithmetic_type(self, operator, left_type, right_type):
+        """The type of a componentwise CrossGL ``+``, ``-`` or ``/`` with a matrix operand.
 
-        These operate componentwise on a matrix and a scalar or on two matrices of one shape (GLSL 4.60 section
-        5.9), so the result is the matrix type.
+        A matrix and a scalar, or two matrices of one shape, give that matrix type (GLSL 4.60 section 5.9).
+        ``None`` for every other operation, which keeps the caller's typing.
         """
+        if operator not in {"+", "-", "/"}:
+            return None
         left = self.dimensions(left_type)
         right = self.dimensions(right_type)
         if left is None and right is None:
             return None
+        generator = self.generator
         if left is not None and right is not None:
-            return left_type if left == right else None
+            return generator.map_type(left_type) if left == right else None
         matrix_type, other = (
             (left_type, right_type) if left is not None else (right_type, left_type)
         )
-        if self.generator.is_vector_value_type(other):
+        if other is None or not generator.is_scalar_value_type(other):
             return None
-        return matrix_type
+        return generator.map_type(matrix_type)
 
-    def builtin_result_type(self, func_name, args):
-        """The type of ``matrixCompMult`` and ``outerProduct``; ``None`` for any other call."""
+    def call_type(self, func_name, arg_types):
+        """The type of ``matrixCompMult(a, b)`` or ``outerProduct(c, r)``, or ``None``.
+
+        ``matrixCompMult`` keeps its operands' type, and ``outerProduct(c, r)`` has as many rows as ``c`` has
+        components and as many columns as ``r`` (GLSL 4.60 section 8.6).
+        """
+        if len(arg_types) != 2:
+            return None
         generator = self.generator
-        if len(args) != 2 or func_name in getattr(generator, "user_function_names", ()):
-            return None
         if func_name == "matrixCompMult":
-            matrix_type = generator.expression_result_type(args[0])
-            return matrix_type if self.dimensions(matrix_type) is not None else None
-        if func_name != "outerProduct":
-            return None
-        arg_types = [generator.expression_result_type(arg) for arg in args]
-        if not all(generator.is_vector_value_type(arg_type) for arg_type in arg_types):
-            return None
-        scalar = generator.vector_component_type(generator.map_type(arg_types[0]))
-        rows, columns = (
-            generator.value_component_count(arg_type) for arg_type in arg_types
-        )
-        return f"{scalar}{rows}x{columns}"
+            if self.dimensions(arg_types[0]) is None:
+                return None
+            return generator.map_type(arg_types[0])
+        if func_name == "outerProduct":
+            column, row = arg_types
+            if not (
+                generator.is_vector_value_type(column)
+                and generator.is_vector_value_type(row)
+            ):
+                return None
+            rows = generator.value_component_count(column)
+            columns = generator.value_component_count(row)
+            return f"{generator.vector_component_type(column)}{rows}x{columns}"
+        return None
 
     def constant_index(self, index_expr):
         return self.generator.literal_int_value(

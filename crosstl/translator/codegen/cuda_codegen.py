@@ -37,6 +37,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -1072,6 +1073,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("#include <cuda_fp16.h>")
+        # CrossGL's fixed-width integers lower to uint8_t, int64_t and friends, which none of the
+        # CUDA headers above declares.
+        self.emit("#include <cstdint>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
@@ -2933,7 +2937,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
-        return self.format_assignment_expression(node)
+        return assignment_value_expression(self.format_assignment_expression(node))
 
     def format_assignment_expression(self, node):
         operator = getattr(node, "operator", "=")

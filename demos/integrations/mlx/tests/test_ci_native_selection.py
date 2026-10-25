@@ -1,7 +1,7 @@
 """Checks that the MLX workflow keeps every required native test and fits its runner limits.
 
 These guards moved here from ``tests/test_ci_workflows.py`` unchanged, apart from importing the workflow-text
-helpers from ``tests.workflow_text``. They move to ``demos/integrations/mlx/tests/`` with the MLX test imports.
+helpers from ``tests.workflow_text``.
 """
 
 import ast
@@ -14,7 +14,7 @@ import yaml
 from tests import workflow_text
 from tests.ci_helpers import bounded_step_deadline
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 
 

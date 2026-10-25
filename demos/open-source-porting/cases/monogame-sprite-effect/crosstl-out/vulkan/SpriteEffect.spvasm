@@ -32,15 +32,15 @@ OpName %65 "input"
 OpDecorate %13 DescriptorSet 0
 OpDecorate %13 Binding 0
 OpDecorate %21 BuiltIn Position
-OpDecorate %22 Location 1
-OpDecorate %24 Location 2
+OpDecorate %22 Location 13
+OpDecorate %24 Location 5
 OpDecorate %26 Location 0
-OpDecorate %30 Location 1
-OpDecorate %34 Location 2
+OpDecorate %30 Location 13
+OpDecorate %34 Location 5
 OpDecorate %57 Location 0
 OpDecorate %58 BuiltIn FragCoord
-OpDecorate %60 Location 1
-OpDecorate %62 Location 2
+OpDecorate %60 Location 13
+OpDecorate %62 Location 5
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

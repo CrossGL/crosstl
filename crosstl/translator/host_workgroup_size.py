@@ -116,7 +116,7 @@ class HostDefinedWorkgroupSizeError(ValueError):
 
     def __init__(self, entry: str, reason: str):
         super().__init__(
-            f"Compute entry '{entry}' {reason}, so its result depends on the threadgroup size, which the host "
+            f"Entry '{entry}' {reason}, so its result depends on the threadgroup size, which the host "
             "chooses at dispatch time in the source language. The target fixes the size in the shader: give it "
             "with source_options={'threadgroup_size': (x, y, z)} or a project workgroup-size rule."
         )
@@ -378,9 +378,14 @@ def host_workgroup_size_mark(attributes: Iterable[Any], render) -> dict | None:
     return {"size": tuple(render(argument) for argument in arguments)}
 
 
-def _is_compute(stage: Any) -> bool:
+# Stages that run in workgroups: a Metal kernel, mesh function or object function takes its threadgroup size from
+# the host's dispatch, while the targets fix it in the shader.
+_WORKGROUP_STAGES = frozenset({"compute", "mesh", "task"})
+
+
+def _is_workgroup_stage(stage: Any) -> bool:
     kind = getattr(stage, "stage", None)
-    return str(getattr(kind, "value", kind)).lower() == "compute"
+    return str(getattr(kind, "value", kind)).lower() in _WORKGROUP_STAGES
 
 
 def _is_compute_function(function: Any) -> bool:
@@ -461,7 +466,7 @@ def resolve_host_workgroup_sizes(shader: Any, render=str) -> Any:
         if not config or not config.get(HOST_WORKGROUP_SIZE_KEY):
             continue
         mark = config.pop(HOST_WORKGROUP_SIZE_KEY)
-        if not _is_compute(stage):
+        if not _is_workgroup_stage(stage):
             continue
         _resolve_mark(
             getattr(stage, "entry_point", None),

@@ -649,6 +649,16 @@ def test_spirv_input_bugs_name_the_dropped_instruction_as_a_failure():
     assert "instruction" not in issues.plan(_report(glsl), [])[1].body
 
 
+def test_spirv_output_bugs_name_ignored_nan_operands_as_a_failure():
+    detail = "the translation calls no NMin and tests no operand for NaN"
+    row = _row("spirv", "output", [_feature("NMin", "wrong", detail=detail)])
+    body = issues.plan(_report(row), [])[1].body
+    assert "or that ignores the NaN operands the feature's instruction handles" in body
+    assert detail in body
+    glsl = _row("glsl", "output", [_feature("x", "wrong", detail="bad")])
+    assert "NaN" not in issues.plan(_report(glsl), [])[1].body
+
+
 def test_long_gap_lists_are_cut_to_the_body_limit(monkeypatch):
     monkeypatch.setattr(issues, "BODY_LIMIT", 1_500)
     row = _row(
