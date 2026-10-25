@@ -24849,6 +24849,7 @@ def test_slang_subscripts_matrix_valued_expressions_by_column():
             void main() {
                 uint i = gl_GlobalInvocationID.x;
                 float s = fin[i];
+                int j = int(i % 2u);
                 vec2 v = vec2(s, 1.0);
                 mat2 m = mat2(s, 2.0, 3.0, 4.0);
                 mat2x3 w = mat2x3(s, 2.0, 3.0, 4.0, 5.0, 6.0);
@@ -24863,7 +24864,10 @@ def test_slang_subscripts_matrix_valued_expressions_by_column():
                 vec3 k = (w * 2.0)[1];
                 vec2 t = transpose(w)[2];
                 vec2 p = transpose(m) * v;
-                outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x;
+                vec2 r = (m * 2.0)[j];
+                float x = (m * 2.0)[1][0];
+                vec2 y = m * 2.0 * v;
+                outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x + r.x + x + y.x;
             }
         }
     }
@@ -24881,6 +24885,9 @@ def test_slang_subscripts_matrix_valued_expressions_by_column():
     assert "float3 k = (w * 2.0)._m01_m11_m21;" in generated_code
     assert "float2 t = (transpose(w))._m02_m12;" in generated_code
     assert "float2 p = mul(transpose(m), v);" in generated_code
+    assert "float2 r = transpose((m * 2.0))[j];" in generated_code
+    assert "float x = (m * 2.0)[0][1];" in generated_code
+    assert "float2 y = mul(m * 2.0, v);" in generated_code
 
 
 if __name__ == "__main__":

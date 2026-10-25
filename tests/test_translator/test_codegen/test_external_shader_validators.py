@@ -849,6 +849,40 @@ shader SlangBitQueryValidator {
 """
 
 
+SLANG_MATRIX_GROUP_VALIDATOR_SHADER = """
+shader SlangMatrixGroupValidator {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float s = fin[i];
+            int j = int(i % 2u);
+            vec2 v = vec2(s, 1.0);
+            mat2 m = mat2(s, 2.0, 3.0, 4.0);
+            mat2x3 w = mat2x3(s, 2.0, 3.0, 4.0, 5.0, 6.0);
+            vec2 a = (m * 2.0)[1];
+            vec2 b = (s * m)[1];
+            vec2 c = (m / 2.0)[1];
+            vec2 d = (1.0 - m)[1];
+            vec2 e = transpose(m)[0];
+            vec2 f = (transpose(m) * 2.0)[1];
+            vec2 g = (i > 0u ? m : -m)[1];
+            vec2 h = inverse(m)[1];
+            vec3 k = (w * 2.0)[1];
+            vec2 t = transpose(w)[2];
+            vec2 p = transpose(m) * v;
+            vec2 r = (m * 2.0)[j];
+            float x = (m * 2.0)[1][0];
+            vec2 y = m * 2.0 * v;
+            outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x + r.x + x + y.x;
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -3095,6 +3129,49 @@ def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
     assert "int2 rev = reversebits(sv);" in code
     assert "uint urev = reversebits(uin[i]);" in code
     assert "bool none = int(firstbithigh(iin[i])) < 0;" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_matrix_group_compiles_with_slangc(tmp_path):
+    """Column subscripts and ``mul`` on matrix-valued expressions are valid Slang (#2813)."""
+    shader_path = tmp_path / "slang_matrix_group.slang"
+    spirv_path = tmp_path / "slang_matrix_group.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_MATRIX_GROUP_VALIDATOR_SHADER)
+    )
+    assert "float2 a = (m * 2.0)._m01_m11;" in code
+    assert "float2 b = (s * m)._m01_m11;" in code
+    assert "float2 c = (m / 2.0)._m01_m11;" in code
+    assert "float2 d = (1.0 - m)._m01_m11;" in code
+    assert "float2 e = (transpose(m))._m00_m10;" in code
+    assert "float2 f = (transpose(m) * 2.0)._m01_m11;" in code
+    assert "float2 g = ((i > 0u ? m : -m))._m01_m11;" in code
+    assert "float2 h = (_crossgl_inverse_float2x2(m))._m01_m11;" in code
+    assert "float3 k = (w * 2.0)._m01_m11_m21;" in code
+    assert "float2 t = (transpose(w))._m02_m12;" in code
+    assert "float2 p = mul(transpose(m), v);" in code
+    assert "float2 r = transpose((m * 2.0))[j];" in code
+    assert "float x = (m * 2.0)[0][1];" in code
+    assert "float2 y = mul(m * 2.0, v);" in code
     shader_path.write_text(code, encoding="utf-8")
 
     slangc = _require_tool("slangc")
