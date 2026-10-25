@@ -395,6 +395,63 @@ def test_opencl_reduce_helpers_report_structured_target_contracts():
     assert all(contract["action"] for contract in contracts)
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl", "metal"])
+def test_opencl_device_enqueue_event_builtins_are_refused(target):
+    cgl_ast, _crossgl = parse_crossgl_from_opencl("""
+        kernel void events(global uint* outp, global int* status) {
+            uint i = get_global_id(0);
+            clk_event_t e = create_user_event();
+            retain_event(e);
+            if (is_valid_event(e)) {
+                set_user_event_status(e, status[i]);
+                capture_event_profiling_info(
+                    e, CLK_PROFILING_COMMAND_EXEC_TIME, (global void*)outp
+                );
+            }
+            release_event(e);
+            outp[i] = 0u;
+        }
+        """)
+
+    with pytest.raises(OpenCLTargetUnsupportedError) as error:
+        validate_opencl_intermediate_for_target(cgl_ast, target)
+
+    contracts = [contract.to_json() for contract in error.value.contracts]
+
+    assert "device-side enqueue event builtins have no target equivalent" in str(
+        error.value
+    )
+    assert {contract["signature"] for contract in contracts} == {
+        "capture_event_profiling_info(...)",
+        "create_user_event(...)",
+        "is_valid_event(...)",
+        "release_event(...)",
+        "retain_event(...)",
+        "set_user_event_status(...)",
+    }
+    assert {contract["code"] for contract in contracts} == {
+        "opencl.target.unsupported-builtin"
+    }
+    assert all(contract["action"] for contract in contracts)
+
+
+def test_opencl_helper_named_like_device_enqueue_event_builtin_is_not_refused():
+    # OpenCL C 1.2 does not reserve the device-side enqueue names.
+    cgl_ast, crossgl = parse_crossgl_from_opencl("""
+        uint retain_event(uint x) {
+            return x + 1u;
+        }
+
+        kernel void events(global uint* outp) {
+            uint i = get_global_id(0);
+            outp[i] = retain_event(i);
+        }
+        """)
+
+    validate_opencl_intermediate_for_target(cgl_ast, "opengl")
+    assert "u32 retain_event(u32 x)" in crossgl
+
+
 def test_opencl_vector_constructor_cast_codegen_reparse():
     crossgl = generate_crossgl("""
         __kernel void gaussian_filter(__read_only image2d_t srcImg,

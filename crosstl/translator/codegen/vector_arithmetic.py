@@ -1999,6 +1999,8 @@ class VectorArithmeticMixin:
             "pow": {"float": "powf", "double": "pow"},
             "sin": {"float": "sinf", "double": "sin"},
             "cos": {"float": "cosf", "double": "cos"},
+            "sinpi": {"float": "sinpif", "double": "sinpi"},
+            "cospi": {"float": "cospif", "double": "cospi"},
             "tan": {"float": "tanf", "double": "tan"},
             "asin": {"float": "asinf", "double": "asin"},
             "acos": {"float": "acosf", "double": "acos"},
