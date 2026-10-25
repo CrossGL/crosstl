@@ -2943,8 +2943,21 @@ class SlangCodeGen(LoweringRefusalMixin):
             if str(getattr(attr, "name", "")).lower() == "builtin":
                 # ``@builtin(global_invocation_id)`` names the same value as ``@gl_GlobalInvocationID``.
                 builtin_name = glsl_builtin_name(attr)
+                if builtin_name == "gl_SampleMask":
+                    # WGSL's sample_mask is a fragment input and an output, like SV_Coverage; GLSL splits it into
+                    # gl_SampleMaskIn and the output-only gl_SampleMask.
+                    return "SV_Coverage"
                 if builtin_name is not None:
                     return builtin_name
+                arguments = getattr(attr, "arguments", None) or [""]
+                written = getattr(arguments[0], "name", None) or getattr(
+                    arguments[0], "value", arguments[0]
+                )
+                self.refuse_lowering(
+                    f"Slang has no system value for the unknown built-in @builtin({written}) "
+                    f"on '{getattr(node, 'name', '')}'"
+                )
+                return None
             if hasattr(attr, "name"):
                 if attr.name == "gl_FragData":
                     index = frag_data_attachment_index(node)

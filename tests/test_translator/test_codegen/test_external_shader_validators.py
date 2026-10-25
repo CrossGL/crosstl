@@ -768,9 +768,10 @@ shader SlangWorkgroupCountValidator {
     RWStructuredBuffer<uint> groupCounts;
     compute {
         layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-        void main(uint3 gid @ gl_GlobalInvocationID) {
+        void main(uint3 gid @ gl_GlobalInvocationID, uvec3 wid @builtin(workgroup_id),
+                  uvec3 count @builtin(num_workgroups)) {
             uvec3 groups = gl_NumWorkGroups;
-            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y + count.z + wid.x;
         }
     }
 }
@@ -2901,7 +2902,10 @@ def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
     )
     assert "uint3 groups = WorkgroupCount();" in code
     assert "groups.x + WorkgroupCount().y" in code
+    assert "uint3 wid : SV_GroupID" in code
+    assert "uint3 count = WorkgroupCount();" in code
     assert "gl_NumWorkGroups" not in code
+    assert "builtin" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     slangc = _require_tool("slangc")
