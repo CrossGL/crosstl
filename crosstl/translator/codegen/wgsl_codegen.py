@@ -52,6 +52,7 @@ from ..host_workgroup_size import (
 )
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
+from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
@@ -87,9 +88,10 @@ from .wgsl_stage_io import (
     with_flat_integer_interpolation,
 )
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
+from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
-class WGSLCodeGen(WGSLParameterLoweringMixin):
+class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
     SUPPORTED_STAGE_NAMES = {"vertex", "fragment", "compute"}
@@ -2571,6 +2573,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
 
     def generate_statement(self, stmt, indent=0):
         pad = "    " * indent
+        lowered = self.lower_value_side_effects(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         if isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
@@ -2597,7 +2604,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 return self.generate_assignment_statement(stmt.expression, indent)
             if is_discard_statement(stmt):
                 return f"{pad}discard;"
-            expression = self.generate_expression(stmt.expression)
+            expression = self.generate_statement_expression(stmt.expression)
             if self.is_multi_barrier_memory_lowering(stmt.expression):
                 return "\n".join(f"{pad}{call};" for call in expression.split("; "))
             return f"{pad}{expression};"
@@ -2669,7 +2676,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             condition = (
                 self.generate_expression(node.condition) if node.condition else ""
             )
-            update = self.generate_expression(node.update) if node.update else ""
+            update = (
+                self.generate_statement_expression(node.update) if node.update else ""
+            )
             return (
                 f"{pad}for ({init}; {condition}; {update}) "
                 f"{self.generate_block(node.body, indent)}"
@@ -2698,11 +2707,18 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 init.name, var_type, initializer=init.initial_value
             )
             return line
-        if isinstance(init, AssignmentNode):
-            return self.generate_assignment(init)
         if isinstance(init, ExpressionStatementNode):
-            return self.generate_expression(init.expression)
-        return self.generate_expression(init)
+            return self.generate_statement_expression(init.expression)
+        return self.generate_statement_expression(init)
+
+    def generate_statement_expression(self, expr):
+        """An expression in statement position, where WGSL allows updates."""
+        if isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        if is_increment(expr):
+            operator = "+=" if expr.operator == "++" else "-="
+            return f"{self.generate_expression(expr.operand)} {operator} 1"
+        return self.generate_expression(expr)
 
     def generate_switch(self, node, indent):
         pad = "    " * indent
@@ -3046,28 +3062,25 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 f"{self.generate_expression(expr.right)})"
             )
         if isinstance(expr, UnaryOpNode):
+            if is_increment(expr):
+                self.reject_unordered_side_effect(expr)
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
-                if expr.operator == "++":
-                    return f"{operand} += 1"
-                if expr.operator == "--":
-                    return f"{operand} -= 1"
                 return f"{operand}{expr.operator}"
-            if expr.operator == "++":
-                return f"{operand} += 1"
-            if expr.operator == "--":
-                return f"{operand} -= 1"
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
                     operand_type = self.type_name_string(operand_type)
-                operand = wgsl_logical_not_operand(operand, operand_type)
+                converted = wgsl_logical_not_operand(operand, operand_type)
+                if converted != operand:
+                    # A bool conversion is a constructor call, a primary.
+                    return f"!{converted}"
             if expr.operator == "-" and self.matrix_shape(
                 self.expression_type(expr.operand)
             ):
                 # WGSL has no unary minus on matrices; multiplying by -1 is exact.
                 return f"({operand} * -1.0)"
-            return f"{expr.operator}{operand}"
+            return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
@@ -3140,7 +3153,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if isinstance(expr, RangeNode):
             raise ValueError("WGSL target does not support range expressions")
         if isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr)
+            self.reject_unordered_side_effect(expr)
         raise ValueError(
             f"WGSL target does not support expression {type(expr).__name__}"
         )

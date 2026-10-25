@@ -7,6 +7,7 @@ from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
 
+from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
 from .OpenglAst import (
     ArrayAccessNode,
@@ -4270,20 +4271,16 @@ class GLSLToCrossGLConverter:
         expression = self.generate_expression(node.expression)
         result = f"switch ({expression}) {{\n"
 
-        for case in node.cases:
-            case_value = self.generate_expression(case.value)
-            result += self.indent() + f"case {case_value}:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value)}"
+            )
+            result += self.indent() + f"{label}:\n"
 
             self.increase_indent()
-            for statement in case.statements:
-                result += self.indent() + self.generate_statement(statement) + "\n"
-            self.decrease_indent()
-
-        if node.default:
-            result += self.indent() + "default:\n"
-
-            self.increase_indent()
-            for statement in node.default:
+            for statement in statements:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 
