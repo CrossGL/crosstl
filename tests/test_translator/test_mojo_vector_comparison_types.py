@@ -51,7 +51,7 @@ def test_scalar_comparison_remains_scalar(tmp_path):
 @pytest.mark.parametrize("width", [2, 3, 4])
 def test_boolean_reductions_run_with_native_mojo(tmp_path, width):
     mojo = validators.command("mojo")
-    if mojo is None:
+    if not mojo:
         pytest.skip("Mojo compiler not installed")
     # Equal padding must not make a three-lane <= reduction true; unequal
     # logical lanes must not make a three-lane < all-reduction false.
