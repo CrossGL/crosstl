@@ -135,7 +135,10 @@ def test_storage_structure_with_a_one_byte_bool_keeps_the_metal_layout(tmp_path)
         "struct Cell { half first; half second; };",
         "struct Cell { half value; bool enabled; uint marker; };",
     )
-    with pytest.raises(StructuredLayoutUnsupportedError, match="no word layout"):
+    with pytest.raises(
+        StructuredLayoutUnsupportedError,
+        match="laid out differently by MSL and HLSL structured buffers",
+    ):
         _translate(tmp_path, source)
 
 
