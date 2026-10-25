@@ -2708,7 +2708,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             user_functions = set(self._function_identifier_names.values())
             user_functions.update(self._function_signature_identifier_names.values())
             user_functions.update(self._function_overloads_by_name)
-            return f"{pad}{wgsl_call_statement(expression, user_functions)};"
+            struct_types = set(self._type_identifier_names.values())
+            statement = wgsl_call_statement(expression, user_functions, struct_types)
+            return f"{pad}{statement};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):

@@ -3419,6 +3419,10 @@ def test_wgsl_discards_must_use_builtin_call_statements(tmp_path):
 def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
     shader = """
     shader MustUse {
+        struct Pair {
+            float a;
+            float b;
+        };
         compute {
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
             buffer float* fin;
@@ -3432,6 +3436,7 @@ def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
                 max(fin[i], 1.0);
                 vec2(fin[i]);
                 clamp(fin[i], 0.0, 1.0);
+                Pair(fin[i], 1.0);
             }
         }
     }
@@ -3444,6 +3449,7 @@ def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
     assert "_ = max(fin[i], 1.0);" in generated
     assert "_ = vec2<f32>(fin[i]);" in generated
     assert "_ = clamp(fin[i], 0.0, 1.0);" in generated
+    assert "_ = Pair(fin[i], 1.0);" in generated
     validate_wgsl_with_naga(tmp_path, generated)
 
 

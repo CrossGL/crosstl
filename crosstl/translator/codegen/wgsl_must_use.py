@@ -6,7 +6,8 @@ throw the value away. :func:`wgsl_call_statement` keeps such a call and discards
 ``_ = min(a, 4u);``, which WGSL provides for exactly this case. The arguments are still evaluated, so any side effect
 in them is kept.
 
-Atomics, barriers, ``textureStore`` and functions the shader declares itself are written unchanged.
+The value constructor of a structure the shader declares, such as ``Pair(a, b)``, is ``@must_use`` as well. Atomics,
+barriers, ``textureStore`` and functions the shader declares itself are written unchanged.
 """
 
 from __future__ import annotations
@@ -205,13 +206,16 @@ def called_function_name(expression: str) -> str | None:
     return None
 
 
-def wgsl_call_statement(expression: str, user_functions=()) -> str:
+def wgsl_call_statement(expression: str, user_functions=(), struct_types=()) -> str:
     """``expression`` as a function call statement, with a phony assignment for ``@must_use`` built-ins.
 
     ``user_functions`` names the functions the shader declares. One of them may shadow a built-in, such as a
-    ``void sign(uint i)``, and a call to it is written unchanged.
+    ``void sign(uint i)``, and a call to it is written unchanged. ``struct_types`` names the structures the shader
+    declares, whose value constructors are ``@must_use``.
     """
     name = called_function_name(expression)
-    if name in WGSL_MUST_USE_BUILTINS and name not in user_functions:
+    if name in struct_types or (
+        name in WGSL_MUST_USE_BUILTINS and name not in user_functions
+    ):
         return f"_ = {expression}"
     return expression
