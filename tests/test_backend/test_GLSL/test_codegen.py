@@ -1958,10 +1958,6 @@ def test_codegen_refuses_tensor_arm_uniforms_from_vulkan_samples():
 
     with pytest.raises(GLSLTypeUnsupportedError, match="tensorARM"):
         generate_crossgl(code, "compute")
-    assert "tensorWriteARM(output_tensor, pixel_coords, value)" in crossgl
-
-    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    GLSLParser(GLSLLexer(glsl).tokenize(), "compute").parse()
 
 
 def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
