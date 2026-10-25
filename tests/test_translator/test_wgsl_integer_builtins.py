@@ -69,9 +69,26 @@ vertex Out v(const device float4* positions [[buffer(0)]], uint vid [[vertex_id]
 """
 
 
-def test_signed_vertex_and_instance_indices(tmp_path):
-    # CrossGL types gl_VertexID and gl_InstanceID int, as GLSL does; WGSL's built-ins are u32.
+SIGNED_VERTEX = """struct VOut { float4 position : SV_Position; };
+VOut main(int vid : SV_VertexID, int iid : SV_InstanceID)
+{
+    VOut output;
+    output.position = float4(float(vid), float(iid), 0.0, 1.0);
+    return output;
+}
+"""
+
+
+def test_unsigned_metal_vertex_and_instance_indices(tmp_path):
+    # MSL's [[vertex_id]] and [[instance_id]] are uint, as WGSL's built-ins are.
     wgsl = translate(tmp_path, VERTEX, ".metal")
+    assert "@builtin(vertex_index) vid: u32" in wgsl
+    assert "@builtin(instance_index) iid: u32" in wgsl
+
+
+def test_signed_vertex_and_instance_indices(tmp_path):
+    # An int parameter (HLSL accepts int SV_VertexID for SPIR-V) is received as u32 and converted.
+    wgsl = translate(tmp_path, SIGNED_VERTEX, ".vert.hlsl")
     assert "@builtin(vertex_index) vid_vertex_index: u32" in wgsl
     assert "@builtin(instance_index) iid_instance_index: u32" in wgsl
     assert "var vid: i32 = i32(vid_vertex_index);" in wgsl
