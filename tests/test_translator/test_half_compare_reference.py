@@ -12,7 +12,10 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.validation import is_floating_scalar_type, is_numeric_scalar_type
+from crosstl.translator.validation import (
+    is_floating_scalar_type,
+    is_numeric_scalar_type,
+)
 
 SOURCE = """#include <metal_stdlib>
 using namespace metal;

@@ -46,7 +46,9 @@ def test_subpass_reads_import_as_subpass_loads(tmp_path, assembly):
         ("vulkan", "OpImageRead"),
     ],
 )
-def test_imported_subpass_reads_reach_each_target(tmp_path, assembly, backend, expected):
+def test_imported_subpass_reads_reach_each_target(
+    tmp_path, assembly, backend, expected
+):
     assert expected in _import(tmp_path, assembly, backend)
 
 
@@ -56,8 +58,12 @@ def test_a_subpass_read_at_a_nonzero_offset_is_refused(tmp_path, assembly):
         if "OpConstantComposite" in line:
             result, _, rest = line.partition(" = ")
             composite_type, first, _second = rest.split()[1:4]
-            lines[index] = f"{result} = OpConstantComposite {composite_type} {first} %offset_one"
-            lines.insert(index, f"%offset_one = OpConstant {_scalar_type(lines, first)} 1")
+            lines[index] = (
+                f"{result} = OpConstantComposite {composite_type} {first} %offset_one"
+            )
+            lines.insert(
+                index, f"%offset_one = OpConstant {_scalar_type(lines, first)} 1"
+            )
             break
     with pytest.raises(SpirvInstructionUnsupportedError, match="not the constant"):
         _import(tmp_path, "\n".join(lines) + "\n", "cgl")
