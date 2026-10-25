@@ -21,6 +21,7 @@ from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_extents import fold_constant_extents
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -30,6 +31,10 @@ from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
+)
+from .device_references import (
+    DeviceReferenceUnsupportedError,
+    lower_device_struct_references,
 )
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
@@ -132,6 +137,7 @@ __all__ = [
     "CudaWarpIntrinsicUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
+    "DeviceReferenceUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
@@ -273,6 +279,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_undeclared_types(program, report.target)
     refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
+    fold_constant_extents(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
@@ -280,6 +287,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
+    lower_device_struct_references(program, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
     lower_vector_logic(program, report.target)
