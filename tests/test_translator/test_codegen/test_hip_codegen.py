@@ -3352,6 +3352,7 @@ class TestHipCodeGen:
                     float narrow = min(f, 1.0);
                     int64_t wide64 = max(w, 3);
                     uint64_t big = min(uw, 3u);
+                    int64_t same64 = min(w, w);
                 }
             }
         }
@@ -3370,10 +3371,16 @@ class TestHipCodeGen:
         )
         assert "double wide = fmax(d, 2.0);" in hip_code
         assert "float narrow = fminf(f, 1.0);" in hip_code
-        assert "int64_t wide64 = max(w, static_cast<long long>(3));" in hip_code
+        # int64_t is long on LP64 Linux, so both operands are cast to one type.
         assert (
-            "uint64_t big = min(uw, static_cast<unsigned long long>(3u));" in hip_code
+            "int64_t wide64 = max(static_cast<long long>(w), "
+            "static_cast<long long>(3));" in hip_code
         )
+        assert (
+            "uint64_t big = min(static_cast<unsigned long long>(uw), "
+            "static_cast<unsigned long long>(3u));" in hip_code
+        )
+        assert "int64_t same64 = min(w, w);" in hip_code
         assert "fminf(x, 32u)" not in hip_code
         assert "fmaxf(y, 3)" not in hip_code
         assert "fminf(d, 2.0)" not in hip_code

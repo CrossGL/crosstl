@@ -60,13 +60,13 @@ MIN_MAX_SCALAR_TYPES = {
 }
 
 # Spellings that are the same C type as the entry they point at, so a min/max
-# operand written this way needs no cast.
+# operand written this way needs no cast. ``int64_t`` and ``uint64_t`` are not
+# here: they are ``long`` on LP64 Linux, and ``long`` next to ``long long``
+# makes the CUDA and HIP overloads ambiguous.
 MIN_MAX_SCALAR_ALIASES = {
     "int32_t": "int",
     "uint": "unsigned int",
     "uint32_t": "unsigned int",
-    "int64_t": "long long",
-    "uint64_t": "unsigned long long",
 }
 
 # Integer rank and signedness of the types above, as C++ orders them.
@@ -1436,6 +1436,9 @@ class VectorArithmeticMixin:
             return self.format_scalar_min_max(func_name, "float", *args)
         if None in scalar_types:
             return None
+        if left_spelling == right_spelling:
+            # Two operands of one type match an overload as written.
+            return self.format_scalar_min_max(func_name, "integer", *args)
 
         unified_type = self.unified_integer_scalar_type(
             MIN_MAX_SCALAR_TYPES[left_spelling],

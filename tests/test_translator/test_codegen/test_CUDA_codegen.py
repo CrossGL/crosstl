@@ -4625,6 +4625,7 @@ class TestCudaCodeGen:
                     float narrow = min(f, 1.0);
                     int64_t wide64 = max(w, 3);
                     uint64_t big = min(uw, 3u);
+                    int64_t same64 = min(w, w);
                 }
             }
         }
@@ -4641,10 +4642,16 @@ class TestCudaCodeGen:
         assert "uint mixed = min(static_cast<unsigned int>(y), 32u);" in cuda_code
         assert "double wide = fmax(d, 2.0);" in cuda_code
         assert "float narrow = fminf(f, 1.0);" in cuda_code
-        assert "int64_t wide64 = max(w, static_cast<long long>(3));" in cuda_code
+        # int64_t is long on LP64 Linux, so both operands are cast to one type.
         assert (
-            "uint64_t big = min(uw, static_cast<unsigned long long>(3u));" in cuda_code
+            "int64_t wide64 = max(static_cast<long long>(w), "
+            "static_cast<long long>(3));" in cuda_code
         )
+        assert (
+            "uint64_t big = min(static_cast<unsigned long long>(uw), "
+            "static_cast<unsigned long long>(3u));" in cuda_code
+        )
+        assert "int64_t same64 = min(w, w);" in cuda_code
         assert "fminf(x, 32u)" not in cuda_code
         assert "fmaxf(y, 3)" not in cuda_code
         assert "fminf(d, 2.0)" not in cuda_code
