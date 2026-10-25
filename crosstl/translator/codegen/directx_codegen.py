@@ -47223,6 +47223,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 rendered_args = [
                     f"{rendered_args[0]}.{self.hlsl_vector_swizzle(component_count)}"
                 ]
+            elif arg_component_count is None:
+                # HLSL has no one-argument vector constructor for a scalar ("too few elements in vector
+                # initialization"); a cast splats a scalar and keeps a vector of the same width.
+                splat = self.hlsl_scalar_splat_cast(mapped_type, rendered_args[0])
+                return (
+                    self.hlsl_byte_conversion_expression(splat, constructor_type)
+                    or splat
+                )
         if (
             component_count
             and component_count > 1
