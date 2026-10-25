@@ -256,6 +256,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "dfdycoarse": "dpdyCoarse",
         "ddycoarse": "dpdyCoarse",
         "ddy_coarse": "dpdyCoarse",
+        # The GLSL importer writes fwidthFine and fwidthCoarse with underscores.
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
@@ -3353,7 +3356,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
-        if derivative_name is not None:
+        if derivative_name is not None and not self.is_user_function_name(
+            function_name
+        ):
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
