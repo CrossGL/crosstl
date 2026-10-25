@@ -153,6 +153,7 @@ from .spirv_inline_requirements import (
     is_inline_spirv_attribute,
 )
 from .spirv_local_references import SpirvLocalReferenceMixin
+from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
@@ -20916,9 +20917,8 @@ class VulkanSPIRVCodeGen(
                 node, storage_class, explicit_location, patch=patch
             )
             if used_slots & slot_keys:
-                raise ValueError(
-                    f"Duplicate SPIR-V {storage_class.lower()} location "
-                    f"{explicit_location}"
+                raise InterfaceLocationConflictError(
+                    storage_class, explicit_location, getattr(node, "name", None)
                 )
             used_slots.update(slot_keys)
             return explicit_location
@@ -20928,9 +20928,8 @@ class VulkanSPIRVCodeGen(
                 node, storage_class, preferred_location, patch=patch
             )
             if used_slots & slot_keys:
-                raise ValueError(
-                    f"Duplicate SPIR-V {storage_class.lower()} location "
-                    f"{preferred_location}"
+                raise InterfaceLocationConflictError(
+                    storage_class, preferred_location, getattr(node, "name", None)
                 )
             used_slots.update(slot_keys)
             self.record_global_interface_location(
