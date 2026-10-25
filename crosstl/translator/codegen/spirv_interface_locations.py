@@ -19,9 +19,15 @@ from .spirv_stage_distances import entry_point_distance_layout
 from .stage_io_semantic_locations import allocate_locations
 
 __all__ = [
+    "is_builtin_interface_value",
+    "nested_struct_location_span",
     "plan_entry_input_locations",
     "plan_struct_member_locations",
 ]
+
+# Varyings that are one value per invocation and whose structure-typed members are flattened by
+# spirv_struct_varyings.py; arrayed stage interfaces (geometry, tessellation, mesh) keep their form.
+FLATTENED_INTERFACES = frozenset({("Vertex", "Output"), ("Fragment", "Input")})
 
 
 def plan_struct_member_locations(
@@ -84,8 +90,53 @@ def _struct_entries(
         if fixed is False:
             continue
         names.append(member_name)
-        entries.append((fixed, codegen.struct_member_interface_location_span(node)))
+        span = None
+        if (execution_model, storage_class) in FLATTENED_INTERFACES:
+            span = nested_struct_location_span(
+                codegen, execution_model, storage_class, member_type
+            )
+        if span is None:
+            span = codegen.struct_member_interface_location_span(node)
+        entries.append((fixed, span))
     return names, entries
+
+
+def is_builtin_interface_value(
+    codegen, execution_model, storage_class, node, value_type, member_name
+):
+    """Whether a stage-interface value is a built-in, which takes no location."""
+    semantic = codegen.entry_point_interface_semantic(
+        execution_model, storage_class, node, value_type, member_name
+    )
+    return _is_builtin(codegen, semantic, storage_class)
+
+
+def nested_struct_location_span(codegen, execution_model, storage_class, type_id):
+    """Locations a structure-typed varying takes once flattened, or ``None`` when ``type_id`` is no structure.
+
+    Each leaf field takes its own span and a built-in leaf none, as :func:`flatten_struct_varying` places them; the
+    structure as one value would count one location.
+    """
+    if codegen.array_type_info_from_type(type_id) is not None:
+        return None
+    type_name = type_id.type.base_type
+    members = codegen.current_struct_members.get(type_name)
+    if not members:
+        return None
+    metadata = codegen.struct_member_metadata.get(type_name, {})
+    span = 0
+    for field_type, field_name in members:
+        node = metadata.get(field_name, {}).get("node")
+        nested = nested_struct_location_span(
+            codegen, execution_model, storage_class, field_type
+        )
+        if nested is not None:
+            span += nested
+        elif not is_builtin_interface_value(
+            codegen, execution_model, storage_class, node, field_type, field_name
+        ):
+            span += codegen.struct_member_interface_location_span(node)
+    return max(span, 1)
 
 
 def _fixed_location(

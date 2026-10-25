@@ -25,8 +25,17 @@ importer rewrites each Metal method onto that form:
   returns early is refused.
 
 Other uses of the mesh object, ``set_indices``, a missing ``set_primitive_count`` and a mesh type whose arguments
-are not constant are refused through :meth:`refuse_import`. Object (``[[object]]``) functions are refused as well
-until their payload and grid-size dispatch are imported.
+are not constant are refused through :meth:`refuse_import`.
+
+A Metal ``[[object]]`` function becomes a CrossGL task stage. Its ``object_data`` payload reference is threadgroup
+memory that every invocation of the group shares, so it becomes a ``groupshared`` local of the payload type, the
+form ``DispatchMesh`` takes. The function sizes the mesh grid by calling ``set_threadgroups_per_grid`` on its
+``mesh_grid_properties`` parameter from any invocation; the importer keeps that size in a ``groupshared uvec3``
+that invocation 0 sets to zero first (no call launches no mesh threadgroups), and, after the body and a threadgroup
+barrier, every invocation calls ``DispatchMesh`` with it once, as HLSL requires. An early ``return`` leaves a
+one-iteration loop around the body instead of the function, so that every invocation still reaches the barrier and
+the dispatch; a ``return`` inside a loop or ``switch`` cannot be rewritten that way and is refused, as are object
+functions without a payload (HLSL's ``DispatchMesh`` always passes one) and other uses of the grid object.
 """
 
 from __future__ import annotations
@@ -36,13 +45,17 @@ from dataclasses import dataclass, field
 
 from .MetalAst import MethodCallNode, ReturnNode, VariableNode
 
-__all__ = ["MetalMeshImport", "MetalMeshOutput"]
+__all__ = ["MetalMeshImport", "MetalMeshOutput", "MetalObjectFunction"]
 
 _MESH_TYPE = re.compile(r"^(?:::)?(?:metal\s*::\s*)?mesh\s*<(?P<args>.*)>$", re.DOTALL)
 _TOPOLOGY = {"point": 1, "line": 2, "triangle": 3}
 _INDEX_TYPES = {1: "uint", 2: "uvec2", 3: "uvec3"}
 _OUTPUT_METHODS = frozenset({"set_vertex", "set_primitive", "set_index", "set_indices"})
 _MESH_METHODS = _OUTPUT_METHODS | {"set_primitive_count"}
+_GRID_TYPE = re.compile(r"^(?:::)?(?:metal\s*::\s*)?mesh_grid_properties$")
+_BREAKABLE = frozenset(
+    {"ForNode", "WhileNode", "DoWhileNode", "RangeForNode", "SwitchNode"}
+)
 
 
 def _split_template_arguments(text):
@@ -83,6 +96,43 @@ def _walk(node, seen=None):
         yield from _walk(value, seen)
 
 
+def _returns_inside_breakable(node, inside=False, seen=None):
+    """Whether a ``return`` under ``node`` sits inside a loop or ``switch``, where ``break`` would not leave it."""
+    if seen is None:
+        seen = set()
+    if node is None or isinstance(node, (str, int, float, bool)):
+        return False
+    if isinstance(node, (list, tuple)):
+        return any(_returns_inside_breakable(item, inside, seen) for item in node)
+    if isinstance(node, dict):
+        return any(
+            _returns_inside_breakable(item, inside, seen) for item in node.values()
+        )
+    if id(node) in seen:
+        return False
+    seen.add(id(node))
+    if isinstance(node, ReturnNode):
+        return inside
+    inside = inside or type(node).__name__ in _BREAKABLE
+    return any(
+        _returns_inside_breakable(value, inside, seen)
+        for value in getattr(node, "__dict__", {}).values()
+    )
+
+
+@dataclass
+class MetalObjectFunction:
+    """The CrossGL task-stage form of one Metal ``[[object]]`` function."""
+
+    function: object
+    payload: object
+    grid: object = None
+    grid_size: str = ""
+    invocation: str = ""
+    added_invocation: bool = False
+    wraps_returns: bool = False
+
+
 @dataclass
 class MetalMeshOutput:
     """The CrossGL form of one Metal mesh function's ``metal::mesh`` parameter."""
@@ -113,6 +163,7 @@ class MetalMeshImport:
     """Mixin for :class:`MetalToCrossGLConverter`: Metal mesh functions as CrossGL mesh stages."""
 
     current_metal_mesh_output = None
+    current_metal_object_function = None
 
     def is_metal_mesh_object(self, node):
         output = self.current_metal_mesh_output
@@ -395,3 +446,203 @@ class MetalMeshImport:
                 return f"{output.staging}[{args[0]}] = uint({args[1]}) & 255u;\n"
             return f"{output.indices}[{args[0]}] = uint({args[1]}) & 255u;\n"
         return None
+
+    def plan_metal_object_function(self, function):
+        """The :class:`MetalObjectFunction` of an ``[[object]]`` function, or ``None`` after recording its refusal."""
+        name = function.name
+        payloads = [
+            parameter
+            for parameter in function.params
+            if any(
+                getattr(attribute, "name", None) == "payload"
+                for attribute in getattr(parameter, "attributes", []) or []
+            )
+        ]
+        grids = [
+            parameter
+            for parameter in function.params
+            if _GRID_TYPE.match(
+                re.sub(r"\s+", "", str(getattr(parameter, "vtype", "")))
+            )
+        ]
+        if len(payloads) != 1:
+            self.refuse_import(
+                f"Metal object function '{name}' must take exactly one [[payload]] parameter for CrossGL's "
+                f"DispatchMesh, found {len(payloads)}"
+            )
+            return None
+        if len(grids) > 1:
+            self.refuse_import(
+                f"Metal object function '{name}' takes more than one mesh_grid_properties parameter"
+            )
+            return None
+        payload = payloads[0]
+        if "object_data" not in {
+            str(qualifier) for qualifier in getattr(payload, "qualifiers", []) or []
+        } or not str(getattr(payload, "vtype", "")).strip().endswith("&"):
+            self.refuse_import(
+                f"Metal object function '{name}': payload '{payload.name}' must be an object_data reference"
+            )
+            return None
+        plan = MetalObjectFunction(
+            function=function, payload=payloads[0], grid=grids[0] if grids else None
+        )
+        body = list(getattr(function, "body", None) or [])
+        if plan.grid is not None:
+            methods = {
+                node.method
+                for node in _walk(body)
+                if isinstance(node, MethodCallNode)
+                and isinstance(node.object, VariableNode)
+                and node.object.name == plan.grid.name
+            }
+            unsupported = sorted(methods - {"set_threadgroups_per_grid"})
+            if unsupported:
+                self.refuse_import(
+                    f"Metal object function '{name}' calls mesh_grid_properties::{', '.join(unsupported)}, "
+                    "which has no CrossGL form"
+                )
+                return None
+        if _returns_inside_breakable(body):
+            self.refuse_import(
+                f"Metal object function '{name}' returns from inside a loop or switch; every invocation must "
+                "reach the DispatchMesh that ends a CrossGL task entry"
+            )
+            return None
+        plan.wraps_returns = any(isinstance(node, ReturnNode) for node in _walk(body))
+        return plan
+
+    def reserve_metal_object_names(self, plan):
+        if plan.grid is None:
+            return
+        plan.grid_size = self.reserve_generated_identifier(
+            f"{plan.grid.name}_threadgroups"
+        )
+        for parameter in plan.function.params:
+            if any(
+                getattr(attribute, "name", None) == "thread_index_in_threadgroup"
+                for attribute in getattr(parameter, "attributes", []) or []
+            ):
+                plan.invocation = self.render_identifier(parameter.name)
+                return
+        plan.invocation = self.reserve_generated_identifier("object_invocation")
+        plan.added_invocation = True
+
+    def generate_metal_object_stage(self, function, **options):
+        """A ``task { ... }`` stage block for one ``[[object]]`` function, or ``""`` when it is refused."""
+        plan = self.plan_metal_object_function(function)
+        if plan is None:
+            return ""
+        self.reserve_metal_object_names(plan)
+        previous = self.current_metal_object_function
+        self.current_metal_object_function = plan
+        try:
+            text = self.generate_function(
+                function, stage_entry=function.name != "main", **options
+            )
+        finally:
+            self.current_metal_object_function = previous
+        body_start = text.find("{\n")
+        body = text[body_start:] if body_start >= 0 else text
+        if plan.grid is not None and re.search(
+            rf"\b{re.escape(plan.grid.name)}\b", body
+        ):
+            self.refuse_import(
+                f"Metal object function '{function.name}' uses its mesh_grid_properties parameter "
+                f"'{plan.grid.name}' other than in statement-level set_threadgroups_per_grid calls"
+            )
+            return ""
+        return (
+            "    // Task Shader\n"
+            "    task {\n" + self.kernel_workgroup_size_attribute() + text + "    }\n\n"
+        )
+
+    def active_metal_object_function(self, func=None):
+        plan = self.current_metal_object_function
+        if plan is None:
+            return None
+        if func is not None and plan.function is not func:
+            return None
+        if func is None and self.current_function is not plan.function:
+            return None
+        return plan
+
+    def metal_object_parameter_declaration(self, var):
+        plan = self.active_metal_object_function()
+        if plan is None:
+            return None
+        if var is plan.payload:
+            return ""
+        if var is plan.grid:
+            if plan.added_invocation:
+                return f"uint {plan.invocation} @gl_LocalInvocationIndex"
+            return ""
+        return None
+
+    def metal_object_body_prologue(self, func, indent):
+        plan = self.active_metal_object_function(func)
+        if plan is None:
+            return ""
+        pad = "    " * indent
+        raw_type = str(getattr(plan.payload, "vtype", "")).strip().rstrip("&").strip()
+        code = (
+            f"{pad}groupshared {self.map_type(raw_type)} "
+            f"{self.render_identifier(plan.payload.name)};\n"
+        )
+        if plan.grid is not None:
+            code += (
+                f"{pad}groupshared uvec3 {plan.grid_size};\n"
+                f"{pad}if ({plan.invocation} == 0u) {{\n"
+                f"{pad}    {plan.grid_size} = uvec3(0u);\n"
+                f"{pad}}}\n"
+                f"{pad}workgroupBarrier();\n"
+            )
+        if plan.wraps_returns:
+            once = self.reserve_generated_identifier("object_body")
+            code += f"{pad}for (uint {once} = 0u; {once} < 1u; {once}++) {{\n"
+        return code
+
+    def metal_object_body_indent(self, func):
+        plan = self.active_metal_object_function(func)
+        return 1 if plan is not None and plan.wraps_returns else 0
+
+    def metal_object_body_epilogue(self, func, indent):
+        plan = self.active_metal_object_function(func)
+        if plan is None:
+            return ""
+        pad = "    " * indent
+        code = f"{pad}}}\n" if plan.wraps_returns else ""
+        payload = self.render_identifier(plan.payload.name)
+        if plan.grid is None:
+            return (
+                code
+                + f"{pad}workgroupBarrier();\n{pad}DispatchMesh(0u, 0u, 0u, {payload});\n"
+            )
+        size = plan.grid_size
+        return code + (
+            f"{pad}workgroupBarrier();\n"
+            f"{pad}DispatchMesh({size}.x, {size}.y, {size}.z, {payload});\n"
+        )
+
+    def generate_metal_object_statement(self, stmt, is_main=False):
+        """``set_threadgroups_per_grid`` stores the grid size; ``None`` for other statements."""
+        plan = self.active_metal_object_function()
+        if (
+            plan is None
+            or plan.grid is None
+            or not isinstance(stmt, MethodCallNode)
+            or not isinstance(stmt.object, VariableNode)
+            or stmt.object.name != plan.grid.name
+        ):
+            return None
+        if stmt.method != "set_threadgroups_per_grid" or len(stmt.args) != 1:
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        return f"{plan.grid_size} = uvec3({value});\n"
+
+    def generate_metal_object_return(self, stmt):
+        """``break`` out of the one-iteration loop for an object function's ``return``; ``None`` otherwise."""
+        plan = self.active_metal_object_function()
+        if plan is None or not plan.wraps_returns or not isinstance(stmt, ReturnNode):
+            return None
+        return "break;\n"

@@ -190,6 +190,34 @@ def test_a_translation_of_a_nan_aware_instruction_must_handle_nan():
     assert spirv_input.ignores_nan(fmin, ignored) == ""
 
 
+def test_a_bit_test_against_the_exponent_mask_handles_nan():
+    ignored = "%5 = OpExtInst %v3float %1 FMin %3 %4\n"
+    constants = "%m = OpConstant %uint 2147483647\n%e = OpConstant %uint 2139095040\n"
+    scalar = constants + (
+        "%b = OpBitcast %uint %3\n"
+        "%a = OpBitwiseAnd %uint %b %m\n"
+        "%n = OpUGreaterThan %bool %a %e\n"
+    )
+    assert spirv_input.ignores_nan(NMIN, scalar + ignored) == ""
+    splatted = constants + (
+        "%b = OpBitcast %v3uint %3\n"
+        "%vm = OpCompositeConstruct %v3uint %m %m %m\n"
+        "%a = OpBitwiseAnd %v3uint %b %vm\n"
+        "%ve = OpCompositeConstruct %v3uint %e %e %e\n"
+        "%n = OpUGreaterThan %v3bool %a %ve\n"
+    )
+    assert spirv_input.ignores_nan(NMIN, splatted + ignored) == ""
+    # Unmasked bits of a negative value always exceed the mask; a smaller bound also admits infinities.
+    unmasked = scalar.replace(
+        "%n = OpUGreaterThan %bool %a %e", "%n = OpUGreaterThan %bool %b %e"
+    )
+    smaller = scalar.replace("2139095040", "2139095039")
+    for untested in (unmasked, smaller):
+        assert spirv_input.ignores_nan(NMIN, untested + ignored) == (
+            "the translation calls no NMin and tests no operand for NaN"
+        )
+
+
 def test_without_glslang_the_input_probes_are_untested(monkeypatch):
     monkeypatch.setattr(validators, "can_lower", lambda language: False)
     result = runner.run_input(FABS, "spirv")

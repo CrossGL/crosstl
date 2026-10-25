@@ -4025,17 +4025,31 @@ class MetalToCrossGLConverter(
                 specialization_key=specialization_key,
             )
         if qualifier == "object":
-            return self.refuse_import(
-                f"Metal object function '{function.name}': importing object-stage payloads and "
-                "mesh_grid_properties dispatch is not implemented"
-            )
-        if qualifier in self.rt_qualifiers:
-            return f"    // {qualifier} function\n" + self.generate_function(
+            return self.generate_metal_object_stage(
                 function,
                 template_value_bindings=template_value_bindings,
                 template_type_bindings=template_type_bindings,
                 output_name=output_name,
                 specialization_key=specialization_key,
+            )
+        ray_attribute = next(
+            (
+                attribute.name
+                for attribute in getattr(function, "attributes", None) or []
+                if getattr(attribute, "name", None)
+                in self.rt_qualifiers - {"mesh", "object"}
+            ),
+            None,
+        )
+        if qualifier is None and ray_attribute is not None:
+            # [[intersection(bounding_box, ...)]] keeps the stage as an attribute rather than a qualifier.
+            qualifier = ray_attribute
+        if qualifier in self.rt_qualifiers:
+            # Printed as a plain helper, the function would lose the qualifier that lets the host place it in an
+            # intersection function table, and the targets would get no ray-tracing stage.
+            return self.refuse_import(
+                f"Metal {qualifier} function '{function.name}' has no CrossGL import; its ray-tracing "
+                "parameters and results are not yet mapped to a CrossGL ray stage"
             )
         return self.generate_function(
             function,
@@ -9580,7 +9594,9 @@ class MetalToCrossGLConverter(
         )
 
     def format_parameter_decl(self, var, index, semantic_context=None):
-        mesh_declaration = self.metal_mesh_parameter_declaration(var)
+        mesh_declaration = self.metal_mesh_parameter_declaration(
+            var
+        ) or self.metal_object_parameter_declaration(var)
         if mesh_declaration is not None:
             return mesh_declaration
         if getattr(var, "name", None):
@@ -9935,7 +9951,12 @@ class MetalToCrossGLConverter(
             body = (
                 value_param_decls
                 + self.metal_mesh_body_prologue(func, indent + 1)
-                + self.generate_function_body(function_body, indent=indent + 1)
+                + self.metal_object_body_prologue(func, indent + 1)
+                + self.generate_function_body(
+                    function_body,
+                    indent=indent + 1 + self.metal_object_body_indent(func),
+                )
+                + self.metal_object_body_epilogue(func, indent + 1)
                 + self.metal_mesh_body_epilogue(func, indent + 1)
             )
             for index, parameter in enumerate(func.params):
@@ -9945,7 +9966,9 @@ class MetalToCrossGLConverter(
                     and not re.search(rf"\b{re.escape(parameter_names[index])}\b", body)
                 ):
                     parameter_declarations[index] += " @maybe_unused"
-            params = ", ".join(parameter_declarations)
+            params = ", ".join(
+                declaration for declaration in parameter_declarations if declaration
+            )
             code += (
                 f"{generic_prefix}{return_type} {function_name}({params})"
                 f"{suffix} {{\n"
@@ -10505,6 +10528,10 @@ class MetalToCrossGLConverter(
                         code += f"{constructor_array}\n"
                         continue
                 code += self.generate_assignment(stmt, is_main) + ";\n"
+            elif isinstance(stmt, ReturnNode) and self.generate_metal_object_return(
+                stmt
+            ):
+                code += self.generate_metal_object_return(stmt)
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     if stmt.value is None:
@@ -10593,7 +10620,7 @@ class MetalToCrossGLConverter(
             elif isinstance(stmt, (MethodCallNode, CallNode)):
                 lowered_mesh_call = self.generate_metal_mesh_statement(
                     stmt, indent, is_main
-                )
+                ) or self.generate_metal_object_statement(stmt, is_main)
                 if lowered_mesh_call is not None:
                     code += lowered_mesh_call
                 else:

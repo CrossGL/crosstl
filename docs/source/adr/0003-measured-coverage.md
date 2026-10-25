@@ -45,8 +45,8 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
-control flow, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the sources at
-their pinned commits, checks their digests and caches them. No feature list is written by hand.
+control flow, operators, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the
+sources at their pinned commits, checks their digests and caches them. No feature list is written by hand.
 
 ### 3. Each feature is checked by the target's reference validator
 

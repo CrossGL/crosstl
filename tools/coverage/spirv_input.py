@@ -8,7 +8,8 @@ instructions have no GLSL built-in; their probe is the one of the instruction wi
 assembly.
 
 The NaN-aware instructions and the ones they are renamed from agree on every input but NaN, and the inputs of
-:mod:`.execution` hold none, so a SPIR-V translation of one must also call it, or test an operand with ``OpIsNan``.
+:mod:`.execution` hold none, so a SPIR-V translation of one must also call it, or test an operand for NaN with
+``OpIsNan`` or by comparing its bits with the exponent mask.
 
 GLSL.std.450 encodes ``frexp`` and ``modf`` twice, with an out pointer (``Frexp``, ``Modf``) or a struct result
 (``FrexpStruct``, ``ModfStruct``). glslang, like DXC, writes the struct forms, so they are probed with the GLSL call,
@@ -48,6 +49,13 @@ _EXTENDED = re.compile(r"(\bOpExtInst\s+%\w+\s+%\w+\s+)(\w+)\b")
 # that declares an output stream, so the module a probe of them compiles to declares it here.
 _STREAMS = re.compile(r"\bOp(?:EmitStreamVertex|EndStreamPrimitive)\b")
 _GEOMETRY = re.compile(r"^( *)OpCapability Geometry$", re.MULTILINE)
+# A float is a NaN when its bits, sign masked off, exceed the exponent mask: 0x7F800000 for binary32, 0x7FF00000 in
+# the high word of binary64 (IEEE 754-2019 section 3.4).
+_MAGNITUDE_MASK, _EXPONENT_MASKS = "2147483647", {"2139095040", "2146435072"}
+_INTEGER_CONSTANT = re.compile(r"^\s*(%\w+) = OpConstant %\w+ (\d+)\s*$", re.M)
+_SPLAT = re.compile(r"^\s*(%\w+) = OpCompositeConstruct %\w+((?: %\w+)+)\s*$", re.M)
+_MASKED = re.compile(r"^\s*(%\w+) = OpBitwiseAnd %\w+ (%\w+) (%\w+)\s*$", re.M)
+_ABOVE = re.compile(r"^\s*%\w+ = OpUGreaterThan %\w+ (%\w+) (%\w+)\s*$", re.M)
 # Each pointer form, with the struct form glslang writes for the GLSL call.
 _POINTER_FORMS = {"Frexp": "FrexpStruct", "Modf": "ModfStruct"}
 
@@ -164,9 +172,31 @@ def ignores_nan(feature: Feature, assembly: str) -> str:
     """Why the SPIR-V translation ``assembly`` of a NaN-aware ``feature`` may ignore NaN; empty when it cannot."""
     if feature.name not in NAN_AWARE or _calls(feature, assembly):
         return ""
-    if re.search(r"\bOpIsNan\b", assembly):
+    if re.search(r"\bOpIsNan\b", assembly) or _tests_nan_bits(assembly):
         return ""
     return f"the translation calls no {feature.name} and tests no operand for NaN"
+
+
+def _tests_nan_bits(assembly: str) -> bool:
+    """Whether ``assembly`` compares a float's magnitude bits with its exponent mask.
+
+    Vulkan lets a driver assume no operand is a NaN unless the entry point declares ``SignedZeroInfNanPreserve``,
+    and some fold ``OpIsNan`` to false, so a generator may test the bits instead.
+    """
+    constants = {m[1]: m[2] for m in _INTEGER_CONSTANT.finditer(assembly)}
+    for splat in _SPLAT.finditer(assembly):
+        components = set(splat[2].split())
+        if len(components) == 1 and (value := constants.get(components.pop())):
+            constants[splat[1]] = value
+    masked = {
+        m[1]
+        for m in _MASKED.finditer(assembly)
+        if _MAGNITUDE_MASK in (constants.get(m[2]), constants.get(m[3]))
+    }
+    return any(
+        left in masked and constants.get(right) in _EXPONENT_MASKS
+        for left, right in _ABOVE.findall(assembly)
+    )
 
 
 def _calls(feature: Feature, assembly: str) -> bool:
