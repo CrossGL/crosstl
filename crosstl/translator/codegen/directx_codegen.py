@@ -10399,6 +10399,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             semantic = default_member_semantics.get(member.name)
             if semantic is None:
                 semantic = self.hlsl_struct_member_declared_semantic(member)
+            member_type = self.hlsl_unsigned_system_value_type(member_type, semantic)
 
             self.validate_hlsl_struct_member_semantic_type(
                 node.name,
@@ -35454,6 +35455,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "have a floating-point scalar, vector, or scalar array type, "
                 f"got {actual_type}"
             )
+
+    # System values DXIL requires to be uint; Vulkan HLSL and GLSL (gl_Layer, gl_PrimitiveID) also take int.
+    HLSL_UNSIGNED_SYSTEM_VALUES = frozenset(
+        {
+            "SV_RENDERTARGETARRAYINDEX",
+            "SV_VIEWPORTARRAYINDEX",
+            "SV_PRIMITIVEID",
+            "SV_VERTEXID",
+            "SV_INSTANCEID",
+            "SV_SAMPLEINDEX",
+            "SV_GSINSTANCEID",
+        }
+    )
+
+    def hlsl_unsigned_system_value_type(self, declaration_type, semantic):
+        """``uint`` for an ``int`` member carrying a system value that DXIL delivers as ``uint``."""
+        mapped = str(self.hlsl_canonical_semantic(semantic) or "").upper()
+        if mapped in self.HLSL_UNSIGNED_SYSTEM_VALUES and declaration_type == "int":
+            return "uint"
+        return declaration_type
 
     def hlsl_output_builtin_semantic_type(self, mapped_semantic):
         if mapped_semantic is None:
