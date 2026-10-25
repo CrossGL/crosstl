@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from tools.coverage import probes, validators
+from tools.coverage.features import metal
 from tools.coverage.features.common import prototype
 from tools.coverage.model import (
     COOP_COLUMNS,
@@ -719,6 +720,21 @@ def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():
     source = probes.build(add, "metal").source
     assert "device atomic_int* outp [[buffer(1)]]" in source
     assert "atomic_fetch_add_explicit(&outp[i], a1, memory_order_relaxed);" in source
+
+
+def test_metal_atomic_load_and_store_probes_call_crossgl_load_and_store():
+    load, store = metal.parse(
+        "metal_atomic atomic_load_explicit int(inout int, memory_order)\n"
+        "metal_atomic atomic_store void(inout int, int)\n"
+    )
+    assert "atomic_load_explicit(&outp[i], memory_order_relaxed);" in (
+        probes.build(load, "metal").source
+    )
+    crossgl = probes.build(load, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicLoad(outp[i])" in crossgl
+    assert "atomic_store(&outp[i], a1);" in probes.build(store, "metal").source
+    assert "atomicStore(outp[i], a1);" in probes.build(store, "crossgl").source
 
 
 CUDA_SIGNATURES = [

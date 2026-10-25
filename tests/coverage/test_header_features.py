@@ -224,7 +224,10 @@ def test_metal_header_parse_reads_atomic_functions():
 
 METAL_ATOMIC_LIST = """metal_atomic atomic_fetch_add_explicit int(inout int, int, memory_order)
 metal_atomic atomic_fetch_add int(inout int, int)
+metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)
 metal_atomic atomic_load_explicit int(inout int, memory_order)
+metal_atomic atomic_load int(inout int)
+metal_atomic atomic_store_explicit void(inout int, int, memory_order)
 metal_atomic atomic_max void(inout ulong, ulong)
 metal_compute threadgroup_barrier void(mem_flags)
 """
@@ -246,10 +249,17 @@ def test_metal_atomic_functions_call_glsl_atomics_from_crossgl():
     assert features["atomic_max"].signature.params[0] == Param(Type("uint64"), "inout")
     assert features["threadgroup_barrier"].crossgl == "barrier"
     assert features["threadgroup_barrier"].counterpart.params == ()
+    # CrossGL's relaxed load and store, which GLSL lacks, stand in for Metal's in either form.
+    for name in ("atomic_load_explicit", "atomic_load"):
+        assert features[name].crossgl == "atomicLoad"
+        assert features[name].counterpart.params == (Param(Type("int"), "inout"),)
+    store = features["atomic_store_explicit"]
+    assert store.crossgl == "atomicStore"
+    assert store.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
     # An operation CrossGL has only without a memory order is a gap, not an untested probe.
-    load = features["atomic_load_explicit"]
-    assert load.crossgl == ""
-    assert "memory order" in load.note
+    sub = features["atomic_fetch_sub_explicit"]
+    assert sub.crossgl == ""
+    assert "memory order" in sub.note
 
 
 def test_metal_list_records_its_toolchain():

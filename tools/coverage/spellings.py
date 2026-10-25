@@ -304,6 +304,18 @@ COUNTERPARTS["metal"].update(
         for op, name in _METAL_ATOMICS.items()
     }
 )
+# CrossGL's relaxed atomicLoad and atomicStore, which GLSL lacks, are the ones the Metal importer writes for
+# atomic_load_explicit and atomic_store_explicit.
+COUNTERPARTS["metal"].update(
+    {
+        f"atomic_{op}{suffix}": prototype
+        for op, prototype in (
+            ("load", "int atomicLoad(inout int)"),
+            ("store", "void atomicStore(inout int, int)"),
+        )
+        for suffix in ("", "_explicit")
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
