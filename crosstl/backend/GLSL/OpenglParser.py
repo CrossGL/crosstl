@@ -2,6 +2,7 @@
 
 import re
 
+from ..switch_clauses import record_default_position
 from .interface_block_locations import anonymous_block_member_layouts
 from .OpenglAst import (
     ArrayAccessNode,
@@ -2496,6 +2497,7 @@ class GLSLParser:
 
         cases = []
         default_statements = None
+        default_index = None
 
         while self.current_token[0] not in ("RBRACE", "EOF"):
             self.skip_newlines()
@@ -2507,6 +2509,7 @@ class GLSLParser:
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_statements = []
+                default_index = len(cases)
                 while self.current_token[0] not in (
                     "CASE",
                     "DEFAULT",
@@ -2527,7 +2530,9 @@ class GLSLParser:
                 )
 
         self.eat("RBRACE")
-        return SwitchNode(expression, cases, default_statements)
+        return record_default_position(
+            SwitchNode(expression, cases, default_statements), default_index
+        )
 
     def parse_case_statement(self):
         self.eat("CASE")

@@ -7185,8 +7185,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated

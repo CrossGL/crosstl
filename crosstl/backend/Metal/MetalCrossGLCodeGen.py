@@ -41,6 +41,7 @@ from ...translator.semantics.sampler_states import (
 )
 from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
+from ..switch_clauses import ordered_switch_clauses
 from .aggregate_scalar_conversions import (
     refuse_aggregate_builtin_operation,
     render_aggregate_scalar_conversion,
@@ -23362,20 +23363,16 @@ float {scalar}(float value) {{
         )
         code = f"switch ({expression}) {{\n"
         try:
-            for case in node.cases:
-                case_value = self.generate_expression(case.value, is_main)
-                code += "    " * (indent + 1) + f"case {case_value}:\n"
-                code += self.generate_function_body(
-                    case.statements, indent + 2, is_main
+            # The parser keeps each clause's own jumps, so a clause without one
+            # still falls through into the next.
+            for value, statements in ordered_switch_clauses(node):
+                label = (
+                    "default"
+                    if value is None
+                    else f"case {self.generate_expression(value, is_main)}"
                 )
-                if not self.switch_case_has_explicit_terminator(case.statements):
-                    code += "    " * (indent + 2) + "break;\n"
-
-            if node.default:
-                code += "    " * (indent + 1) + "default:\n"
-                code += self.generate_function_body(node.default, indent + 2, is_main)
-                if not self.switch_case_has_explicit_terminator(node.default):
-                    code += "    " * (indent + 2) + "break;\n"
+                code += "    " * (indent + 1) + f"{label}:\n"
+                code += self.generate_function_body(statements, indent + 2, is_main)
 
             code += "    " * indent + "}\n"
             return code
@@ -23392,10 +23389,3 @@ float {scalar}(float value) {{
             self.local_integral_constant_bindings = (
                 previous_local_integral_constant_bindings
             )
-
-    def switch_case_has_explicit_terminator(self, statements):
-        if not statements:
-            return False
-        return isinstance(
-            statements[-1], (BreakNode, ContinueNode, DiscardNode, ReturnNode)
-        )

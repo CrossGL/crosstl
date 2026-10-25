@@ -270,6 +270,7 @@ from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlock
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
 from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
@@ -1681,7 +1682,12 @@ class _DirectXResourceRegisterAllocator(dict):
         )
 
 
-class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin, HLSLBfloat16Vectors):
+class HLSLCodeGen(
+    HlslGlslBlockRegisters,
+    HLSLNarrowIntegerMixin,
+    LoweringRefusalMixin,
+    HLSLBfloat16Vectors,
+):
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = DirectXLoweringRefused
@@ -17004,12 +17010,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "shape"
                     ),
                 )
-            left_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
-                left_integer
+            narrow_vector_bases = self.hlsl_narrow_vector_shift_bases(
+                left_integer, right_integer
             )
-            right_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
-                right_integer
-            )
+            if narrow_vector_bases is not None:
+                left_operation_base, right_operation_base = narrow_vector_bases
+            else:
+                left_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
+                    left_integer
+                )
+                right_operation_base = self.hlsl_promoted_integer_arithmetic_base_type(
+                    right_integer
+                )
             operation_base = left_operation_base
             result_width = left_width
         else:
@@ -18664,6 +18676,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if pointee_type is not None:
                     return pointee_type
+            narrow_scalar_unary = self.hlsl_narrow_scalar_unary_result_type(expr)
+            if narrow_scalar_unary is not None:
+                return narrow_scalar_unary
             return self.expression_result_type(expr.operand)
         if isinstance(expr, TernaryOpNode) or (
             hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__)
@@ -27686,6 +27701,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bfloat_unary is not None:
                 return bfloat_unary
+            narrow_scalar_unary = self.hlsl_narrow_scalar_unary_expression(
+                expr, operand, mapped_op
+            )
+            if narrow_scalar_unary is not None:
+                return narrow_scalar_unary
             if mapped_op == "-" and not isinstance(expr.operand, LiteralNode):
                 floating = self.hlsl_floating_arithmetic_type_info(
                     self.hlsl_source_expression_type(expr.operand)
