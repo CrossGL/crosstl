@@ -50,6 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- CUDA and HIP output writes `min` and `max` of integer operands as the integer intrinsics instead of `fminf` and `fmaxf`, which converted the operands to `float` and rounded values above 2^24, and writes `double` operands as `fmin` and `fmax`. Operands of different integer types are cast to the type they promote to, as `min(static_cast<unsigned int>(i), 32u)`.
 - WGSL output gives resources without an explicit binding the lowest free slots in their bind group, as GLSL and HLSL output do. Explicit bindings in any group used to push them higher: next to `cbuffer Params @binding(3)`, two storage buffers without a binding took slots 4 and 5 instead of 0 and 1.
 - Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
