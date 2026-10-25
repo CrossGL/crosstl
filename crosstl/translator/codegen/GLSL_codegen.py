@@ -19215,6 +19215,12 @@ class GLSLCodeGen(
             layout_name="max_primitives",
         )
 
+        declared = self.glsl_mesh_output_array_limits(func)
+        if max_vertices is None:
+            max_vertices = declared.get("vertices")
+        if max_primitives is None:
+            max_primitives = declared.get("primitives")
+
         layout_parts = []
         if output_primitive:
             layout_parts.append(output_primitive)
@@ -19226,6 +19232,24 @@ class GLSLCodeGen(
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_mesh_output_array_limits(self, func):
+        """The vertex and primitive limits that a mesh entry's output arrays declare.
+
+        GL_EXT_mesh_shader requires ``max_vertices`` and ``max_primitives`` in the output layout; without the
+        attributes, the ``@vertices``, ``@primitives`` and ``@indices`` array sizes give them, as they do in HLSL.
+        """
+        limits = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if not self.is_mesh_output_parameter(param):
+                continue
+            count = self.mesh_output_parameter_count_value(param)
+            if count is None:
+                continue
+            role = self.mesh_output_parameter_role(param)
+            key = "vertices" if role == "vertices" else "primitives"
+            limits[key] = max(count, limits.get(key, 0))
+        return limits
 
     def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
         return self.glsl_stage_consistent_layout_value(
