@@ -39,6 +39,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- HLSL Shader Model 6.9 `dx::MaybeReorderThread(hint, bits)` is refused with `ShaderExecutionReorderingUnsupportedError` for every target other than Direct3D, which writes the call back unchanged. The Metal, GLSL, Slang, CUDA, HIP, Rust and Mojo generators copied the HLSL spelling into their output, where each target compiler rejects it.
 - Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
 - An early `return;` in a GLSL `main` that writes stage outputs returns those outputs on every target.
