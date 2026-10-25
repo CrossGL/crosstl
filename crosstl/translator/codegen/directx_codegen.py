@@ -38312,16 +38312,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return str(mapped_semantic).lower()
 
     def hlsl_struct_member_declared_semantic(self, member):
-        semantic = self.semantic_from_struct_member(member)
-        if semantic is not None:
-            return semantic
-
-        name_semantics = {
-            "view": "gl_ViewIndex",
-            "layer": "gl_Layer",
-            "viewport": "gl_ViewportIndex",
-        }
-        return name_semantics.get(getattr(member, "name", ""))
+        return self.semantic_from_struct_member(member)
 
     def hlsl_semantic_range_start(self, semantic):
         mapped_semantic = self.hlsl_semantic_name(semantic)
