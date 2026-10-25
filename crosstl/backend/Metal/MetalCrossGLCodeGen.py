@@ -50,6 +50,7 @@ from .color_attachments import (
     framebuffer_fetch_struct_names,
 )
 from .comparison_samplers import collect_comparison_sampler_ids
+from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_builtin_result_type,
@@ -10406,6 +10407,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     code += f"{constructor_array}\n"
                     continue
                 decl = self.format_decl(stmt, include_semantic=False)
+                if decl.startswith("sampler ") and is_default_sampler_local(
+                    stmt, getattr(self.current_function, "body", None)
+                ):
+                    # Default-constructed state is fixed state (:mod:`.default_samplers`).
+                    code += f"const {decl} = sampler();\n"
+                    continue
                 if not getattr(stmt, "is_metal_constructor_storage", False):
                     initializer = self.generate_default_constructor_initializer(
                         stmt, is_main
