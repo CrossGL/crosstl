@@ -322,6 +322,27 @@ def o_hlsl_matrix_orientation(inp):
     return np.array(out, dtype=np.float32)
 
 
+def o_matrix_expression_columns(inp):
+    """GLSL 4.60 sections 5.6, 5.9 and 8.6: columns of matrix-valued expressions built from six inputs per thread."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).T  # 3 rows, 2 columns; column c is m[:, c]
+        n = np.array([[1.0, 2.0, 3.0], [a[5], a[0], 4.0]]).T
+        c = np.array([a[0], a[2], a[4]])
+        r = np.array([a[1], 10.0])
+        q, s, t = (m / 2.0)[:, 1], (m + 1.0)[:, k], (10.0 - m)[:, 1]
+        u, v = (m * n)[:, 1], np.outer(c, r)[:, k]
+        x, y = (m - 1.0) @ r, c @ (m + n)
+        out += [q[0], q[2], s[1], s[2], t[0], t[1], u[0], u[2], v[0], v[1], x[0], x[2]]
+        out += [y[0], y[1], (m * 2.0)[1, 1], (2.0 * m - n)[2, k]]
+        d = np.array([[2.0, 4.0, 0.5], [8.0, 1.0, 0.25]]).T * float(1 << k)
+        h = (m + 1.0 - n - 0.5) / d
+        out += [-m[0, 1], h[1, k], (4.0 / d)[2, 1], (m / d)[0, k]]
+    return np.array(out, dtype=np.float32)
+
+
 def _matrix_storage_input(n=64):
     """``n`` std430 mat2x3 values: two columns of three floats, each padded to four with -1000."""
     columns = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
@@ -1498,6 +1519,17 @@ CASES = [
         + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
         np.float32,
         o_hlsl_matrix_orientation,
+        compare="ulp:0",
+    ),
+    Case(
+        "g_matrix_expression_columns",
+        "S11",
+        "columns of mat2x3 sums, quotients, negations, compound updates, matrixCompMult and outerProduct results",
+        "GLSL 4.60 sections 5.6, 5.9 and 8.6",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_matrix_expression_columns,
         compare="ulp:0",
     ),
     Case(

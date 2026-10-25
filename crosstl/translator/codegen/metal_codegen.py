@@ -11015,7 +11015,35 @@ class MetalCodeGen(
             rhs = f"{native_vector}({rhs})"
         if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
+        matrix_update = self.metal_matrix_compound_assignment(
+            target, value, op, lhs, rhs
+        )
+        if matrix_update is not None:
+            return matrix_update
         return f"{lhs} {op} {rhs}"
+
+    def metal_matrix_compound_assignment(self, target, value, op, lhs, rhs):
+        """``m op= v`` for a componentwise matrix update MSL has no operator for, or ``None``.
+
+        The update becomes ``m = helper(m, v)``, which evaluates ``m`` twice, so a target with side effects is
+        refused.
+        """
+        if op not in {"+=", "-=", "/="}:
+            return None
+        update = self.metal_matrix_builtins.componentwise(
+            op[:-1], target, value, lhs, rhs
+        )
+        if update is None:
+            return None
+        if not self.metal_expression_is_side_effect_free(target):
+            raise UnsupportedMetalFeatureError(
+                "matrix compound assignment",
+                f"Metal has no '{op}' for this matrix operand, and the target "
+                "of the rewritten update has side effects",
+                operation=op,
+                reason="target-has-side-effects",
+            )
+        return f"{lhs} = {update}"
 
     def generate_metal_stage_io_lowered_assignment(self, target, rhs, op):
         if isinstance(target, MemberAccessNode):
@@ -11677,6 +11705,11 @@ class MetalCodeGen(
             )
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
+            matrix_arithmetic = self.metal_matrix_builtins.componentwise(
+                operator, expr.left, expr.right, left, right
+            )
+            if matrix_arithmetic is not None:
+                return matrix_arithmetic
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -11750,6 +11783,12 @@ class MetalCodeGen(
                     operand, self.expression_result_type(expr.operand)
                 )
             operand = self.metal_narrow_vector_operand(expr.operand, operand)
+            if operator == "-":
+                matrix_negation = self.metal_matrix_builtins.negation(
+                    expr.operand, operand
+                )
+                if matrix_negation is not None:
+                    return matrix_negation
             if operator in {"+", "-"} and operand.startswith(("+", "-")):
                 # Keep adjacent signs from becoming an increment or decrement.
                 operand = f"({operand})"

@@ -84,7 +84,10 @@ from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
 )
-from ..matrix_shape import crossgl_linear_algebra_product_type
+from ..matrix_shape import (
+    crossgl_linear_algebra_product_type,
+    crossgl_matrix_componentwise_type,
+)
 from ..metadata_preconditions import (
     MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
@@ -36892,6 +36895,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = crossgl_matrix_componentwise_type(
+                operator, left_type, right_type
+            )
+            if matrix_type is not None:
+                return matrix_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )
@@ -45380,6 +45388,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = crossgl_matrix_componentwise_type(
+                operator, self.map_type(left_type), self.map_type(right_type)
+            )
+            if matrix_type is not None:
+                return matrix_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )

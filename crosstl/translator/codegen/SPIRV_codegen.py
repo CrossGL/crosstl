@@ -3691,7 +3691,7 @@ class VulkanSPIRVCodeGen(
             return self.unsupported_matrix_operation(op, result_type)
 
         if left_matrix is not None and right_matrix is not None:
-            if op in {"+", "-"}:
+            if op in {"+", "-", "/"}:
                 return self.componentwise_matrix_operation(
                     op, left, left_type, left_matrix, right, right_type, right_matrix
                 )
@@ -3708,10 +3708,9 @@ class VulkanSPIRVCodeGen(
             if right_vector is None:
                 if op == "*":
                     return self.matrix_times_scalar(left, left_type, left_matrix, right)
-                if op == "/":
-                    return self.matrix_divided_by_scalar(
-                        left, left_type, left_matrix, right
-                    )
+                return self.matrix_scalar_componentwise(
+                    op, left, left_type, left_matrix, right, scalar_first=False
+                )
             return self.unsupported_matrix_operation(op, result_type)
 
         left_vector = self.vector_type_info_from_type(left_type)
@@ -3719,6 +3718,10 @@ class VulkanSPIRVCodeGen(
             return self.vector_times_matrix(left, left_vector, right, right_matrix)
         if op == "*" and left_vector is None and right_matrix is not None:
             return self.matrix_times_scalar(right, right_type, right_matrix, left)
+        if left_vector is None and right_matrix is not None:
+            return self.matrix_scalar_componentwise(
+                op, right, right_type, right_matrix, left, scalar_first=True
+            )
 
         return self.unsupported_matrix_operation(op, result_type)
 
@@ -3813,18 +3816,27 @@ class VulkanSPIRVCodeGen(
         )
         return spirv_id
 
-    def matrix_divided_by_scalar(
-        self, matrix: SpirvId, matrix_type: SpirvId, matrix_info, scalar: SpirvId
+    def matrix_scalar_componentwise(
+        self,
+        op: str,
+        matrix: SpirvId,
+        matrix_type: SpirvId,
+        matrix_info,
+        scalar: SpirvId,
+        *,
+        scalar_first: bool,
     ) -> SpirvId:
+        """``m op s`` or ``s op m`` for ``+``, ``-`` or ``/``, one column at a time (GLSL 4.60 section 5.9)."""
         scalar = self.matrix_scalar_operand(scalar, matrix_info["component_type"])
         if scalar is None:
-            return self.unsupported_matrix_operation("/", matrix_type)
+            return self.unsupported_matrix_operation(op, matrix_type)
 
         columns = []
         for index in range(matrix_info["column_count"]):
             column = self.composite_extract(matrix, matrix_info["column_type"], index)
+            operands = (scalar, column) if scalar_first else (column, scalar)
             columns.append(
-                self.binary_operation("/", matrix_info["column_type"], column, scalar)
+                self.binary_operation(op, matrix_info["column_type"], *operands)
             )
         return self.composite_construct(matrix_type, columns)
 
@@ -4703,6 +4715,20 @@ class VulkanSPIRVCodeGen(
             complex_negation = self.complex_struct_negate_operation(operand)
             if complex_negation is not None:
                 return complex_negation
+            # OpFNegate takes no matrix, so a matrix is negated one column at a time.
+            matrix_info = self.matrix_operand_info(self.registered_value_type(operand))
+            if matrix_info is not None:
+                columns = [
+                    self.unary_operation(
+                        "-",
+                        matrix_info["column_type"],
+                        self.composite_extract(
+                            operand, matrix_info["column_type"], index
+                        ),
+                    )
+                    for index in range(matrix_info["column_count"])
+                ]
+                return self.composite_construct(matrix_info["type"], columns)
             component_type = self.scalar_or_vector_component_type(result_type.type)
             # Unary minus on a bool result: SPIR-V has no negation opcode for
             # bool (OpFNegate/OpSNegate reject bool), and C++ promotes bool to int
