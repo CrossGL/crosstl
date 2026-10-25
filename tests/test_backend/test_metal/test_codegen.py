@@ -6179,6 +6179,26 @@ def test_codegen_packed_and_simd_types():
     assert "mat4 m4" in result
 
 
+def test_codegen_simd_namespace_types():
+    """The C++ interface of <simd/simd.h> spells Metal's vector and matrix types simd::float3, simd::half3x3."""
+    code = """
+    struct Types {
+        simd::float3 v3;
+        simd::uint2 u2;
+        simd::float3x3 m3;
+        simd::float4x2 m42;
+        simd::half3x3 h3;
+    };
+    """
+    result = convert(code)
+    assert "vec3 v3" in result
+    assert "uvec2 u2" in result
+    assert "mat3 m3" in result
+    assert "mat4x2 m42" in result
+    assert "f16mat3 h3" in result
+    assert "float3x3" not in result
+
+
 def test_codegen_function_constants_and_argument_buffers():
     code = """
     #include <metal_stdlib>
