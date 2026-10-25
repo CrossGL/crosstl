@@ -515,8 +515,11 @@ CONSTRUCTS: dict[str, Template] = {
     "workgroup-id": Template("outp[i] = float(gl_WorkGroupID.x);"),
     "local-invocation-index": Template("outp[i] = float(gl_LocalInvocationIndex);"),
     "num-workgroups": Template("outp[i] = float(gl_NumWorkGroups.x);"),
+    # The native probes bind the block at slot 3, past the buffers, and so does the CrossGL probe, so that a host binds
+    # the translation the way it binds the native probe.
     "uniform-buffer": Template(
-        "outp[i] = fin[i] * scale;", prelude="cbuffer Params {\n    float scale;\n};"
+        "outp[i] = fin[i] * scale;",
+        prelude="cbuffer Params @binding(3) {\n    float scale;\n};",
     ),
     "read-only-buffer": Template("outp[i] = rin[i];", "readonly buffer float* rin;"),
     "sampled-texture": Template(

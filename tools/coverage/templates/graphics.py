@@ -172,9 +172,10 @@ HLSL = {
     ),
     # HLSL has no system value for the number of groups; applications pass it in a constant buffer.
     "num-workgroups": ABSENT,
+    # Slot 3, as in the other languages: the SPIR-V that DXC and slangc write puts register b0 at the binding of u0.
     "uniform-buffer": Template(
         "outp[i] = fin[i] * scale;",
-        "cbuffer Params : register(b0) {\n    float scale;\n};",
+        "cbuffer Params : register(b3) {\n    float scale;\n};",
     ),
     "read-only-buffer": Template(
         "outp[i] = rin[i];", "StructuredBuffer<float> rin : register(t0);"

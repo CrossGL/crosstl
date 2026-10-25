@@ -11,6 +11,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - `buffer T name[]` and `buffer T name[N]` declare one storage buffer of `T` elements for every `T`, structures included, as Metal's `device T*` does. GLSL buffer block arrays (`buffer B { ... } name[N];`) keep their meaning as arrays of descriptors.
 - CrossGL `sizeof` of a scalar, a 2- or 4-component vector or a sized array is folded to a constant on Metal, HLSL and GLSL. Other operands are refused with `SizeofUnsupportedError`; `sizeof` used to be written out unchanged, so GLSL rejected it and HLSL and Metal measured with their own layout rules.
 - The Metal importer refuses `sinpi`, `cospi`, `tanpi`, `asinpi`, `acospi`, `atanpi` and `atan2pi`, which are exact at integers and half-integers where `sin(x * pi)` is not, and calls to functions that the source declares but never defines. Both used to reach every target as calls to undeclared functions.
+- Metal indirect command buffers (`command_buffer`, `render_command`, `compute_command`) and rasterization rate maps are refused with `MetalRuntimeTypeUnsupportedError` for every target other than Metal when a stage uses them. HLSL and GLSL output used to copy the type names.
 
 ### Added
 
@@ -32,6 +33,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - SPIR-V output folds module-scope constant expressions exactly, rounding binary32 results after each operation, instead of emitting instructions that module scope cannot hold. Shading-rate built-ins, per-primitive mesh outputs and arrays of constant buffers are declared with their SPIR-V built-ins and capabilities.
 - `INFINITY`, `NAN`, `FLT_MAX`, `FLT_MIN`, `FLT_EPSILON` and the other standard float limits are written as exact binary32 values on HLSL and GLSL.
 - Arrays of HLSL structured buffers keep HLSL's tight element layout on GLSL, SPIR-V and Metal.
+- Texel lookup offsets that a program keeps in constant locals or computes in short constant loops become constant expressions on GLSL, HLSL, WGSL, SPIR-V and Slang. SPIR-V output refuses a non-constant offset outside gathers instead of writing an invalid module.
+- Metal `half` matrices translate to SPIR-V and WGSL as float matrices that hold binary16 values, rounded after each operation, and `half` operands in mixed expressions are typed. The Metal importer maps the `simd::` vector and matrix types like the Metal ones.
 - GLSL `length()` of a vector or matrix becomes its component or column count on other targets.
 
 ### Fixed
@@ -48,6 +51,14 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - 8- and 16-bit integer vector arithmetic wraps at its own width on GLSL and Metal, and Metal widens native `ushort2` and similar fields and buffer elements when it reads them.
 - Storage buffer arrays translate to GLSL, SPIR-V, HLSL, WGSL, Slang and Metal. Sized arrays on HLSL used to be `static` arrays whose stores never reached memory, and unsized arrays of structures were refused on HLSL and WGSL.
 - A GLSL entry point that writes one of its inputs, built-ins included, writes a local copy instead of the read-only input.
+- HLSL entry points that write stage outputs through `out` and `inout` parameters translate to GLSL, HLSL, Metal, SPIR-V, WGSL and Slang, and `SV_Target<N>` reaches colour attachment N on GLSL, WGSL, Slang and Metal. Multi-stage shaders written this way used to fail, and GLSL and WGSL numbered attachments in declaration order.
+- WGSL output of a `switch` has one `default` arm and keeps fallthrough by merging case bodies, writes `discard;`, and converts scalar operands of vector stores, shifts and bitwise operators, which naga used to reject.
+- An HLSL vertex input with `SV_Position` is a regular vertex attribute on GLSL, Metal, WGSL and SPIR-V. Metal and WGSL rejected it, and SPIR-V read the `gl_Position` output instead.
+- Function-scope `static` variables keep their value across calls on every target, and HLSL output keeps the initializers of static globals.
+- Vector `&&` and `||` combine per component on every target. HLSL 2021 and WGSL output used to be invalid, and GLSL refused it.
+- Metal output of HLSL vertex inputs that mix attributes with built-ins such as `SV_VertexID` compiles, and an `int` `SV_VertexID` is accepted.
+- Metal fragment parameters whose members carry `[[color(n)]]` read colour attachments on every target, or are refused where the target has no framebuffer fetch. They used to become ordinary inputs. A default-constructed Metal `sampler` gets MSL's default sampler state.
+- The Metal importer reads `m.columns[i]` of a matrix as the column `m[i]`. The `columns` array used as a value is refused with `MetalMatrixColumnsError`.
 - HLSL output stores bfloat16 vectors as per-lane `uint` payloads, writes `fwidthFine` and `fwidthCoarse` with fine and coarse derivatives, and the HLSL importer maps packed 8-bit structured buffer elements.
 - A scalar swizzle such as `s.xxx` becomes a vector constructor on Metal, WGSL and GLSL ES, which do not accept it.
 - Slang output reads `gl_NumWorkGroups` as `WorkgroupCount()`, and Metal output infers the type of a shader-scope `let` from its initializer.
