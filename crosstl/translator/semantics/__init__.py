@@ -84,6 +84,7 @@ from .stage_interface_structs import (
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -103,6 +104,10 @@ from .texture_residency import declare_hlsl_residency_status, refuse_texture_res
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .vector_logic import lower_vector_logic
+from .vertex_input_positions import (
+    VertexInputPositionUnsupportedError,
+    attribute_vertex_input_positions,
+)
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
@@ -139,7 +144,9 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
+    "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "UndeclaredTypeError",
@@ -189,7 +196,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). A position built-in on a vertex input names the ``Position``
+    vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
     target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
@@ -252,6 +260,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_static_locals(program, report.target)
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
@@ -263,6 +272,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     pass_builtin_inputs(program, report.target)
+    attribute_vertex_input_positions(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)

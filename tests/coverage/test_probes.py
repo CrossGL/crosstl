@@ -27,6 +27,26 @@ def test_crossgl_probe_reads_buffers_and_stores_the_result():
     assert "outp[i] = r;" in source
 
 
+@pytest.mark.parametrize("language", ["glsl", "hlsl", "metal", "slang", "wgsl", "cuda"])
+def test_a_call_without_arguments_declares_the_input_the_harness_binds(language):
+    # The conformance harness binds an input buffer at slot 0, so where it runs the feature's language, the probe
+    # declares one that the call never reads.
+    lane = Feature(
+        language,
+        "function",
+        "WaveGetLaneIndex",
+        Signature(Type("uint"), ()),
+        crossgl="WaveGetLaneIndex",
+    )
+    native = probes.build(lane, language).source
+    crossgl = probes.build(lane, "crossgl").source
+    if language == "cuda":
+        assert "fin" not in native + crossgl
+        return
+    assert native.count("fin") == 1 and native.index("fin") < native.index("outp")
+    assert "buffer float* fin;\n        buffer uint* outp;" in crossgl
+
+
 def test_probe_binds_inout_parameters_to_the_output_buffer():
     source = probes.build(
         feature("atomicAdd", Type("uint"), Param(Type("uint"), "inout"), Type("uint")),
@@ -327,6 +347,16 @@ def test_constant_unsigned_arguments_are_one(language):
     )
     source = probes.build(rotate, language).source
     assert "float r = WaveClusteredRotate(a0, a1, 1u);" in source
+
+
+@pytest.mark.parametrize("language", ["slang", "crossgl"])
+def test_compile_time_conditions_are_true(language):
+    # A false condition would fail the probe however CrossTL translates the call.
+    check = feature(
+        "static_assert", VOID, Param(Type("bool"), "condition"), Param(STRING, "const")
+    )
+    source = probes.build(check, language).source
+    assert 'static_assert(true, "");' in source
 
 
 @pytest.mark.parametrize("language", ["glsl", "crossgl"])
@@ -929,6 +959,7 @@ MOJO_SIGNATURES = [
     feature(
         "divmod", Type.other("Tuple[Float32, Float32]"), Type("float"), Type("float")
     ),
+    feature("mulwide", Type("uint64"), Type("uint"), Type("uint")),
 ]
 
 
@@ -938,6 +969,8 @@ def test_mojo_probe_spells_the_word_sized_int_and_reads_the_first_of_a_pair():
     assert "    var r: Int = gcd(a0, a1)\n    outp[i] = Int32(r)\n" in source
     source = probes.build(MOJO_SIGNATURES[5], "mojo").source
     assert "    var r: Float32 = frexp(a0)[0]\n    outp[i] = r\n" in source
+    source = probes.build(MOJO_SIGNATURES[7], "mojo").source
+    assert "    var r: UInt64 = mulwide(a0, a1)\n    outp[i] = UInt32(r)\n" in source
     # Only Mojo reads a pair.
     with pytest.raises(probes.ProbeError, match="Tuple"):
         probes.build(MOJO_SIGNATURES[6], "cuda")

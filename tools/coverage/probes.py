@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import constructs
+from . import constructs, execution
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
 from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type, tuple_element
@@ -261,6 +261,8 @@ class _Builder:
                 arguments.append(local)
             elif param.direction == "const":
                 arguments.append(dialect.constant(param.type))
+            elif param.direction == "condition":
+                arguments.append(dialect.true)
             elif param.direction == "address":
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
@@ -402,6 +404,10 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         for scalar in ("float", "int", "uint")
         if scalar in builder.offsets
     ]
+    # The conformance harness binds an input buffer at slot 0 and the output at slot 1, so a compute probe whose
+    # call reads no argument still declares an input, unread, for :mod:`.execution` to run it.
+    if not buffers and feature.stage == "compute" and execution.runs(feature.language):
+        buffers.append((dialect.type(Type("float")), _BUFFERS["float"]))
     atomic = any(p.direction == "inout" for p in signature.params)
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
