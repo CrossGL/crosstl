@@ -21,6 +21,7 @@ from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_extents import fold_constant_extents
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -256,6 +257,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
     fold_binding_constants(program, report.target)
+    fold_constant_extents(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
