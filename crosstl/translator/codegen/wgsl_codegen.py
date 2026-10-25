@@ -66,6 +66,7 @@ from .image_access_contracts import (
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_compute_builtins import lower_narrow_compute_builtins
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
@@ -730,6 +731,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
+        lower_narrow_compute_builtins(
+            ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
+        )
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}

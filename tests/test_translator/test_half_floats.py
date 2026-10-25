@@ -485,10 +485,7 @@ def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
     output = crosstl.translate(str(path), backend=backend, format_output=False)
-    # WGSL from Metal kernels has an unrelated interface defect (scalar invocation-id builtins), so only WGSL from
-    # GLSL is checked natively.
-    if backend == "vulkan" or suffix == ".comp":
-        validate(tmp_path, output, backend)
+    validate(tmp_path, output, backend)
     return output
 
 
