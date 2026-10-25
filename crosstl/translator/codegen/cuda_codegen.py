@@ -1073,6 +1073,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("#include <cuda_fp16.h>")
+        # CrossGL's fixed-width integers lower to uint8_t, int64_t and friends, which none of the
+        # CUDA headers above declares.
+        self.emit("#include <cstdint>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
