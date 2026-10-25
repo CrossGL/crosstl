@@ -18,10 +18,11 @@ gives every ``half`` register a ``float`` and keeps the invariant that it holds 
   ``half``. A floating-point literal adopts ``half`` in HLSL and Slang (literal float) and is a ``float`` elsewhere;
   importers spell half literals (``1.5h``, ``1.5hf``) as conversions.
 
-Registers, private and workgroup arrays and struct members become ``float``. Half pointees in device, constant or
-unqualified memory, and buffer element types, are left to the emitters, which lay that storage out one 32-bit word
-per element (a layout change for the host that the reflection metadata does not report yet). Constructs the pass
-cannot keep exact are refused with :class:`HalfFloatUnsupportedError`: half matrices, ``%`` and ``fmod`` on half,
+Registers, private and workgroup arrays and struct members become ``float``; half matrices follow the same rules
+(:mod:`.half_matrices`). Half pointees in device, constant or unqualified memory, and buffer element types, are left to
+the emitters, which lay that storage out one 32-bit word per element (a layout change for the host that the reflection
+metadata does not report yet). Constructs the pass cannot keep exact are refused with
+:class:`HalfFloatUnsupportedError`: ``%`` and ``fmod`` on half,
 a half operation with an operand of unknown type, a half increment used as a value and a compound assignment to an
 lvalue with side effects. ``min16float`` is a minimum-precision type that may compute in 32 bits and is not
 legalized here.
@@ -38,6 +39,13 @@ from dataclasses import dataclass
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from . import half_helpers as H
+from .half_matrices import (
+    MatrixRules,
+    column_of,
+    mark_matrix,
+    matrix_shape,
+    widened_matrix,
+)
 from .hub_types import HubType, TypeScope, call_name, element_type_node
 from .rewrite import (
     call,
@@ -227,17 +235,28 @@ def half_of(node) -> HubType | None:
     return None
 
 
-def _is_half_matrix(node) -> bool:
+def _is_half_matrix(node, *, unshaped=False) -> bool:
+    """Whether ``node`` is or contains a half matrix type (only one without a readable shape when ``unshaped``)."""
     if isinstance(node, str):
-        return bool(_MATRIX.fullmatch(node.replace(" ", "")))
-    if isinstance(node, (A.PrimitiveType, A.NamedType)):
-        return _is_half_matrix(str(node.name))
+        name = node.replace(" ", "")
+        return bool(_MATRIX.fullmatch(name)) and not (
+            unshaped and matrix_shape(name) is not None
+        )
     if isinstance(node, A.MatrixType):
-        return half_of(node.element_type) is not None
+        return half_of(node.element_type) is not None and not (
+            unshaped and matrix_shape(node) is not None
+        )
+    if isinstance(node, A.NamedType) and node.generic_args:
+        return any(
+            _is_half_matrix(argument, unshaped=unshaped)
+            for argument in node.generic_args
+        )
+    if isinstance(node, (A.PrimitiveType, A.NamedType)):
+        return _is_half_matrix(str(node.name), unshaped=unshaped)
     for field in ("element_type", "pointee_type", "referenced_type"):
         inner = getattr(node, field, None)
         if inner is not None:
-            return _is_half_matrix(inner)
+            return _is_half_matrix(inner, unshaped=unshaped)
     return False
 
 
@@ -261,7 +280,7 @@ def widened(node):
     """
     if isinstance(node, str):
         half = half_from_name(node)
-        return _float_type(half.lanes) if half is not None else None
+        return _float_type(half.lanes) if half is not None else widened_matrix(node)
     field = {
         A.ArrayType: "element_type",
         A.PointerType: "pointee_type",
@@ -278,7 +297,9 @@ def widened(node):
         return duplicate
     if isinstance(node, (A.PrimitiveType, A.NamedType, A.VectorType)):
         half = half_of(node)
-        return _float_type(half.lanes) if half is not None else None
+        return _float_type(half.lanes) if half is not None else widened_matrix(node)
+    if isinstance(node, A.MatrixType):
+        return widened_matrix(node)
     return None
 
 
@@ -324,10 +345,12 @@ def _mark(node, lanes):
 @dataclass(frozen=True)
 class Kind:
     """An operand's category: ``half``, ``float`` (binary32), ``double``, ``int``, ``bool``, ``literal`` (a
-    floating-point literal) or ``int_literal``."""
+    floating-point literal) or ``int_literal``. A matrix has ``columns`` columns of ``lanes`` rows.
+    """
 
     name: str
     lanes: int = 1
+    columns: int = 0
 
 
 class _HalfScope(TypeScope):
@@ -342,11 +365,15 @@ class _HalfScope(TypeScope):
             carried = expr.annotations.get("cgl_half")
             if carried is not None:
                 return carried
+        if isinstance(expr, A.ArrayAccessNode):
+            column = column_of(expr.array_expr, self)
+            if column is not None:
+                return column
         return super().infer(expr)
 
 
 # The pass -------------------------------------------------------------------------------------------------------
-class HalfLegalizer:
+class HalfLegalizer(MatrixRules):
     def __init__(self, program, source, target):
         self.program = program
         self.source = source
@@ -357,6 +384,7 @@ class HalfLegalizer:
         for function in _functions(program):
             self.functions.setdefault(function.name, []).append(function)
         self.return_type = None
+        self.return_matrix = None
         self.required = set()
 
     def run(self):
@@ -419,8 +447,16 @@ class HalfLegalizer:
                 types.append(call_name(node))
             if isinstance(node, A.CastNode):
                 types.append(node.target_type)
-            if any(_is_half_matrix(value) for value in types if value is not None):
-                self.refuse("a half matrix", "matrix", node)
+            if any(
+                _is_half_matrix(value, unshaped=True)
+                for value in types
+                if value is not None
+            ):
+                self.refuse(
+                    "a half matrix spelled without a column-major shape (f16matCxR)",
+                    "matrix",
+                    node,
+                )
 
     def _declare_variables(self, variables):
         for variable in variables:
@@ -462,12 +498,14 @@ class HalfLegalizer:
         self.scope.push()
         for parameter in function.parameters or []:
             self.scope.declare(parameter.name, _parameter_type(parameter))
-        previous, self.return_type = self.return_type, half_of(function.return_type)
+        previous = self.return_type, self.return_matrix
+        self.return_type = half_of(function.return_type)
+        self.return_matrix = matrix_shape(function.return_type)
         if isinstance(function.body, list):
             function.body[:] = [self.statement(item) for item in function.body]
         else:
             self.visit(function.body)
-        self.return_type = previous
+        self.return_type, self.return_matrix = previous
         self.scope.pop()
 
     def visit(self, node):
@@ -510,6 +548,10 @@ class HalfLegalizer:
         """A statement: a half increment or decrement here becomes an assignment."""
         inner = node.expression if isinstance(node, A.ExpressionStatementNode) else node
         if isinstance(inner, A.UnaryOpNode) and inner.op in _STEPS:
+            if self.matrix_value(inner.operand) is not None:
+                self.refuse(
+                    "a half matrix increment or decrement", "matrix-step", inner
+                )
             half = self.half_lvalue(inner.operand)
             if half is not None:
                 self.visit_children(inner)
@@ -534,6 +576,10 @@ class HalfLegalizer:
             return self.rewrite_assignment(node)
         if isinstance(node, A.UnaryOpNode):
             if node.op in _STEPS:
+                if self.matrix_value(node.operand) is not None:
+                    self.refuse(
+                        "a half matrix increment or decrement", "matrix-step", node
+                    )
                 if self.half_lvalue(node.operand) is not None:
                     self.refuse(
                         "a half increment or decrement used as a value",
@@ -541,6 +587,9 @@ class HalfLegalizer:
                         node,
                     )
                 return node
+            shape = self.matrix_value(node.operand)
+            if node.op in ("-", "+") and shape is not None:
+                return mark_matrix(node, shape)
             half = self.half_value(node.operand)
             if node.op in ("-", "+") and half is not None:
                 return _mark(node, half.lanes)
@@ -551,16 +600,32 @@ class HalfLegalizer:
             half = half_of(node.target_type)
             if half is not None:
                 return self.convert(node.expression, half, node)
+            shape = matrix_shape(node.target_type)
+            if shape is not None:
+                return self.convert_matrix(node.expression, shape, node)
             return node
         if isinstance(node, A.ReturnNode):
-            if self.return_type is not None and node.value is not None:
+            if node.value is not None and self.return_type is not None:
                 set_child(
                     node, "value", None, self.coerce(node.value, self.return_type)
+                )
+            elif node.value is not None and self.return_matrix is not None:
+                set_child(
+                    node,
+                    "value",
+                    None,
+                    self.coerce_matrix(node.value, self.return_matrix),
                 )
             return node
         if isinstance(node, A.BinaryOpNode):
             return self.rewrite_binary(node)
         if isinstance(node, A.TernaryOpNode):
+            shapes = {
+                self.matrix_value(node.true_expr),
+                self.matrix_value(node.false_expr),
+            }
+            if len(shapes) == 1 and None not in shapes:
+                return mark_matrix(node, shapes.pop())
             arms = {
                 self.half_value(node.true_expr),
                 self.half_value(node.false_expr),
@@ -575,6 +640,8 @@ class HalfLegalizer:
         left, right = self.kind(node.left), self.kind(node.right)
         if "half" not in (getattr(left, "name", None), getattr(right, "name", None)):
             return node
+        if any(kind is not None and kind.columns for kind in (left, right)):
+            return self.rewrite_matrix_binary(node, left, right)
         if not self._half_operation((left, right), node, f"a half '{node.op}'"):
             return node
         for side, kind in (("left", left), ("right", right)):
@@ -609,10 +676,17 @@ class HalfLegalizer:
 
     def rewrite_assignment(self, node):
         half = self.half_lvalue(node.target)
-        if half is None:
+        shape = self.matrix_value(node.target) if half is None else None
+        if half is None and shape is None:
             return node
+
+        def fit(value):
+            if shape is not None:
+                return self.coerce_matrix(value, shape)
+            return self.coerce(value, half)
+
         if node.operator == "=":
-            set_child(node, "value", None, self.coerce(node.value, half))
+            set_child(node, "value", None, fit(node.value))
             return node
         operation = _COMPOUND.get(node.operator)
         if operation is None:
@@ -625,7 +699,7 @@ class HalfLegalizer:
         combined = self.rewrite_binary(
             A.BinaryOpNode(clone(node.target), operation, node.value)
         )
-        replacement = A.AssignmentNode(node.target, self.coerce(combined, half))
+        replacement = A.AssignmentNode(node.target, fit(combined))
         replacement.source_location = node.source_location
         return replacement
 
@@ -635,6 +709,9 @@ class HalfLegalizer:
         half = half_from_name(name)
         if half is not None:
             return self.construct(half, arguments, node)
+        shape = matrix_shape(name)
+        if shape is not None:
+            return self.construct_matrix(shape, arguments, node)
         if (
             _TO_BITS.fullmatch(name)
             and len(arguments) == 1
@@ -673,6 +750,10 @@ class HalfLegalizer:
                 expected = half_of(declared)
                 if expected is not None:
                     node.arguments[index] = self.coerce(arguments[index], expected)
+                elif matrix_shape(declared) is not None:
+                    node.arguments[index] = self.coerce_matrix(
+                        arguments[index], matrix_shape(declared)
+                    )
             node.args = node.arguments
             return node
         if name == "buffer_store" and len(arguments) == 3:
@@ -684,6 +765,9 @@ class HalfLegalizer:
         if name == "buffer_load" and len(arguments) == 2:
             element = half_of(self._element_type(arguments[0]))
             return _mark(node, element.lanes) if element is not None else node
+        matrix = self.rewrite_matrix_builtin(name, node)
+        if matrix is not None:
+            return matrix
         if name in _EXACT or name in _ROUNDED or name in _EXACT_HELPERS:
             return self.rewrite_builtin(name, node)
         if name in _REFUSED_CALLS and any(
@@ -793,7 +877,11 @@ class HalfLegalizer:
         self.required.add((base, lanes))
         result = call(H.helper_name(base, lanes), operands)
         result.source_location = getattr(node, "source_location", None)
-        return _mark(result, lanes) if mark else result
+        if not mark:
+            return result
+        if isinstance(lanes, tuple):
+            return mark_matrix(result, lanes)
+        return _mark(result, lanes)
 
     def _callee(self, name, count, node):
         candidates = [
@@ -804,7 +892,10 @@ class HalfLegalizer:
         if len(candidates) <= 1:
             return candidates[0] if candidates else None
         signatures = {
-            tuple(half_of(_parameter_type(p)) for p in function.parameters or [])
+            tuple(
+                half_of(_parameter_type(p)) or matrix_shape(_parameter_type(p))
+                for p in function.parameters or []
+            )
             for function in candidates
         }
         if len(signatures) > 1 and any(any(s) for s in signatures):
@@ -822,18 +913,29 @@ class HalfLegalizer:
             )
 
     def _normalize_declaration(self, node, type_field, value_field):
-        half = half_of(getattr(node, type_field, None))
+        declared = getattr(node, type_field, None)
+        half = half_of(declared)
         value = getattr(node, value_field, None)
         if value is None:
             return
         if half is not None:
             set_child(node, value_field, None, self.coerce(value, half))
-        elif isinstance(value, A.ArrayLiteralNode):
-            element = half_of(
-                getattr(getattr(node, type_field, None), "element_type", None)
+        elif matrix_shape(declared) is not None:
+            set_child(
+                node,
+                value_field,
+                None,
+                self.coerce_matrix(value, matrix_shape(declared)),
             )
+        elif isinstance(value, A.ArrayLiteralNode):
+            element_type = getattr(declared, "element_type", None)
+            element, shape = half_of(element_type), matrix_shape(element_type)
             if element is not None:
                 value.elements = [self.coerce(item, element) for item in value.elements]
+            elif shape is not None:
+                value.elements = [
+                    self.coerce_matrix(item, shape) for item in value.elements
+                ]
 
     def _element_type(self, buffer):
         declared = self.scope.node_type(buffer)
@@ -846,7 +948,17 @@ class HalfLegalizer:
             if base is None:
                 return None
             return base.with_lanes(len(str(expr.components)))
-        if isinstance(expr, (A.IdentifierNode, A.ArrayAccessNode, A.MemberAccessNode)):
+        if isinstance(expr, A.ArrayAccessNode):
+            declared = half_of(self.scope.node_type(expr))
+            if declared is not None:
+                return declared
+            # A column of a half matrix, or a lane of a half vector.
+            column = column_of(expr.array_expr, self.scope)
+            if column is not None:
+                return column
+            base = self.half_lvalue(expr.array_expr)
+            return base.scalar if base is not None and base.lanes > 1 else None
+        if isinstance(expr, (A.IdentifierNode, A.MemberAccessNode)):
             return half_of(self.scope.node_type(expr))
         if isinstance(expr, A.UnaryOpNode) and expr.op == "*":
             pointer = self.scope.node_type(expr.operand)
@@ -880,6 +992,9 @@ class HalfLegalizer:
                 return base.with_lanes(len(components))
             return None
         if isinstance(expr, A.ArrayAccessNode):
+            column = column_of(expr.array_expr, self.scope)
+            if column is not None:
+                return column
             base = self.half_value(expr.array_expr)
             return base.scalar if base is not None and base.lanes > 1 else None
         if isinstance(expr, A.FunctionCallNode):
@@ -889,12 +1004,19 @@ class HalfLegalizer:
         return None
 
     def kind(self, expr) -> Kind | None:
+        shape = self.matrix_value(expr)
+        if shape is not None:
+            return Kind("half", shape[1], shape[0])
         half = self.half_value(expr)
         if half is not None:
             return Kind("half", half.lanes)
         number = _number(expr)
         if number is not None:
             return Kind("literal" if number[1] else "int_literal")
+        matrix = self.float_matrix_kind(expr)
+        if matrix is not None:
+            name, (columns, rows) = matrix
+            return Kind(name, rows, columns)
         inferred = self.scope.infer(expr)
         if inferred is None:
             return None
@@ -926,15 +1048,29 @@ class HalfLegalizer:
                 for field in _STAGE_FIELDS
                 if widened(getattr(node, field, None)) is not None
             ]
+            if any(
+                _is_half_matrix(getattr(node, field, None)) for field in _STAGE_FIELDS
+            ):
+                self.refuse(
+                    "a half matrix in device, constant or buffer memory",
+                    "matrix-storage",
+                    node,
+                )
             if (
                 left
                 or (
                     isinstance(node, A.FunctionCallNode)
-                    and half_from_name(call_name(node))
+                    and (
+                        half_from_name(call_name(node))
+                        or _is_half_matrix(call_name(node))
+                    )
                 )
                 or (
                     isinstance(node, A.CastNode)
-                    and half_of(node.target_type) is not None
+                    and (
+                        half_of(node.target_type) is not None
+                        or _is_half_matrix(node.target_type)
+                    )
                 )
             ):
                 self.refuse(
@@ -980,11 +1116,12 @@ def _functions(program):
 
 
 def _reserved_names():
+    shapes = [(columns, rows) for columns in (2, 3, 4) for rows in (2, 3, 4)]
     return {
         H.helper_name(base, lanes)
         for base in H.SCALAR_HELPERS
         for lanes in (1, 2, 3, 4)
-    }
+    } | {H.helper_name(base, shape) for base in H.MATRIX_HELPERS for shape in shapes}
 
 
 def legalize_half_floats(program, source, target) -> bool:
