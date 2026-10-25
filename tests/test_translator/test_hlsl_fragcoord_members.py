@@ -1,5 +1,6 @@
 """An HLSL fragment input structure's SV_Position member is the fragment coordinate."""
 
+import re
 import shutil
 import subprocess
 
@@ -22,9 +23,11 @@ float4 main(VSOutput input) : SV_TARGET
 def test_subpass_loads_read_the_input_position(tmp_path):
     path = tmp_path / "shader.frag.hlsl"
     path.write_text(SOURCE)
-    hlsl = crosstl.translate(str(path), backend="directx", source_backend="directx")
+    hlsl = crosstl.translate(
+        str(path), backend="directx", source_backend="directx", format_output=False
+    )
     # A second SV_Position parameter used to be added, which DXC rejects ("overlapping semantic index").
-    assert "float4 PSMain(VSOutput input) : SV_TARGET" in hlsl
+    assert re.search(r"float4 PSMain\(VSOutput input\)\s*:\s*SV_TARGET", hlsl)
     assert "positionDepth.Load(int3(int2(input.Pos.xy), 0))" in hlsl
     assert hlsl.count("SV_Position") + hlsl.count("SV_POSITION") == 1
     if shutil.which("dxc"):

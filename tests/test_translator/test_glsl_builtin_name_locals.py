@@ -21,7 +21,7 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 def test_hlsl_locals_do_not_hide_the_glsl_builtins(tmp_path):
     path = tmp_path / "shader.hlsl"
     path.write_text(SOURCE)
-    glsl = crosstl.translate(str(path), backend="opengl")
+    glsl = crosstl.translate(str(path), backend="opengl", format_output=False)
     # A local named texture used to hide texture() in its scope ("can't use function syntax on variable").
     assert "vec2 textureSize_;" in glsl and "textureSize(tex, 0)" in glsl
     assert "vec4 texture_ = texture(tex, (uv + (1.0 / textureSize_)));" in glsl
