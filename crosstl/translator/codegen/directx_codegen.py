@@ -39141,23 +39141,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             next_texcoord += count
         return defaults
 
+    def hlsl_parameter_signature_directions(self, parameter):
+        """The entry signatures (``in``, ``out``) a parameter's semantic belongs to.
+
+        The input and output signatures of an HLSL entry point are separate, so
+        ``float2 uv : TEXCOORD0`` and ``out float2 o : TEXCOORD0`` do not overlap.
+        """
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", None) or []
+        }
+        if "inout" in qualifiers:
+            return ("in", "out")
+        if "out" in qualifiers:
+            return ("out",)
+        return ("in",)
+
     def hlsl_default_vertex_parameter_semantics(self, parameters, func):
-        used_ranges = {}
+        used_ranges = {"in": {}, "out": {}}
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
             if semantic is None:
                 continue
             count = self.hlsl_parameter_semantic_slot_count(parameter, semantic)
-            self.hlsl_reserve_semantic_range(
-                used_ranges,
-                getattr(func, "name", "<entry>"),
-                getattr(parameter, "name", "<anonymous>"),
-                semantic,
-                count,
-            )
+            for direction in self.hlsl_parameter_signature_directions(parameter):
+                self.hlsl_reserve_semantic_range(
+                    used_ranges[direction],
+                    getattr(func, "name", "<entry>"),
+                    getattr(parameter, "name", "<anonymous>"),
+                    semantic,
+                    count,
+                )
 
         defaults = {}
-        next_texcoord = 0
+        next_texcoord = {"in": 0, "out": 0}
         for parameter in parameters or []:
             if self.semantic_from_node(parameter) is not None:
                 continue
@@ -39170,22 +39187,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 continue
 
+            directions = self.hlsl_parameter_signature_directions(parameter)
+            start = max(next_texcoord[direction] for direction in directions)
             count = self.hlsl_parameter_semantic_slot_count(
-                parameter, f"TEXCOORD{next_texcoord}"
+                parameter, f"TEXCOORD{start}"
             )
-            next_texcoord = self.hlsl_next_available_semantic_index(
-                used_ranges, "TEXCOORD", next_texcoord, count
-            )
-            semantic = f"TEXCOORD{next_texcoord}"
+            index = start
+            while True:
+                candidates = {
+                    self.hlsl_next_available_semantic_index(
+                        used_ranges[direction], "TEXCOORD", index, count
+                    )
+                    for direction in directions
+                }
+                if len(candidates) == 1:
+                    index = candidates.pop()
+                    break
+                index = max(candidates)
+            semantic = f"TEXCOORD{index}"
             defaults[id(parameter)] = semantic
-            self.hlsl_reserve_semantic_range(
-                used_ranges,
-                getattr(func, "name", "<entry>"),
-                getattr(parameter, "name", "<anonymous>"),
-                semantic,
-                count,
-            )
-            next_texcoord += count
+            for direction in directions:
+                self.hlsl_reserve_semantic_range(
+                    used_ranges[direction],
+                    getattr(func, "name", "<entry>"),
+                    getattr(parameter, "name", "<anonymous>"),
+                    semantic,
+                    count,
+                )
+                next_texcoord[direction] = index + count
         return defaults
 
     def hlsl_default_vertex_output_member_semantics(self, struct_node):

@@ -21108,24 +21108,23 @@ class TestVulkanSPIRVCodeGen:
                     int layer = 1;
                     vec2 uv = vec2(0.25, 0.75);
                     ivec2 pixel = ivec2(4, 8);
-                    ivec2 offset = ivec2(1, 0);
-                    vec4 offsetColor = textureOffset(colorMap, uv, offset);
+                    vec4 offsetColor = textureOffset(colorMap, uv, ivec2(1, 0));
                     vec4 gathered = textureGather(colorMap, uv);
                     vec4 fetched = texelFetch(colorMap, pixel, 2);
                     vec4 fetchedOffset = texelFetchOffset(
                         colorMap,
                         pixel,
                         2,
-                        offset
+                        ivec2(1, 0)
                     );
-                    vec4 arrayOffset = textureOffset(textures[layer], uv, offset);
+                    vec4 arrayOffset = textureOffset(textures[layer], uv, ivec2(1, 0));
                     vec4 arrayGathered = textureGather(textures[layer], uv, 1);
                     vec4 arrayFetched = texelFetch(textures[layer], pixel, 0);
                     vec4 arrayFetchedOffset = texelFetchOffset(
                         textures[layer],
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -21150,14 +21149,17 @@ class TestVulkanSPIRVCodeGen:
         assert array_type is not None
         assert spv_code.count("OpImageSampleImplicitLod") == 0
         assert spv_code.count("OpImageSampleExplicitLod") == 2
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; a non-constant Offset is valid on gathers only
+        # (VUID-RuntimeSpirv-Offset-10213), and only gathers with offsets need ImageGatherExtended.
+        assert not re.search(r"(?<!Const)Offset %", spv_code)
         assert (
-            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bOffset\b", spv_code)) == 2
+            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bConstOffset\b", spv_code))
+            == 2
         )
-        assert spv_code.count("OpCapability ImageGatherExtended") == 1
+        assert "OpCapability ImageGatherExtended" not in spv_code
         assert spv_code.count("OpImageGather") == 2
         assert spv_code.count("OpImageFetch") == 4
-        assert len(re.findall(r"\bOpImageFetch\b.*\bOffset\b", spv_code)) == 2
+        assert len(re.findall(r"\bOpImageFetch\b.*\bConstOffset\b", spv_code)) == 2
         assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -21688,7 +21690,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         linearSampler,
                         uv,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGather(colorMap, linearSampler, uv, 1);
                     vec4 gatherOffset = textureGatherOffset(
@@ -21742,8 +21744,10 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageGather") == 6
         assert spv_code.count("OpImageFetch") == 1
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
-        assert len(re.findall(r"\bOffset\b", spv_code)) == 6
+        # The constant textureOffset offset is a ConstOffset; the gathers keep their variable Offset operands,
+        # which Vulkan accepts on gathers only (VUID-RuntimeSpirv-Offset-10213).
+        assert len(re.findall(r"\bConstOffset\b", spv_code)) == 1
+        assert len(re.findall(r"(?<!Const)\bOffset\b", spv_code)) == 5
         assert "ConstOffsets" not in spv_code
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -26849,7 +26853,7 @@ class TestVulkanSPIRVCodeGen:
                         uv,
                         0.45,
                         1.0,
-                        offset
+                        ivec2(1, 0)
                     );
                     float grad = textureCompareGrad(
                         shadowMap,
@@ -26866,13 +26870,13 @@ class TestVulkanSPIRVCodeGen:
                         0.35,
                         dx,
                         dy,
-                        offset
+                        ivec2(1, 0)
                     );
                     float offsetShadow = textureCompareOffset(
                         shadowMaps[layer],
                         uv,
                         0.3,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGatherCompare(shadowMap, uv, 0.6);
                     vec4 gatheredOffset = textureGatherCompareOffset(
@@ -26917,11 +26921,17 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageSampleDrefImplicitLod") == 0
         assert spv_code.count("OpImageDrefGather") == 2
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; only the gather keeps a variable Offset
+        # (VUID-RuntimeSpirv-Offset-10213).
         assert (
-            len(re.findall(r"\bOpImageSampleDrefExplicitLod\b.*\bOffset\b", spv_code))
+            len(
+                re.findall(
+                    r"\bOpImageSampleDrefExplicitLod\b.*\bConstOffset\b", spv_code
+                )
+            )
             == 3
         )
+        assert not re.search(r"OpImageSampleDref\w+ .*(?<!Const)Offset %", spv_code)
         assert len(re.findall(r"\bOpImageDrefGather\b.*\bOffset\b", spv_code)) == 1
         assert f"OpImageSampleDrefExplicitLod {float_type.group(1)}" in spv_code
         assert f"OpImageSampleDrefImplicitLod {float_type.group(1)}" not in spv_code
@@ -26935,11 +26945,11 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|Offset %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|Offset %\d+ %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
             spv_code,
         )
         assert f"OpLoad {array_type.group(1)}" not in spv_code
@@ -30338,7 +30348,6 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     vec2 uv = vec2(0.5, 0.5);
                     ivec2 pixel = ivec2(10, 20);
-                    ivec2 offset = ivec2(1, 0);
                     vec2 ddx = vec2(0.1, 0.0);
                     vec2 ddy = vec2(0.0, 0.1);
                     vec4 lodWithOffset = textureLodOffset(
@@ -30358,7 +30367,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -30385,7 +30394,7 @@ class TestVulkanSPIRVCodeGen:
         assert grad_offset_match.group(1) == "Grad|ConstOffset"
 
         fetch_offset_match = re.search(
-            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|(?:Const)?Offset) %\d+ %\d+",
+            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|ConstOffset) %\d+ %\d+",
             spv_code,
         )
         assert fetch_offset_match is not None

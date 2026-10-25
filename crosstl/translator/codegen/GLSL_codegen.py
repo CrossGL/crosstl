@@ -204,6 +204,7 @@ from .for_in_utils import (
     validate_range_reference_argument,
 )
 from .for_initializers import join_for_initializer
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -32676,6 +32677,9 @@ class GLSLCodeGen(
         explicit_layout = self.glsl_variable_layout_prefix(node).strip()
         if explicit_layout:
             return explicit_layout
+        attachment = frag_data_attachment_index(node)
+        if attachment is not None:
+            return f"layout(location = {attachment})"
         return self.map_semantic(self.semantic_from_node(node))
 
     def stage_io_declaration_prefix(
@@ -45743,6 +45747,11 @@ complex64_t crossgl_complex64_mod_assign(
                 return bitcast_type
             if self.glsl_constructor_type(function_name):
                 return function_name
+            logical_type = self.glsl_hlsl_logical_result_type(
+                function_name, expression.arguments
+            )
+            if logical_type is not None:
+                return logical_type
             unified_type = self.glsl_unified_builtin_result_type(
                 function_name, expression.arguments
             )

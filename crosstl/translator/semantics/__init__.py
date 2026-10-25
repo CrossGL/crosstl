@@ -65,6 +65,10 @@ from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
     lower_metal_ray_dispatch,
 )
+from .metal_runtime_types import (
+    MetalRuntimeTypeUnsupportedError,
+    refuse_metal_runtime_types,
+)
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -99,10 +103,12 @@ from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
 )
+from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
     attribute_vertex_input_positions,
@@ -133,6 +139,7 @@ __all__ = [
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "MetalRayDispatchUnsupportedError",
+    "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -191,7 +198,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
-    scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
+    scalars become vector constructors (:mod:`.scalar_swizzles`). ``&&``/``||`` on boolean vectors become ``and``/``or``
+    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). A position built-in on a vertex input names the ``Position``
@@ -231,6 +239,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
+    texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
@@ -255,15 +265,18 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
+    legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
+    lower_vector_logic(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)

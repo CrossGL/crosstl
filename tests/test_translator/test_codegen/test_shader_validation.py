@@ -18,6 +18,7 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.semantics.texel_offsets import legalize_texel_offsets
 from tests.lowering_refusal_helpers import refused_glsl
 from tests.metal_refusal_helpers import metal_partial_output
 
@@ -7041,7 +7042,11 @@ def validate_spirv_shader_source(
 
     source = tmp_path / f"{stem}.spvasm"
     output = tmp_path / f"{stem}.spv"
-    code = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(shader_source))
+    program = crosstl.translator.parse(shader_source)
+    # As crosstl.translate does, offsets held in constant locals become ConstOffset operands: Vulkan accepts a
+    # non-constant Offset on gathers only (VUID-RuntimeSpirv-Offset-10213).
+    legalize_texel_offsets(program, "vulkan")
+    code = VulkanSPIRVCodeGen().generate(program)
     assert "WARNING" not in code
     source.write_text(code, encoding="utf-8")
 

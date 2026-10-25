@@ -48,9 +48,14 @@ from .aggregate_scalar_conversions import (
 )
 from .barrier_import import metal_barrier_statements
 from .buffer_layout_import import MetalBufferLayoutImport
-from .color_attachments import color_attachment_semantic, enumerator_index_values
+from .color_attachments import (
+    color_attachment_semantic,
+    enumerator_index_values,
+    framebuffer_fetch_struct_names,
+)
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
+from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_builtin_result_type,
@@ -58,6 +63,7 @@ from .dependent_builtins import (
 )
 from .external_functions import refuse_external_function_calls
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
+from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -3578,6 +3584,14 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             if isinstance(enum, EnumNode):
                 self.register_metal_enum_arithmetic_contract(enum)
         self.metal_enum_index_values = enumerator_index_values(enums)
+        self.metal_fetched_struct_names = framebuffer_fetch_struct_names(
+            functions,
+            [
+                struct_node.name
+                for struct_node in structs
+                if isinstance(struct_node, StructNode)
+            ],
+        )
         emitted_typedefs = []
         for alias in typedefs:
             if not isinstance(alias, TypeAliasNode):
@@ -3699,6 +3713,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         member,
                         owner=self.map_struct_name(struct_node.name),
                         static_member_types=static_member_types,
+                        semantic_context=(
+                            {"kind": "fetched_member"}
+                            if struct_node.name in getattr(
+                                self, "metal_fetched_struct_names", ()
+                            )
+                            else None
+                        ),
                     )
                     if self.metal_packed_member(member) and not decl.startswith(
                         "static "
@@ -9471,15 +9492,20 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
-    def format_struct_member_decl(self, member, owner=None, static_member_types=None):
+    def format_struct_member_decl(
+        self, member, owner=None, static_member_types=None, semantic_context=None
+    ):
         """Render a struct field while preserving compile-time member constants.
 
         ``static_member_types`` types the struct's own static members while an
         unresolved default such as ``OUT_TILE_SIZE + FILTER_SIZE - 1`` of an
         explicit specialization renders, so arithmetic between them keeps its
-        declared type.
+        declared type. ``semantic_context`` is ``{"kind": "fetched_member"}``
+        for a structure a fragment function reads attachments through.
         """
-        declaration = self.format_decl(member, include_semantic=True)
+        declaration = self.format_decl(
+            member, include_semantic=True, semantic_context=semantic_context
+        )
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(member, "qualifiers", []) or []
@@ -10441,6 +10467,12 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     code += f"{constructor_array}\n"
                     continue
                 decl = self.format_decl(stmt, include_semantic=False)
+                if decl.startswith("sampler ") and is_default_sampler_local(
+                    stmt, getattr(self.current_function, "body", None)
+                ):
+                    # Default-constructed state is fixed state (:mod:`.default_samplers`).
+                    code += f"const {decl} = sampler();\n"
+                    continue
                 if not getattr(stmt, "is_metal_constructor_storage", False):
                     initializer = self.generate_default_constructor_initializer(
                         stmt, is_main
@@ -12703,6 +12735,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             static_member = self.render_decltype_static_struct_member(expr)
             if static_member is not None:
                 return static_member
+            if matrix_columns_object(self, expr) is not None:
+                raise MetalMatrixColumnsError(getattr(expr, "source_location", None))
             obj = self.generate_postfix_operand(expr.object, is_main)
             constructor_this = (
                 isinstance(expr.object, VariableNode)
@@ -12735,6 +12769,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 matrix_text = self.generate_expression(matrix, is_main)
                 index_text = self.generate_expression(element_index, is_main)
                 return f"cooperative_matrix_element({matrix_text}, {index_text})"
+            matrix = matrix_columns_object(self, expr.array)
+            if matrix is not None:
+                matrix_text = self.generate_postfix_operand(matrix, is_main)
+                return f"{matrix_text}[{self.generate_expression(expr.index, is_main)}]"
             component_info = self.small_vector_index_info(expr)
             if component_info is not None:
                 return self.generate_small_vector_component_read(
@@ -22682,6 +22720,9 @@ float {scalar}(float value) {{
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
                 return None
+            if matrix_columns_object(self, expr) is not None:
+                # ``m.columns[i]`` selects the column ``m[i]``.
+                return object_type
             wide_vector = self.wide_vector_type_info(
                 object_type, getattr(expr, "source_location", None)
             )
@@ -23334,7 +23375,7 @@ float {scalar}(float value) {{
         if name == "color" and args:
             return color_attachment_semantic(
                 args[0],
-                is_input=context_kind == "parameter",
+                is_input=context_kind in ("parameter", "fetched_member"),
                 enumerator_values=getattr(self, "metal_enum_index_values", {}),
             )
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:

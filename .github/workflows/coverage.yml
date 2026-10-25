@@ -470,13 +470,17 @@ jobs:
           path: coverage.json
           retention-days: 14
 
-      # The coverage branch is public, so reading it needs no token.
+      # The coverage branch is public, so reading it needs no token; naming the pull requests in between reads commits.
       - name: Compare with the published coverage
         if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json coverage.json | tee compare.md
+            python -m tools.coverage compare published.json coverage.json \
+              --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
             { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No published coverage to compare with yet."

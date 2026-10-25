@@ -806,6 +806,30 @@ T floatCast<T:IFloatingPointCoopElement, U:IFloatingPointCoopElement>(U val);
     assert "float r = floatCast<float>(a0);" in probes.build(cast, "slang").source
 
 
+def test_slang_generic_type_parameters_nothing_fixes_are_untested():
+    text = """
+//@public:
+[ForceInline]
+bool usesNativeSpirvDescriptorHandle<T : IOpaqueDescriptor>()
+{
+    return false;
+}
+
+T getDescriptorFromExplicitHeapIndex<T:IOpaqueDescriptor>(uint2 handle);
+"""
+    features = by_name(slang.parse(text, ""))
+    query = features["usesNativeSpirvDescriptorHandle"]
+    assert (query.signature, query.spelling, query.target) == (None, "", "")
+    assert query.note == "no probe type for the generic parameter T : IOpaqueDescriptor"
+    with pytest.raises(
+        probes.ProbeError, match="no probe type for the generic parameter T"
+    ):
+        probes.build(query, "slang")
+    # The result names the parameter, so the probe reaches the descriptor type and reports that instead.
+    heap = features["getDescriptorFromExplicitHeapIndex"]
+    assert heap.signature is not None and heap.note == ""
+
+
 MOJO_MATH_INIT = """
 from std.utils.numerics import isnan, nan
 from .math import (

@@ -327,6 +327,11 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             f"CrossTL translates the generated {probe} and {tool} accepts the result, but run, it does not "
             f"compute what the native {chart.name(language)} probe computes."
         )
+        if execution.REBOUND in (first.get("detail") or "").partition("\n")[0]:
+            what = (
+                f"CrossTL translates the generated {probe} and {tool} accepts the result, but it does not bind "
+                f"the buffers the native {chart.name(language)} probe binds, so it cannot run in its place."
+            )
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "
