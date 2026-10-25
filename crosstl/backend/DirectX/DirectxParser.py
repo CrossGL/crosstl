@@ -2175,6 +2175,17 @@ class HLSLParser:
         qualifier = self.infer_function_qualifier(
             name, attributes, params, semantic, body
         )
+        if qualifier in ("compute", "task", "mesh") and str(
+            getattr(return_type, "name", return_type) or ""
+        ).strip() not in ("", "void"):
+            # Compute, mesh and amplification entry points return void; DXC ignores [numthreads] on a
+            # function that returns a value, which is a helper.
+            qualifier = None
+            attributes = [
+                attribute
+                for attribute in attributes
+                if str(attribute.name).lower() not in ("numthreads", "outputtopology")
+            ]
 
         function = FunctionNode(
             return_type=return_type,
