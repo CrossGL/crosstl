@@ -1789,10 +1789,64 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         return f"{resource_type}{array_suffix or ''}"
 
+    def slang_storage_buffer_resource_type(self, node, vtype=None):
+        """Return the structured-buffer type a CrossGL storage buffer declares.
+
+        ``buffer T* name`` names bound storage, so it becomes ``RWStructuredBuffer<T>``
+        (``StructuredBuffer<T>`` when it is declared ``readonly``). Slang has no pointer to
+        bound memory: a global pointer is an implicit shader parameter, one
+        ``PhysicalStorageBuffer`` address per buffer, which a host cannot bind as a
+        storage buffer on any slangc target (#2921).
+        """
+        if node is None:
+            return None
+
+        qualifiers = {
+            str(value).lower() for value in getattr(node, "qualifiers", []) or []
+        }
+        if "buffer" not in qualifiers:
+            return None
+        if self.glsl_buffer_block_attribute(node) is not None:
+            return None
+
+        if vtype is None:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            if vtype is None:
+                vtype = getattr(node, "param_type", None)
+        if vtype is None:
+            return None
+
+        element_type = self.slang_storage_buffer_element_type(vtype)
+        if element_type is None:
+            return None
+
+        resource_type = (
+            "StructuredBuffer"
+            if self.explicit_resource_access(node) == "readonly"
+            else "RWStructuredBuffer"
+        )
+        return f"{resource_type}<{element_type}>"
+
+    def slang_storage_buffer_element_type(self, vtype):
+        """Return the element type ``buffer T* name`` declares, or ``None``.
+
+        ``buffer BlockName instance`` (an interface block instance, whose members are read directly) is not this
+        form: it keeps the emitter's block lowering.
+        """
+        element_type = self.pointer_pointee_type_name(vtype)
+        if element_type is None:
+            return None
+
+        element_type = str(element_type).strip()
+        if element_type.startswith("atomic<") and element_type.endswith(">"):
+            element_type = element_type[len("atomic<") : -1].strip()
+        return self.convert_type(element_type) if element_type else None
+
     def slang_resource_declaration_type(self, node):
         return (
             self.slang_glsl_buffer_array_resource_type(node)
             or self.slang_glsl_buffer_block_resource_type(node)
+            or self.slang_storage_buffer_resource_type(node)
             or self.variable_declaration_type(node)
         )
 
@@ -5719,6 +5773,23 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             return f"{declaration};\n"
 
+        storage_buffer_type = self.slang_storage_buffer_resource_type(node)
+        if storage_buffer_type is not None:
+            self.register_variable_type(node.name, storage_buffer_type, node)
+            if self.skip_duplicate_slang_global_variable(node, storage_buffer_type):
+                return ""
+            declaration = format_c_style_array_declaration(
+                storage_buffer_type, node.name
+            )
+            declaration = (
+                self.slang_resource_memory_qualifier_prefix(storage_buffer_type, node)
+                + declaration
+            )
+            declaration = self.apply_slang_resource_binding_decorations(
+                declaration, node, storage_buffer_type, auto_assign=True
+            )
+            return f"{declaration};\n"
+
         if self.is_glsl_buffer_block_variable(node, glsl_buffer_block_node_type(node)):
             vtype = self.type_name_string(glsl_buffer_block_node_type(node))
             diagnostic = self.glsl_buffer_block_diagnostic(
@@ -8863,6 +8934,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 return f"{operand_type}*"
             if expr.op == "*" and operand_type is not None:
+                if self.is_structured_buffer_resource_type(operand_type):
+                    return self.structured_buffer_element_type(operand_type)
                 return self.pointer_pointee_type_name(operand_type) or operand_type
             return operand_type
         if isinstance(expr, AssignmentNode):
@@ -8890,6 +8963,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
                 return self.array_element_type(array_type)
+            if self.is_structured_buffer_resource_type(array_type):
+                return self.structured_buffer_element_type(array_type)
             pointer_element_type = self.pointer_pointee_type_name(array_type)
             if pointer_element_type is not None:
                 return pointer_element_type
@@ -9469,6 +9544,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, RayTracingOpNode):
             return self.generate_slang_ray_tracing_op_expression(node)
         elif isinstance(node, UnaryOpNode):
+            if node.op == "*" and self.is_structured_buffer_resource_type(
+                self.expression_result_type(node.operand)
+            ):
+                # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
+                return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
             operand = self.generate_expression(node.operand)
             if isinstance(node.operand, BinaryOpNode):
                 operand = f"({operand})"

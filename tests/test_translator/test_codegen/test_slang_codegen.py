@@ -11585,6 +11585,157 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     assert "StructuredBuffer<vec4>" not in generated_code
 
 
+def test_storage_buffer_pointer_declarations_become_structured_buffers():
+    """A CrossGL ``buffer T* name`` declares bound storage, not a Slang pointer.
+
+    Fixes #2921: Slang has no pointer to bound memory, so a global pointer is an implicit shader parameter holding one
+    ``PhysicalStorageBuffer`` address per buffer, and no slangc target lets a host bind that as a storage buffer. The
+    README kernel's two buffers are named at the interface, as GLSL, HLSL, Metal, SPIR-V and WGSL declare them.
+    """
+    code = """
+    shader Saxpy {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer float* x;
+            buffer float* y;
+            uniform float a;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                y[i] = a * x[i] + y[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RWStructuredBuffer<float> x : register(u0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> y : register(u1);"
+        in generated_code
+    )
+    assert "float* x" not in generated_code
+    assert "float* y" not in generated_code
+    assert "y[i] = a * x[i] + y[i];" in generated_code
+
+
+def test_readonly_storage_buffer_declaration_binds_a_structured_buffer():
+    """A read-only storage buffer is a ``StructuredBuffer``, the t-register view of the same binding (#2921)."""
+    code = """
+    shader Reduce {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, set = 0, binding = 2) buffer readonly float* src;
+            layout(std430, set = 1, binding = 0) buffer float* dst;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                dst[i] = src[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> src : register(t2, space0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 1)]] RWStructuredBuffer<float> dst : register(u0, space1);"
+        in generated_code
+    )
+    assert "dst[i] = src[i];" in generated_code
+
+
+def test_storage_buffer_of_structs_declares_its_element_type():
+    """``buffer Particle* name`` becomes ``RWStructuredBuffer<Particle>``, so member access reads the element."""
+    code = """
+    shader Particles {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, binding = 0) buffer Particle* particles;
+            buffer float* masses;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                masses[i] = particles[i].position.x + particles[i].mass;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[vk::binding(0, 0)]] RWStructuredBuffer<Particle> particles " in (
+        generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u1);"
+        in generated_code
+    )
+    assert "masses[i] = particles[i].position.x + particles[i].mass;" in generated_code
+    assert "Particle* particles" not in generated_code
+
+    # The importer reads the declaration back, so a round trip keeps the element type.
+    assert "RWStructuredBuffer<Particle> particles" in generate_crossgl_from_slang(
+        generated_code
+    )
+
+
+def test_coherent_storage_buffer_declaration_is_globallycoherent():
+    """A ``coherent`` storage buffer keeps its memory qualifier, which Slang spells ``globallycoherent``."""
+    code = """
+    shader Counters {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            coherent buffer uint* counters;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                counters[i] = counters[i] + 1u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u0);" in generated_code
+    )
+    assert "uint* counters" not in generated_code
+
+
+def test_storage_buffer_dereference_reads_its_first_element():
+    """``*name`` of a storage buffer is ``name[0]``: a structured buffer has no address to dereference."""
+    code = """
+    shader Deref {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* data;
+            buffer float* outp;
+            void main() {
+                *outp = *data + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "outp[0] = data[0] + 1.0;" in generated_code
+    assert "*data" not in generated_code
+    assert "*outp" not in generated_code
+
+
 def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
     code = """
     shader SlangReadonlyStructuredBuffer {
