@@ -7,6 +7,7 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLAtomicOrderUnsupportedError,
     OpenCLFenceScopeUnsupportedError,
+    OpenCLImageReadUnsupportedError,
     OpenCLImageWriteUnsupportedError,
     OpenCLToCrossGLConverter,
 )
@@ -16,6 +17,7 @@ from crosstl.backend.OpenCL.target_lowering import (
     OpenCLTargetUnsupportedError,
     validate_opencl_intermediate_for_target,
 )
+from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -679,9 +681,11 @@ def test_opencl_write_image_translates_to_hlsl_texture_store(tmp_path):
     hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
 
     assert "write_image" not in hlsl
-    assert "RWTexture2D<float4> dst;" in hlsl
-    assert "RWTexture3D<int" in hlsl
-    assert "RWBuffer<uint" in hlsl
+    # Every image, integer ones included, is a bound resource, not a k_Args member.
+    assert "k_Args" not in hlsl
+    assert "RWTexture2D<float4> dst : register(u" in hlsl
+    assert "RWTexture3D<int4> idst : register(u" in hlsl
+    assert "RWBuffer<uint4> udst : register(u" in hlsl
     assert "dst[int2(i, 0)] = float4(fin[i], 0.0, 0.0, 1.0);" in hlsl
     assert "idst[int4(i, 0, 1, 0).xyz] = int4(i, i, i, i);" in hlsl
     assert "udst[i] = uint4(1u, 1u, 1u, 1u);" in hlsl
@@ -732,6 +736,184 @@ def test_opencl_write_image_translates_to_hlsl_texture_store(tmp_path):
 def test_opencl_write_image_refuses_writes_imagestore_cannot_keep(source, reason):
     with pytest.raises(OpenCLImageWriteUnsupportedError, match=reason):
         generate_crossgl(source)
+
+
+def test_opencl_read_imagef_lowers_to_texture_reads():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __constant sampler_t pix = CLK_NORMALIZED_COORDS_FALSE |
+            CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
+        float4 read_scaled(image2d_t img, sampler_t s, float2 c) {
+            return read_imagef(img, s, c * 2.0f);
+        }
+        kernel void k(global const float *fin, global float *outp,
+                      read_only image2d_t tex, image3d_t vol,
+                      read_write image2d_t rw, sampler_t hs) {
+            int i = get_global_id(0);
+            float2 uv = (float2)(fin[i], 0.5f);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+            outp[i] += read_imagef(tex, pix, uv).y;
+            outp[i] += read_imagef(tex, pix, (int2)(i, 0)).z;
+            outp[i] += read_imagef(tex, (int2)(i, 0)).w;
+            outp[i] += read_imagef(vol, smp, (float4)(fin[i], 0.5f, 0.5f, 0.0f)).x;
+            outp[i] += read_imagef(vol, (int4)(i, 0, 0, 0)).x;
+            outp[i] += read_imagef(rw, (int2)(i, 0)).x;
+            outp[i] += read_imagef(tex, hs, uv).x;
+            outp[i] += read_imagef(tex, CLK_FILTER_NEAREST, (int2)(i, 0)).x;
+            outp[i] += read_scaled(tex, smp, uv).x;
+        }
+        """)
+
+    assert "read_imagef" not in crossgl
+    # A sampler_t constant fixes its CLK_* state, as a sampler(...) does.
+    assert "CLK_" not in crossgl
+    assert (
+        "const sampler smp = sampler(coord::normalized, address::clamp_to_edge, "
+        "filter::linear);" in crossgl
+    )
+    assert (
+        "const sampler pix = sampler(coord::pixel, address::clamp_to_zero, "
+        "filter::nearest);" in crossgl
+    )
+    # Images are read_only by default, so only read_write stays a storage image.
+    assert "texture2D tex" in crossgl
+    assert "texture3D vol" in crossgl
+    assert "image2D rw" in crossgl
+    assert "read_scaled(texture2D img, sampler s, vec2<f32> c)" in crossgl
+    assert "textureLod(img, s, (c * 2.0f), 0.0)" in crossgl
+    assert "textureLod(tex, smp, vec2<f32>(fin[i], 0.5f), 0.0).x" in crossgl
+    assert "textureLod(tex, pix, uv, 0.0).y" in crossgl
+    # An integer coordinate goes through the sampler as a pixel coordinate.
+    assert "textureLod(tex, pix, vec2(vec2<i32>(i, 0)), 0.0).z" in crossgl
+    assert "texelFetch(tex, vec2<i32>(i, 0), 0).w" in crossgl
+    assert (
+        "textureLod(vol, smp, (vec4<f32>(fin[i], 0.5f, 0.5f, 0.0f)).xyz, 0.0).x"
+        in crossgl
+    )
+    assert "texelFetch(vol, (vec4<i32>(i, 0, 0, 0)).xyz, 0).x" in crossgl
+    assert "imageLoad(rw, vec2<i32>(i, 0)).x" in crossgl
+    assert "textureLod(tex, hs, uv, 0.0).x" in crossgl
+    assert (
+        "textureLod(tex, sampler(coord::pixel, address::clamp_to_edge, "
+        "filter::nearest), vec2(vec2<i32>(i, 0)), 0.0).x" in crossgl
+    )
+
+
+PIXEL_SAMPLER_SOURCE = """
+    __constant sampler_t smp = CLK_NORMALIZED_COORDS_FALSE |
+        CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+    __kernel void k(__global const float *fin, __global float4 *outp,
+                    __read_only image2d_t tex) {
+        int i = get_global_id(0);
+        outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f));
+    }
+    """
+
+
+def test_opencl_unnormalized_sampler_keeps_pixel_coordinates_for_metal(tmp_path):
+    opencl_path = tmp_path / "pixel.cl"
+    opencl_path.write_text(PIXEL_SAMPLER_SOURCE, encoding="utf-8")
+
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert (
+        "sampler smp = sampler(coord::pixel, address::clamp_to_edge, "
+        "filter::nearest);" in metal
+    )
+    assert "tex.sample(smp, float2(fin[i], 0.5), level(0.0))" in metal
+
+
+@pytest.mark.parametrize("backend", ["directx", "vulkan", "opengl", "wgsl"])
+def test_opencl_unnormalized_sampler_is_refused_where_targets_cannot_fix_it(
+    tmp_path, backend
+):
+    opencl_path = tmp_path / "pixel.cl"
+    opencl_path.write_text(PIXEL_SAMPLER_SOURCE, encoding="utf-8")
+
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(str(opencl_path), backend=backend)
+
+    # The target refuses pixel coordinates, or fixed sampler state at all.
+    code = raised.value.project_diagnostic_code
+    assert code.startswith(f"project.translate.{backend}-")
+    assert "sampler" in code
+
+
+@pytest.mark.parametrize(
+    ("read", "reason"),
+    [
+        ("read_imagef(tex, (float2)(0.5f))", "without a sampler takes integer"),
+        ("read_imagef(rw, pix, (int2)(0))", "read_write image is read without"),
+        ("read_imagef(tex, pix, (float2)(0.5f), 1.0f)", "4-argument form"),
+        ("read_imagef(dep, pix, (float2)(0.5f))", "image2d_depth_t has no"),
+        ("read_imagef(buf, 0)", "image1d_buffer_t has no"),
+        ("read_imagef(vol, pix, (float4)(0.5f))", "pixel coordinates on a 3D"),
+        ("read_imagef(arr, smp, (int4)(0))", "pixel coordinates on a 2DArray"),
+        ("read_imagef(tex, pix, floor((float2)(0.5f)))", "element type of"),
+        (
+            "read_imagef(tex, CLK_ADDRESS_REPEAT | CLK_FILTER_LINEAR, (float2)(0.5f))",
+            "repeats unnormalized",
+        ),
+        ("read_imagef(tex, CLK_ADDRESS_CLAMP, (int2)(0))", "no CLK_FILTER_* flag"),
+        (
+            "read_imagef(tex, CLK_FILTER_NEAREST | CLK_FILTER_LINEAR, (int2)(0))",
+            "two filter",
+        ),
+        ("read_imagef(tex, 18, (int2)(0))", "only CLK_* sampler flags"),
+        (
+            "read_imagef(rw, (int2)(0)); write_imagei(rw, (int2)(0), (int4)(0))",
+            "makes it an integer image",
+        ),
+    ],
+)
+def test_opencl_read_imagef_refuses_reads_crossgl_cannot_carry(read, reason):
+    source = f"""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE | CLK_FILTER_LINEAR;
+        __constant sampler_t pix = CLK_NORMALIZED_COORDS_FALSE | CLK_FILTER_NEAREST;
+        kernel void k(global float4 *outp, read_only image2d_t tex,
+                      read_write image2d_t rw, read_only image2d_depth_t dep,
+                      read_only image1d_buffer_t buf, read_only image3d_t vol,
+                      read_only image2d_array_t arr) {{
+            outp[0] = {read};
+        }}
+        """
+
+    with pytest.raises(OpenCLImageReadUnsupportedError) as raised:
+        generate_crossgl(source)
+
+    assert reason in str(raised.value)
+    assert (
+        raised.value.project_diagnostic_code
+        == "project.translate.opencl-image-read-unsupported"
+    )
+
+
+def test_opencl_sampled_read_imagef_translates_to_hlsl_sample_level(tmp_path):
+    source = """
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+        }
+        """
+    opencl_path = tmp_path / "read_image.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "read_imagef" not in hlsl
+    # The host creates the fixed sampler from the header record.
+    assert hlsl.startswith("// crosstl-fixed-samplers:")
+    assert '"mag_filter":"linear"' in hlsl
+    assert "SamplerState smp : register(s0);" in hlsl
+    # The texture is a bound resource, not a member of the k_Args cbuffer.
+    assert "k_Args" not in hlsl
+    assert "Texture2D tex : register(t" in hlsl
+    assert "outp[i] = tex.SampleLevel(smp, float2(fin[i], 0.5), 0.0).x;" in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
 
 
 def test_pocl_statement_expression_macro_block_codegen_reparse():
