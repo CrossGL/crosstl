@@ -256,6 +256,7 @@ class Mojo(Dialect):
         "uint": "UInt32",
         "bool": "Bool",
         "int64": "Int",
+        "uint64": "UInt64",
     }
     _DTYPES = {
         "float": "float32",
@@ -264,6 +265,7 @@ class Mojo(Dialect):
         "uint": "uint32",
         "bool": "bool",
         "int64": "int64",
+        "uint64": "uint64",
     }
     # A pair of values, as Mojo's frexp, modf and divmod return; the probe reads the first.
     _PAIR = re.compile(r"Tuple\[(\w+), \1\]|StaticTuple\[(\w+), 2\]")
@@ -291,9 +293,13 @@ class Mojo(Dialect):
     def literal(self, kind: Type) -> str:
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "False", "int": "0", "uint": "0", "int64": "0"}.get(
-            kind.scalar, "0.0"
-        )
+        return {
+            "bool": "False",
+            "int": "0",
+            "uint": "0",
+            "int64": "0",
+            "uint64": "0",
+        }.get(kind.scalar, "0.0")
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         initial = f" = {value}" if value else ""
@@ -374,6 +380,18 @@ class Rust(Dialect):
         "FpCategory": (Type("uint"), "({}) as u32"),
         "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
     }
+    # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
+    _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        closure = self._CLOSURE.fullmatch(kind.opaque)
+        numeric = {
+            spelled for scalar, spelled in self._SCALARS.items() if scalar != "bool"
+        }
+        if not closure or closure.group(1) not in numeric:
+            return None
+        # The closure doubles its argument, so a translation that drops the call computes something else.
+        return Handle(f"|x: {closure.group(1)}| x + x")
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         if opaque in self._CONVERTED:

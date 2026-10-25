@@ -96,14 +96,14 @@ def test_replacing_a_later_block_keeps_the_first_as_the_keyed_stage():
     assert program.stages.all_for_stage(A.ShaderStage.VERTEX) == [second, replacement]
 
 
-def test_a_fixed_sampler_in_a_later_block_is_refused_on_opengl(tmp_path):
+def test_a_fixed_sampler_in_a_later_block_is_refused_on_webgl(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
-        translate(tmp_path, "opengl")
+        translate(tmp_path, "webgl")
 
 
-@pytest.mark.parametrize("backend", ["directx", "vulkan"])
+@pytest.mark.parametrize("backend", ["directx", "vulkan", "opengl"])
 def test_a_fixed_sampler_in_a_later_block_is_bound_with_its_record(tmp_path, backend):
-    # Direct3D and Vulkan bind fixed sampler state from the host
+    # Direct3D, Vulkan and OpenGL (through sampler objects) bind fixed sampler state from the host
     # (crosstl.translator.semantics.fixed_samplers); the later block's sampler
     # must reach that pass and its record.
     records = parse_fixed_sampler_contract(translate(tmp_path, backend))

@@ -7,7 +7,9 @@ from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
 
+from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
+from .block_member_names import instance_block_member_names, rename_shadowing_locals
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -38,6 +40,7 @@ from .OpenglAst import (
 from .shadow_textures import retype_shadow_textures
 from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
+from .unsupported_types import refuse_unsupported_glsl_types
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -681,7 +684,6 @@ class GLSLToCrossGLConverter:
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
@@ -1651,10 +1653,6 @@ class GLSLToCrossGLConverter:
             if qualifier in qualifiers
         ]
 
-    def is_task_payload_shared_variable(self, var):
-        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
-        return "taskpayloadsharedext" in qualifiers
-
     def is_buffer_reference_forward_declaration(self, var):
         if not isinstance(var, VariableNode):
             return False
@@ -2164,6 +2162,18 @@ class GLSLToCrossGLConverter:
         )
         return output_names
 
+    def uniform_block_instance_names(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+        for uniform in uniforms or []:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+        return instance_names
+
     def unique_cbuffer_member_name(self, block_name, field_name):
         safe_block_name = re.sub(r"\W+", "_", str(block_name or "Block")).strip("_")
         safe_block_name = safe_block_name or "Block"
@@ -2183,18 +2193,7 @@ class GLSLToCrossGLConverter:
         if not field_names:
             return
 
-        block_struct = self.structs_by_name.get(block_name)
-        instance_names = set()
-        if block_struct is not None:
-            instance_name = getattr(block_struct, "interface_instance_name", None)
-            if instance_name:
-                instance_names.add(str(instance_name).split("[", 1)[0])
-
-        for uniform in uniforms:
-            if getattr(uniform, "vtype", None) == block_name:
-                instance_names.add(str(uniform.name).split("[", 1)[0])
-
-        for instance_name in instance_names:
+        for instance_name in self.uniform_block_instance_names(block_name, uniforms):
             if instance_name:
                 self.flattened_uniform_block_instances[instance_name] = field_names
                 renames = {
@@ -2597,6 +2596,7 @@ class GLSLToCrossGLConverter:
             self.shader_type = previous_shader_type
 
     def generate_shader(self, node):
+        refuse_unsupported_glsl_types(node)
         retype_shadow_textures(node)
         self.uniform_vars = []
         self.inputs = []
@@ -2604,12 +2604,8 @@ class GLSLToCrossGLConverter:
         self.local_vars = []
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
+        rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = {
-            var.name
-            for var in getattr(node, "global_variables", []) or []
-            if self.is_task_payload_shared_variable(var)
-        }
         self.function_name_renames = self.collect_function_name_renames(
             getattr(node, "functions", []) or []
         )
@@ -3079,12 +3075,16 @@ class GLSLToCrossGLConverter:
                     and not self.is_fragment_explicit_entry_return(main_function)
                 ):
                     self.entry_bare_return_value = self.outputs[0].name
+                # The entry's locals get a scope of their own, as other functions' do, so that a local that
+                # shadows a member of an anonymous buffer block is not read as that member.
+                self.push_variable_type_scope()
                 try:
                     for statement in self.generate_statement_sequence(
                         main_function.body
                     ):
                         result += self.indent() + statement + "\n"
                 finally:
+                    self.pop_variable_type_scope()
                     self.entry_bare_return_value = None
 
                 if self.shader_type in ("vertex",) and not any(
@@ -3327,57 +3327,9 @@ class GLSLToCrossGLConverter:
         )
 
     def generate_statement_sequence(self, statements):
-        generated = []
-        index = 0
-        while index < len(statements):
-            folded = self.generate_task_payload_dispatch_statement(statements, index)
-            if folded is not None:
-                generated.append(folded)
-                index += 2
-                continue
-            generated.append(self.generate_statement(statements[index]))
-            index += 1
-        return generated
-
-    def generate_task_payload_dispatch_statement(self, statements, index):
-        if self.shader_type not in {"task", "amplification", "object"}:
-            return None
-        if index + 1 >= len(statements):
-            return None
-
-        assignment = statements[index]
-        dispatch = statements[index + 1]
-        payload_expr = self.task_payload_assignment_expression(assignment)
-        if payload_expr is None:
-            return None
-        if not self.is_emit_mesh_tasks_call(dispatch):
-            return None
-
-        dispatch_args = [
-            self.generate_expression(arg) for arg in getattr(dispatch, "args", [])[:3]
-        ]
-        payload = self.generate_expression(payload_expr)
-        return f"DispatchMesh({', '.join(dispatch_args + [payload])});"
-
-    def task_payload_assignment_expression(self, statement):
-        if not isinstance(statement, AssignmentNode):
-            return None
-        if getattr(statement, "operator", "=") != "=":
-            return None
-        if not self.task_payload_shared_names:
-            return None
-
-        target = self.expression_base_name(getattr(statement, "left", None))
-        if target not in self.task_payload_shared_names:
-            return None
-        return getattr(statement, "right", None)
-
-    def is_emit_mesh_tasks_call(self, statement):
-        if not isinstance(statement, FunctionCallNode):
-            return False
-        if len(getattr(statement, "args", []) or []) != 3:
-            return False
-        return self.function_call_name(statement) == "EmitMeshTasksEXT"
+        # A task shader's payload stores stay stores and EmitMeshTasksEXT stays a three-argument DispatchMesh:
+        # semantics.glsl_mesh_stages passes the taskPayloadSharedEXT variable itself for HLSL and Metal.
+        return [self.generate_statement(statement) for statement in statements]
 
     def function_call_name(self, node):
         name = getattr(node, "name", None)
@@ -3405,8 +3357,11 @@ class GLSLToCrossGLConverter:
             ray_control = self.ray_control_statement(node)
             if ray_control is not None:
                 return ray_control + ";"
+            # GLSL starts a local's scope after its initializer (GLSL 4.60 section 4.2.2): the initializer
+            # reads outer names, so the local is registered once the declaration is rendered.
+            declaration = self.generate_variable_declaration(node)
             self.register_variable_type(node)
-            return self.generate_variable_declaration(node) + ";"
+            return declaration + ";"
         elif isinstance(node, StructNode):
             return self.generate_struct(node)
         elif isinstance(node, FunctionCallNode):
@@ -4270,20 +4225,16 @@ class GLSLToCrossGLConverter:
         expression = self.generate_expression(node.expression)
         result = f"switch ({expression}) {{\n"
 
-        for case in node.cases:
-            case_value = self.generate_expression(case.value)
-            result += self.indent() + f"case {case_value}:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value)}"
+            )
+            result += self.indent() + f"{label}:\n"
 
             self.increase_indent()
-            for statement in case.statements:
-                result += self.indent() + self.generate_statement(statement) + "\n"
-            self.decrease_indent()
-
-        if node.default:
-            result += self.indent() + "default:\n"
-
-            self.increase_indent()
-            for statement in node.default:
+            for statement in statements:
                 result += self.indent() + self.generate_statement(statement) + "\n"
             self.decrease_indent()
 

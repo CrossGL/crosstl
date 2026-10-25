@@ -16,6 +16,8 @@ _GLSL_SCALARS = {
     "uint": "uint",
     "float": "float",
     "double": "double",
+    "int64_t": "int64",
+    "uint64_t": "uint64",
 }
 _VECTOR_PREFIX = {None: "float", "b": "bool", "i": "int", "u": "uint", "d": "double"}
 

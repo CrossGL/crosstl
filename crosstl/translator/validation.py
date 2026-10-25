@@ -479,6 +479,7 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "domain": "domain",
     "local_size": "threadgroup_size",
     "max_total_threads_per_threadgroup": "max_total_threads_per_threadgroup",
+    "max_total_threadgroups_per_mesh_grid": "max_total_threadgroups_per_mesh_grid",
     "maxprimitivecount": "maxprimitivecount",
     "maxvertexcount": "maxvertexcount",
     "numthreads": "threadgroup_size",
@@ -966,9 +967,13 @@ def floating_coordinate_dimension(type_name):
     return dimensions.get(type_name)
 
 
+# 16-bit float scalars: the CrossGL name and the HLSL/GLSL spellings that codegen maps it to.
+_HALF_SCALAR_TYPES = frozenset({"float16", "float16_t", "min16float"})
+
+
 def is_floating_scalar_type(type_name):
     """Return true for known scalar floating-point types."""
-    return str(type_name) in {"float", "half", "double"}
+    return str(type_name) in {"float", "half", "double"} | _HALF_SCALAR_TYPES
 
 
 def is_integer_scalar_type(type_name):
@@ -978,7 +983,10 @@ def is_integer_scalar_type(type_name):
 
 def is_numeric_scalar_type(type_name):
     """Return true for known scalar numeric types."""
-    return str(type_name) in {"float", "half", "double", "int", "uint"}
+    return (
+        str(type_name) in {"float", "half", "double", "int", "uint"}
+        or str(type_name) in _HALF_SCALAR_TYPES
+    )
 
 
 def expression_debug_name(expr):
@@ -1526,12 +1534,11 @@ def _stage_interface_entries(shader, stage, stage_name, direction):
                 entry_point, struct_map, stage_name
             )
         )
-    else:
-        entries.extend(
-            _function_parameter_stage_interface_entries(
-                entry_point, struct_map, stage_name
-            )
+    entries.extend(
+        _function_parameter_stage_interface_entries(
+            entry_point, struct_map, stage_name, direction
         )
+    )
 
     return [entry for entry in entries if entry["keys"]]
 
@@ -1586,9 +1593,33 @@ def _stream_parameter_stage_interface_entries(function, struct_map, stage_name):
     return entries
 
 
-def _function_parameter_stage_interface_entries(function, struct_map, stage_name):
+_OUTPUT_PARAMETER_QUALIFIERS = frozenset({"out", "inout"})
+_INPUT_PARAMETER_EXCLUDED_QUALIFIERS = frozenset({"out"})
+
+
+def _entry_parameter_has_direction(parameter, direction):
+    """Whether an entry-point parameter carries stage ``direction`` data.
+
+    HLSL-style entry points also return stage outputs through ``out`` and ``inout`` parameters
+    (``out float4 position : SV_Position``); an ``inout`` parameter is both an input and an output.
+    """
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", None) or []
+        if qualifier is not None
+    }
+    if direction == "out":
+        return bool(qualifiers & _OUTPUT_PARAMETER_QUALIFIERS)
+    return not qualifiers & _INPUT_PARAMETER_EXCLUDED_QUALIFIERS
+
+
+def _function_parameter_stage_interface_entries(
+    function, struct_map, stage_name, direction="in"
+):
     entries = []
     for parameter in getattr(function, "parameters", []) or []:
+        if not _entry_parameter_has_direction(parameter, direction):
+            continue
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
@@ -1647,6 +1678,9 @@ def _stage_interface_keys(node):
     for attr in attributes:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
         if _is_cross_stage_semantic_name(attr_name):
+            # A semantic without an index has index 0: D3D links COLOR to COLOR0.
+            if not attr_name[-1].isdigit():
+                attr_name += "0"
             keys.append(("semantic", attr_name))
     return tuple(keys)
 
