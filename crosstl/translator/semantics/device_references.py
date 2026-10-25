@@ -11,14 +11,19 @@ shader then read vertex attributes, or nothing, instead of the buffer.
 :func:`lower_device_struct_references` rewrites each such parameter of a stage entry into the structured buffer that a
 pointer argument ``device T* p`` imports as (``RWStructuredBuffer<T>``, or ``StructuredBuffer<T>`` for a ``const``
 reference), and every use of it in the entry into the buffer's element 0. Every generator lowers element accesses
-of structured buffers, writes included. Metal output keeps the reference. An entry that also declares a local of the
+of structured buffers, writes included. Metal output keeps the reference. Only structures of plain data qualify: a
+structure with resource members (``texture2d``, ``sampler``, pointers) or ``[[id(n)]]`` members is an argument buffer
+(MSL 4.1 section 2.13), which the generators flatten or refuse themselves. An entry that also declares a local of the
 parameter's name is refused with :class:`DeviceReferenceUnsupportedError`, because a use could then name either.
 """
 
 from __future__ import annotations
 
+import re
+
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .hub_types import type_from_node
 from .rewrite import child_slots, get_child, set_child
 from .storage_blocks import _walk
 
@@ -41,12 +46,47 @@ class DeviceReferenceUnsupportedError(TranslationDiagnostic):
         )
 
 
-def _struct_names(program):
-    names = set()
-    for node in _walk(program):
-        if isinstance(node, A.StructNode) and isinstance(node.name, str):
-            names.add(node.name)
-    return names
+def _structs(program):
+    return {
+        node.name: node
+        for node in _walk(program)
+        if isinstance(node, A.StructNode) and isinstance(node.name, str)
+    }
+
+
+def _plain_type(type_node, structs, seen):
+    while isinstance(type_node, A.ArrayType):
+        type_node = type_node.element_type
+    if isinstance(type_node, (A.VectorType, A.MatrixType)):
+        return True
+    if not isinstance(type_node, (A.PrimitiveType, A.NamedType)):
+        return False
+    if getattr(type_node, "generic_args", None):
+        return False
+    if type_from_node(type_node) is not None or re.fullmatch(
+        r"(?:d|f16)?mat[234](?:x[234])?", str(type_node.name)
+    ):
+        return True
+    return _plain_struct(type_node.name, structs, seen)
+
+
+def _plain_struct(name, structs, seen=None):
+    """Whether structure ``name`` holds only data: no resources, pointers or argument-buffer ``[[id(n)]]`` members."""
+    struct = structs.get(name)
+    seen = set() if seen is None else seen
+    if struct is None or name in seen:
+        return False
+    seen.add(name)
+    for member in struct.members or []:
+        if not isinstance(member, A.StructMemberNode):
+            return False
+        attributes = {
+            str(getattr(attribute, "name", attribute)).lower()
+            for attribute in getattr(member, "attributes", None) or []
+        }
+        if "id" in attributes or not _plain_type(member.member_type, structs, seen):
+            return False
+    return True
 
 
 def _stages(program):
@@ -63,7 +103,7 @@ def _device_struct_reference(parameter, structs):
     element = declared.referenced_type
     if not isinstance(element, A.NamedType) or element.generic_args:
         return None
-    if element.name not in structs:
+    if not _plain_struct(element.name, structs):
         return None
     attributes = {
         str(getattr(attribute, "name", attribute)).lower()
@@ -107,7 +147,7 @@ def lower_device_struct_references(program, target) -> int:
             continue
         for parameter in entry.parameters or []:
             if structs is None:
-                structs = _struct_names(program)
+                structs = _structs(program)
             reference = _device_struct_reference(parameter, structs)
             if reference is None:
                 continue

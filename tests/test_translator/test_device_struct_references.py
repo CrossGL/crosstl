@@ -124,3 +124,30 @@ def test_a_local_with_the_argument_name_is_refused():
     )
     with pytest.raises(DeviceReferenceUnsupportedError):
         apply_rule_carrying(program, "cgl", "directx")
+
+
+def test_argument_buffers_are_left_to_the_generators():
+    # A structure with resource or [[id(n)]] members is an argument buffer, not plain data.
+    from crosstl.translator import ast as A
+    from crosstl.translator.semantics.device_references import (
+        lower_device_struct_references,
+    )
+
+    register_default_sources()
+    program = SOURCE_REGISTRY.get("cgl").parse(
+        "shader s {\n"
+        "    struct Args { texture2D t @id(0); uint k @id(1); };\n"
+        "    struct Plain { vec4 v; mat3 m; float w[2]; };\n"
+        "    struct Nested { Plain p; uint n; };\n"
+        "    fragment {\n"
+        "        vec4 main(device Args& a @buffer(0), device Nested& n @buffer(1)) @gl_FragColor {\n"
+        "            return n.p.v;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    assert lower_device_struct_references(program, "directx") == 1
+    (stage,) = program.stages.values()
+    args, nested = stage.entry_point.parameters
+    assert isinstance(args.param_type, A.ReferenceType)
+    assert nested.param_type.name == "RWStructuredBuffer"
