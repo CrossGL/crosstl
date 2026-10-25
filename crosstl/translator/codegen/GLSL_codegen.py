@@ -40266,6 +40266,10 @@ complex64_t crossgl_complex64_mod_assign(
             if mul_call is not None:
                 return mul_call
 
+            packed_bytes = self.generate_packed_byte_call(original_func_name, expr.args)
+            if packed_bytes is not None:
+                return packed_bytes
+
             mad_call = self.generate_mad_call(original_func_name, expr.args)
             if mad_call is not None:
                 return mad_call
@@ -42581,6 +42585,39 @@ complex64_t crossgl_complex64_mod_assign(
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"({left} * {right})"
+
+    # HLSL pack_u8/pack_s8 keep the low byte of each lane, pack_clamp_u8 and
+    # pack_clamp_s8 saturate each lane to [0, 255] or [-128, 127], and all four
+    # put lane x in the least significant byte. packUnorm4x8 rounds each
+    # clamped lane of v * 255.0 into the same byte order, and k / 255.0 * 255.0
+    # rounds back to k for every byte k, so it packs the bytes exactly while
+    # evaluating the argument once. The signed clamp packs a + 128 and flips
+    # the top bit of every byte back to two's complement.
+    # unpack_u8u32 and unpack_s8s32 split the bytes into a four-lane vector,
+    # sign-extending a signed lane by shifting it into the top byte and
+    # arithmetically shifting it back down.
+    PACKED_BYTE_INTRINSICS = {
+        "pack_u8": "packUnorm4x8(vec4(uvec4({value}) & uvec4(255u)) / 255.0)",
+        "pack_s8": "packUnorm4x8(vec4(uvec4({value}) & uvec4(255u)) / 255.0)",
+        "pack_clamp_u8": "packUnorm4x8(vec4({value}) / 255.0)",
+        "pack_clamp_s8": (
+            "(packUnorm4x8((vec4({value}) + 128.0) / 255.0) ^ 0x80808080u)"
+        ),
+        "unpack_u8u32": (
+            "((uvec4(uint({value})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))"
+        ),
+        "unpack_s8s32": "((ivec4(int({value})) << ivec4(24, 16, 8, 0)) >> ivec4(24))",
+    }
+
+    def generate_packed_byte_call(self, func_name, args):
+        template = self.PACKED_BYTE_INTRINSICS.get(func_name)
+        if template is None or func_name in self.function_return_types:
+            return None
+        if len(args) != 1:
+            raise ValueError(
+                f"OpenGL {func_name} alias requires 1 argument; got {len(args)}"
+            )
+        return template.format(value=self.generate_expression(args[0]))
 
     def generate_mad_call(self, func_name, args):
         if func_name != "mad" or func_name in self.function_return_types:
