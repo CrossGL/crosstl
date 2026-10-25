@@ -131,13 +131,30 @@ shader Probe {
 """
 
 
+# HIP declares sinpi and cospi for double only, so a float operand takes sinpif and cospif; a vector, which neither
+# library overloads, takes them per component.
+@pytest.mark.parametrize(
+    ("element", "expected", "helper"),
+    [
+        ("float", "outp[i] = (sinpif(fin[i]) + cospif(fin[i]));", None),
+        ("double", "outp[i] = (sinpi(fin[i]) + cospi(fin[i]));", None),
+        (
+            "vec2",
+            "outp[i] = cgl_float2_add(cgl_float2_sinpi(fin[i]), cgl_float2_cospi(fin[i]));",
+            "return make_float2(sinpif(value.x), sinpif(value.y));",
+        ),
+    ],
+)
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
-def test_cuda_and_hip_keep_sinpi_and_cospi(tmp_path, backend):
+def test_cuda_and_hip_keep_sinpi_and_cospi(
+    tmp_path, backend, element, expected, helper
+):
     path = tmp_path / "probe.cgl"
-    path.write_text(PI_PROBE, encoding="utf-8")
+    path.write_text(PI_PROBE.replace("float*", f"{element}*"), encoding="utf-8")
     code = crosstl.translate(str(path), backend=backend)
-    assert "sinpi(fin[i])" in code
-    assert "cospi(fin[i])" in code
+    assert expected in code
+    if helper is not None:
+        assert helper in code
 
 
 @pytest.mark.parametrize("function", ["tanpi", "asinpi", "acospi", "atanpi"])

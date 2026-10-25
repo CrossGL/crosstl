@@ -50,7 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- CUDA and HIP output keep `sinpi` and `cospi`, which both math libraries provide exactly at integers and half-integers. They used to be refused with `MetalMathFunctionUnsupportedError`, whose message also named MSL when the call came from CUDA or HIP source.
+- CUDA and HIP output keep `sinpi` and `cospi`, which both math libraries provide exactly at integers and half-integers: `sinpif` and `cospif` for `float`, `sinpi` and `cospi` for `double`, per component for vectors. They used to be refused with `MetalMathFunctionUnsupportedError`, whose message also named MSL when the call came from CUDA or HIP source.
 - WGSL and Slang output keep the named fields of a braced structure initializer such as `Pair { b: y, a: x }`, in member order, and refuse a missing, unknown or repeated field. They used to construct the structure with no arguments, which zeroed every field.
 - CUDA and HIP output writes `min` and `max` of integer operands as the integer intrinsics instead of `fminf` and `fmaxf`, which converted the operands to `float` and rounded values above 2^24, and writes `double` operands as `fmin` and `fmax`. Operands of different integer types are cast to the type they promote to, as `min(static_cast<unsigned int>(i), 32u)`.
 - WGSL output gives resources without an explicit binding the lowest free slots in their bind group, as GLSL and HLSL output do. Explicit bindings in any group used to push them higher: next to `cbuffer Params @binding(3)`, two storage buffers without a binding took slots 4 and 5 instead of 0 and 1.
