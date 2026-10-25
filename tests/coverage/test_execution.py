@@ -339,22 +339,110 @@ def test_glsl_460_group_votes_run_through_arb_shader_group_vote():
     assert execution.runnable("glsl", written) == written
 
 
-@pytest.mark.parametrize(
-    ("declared", "expected"),
-    [("#version 460", "supported"), ("#version 450 core", "wrong")],
-)
-def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
-    monkeypatch, declared, expected
-):
-    _fake_harness(monkeypatch, "driver-rejected", 0, "opengl-llvmpipe")
+def _glsl(declared="#version 460"):
     feature = Feature("glsl", "function", "sin", SIN.signature, crossgl="sin")
     native = probes.build(feature, "glsl").source
     assert native.startswith("#version 460\n")
     translated = native.replace("#version 460", declared, 1)
-    probe = Result(feature, "input", "supported", sources=(native, translated))
-    [result], used = execution.run([probe])
-    assert used == ["opengl-llvmpipe"]
+    return Result(feature, "input", "supported", sources=(native, translated))
+
+
+def _opengl_then_vulkan(monkeypatch, outcomes, written=0):
+    """Run GLSL on llvmpipe and SPIR-V on lavapipe, giving each probe ``outcomes[(target, role)]``, or "preserved".
+
+    A translation that runs as SPIR-V writes ``written``. Returns the targets of the runs, in order.
+    """
+
+    class Provided:
+        available = True
+
+    on = {
+        "glsl": runtimes.RUNTIMES["opengl-llvmpipe"],
+        "spirv": runtimes.RUNTIMES["vulkan-lavapipe"],
+    }
+    monkeypatch.setattr(
+        harness,
+        "select_runtimes",
+        lambda spec, targets: {t: [(on[t], Provided())] for t in targets},
+    )
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        execution, "as_spirv", lambda language, source: f"; {language} as SPIR-V\n"
+    )
+    ran = []
+
+    def run_suite(
+        cases, targets, configs, selection, root, *, reference=False, environment
+    ):
+        [target] = targets
+        ran.append(target)
+        records = []
+        for case in cases:
+            role = case.id.split("-")[1]
+            outcome = outcomes.get((target, role), "preserved")
+            words = np.zeros(case.out_count, dtype=np.uint32)
+            if role == "translated" and target == "spirv":
+                words[:] = written
+            if outcome == "preserved":
+                case.check(case.inputs, words)
+            records.append(
+                {"case": case.id, "runtime": on[target].id, "outcome": outcome}
+            )
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    return ran
+
+
+@pytest.mark.parametrize(
+    ("declared", "ran", "expected"),
+    [
+        # llvmpipe compiles a 4.60 translation as 4.50, so its rejection decides nothing and both run on Vulkan.
+        ("#version 460", ["glsl", "spirv"], "supported"),
+        ("#version 450 core", ["glsl"], "wrong"),
+    ],
+)
+def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
+    monkeypatch, declared, ran, expected
+):
+    targets = _opengl_then_vulkan(
+        monkeypatch, {("glsl", "translated"): "driver-rejected"}
+    )
+    [result], used = execution.run([_glsl(declared)])
+    assert targets == ran
     assert result.outcome == expected
+    assert used == ["opengl-llvmpipe", "vulkan-lavapipe"][: len(ran)]
+
+
+@pytest.mark.parametrize("rejection", ["driver-rejected", "invalid"])
+@pytest.mark.parametrize(("written", "expected"), [(0, "supported"), (1, "wrong")])
+def test_glsl_probes_llvmpipe_rejects_run_as_spirv_on_vulkan(
+    monkeypatch, rejection, written, expected
+):
+    targets = _opengl_then_vulkan(monkeypatch, {("glsl", "native"): rejection}, written)
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl", "spirv"]
+    assert used == ["opengl-llvmpipe", "vulkan-lavapipe"]
+    assert (result.outcome, result.runtime) == (expected, "vulkan-lavapipe")
+    detail = f"on vulkan-lavapipe as SPIR-V from glslangValidator, the translation {execution.DIVERGED}"
+    assert result.detail.startswith(detail) == (expected == "wrong")
+    assert execution.found(result.detail) == (expected == "wrong")
+
+
+def test_a_glsl_probe_glslang_cannot_lower_keeps_its_validation_result(monkeypatch):
+    targets = _opengl_then_vulkan(monkeypatch, {("glsl", "native"): "driver-rejected"})
+    monkeypatch.setattr(execution, "as_spirv", lambda language, source: "")
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl"]
+    assert used == ["opengl-llvmpipe"]
+    assert result.outcome == "supported" and not result.runtime
+
+
+def test_a_glsl_probe_llvmpipe_runs_does_not_run_again(monkeypatch):
+    targets = _opengl_then_vulkan(monkeypatch, {}, written=1)
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl"] and used == ["opengl-llvmpipe"]
+    assert (result.outcome, result.runtime) == ("supported", "opengl-llvmpipe")
 
 
 def _hlsl(translated=None):

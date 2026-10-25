@@ -17,6 +17,10 @@ buffer, so one that nothing uses is left out of the SPIR-V instead of asking the
 The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
 one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not accept.
 
+GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arithmetic types. When it rejects a native
+probe, or a translation that it compiles at a lower version than the translation declares, both probes run again as
+the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
+
 The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that declare one
 input buffer run; a probe whose call takes no argument declares one it never reads. When the native probe also declares
 one uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
@@ -83,6 +87,8 @@ _BROKEN = {
 # How much of the runtime's message for a rejected translation its diagnostic quotes, after the first line.
 _QUOTED_LINES = 6
 _QUOTED_CHARS = 600
+# Harness outcomes of a probe the runtime would not compile.
+_UNCOMPILED = frozenset({"invalid", "driver-rejected"})
 
 
 def found(detail: str) -> bool:
@@ -128,16 +134,15 @@ def runs(language: str) -> bool:
     return language in SUFFIXES or language in VIA_SPIRV
 
 
-def target(language: str) -> str:
-    """The language the harness runs ``language``'s probes as."""
-    return "spirv" if language in VIA_SPIRV else language
-
-
 def as_spirv(language: str, source: str) -> str:
     """The SPIR-V assembly ``language``'s reference compiler writes for a compute ``source``, or an empty string when
     it rejects the source."""
-    # naga takes no entry point; HLSL and Slang name theirs after [numthreads(...)].
-    entry = "main" if language == "wgsl" else validators.hlsl_entry(source, "compute")
+    # GLSL's entry point is main and naga takes none; HLSL and Slang name theirs after [numthreads(...)].
+    entry = (
+        "main"
+        if language in ("glsl", "wgsl")
+        else validators.hlsl_entry(source, "compute")
+    )
     assembly, _ = validators.lower(language, source, entry, keep_bindings=True)
     return without_unused_counters(assembly) if language == "hlsl" else assembly
 
@@ -293,33 +298,41 @@ def rebinding(runs_as: str, native: Path, translated: Path, constants: bool) -> 
     return "" if objections[0] else objections[1]
 
 
-def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Path):
-    """Run one chunk of results; return ``{index: (native record, translated record, outputs, lowered, rebound)}``.
+def _execute(
+    language: str,
+    chunk: list[tuple[int, Result]],
+    selection,
+    root: Path,
+    via_spirv: bool,
+):
+    """Run one chunk of results, as SPIR-V when ``via_spirv``; return ``{index: (native record, translated record,
+    outputs, lowered, rebound, via_spirv)}``.
 
     ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares, and
     ``rebound`` is :func:`rebinding`'s objection to the translation's resources.
     """
     from tests.conformance import runner
 
-    runs_as = target(language)
+    runs_as = "spirv" if via_spirv else language
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
     rebound = {}
     assemblies = []
     for index, result in chunk:
         [buffer] = set(_INPUT.findall(result.sources[0]))
         data = inputs(buffer)
-        texts = [runnable(language, source) for source in result.sources]
-        if language in VIA_SPIRV:
-            texts = [as_spirv(language, text) for text in texts]
+        if via_spirv:
+            texts = [as_spirv(language, text) for text in result.sources]
             if not all(texts):
                 continue
-        elif texts[1] != result.sources[1]:
-            lowered.add(index)
+        else:
+            texts = [runnable(language, source) for source in result.sources]
+            if texts[1] != result.sources[1]:
+                lowered.add(index)
         if runs_as == "spirv" and any(
             _FLOAT16.search(text) or _UNREPEATABLE.search(text) for text in texts
         ):
             continue
-        if language in VIA_SPIRV:
+        if via_spirv:
             assemblies += texts
         paths = []
         for role, text in zip(("native", "translated"), texts):
@@ -358,6 +371,7 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
             outputs,
             index in lowered,
             rebound.get(index, ""),
+            via_spirv,
         )
         for index, roles in found.items()
     }
@@ -370,6 +384,7 @@ def _judge(
     outputs,
     lowered: bool,
     rebound: str,
+    via_spirv: bool,
     index: int,
 ) -> Result:
     if not native or not translated or native["outcome"] != "preserved":
@@ -379,7 +394,7 @@ def _judge(
         return result
     language = result.feature.language
     where = f"on {runtime}" + (
-        f" as SPIR-V from {validators.TOOLS[language]}" if language in VIA_SPIRV else ""
+        f" as SPIR-V from {validators.TOOLS[language]}" if via_spirv else ""
     )
     if rebound:
         detail = f"{where}, the translation {REBOUND}\n{rebound}"
@@ -402,13 +417,56 @@ def _judge(
     return replace(result, runtime=runtime)
 
 
+def _unjudged(native, translated, outputs, lowered: bool, *_) -> bool:
+    """Whether a run on llvmpipe's OpenGL left no verdict because the runtime would not compile the native probe, or a
+    translation it compiled at a lower version than the translation declares."""
+    if not native or not translated:
+        return False
+    return native["outcome"] in _UNCOMPILED or (
+        lowered and translated["outcome"] == "driver-rejected"
+    )
+
+
+def _pass(
+    language: str,
+    items: list[tuple[int, Result]],
+    runtimes: str,
+    root: Path,
+    workers: int,
+    via_spirv: bool,
+):
+    """Run ``items`` on the first available runtime; return ``({index: records}, runtime id)``, with an empty id when
+    there is nothing to run or no runtime to run it on."""
+    from tests.conformance import runner
+
+    if not items or (via_spirv and not validators.can_lower(language)):
+        return {}, ""
+    runs_as = "spirv" if via_spirv else language
+    selection = runner.select_runtimes(runtimes, [runs_as])
+    available = [pair for pair in selection[runs_as] if pair[1].available]
+    if not available:
+        return {}, ""
+    # One runtime per language keeps a result's verdict independent of how many devices the host has.
+    selection = {runs_as: available[:1]}
+    chunks = [items[n::workers] for n in range(workers) if items[n::workers]]
+    found = {}
+    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+        done = pool.map(
+            lambda pair: _execute(
+                language, pair[1], selection, root / str(pair[0]), via_spirv
+            ),
+            enumerate(chunks),
+        )
+        for records in done:
+            found.update(records)
+    return found, available[0][0].id
+
+
 def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     """Execute every :func:`executable` result where a runtime is available; return the results and the runtimes.
 
     ``runtimes`` is the harness's selection: ``available``, or a comma-separated list of runtime ids.
     """
-    from tests.conformance import runner
-
     results = list(results)
     by_language: dict[str, list[tuple[int, Result]]] = {}
     for index, result in enumerate(results):
@@ -418,31 +476,29 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     used = set()
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-execution-") as scratch:
         for language, items in by_language.items():
-            if language in VIA_SPIRV and not validators.can_lower(language):
-                continue
-            runs_as = target(language)
-            selection = runner.select_runtimes(runtimes, [runs_as])
-            available = [pair for pair in selection[runs_as] if pair[1].available]
-            if not available:
-                continue
-            # One runtime per language keeps a result's verdict independent of how many devices the host has.
-            selection = {runs_as: available[:1]}
-            chunks = [items[n::workers] for n in range(workers) if items[n::workers]]
-            with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                done = pool.map(
-                    lambda pair: _execute(
-                        language,
-                        pair[1],
-                        selection,
-                        Path(scratch, language, str(pair[0])),
-                    ),
-                    enumerate(chunks),
+            via_spirv = language in VIA_SPIRV
+            found, runtime = _pass(
+                language, items, runtimes, Path(scratch, language), workers, via_spirv
+            )
+            used.add(runtime)
+            if language == "glsl":
+                again = [
+                    (i, r) for i, r in items if i in found and _unjudged(*found[i])
+                ]
+                rerun, runtime = _pass(
+                    language,
+                    again,
+                    runtimes,
+                    Path(scratch, "glsl-spirv"),
+                    workers,
+                    True,
                 )
-                for found in done:
-                    for index, records in found.items():
-                        results[index] = _judge(results[index], *records, index)
-            used.add(available[0][0].id)
-    return results, sorted(used)
+                found.update(rerun)
+                if rerun:
+                    used.add(runtime)
+            for index, records in found.items():
+                results[index] = _judge(results[index], *records, index)
+    return results, sorted(used - {""})
 
 
 def idle(results: list[Result]) -> list[str]:
