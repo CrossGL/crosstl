@@ -2789,7 +2789,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Thirty jobs, ten of them on macOS: run them in three waves.
+      # Thirty-three jobs, eleven of them on macOS: run them in four waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2799,6 +2799,7 @@ jobs:
             normalization,
             reductions,
             blas,
+            modules,
             reduction-dtypes,
             reduction-permutations,
             blas-wide,

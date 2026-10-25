@@ -2250,6 +2250,20 @@ package, upload its retained operands and keep its output guards, and a
 gradient without a weight must leave its `gw` placeholder unwritten; launches
 over more than 65,536 row elements keep their extents and digests. The tests
 compare the values with MLX's composed normalization.
+The `modules` group runs whole-module tests beyond the core operations
+(`MODULE_TESTS`): thirteen `test_losses` tests, nine `test_einsum` tests,
+`test_init`'s `test_orthogonal`, `test_sparse_zeros_per_row` and
+`test_uniform`, fifteen `test_linalg` tests (Cholesky, LU, QR, SVD, inverses,
+determinants, solves, cross products and the real and complex norms),
+`test_tree`'s `test_merge` and `test_supported_trees`, and `test_fft`'s
+`test_fftfreq`, `test_fftshift`, `test_fftshift_errors`, `test_ifftshift` and
+`test_rfftfreq`. The linear-algebra factorizations run on the MLX CPU stream,
+as upstream directs; their operands, products and checks run through the
+host. The other tests of these modules are not part of the group: the FFT
+tests need an FFT port, `test_init`'s identity and sparse initializers need
+scatters of more element types, `test_losses`' `test_cross_entropy` needs the
+fused cross-entropy kernel, and the einsum test sweep needs long-column
+reductions.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch, except `test_layer_norm_dim_check`, which rejects its

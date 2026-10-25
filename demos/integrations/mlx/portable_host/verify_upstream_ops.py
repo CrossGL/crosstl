@@ -144,6 +144,82 @@ from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
+# Whole-module tests beyond the core operations: losses, initializers, linear
+# algebra, einsum paths, FFT helpers and tree utilities. Each reaches the GPU;
+# linear algebra factorizations run on the MLX CPU stream as upstream directs,
+# and their operands and checks run through the host.
+MODULE_TESTS = tuple(
+    f"{module}.{case}.test_{name}"
+    for module, case, names in (
+        (
+            "test_losses",
+            "TestLosses",
+            (
+                "binary_cross_entropy",
+                "cosine_similarity_loss",
+                "gaussian_nll_loss",
+                "hinge_loss",
+                "huber_loss",
+                "kl_div_loss",
+                "l1_loss",
+                "log_cosh_loss",
+                "margin_ranking_loss",
+                "mse_loss",
+                "nll_loss",
+                "smooth_l1_loss",
+                "triplet_loss",
+            ),
+        ),
+        (
+            "test_einsum",
+            "TestEinsum",
+            (
+                "attention",
+                "broadcasting",
+                "ellipses",
+                "ellipses_broadcast",
+                "multi_input_einsum",
+                "scalar_operands",
+                "simple_einsum",
+                "sum_first",
+                "two_input_einsum",
+            ),
+        ),
+        ("test_init", "TestInit", ("orthogonal", "sparse_zeros_per_row", "uniform")),
+        (
+            "test_linalg",
+            "TestLinalg",
+            (
+                "cholesky",
+                "cholesky_inv",
+                "complex_norm",
+                "cross_product",
+                "det",
+                "inverse",
+                "lu",
+                "lu_factor",
+                "norm",
+                "pseudo_inverse",
+                "qr_factorization",
+                "slogdet",
+                "solve",
+                "svd_decomposition",
+                "tri_inverse",
+            ),
+        ),
+        ("test_tree", "TestTreeUtils", ("merge", "supported_trees")),
+        (
+            "test_fft",
+            "TestFFT",
+            ("fftfreq", "fftshift", "fftshift_errors", "ifftshift", "rfftfreq"),
+        ),
+    )
+    for name in names
+)
+MODULE_PREFIXES = tuple(
+    dict.fromkeys(name.split(".", 1)[0] + "." for name in MODULE_TESTS)
+)
+
 UPSTREAM_TESTS = (
     tuple(
         "test_ops.TestOps." + name
@@ -254,13 +330,15 @@ UPSTREAM_TESTS = (
             # This also reaches row_reduce_looped through the on-demand row index.
             "test_sum",
         )
-    ) + (
+    )
+    + (
         # These reach lazily translated arg reductions of every real dtype, and
         # of the flattened array in a threadgroup of thirteen simdgroups.
         "test_ops.TestOps.test_argmin_argmax",
         "test_reduce.TestReduce.test_arg_reduce",
         "test_bf16.TestBF16.test_arg_reduction_ops",
-    ) + (
+    )
+    + (
         # These reach lazily translated whole-array, row and column sums,
         # products and extrema of every integer, float and Boolean dtype, over
         # permuted, expanded and negative-stride views, and empty outputs.
@@ -277,13 +355,15 @@ UPSTREAM_TESTS = (
         "test_reduce.TestReduce.test_long_column",
         # This reaches Boolean all and any reductions of signed zeros.
         "test_reduce.TestReduce.test_and_or_negative_zero",
-    ) + (
+    )
+    + (
         # These reach lazily translated block and looped softmax and logsumexp
         # rows, precise 16-bit softmax, and transposed and broadcast inputs.
         "test_ops.TestOps.test_softmax",
         "test_ops.TestOps.test_logsumexp",
         "test_ops.TestOps.test_logsumexp_shape",
-    ) + (
+    )
+    + (
         # These reach lazily translated single-block sorts and argsorts of
         # contiguous, strided, broadcast and reversed views, and multi-block
         # tile sorts, partitions and merges up to a 2^22-element row.
@@ -296,7 +376,8 @@ UPSTREAM_TESTS = (
         # and float32 arrays over several axes, with NaN in any position.
         "test_ops.TestOps.test_median",
         "test_ops.TestOps.test_median_nan",
-    ) + (
+    )
+    + (
         # This reaches lazily translated binary searches of contiguous,
         # strided, reversed and empty sequences, and of transposed, sliced
         # and broadcast values, through searchsorted.metal.
@@ -306,7 +387,8 @@ UPSTREAM_TESTS = (
         # This reaches the kernels MLX generates for the fused tapes of
         # mx.unique's compiled helpers, with sorts and scans.
         "test_ops.TestOps.test_unique",
-    ) + (
+    )
+    + (
         # These reach lazily translated contiguous and strided, forward and
         # reverse, inclusive and exclusive scans of float32, int32, int64 and
         # complex64, log-add-exp scans, and size-one axes of any stride.
@@ -314,7 +396,8 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_logcumsumexp",
         "test_ops.TestOps.test_scans_complex_exclusive",
         "test_ops.TestOps.test_scan_size_one_axis",
-    ) + (
+    )
+    + (
         # These reach lazily translated single-row and looped RMS and layer
         # normalization of every float dtype, their gradient kernels with and
         # without a weight, and the column sums of the weight gradients.
@@ -327,7 +410,8 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_no_bias",
         "test_fast.TestFast.test_layer_norm_grad_no_params",
         "test_fast.TestFast.test_layer_norm_grad_params",
-    ) + tuple(
+    )
+    + tuple(
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
         # and AddMM epilogues of every float dtype, complex64 GEMV, unaligned,
         # batched, broadcast, transposed and strided operands and empty
@@ -366,6 +450,7 @@ UPSTREAM_TESTS = (
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
     )
+    + MODULE_TESTS
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -450,6 +535,8 @@ GROUP_PREFIXES = {
     "normalization": "test_fast.",
     "reductions": "test_reduce.",
     "blas": "test_blas.",
+    # The module tests run in one job; the norm sweep is the longest of them.
+    "modules": MODULE_PREFIXES,
 }
 GROUP_TESTS = {
     "reduction-dtypes": ("test_reduce.TestReduce.test_dtypes",),
@@ -946,9 +1033,10 @@ def run_worker(args, output, mode):
     if args.group is not None:
         command.extend(("--group", args.group))
     command.extend(("--output-dir", str(output / mode)))
-    with (output / f"{mode}.stdout").open("w") as stdout, (
-        output / f"{mode}.stderr"
-    ).open("w") as stderr:
+    with (
+        (output / f"{mode}.stdout").open("w") as stdout,
+        (output / f"{mode}.stderr").open("w") as stderr,
+    ):
         process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
     record = {"command": command, "returncode": process.returncode}
     write_json(output / f"{mode}.command.json", record)
