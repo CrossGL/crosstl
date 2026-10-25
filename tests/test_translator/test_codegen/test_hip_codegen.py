@@ -1949,6 +1949,39 @@ class TestHipCodeGen:
         )
         assert "f16vec3" not in hip_code
 
+    def test_half_vector_with_half_scalar_uses_scalar_helpers(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 scale(f16vec3 v, half h) {
+                    f16vec3 a = v * h;
+                    f16vec3 b = h * v;
+                    f16vec3 c = v / h;
+                    f16vec3 d = v - h;
+                    f16vec4 e = f16vec4(v, h) + h;
+                    return a + b + c + d + e.xyz;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "cgl_half3 a = cgl_cgl_half3_mul_scalar(v, h);" in hip_code
+        assert "cgl_half3 b = cgl_scalar_mul_cgl_half3(h, v);" in hip_code
+        assert "cgl_half3 c = cgl_cgl_half3_div_scalar(v, h);" in hip_code
+        assert "cgl_half3 d = cgl_cgl_half3_sub_scalar(v, h);" in hip_code
+        assert "cgl_cgl_half4_add_scalar(" in hip_code
+        assert (
+            "__device__ inline cgl_half3 cgl_cgl_half3_mul_scalar"
+            "(cgl_half3 lhs, half rhs)" in hip_code
+        )
+        assert "(v * h)" not in hip_code
+        assert "(h * v)" not in hip_code
+        assert "(v / h)" not in hip_code
+        assert "(v - h)" not in hip_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [
