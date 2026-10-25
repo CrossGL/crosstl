@@ -14824,6 +14824,7 @@ class VulkanSPIRVCodeGen(
                     interface_name,
                     member_type,
                     member_node,
+                    planned_location=location_index,
                 )
                 if fields is not None:
                     components.append(
@@ -14901,6 +14902,7 @@ class VulkanSPIRVCodeGen(
                     interface_name,
                     member_type,
                     member_node,
+                    planned_location=location_index,
                 )
                 if fields is not None:
                     struct_outputs.append((member_index, member_type, fields))

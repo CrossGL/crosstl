@@ -22,6 +22,7 @@ import copy
 from typing import NamedTuple
 
 from ..ast import AttributeNode
+from .spirv_interface_locations import FLATTENED_INTERFACES, is_builtin_interface_value
 
 __all__ = [
     "FlattenedField",
@@ -30,8 +31,6 @@ __all__ = [
     "store_flattened_struct_varying",
 ]
 
-# Varyings that are one value per invocation; arrayed stage interfaces (geometry, tessellation, mesh) keep their form.
-_FLATTENED_INTERFACES = {("Vertex", "Output"), ("Fragment", "Input")}
 _INTERPOLATION = frozenset({"flat", "noperspective", "smooth"})
 _QUALIFIER_GROUPS = (
     _INTERPOLATION,
@@ -110,8 +109,11 @@ def _field_node(codegen, field_node, field_type, name, location, inherited):
     return node
 
 
-def _leaves(codegen, type_id, location, inherited, path, types, names):
-    """Yield ``(path, types, names, field_node, location)`` for each leaf field, in declaration order."""
+def _leaves(codegen, type_id, location, inherited, path, types, names, interface):
+    """Yield ``(path, types, names, field_node, location)`` for each leaf field, in declaration order.
+
+    A built-in leaf keeps its own node and takes no location; the next leaf takes the location it would have taken.
+    """
     fields = _struct_fields(codegen, type_id)
     for index, (field_type, field_name, field_node) in enumerate(fields):
         own = codegen.explicit_location_attribute(field_node) if field_node else None
@@ -135,11 +137,18 @@ def _leaves(codegen, type_id, location, inherited, path, types, names):
                 field_path,
                 field_types,
                 field_names,
+                interface,
             ):
                 yield leaf
-                location = leaf[4] + codegen.struct_member_interface_location_span(
-                    leaf[3]
-                )
+                if leaf[4] is not None:
+                    location = leaf[4] + codegen.struct_member_interface_location_span(
+                        leaf[3]
+                    )
+            continue
+        if field_node is not None and is_builtin_interface_value(
+            codegen, interface[0], interface[1], field_node, field_type, field_name
+        ):
+            yield field_path, field_types, field_names, field_node, None
             continue
         leaf_node = _field_node(
             codegen, field_node, field_type, field_name, location, inherited
@@ -155,18 +164,24 @@ def flatten_struct_varying(
     name: str,
     member_type,
     member_node,
+    planned_location: int | None = None,
 ) -> list[FlattenedField] | None:
-    """Register one interface variable per leaf field of a located structure-typed varying.
+    """Register one interface variable per leaf field of a structure-typed varying.
 
+    The fields start at the member's explicit location, else at ``planned_location``, the one the entry's location
+    plan gave the member (Metal nests the vertex and primitive structures of a fragment's ``[[stage_in]]``); a
+    built-in field, such as a fragment's ``[[position]]``, becomes its built-in variable and takes no location.
     Returns the fields in declaration order, or None when ``member_node`` is not such a varying: not a vertex output
-    or fragment input, not of structure type, without an explicit location, or holding an array of structures,
-    which keeps its single variable.
+    or fragment input, not of structure type, without a location, or holding an array of structures, which keeps
+    its single variable.
     """
-    if (execution_model, storage_class) not in _FLATTENED_INTERFACES:
+    if (execution_model, storage_class) not in FLATTENED_INTERFACES:
         return None
     if member_node is None or _struct_fields(codegen, member_type) is None:
         return None
     location = codegen.explicit_location_attribute(member_node)
+    if location is None:
+        location = planned_location
     if location is None:
         return None
     if _has_struct_array(codegen, member_type):
@@ -179,7 +194,16 @@ def flatten_struct_varying(
     ]
     flattened = []
     for path, types, names, field_node, _ in list(
-        _leaves(codegen, member_type, location, inherited, (), (), ())
+        _leaves(
+            codegen,
+            member_type,
+            location,
+            inherited,
+            (),
+            (),
+            (),
+            interface=(execution_model, storage_class),
+        )
     ):
         variable = codegen.register_entry_point_interface_variable(
             execution_model,
