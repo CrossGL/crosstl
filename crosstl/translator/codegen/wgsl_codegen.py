@@ -67,6 +67,12 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_integer_operands import (
+    BITWISE_OPERATORS,
+    SHIFT_OPERATORS,
+    wgsl_bitwise_operands,
+    wgsl_shift_amount,
+)
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -81,6 +87,7 @@ from .wgsl_stage_io import (
     refuse_unmapped_system_semantic,
     with_flat_integer_interpolation,
 )
+from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
@@ -2595,6 +2602,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         if isinstance(stmt, ExpressionStatementNode):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment_statement(stmt.expression, indent)
+            if is_discard_statement(stmt):
+                return f"{pad}discard;"
             expression = self.generate_statement_expression(stmt.expression)
             if self.is_multi_barrier_memory_lowering(stmt.expression):
                 return "\n".join(f"{pad}{call};" for call in expression.split("; "))
@@ -2714,23 +2723,20 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_switch(self, node, indent):
         pad = "    " * indent
         lines = [f"{pad}switch ({self.generate_expression(node.expression)}) {{"]
-        for case in node.cases:
-            label = (
-                "default"
-                if case.value is None
-                else f"case {self.generate_expression(case.value)}"
+        for clause in wgsl_switch_clauses(node):
+            selectors = ", ".join(
+                "default" if value is None else self.generate_expression(value)
+                for value in clause.selectors
             )
+            label = "default" if selectors == "default" else f"case {selectors}"
             lines.append(f"{pad}    {label}: {{")
-            for stmt in case.statements:
-                lines.append(self.generate_statement(stmt, indent + 2))
-            lines.append(f"{pad}    }}")
-        if node.default_case is not None:
-            lines.append(
-                f"{pad}    default: {self.generate_block(node.default_case, indent + 1)}"
-            )
-        else:
-            lines.append(f"{pad}    default: {{")
-            lines.append(f"{pad}        break;")
+            # Each WGSL clause is its own compound statement.
+            self.push_identifier_scope()
+            try:
+                for stmt in clause.statements:
+                    lines.append(self.generate_statement(stmt, indent + 2))
+            finally:
+                self.pop_identifier_scope()
             lines.append(f"{pad}    }}")
         lines.append(f"{pad}}}")
         return "\n".join(lines)
@@ -2738,10 +2744,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
         target_type = self.expression_type(node.target)
-        return (
-            f"{self.generate_expression(node.target)} {node.operator} "
-            f"{self.generate_expression_for_target(node.value, target_type)}"
-        )
+        if node.operator[:-1] in SHIFT_OPERATORS:
+            value = wgsl_shift_amount(self, node.value, target_type)
+        else:
+            value = self.generate_expression_for_target(node.value, target_type)
+        return f"{self.generate_expression(node.target)} {node.operator} {value}"
 
     def generate_assignment_statement(self, node, indent):
         stage_array_assignment = (
@@ -2825,7 +2832,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
         pad = "    " * indent
         target_type = self.expression_type(target)
-        value = self.generate_expression_for_target(node.value, target_type)
+        # A compound assignment applies a scalar value to each component in turn, so it stays a scalar.
+        value = self.generate_expression_for_target(
+            node.value, target_type, splat_scalars=node.operator == "="
+        )
         value_type = self.expression_type(node.value)
 
         if node.operator != "=":
@@ -2897,7 +2907,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             self._identifier_scopes[-1].add(emitted_name)
         return emitted_name
 
-    def generate_expression_for_target(self, expr, target_type):
+    def generate_expression_for_target(self, expr, target_type, splat_scalars=True):
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
@@ -2920,6 +2930,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         narrowed = self.vector_narrowing_expression(rendered, target_type, source_type)
         if narrowed is not None:
             return narrowed
+        if splat_scalars:
+            splat = self.vector_splat_expression(rendered, target_type, source_type)
+            if splat is not None:
+                return splat
         target_scalar = self.scalar_type_name(target_type)
         source_scalar = self.scalar_type_name(source_type)
         if target_scalar == "i32" and source_scalar == "u32":
@@ -2967,6 +2981,24 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         return self.vector_narrowing_expression(
             self.generate_expression(expr), target_type, self.expression_type(expr)
         )
+
+    def vector_splat_expression(self, rendered, target_type, source_type):
+        """A scalar stored to a vector, which HLSL, GLSL, MSL and CrossGL replicate into every component.
+
+        WGSL has no implicit scalar-to-vector conversion, so the value becomes ``vecN<T>(T(value))``.
+        """
+        target_shape = self.vector_shape(target_type)
+        if target_shape is None or source_type is None:
+            return None
+        try:
+            source_scalar = self.type_name_string(source_type)
+        except ValueError:
+            return None
+        if source_scalar not in {"bool", "f16", "f32", "i32", "u32"}:
+            return None
+        element = target_shape[0]
+        value = rendered if source_scalar == element else f"{element}({rendered})"
+        return f"{self.type_name_string(target_type)}({value})"
 
     def vector_narrowing_expression(self, rendered, target_type, source_type):
         target_shape = self.vector_shape(target_type)
@@ -3016,6 +3048,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             matrix_scalar = self.generate_matrix_scalar_binary(expr)
             if matrix_scalar is not None:
                 return matrix_scalar
+            if expr.operator in SHIFT_OPERATORS:
+                left = self.generate_expression(expr.left)
+                amount = wgsl_shift_amount(
+                    self, expr.right, self.expression_type(expr.left)
+                )
+                return f"({left} {expr.operator} {amount})"
+            if expr.operator in BITWISE_OPERATORS:
+                left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
+                return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
                 f"{self.generate_expression(expr.right)})"
@@ -4276,8 +4317,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
+            convert_vectors = len(node.arguments) > 1
             args = ", ".join(
-                self.generate_vector_constructor_argument(arg, element_type)
+                self.generate_vector_constructor_argument(
+                    arg, element_type, convert_vectors
+                )
                 for arg in node.arguments
             )
         else:
@@ -4329,9 +4373,19 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             args.append("".join(current).strip())
         return args
 
-    def generate_vector_constructor_argument(self, arg, element_type):
-        if self.vector_shape(self.expression_type(arg)) is not None:
-            return self.generate_expression(arg)
+    def generate_vector_constructor_argument(
+        self, arg, element_type, convert_vectors=True
+    ):
+        arg_shape = self.vector_shape(self.expression_type(arg))
+        if arg_shape is not None:
+            rendered = self.generate_expression(arg)
+            # A WGSL vector constructor converts only a whole vector passed alone, so a vector of
+            # another component type that contributes components among other arguments is
+            # converted first.
+            element = self.scalar_type_name(element_type)
+            if convert_vectors and element is not None and element != arg_shape[0]:
+                return f"vec{arg_shape[1]}<{element}>({rendered})"
+            return rendered
         if self.is_float_vector_abstract_int_argument(arg, element_type):
             return self.generate_expression(arg)
         return self.generate_expression_for_target(arg, element_type)
@@ -4349,8 +4403,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         if vector_shape is None:
             return self.generate_call_arguments(function_name, arguments)
         element_type, _size = vector_shape
+        convert_vectors = len(arguments) > 1
         return ", ".join(
-            self.generate_vector_constructor_argument(arg, element_type)
+            self.generate_vector_constructor_argument(
+                arg, element_type, convert_vectors
+            )
             for arg in arguments
         )
 
