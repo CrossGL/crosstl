@@ -413,6 +413,67 @@ def test_clspv_struct_return_and_local_elaborated_type_codegen_reparse():
     assert "var t: T = bar(out);" in crossgl
 
 
+def test_opencl_read_imagef_lowers_to_texture_reads():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        kernel void k(global const float *fin, global float *outp,
+                      read_only image2d_t tex, image3d_t vol,
+                      read_write image2d_t rw) {
+            int i = get_global_id(0);
+            float2 uv = (float2)(fin[i], 0.5f);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+            outp[i] += read_imagef(tex, smp, uv).y;
+            outp[i] += read_imagef(tex, smp, (int2)(i, 0)).z;
+            outp[i] += read_imagef(tex, (int2)(i, 0)).w;
+            outp[i] += read_imagef(vol, smp, (float4)(fin[i], 0.5f, 0.5f, 0.0f)).x;
+            outp[i] += read_imagef(rw, (int2)(i, 0)).x;
+        }
+        """)
+
+    assert "read_imagef" not in crossgl
+    # The CLK_* sampler state is host-side; the sampler is a bound resource.
+    assert "CLK_" not in crossgl
+    assert "var<uniform> smp: sampler;" in crossgl
+    # Images are read_only by default, so only read_write stays a storage image.
+    assert "texture2D tex" in crossgl
+    assert "texture3D vol" in crossgl
+    assert "image2D rw" in crossgl
+    assert "textureLod(tex, smp, vec2<f32>(fin[i], 0.5f), 0.0).x" in crossgl
+    assert "textureLod(tex, smp, uv, 0.0).y" in crossgl
+    assert "texelFetch(tex, vec2<i32>(i, 0), 0).z" in crossgl
+    assert "texelFetch(tex, vec2<i32>(i, 0), 0).w" in crossgl
+    assert (
+        "textureLod(vol, smp, (vec4<f32>(fin[i], 0.5f, 0.5f, 0.0f)).xyz, 0.0).x"
+        in crossgl
+    )
+    assert "imageLoad(rw, vec2<i32>(i, 0)).x" in crossgl
+
+
+def test_opencl_sampled_read_imagef_translates_to_hlsl_sample_level(tmp_path):
+    source = """
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;
+        }
+        """
+    opencl_path = tmp_path / "read_image.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "read_imagef" not in hlsl
+    assert "SamplerState smp : register(s0);" in hlsl
+    # The texture is a bound resource, not a member of the k_Args cbuffer.
+    assert "k_Args" not in hlsl
+    assert "Texture2D tex : register(t" in hlsl
+    assert "outp[i] = tex.SampleLevel(smp, float2(fin[i], 0.5), 0.0).x;" in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+
 def test_pocl_statement_expression_macro_block_codegen_reparse():
     crossgl = generate_crossgl("""
         DEFINE_BODY_G

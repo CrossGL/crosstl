@@ -563,6 +563,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
                     )
+                    param_type = self.opencl_kernel_image_parameter_type(
+                        raw_type, param_type
+                    )
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
                     self.register_variable_type(param_name, param_type)
@@ -707,6 +710,20 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
         self.register_opencl_sizeof_symbol(node)
+        if (
+            getattr(node, "value", None) is not None
+            and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
+            == "sampler"
+        ):
+            # A sampler_t initializer is a CLK_* bitmask of sampler state;
+            # CrossGL samplers are bound resources, so drop the initializer.
+            value = node.value
+            node.value = None
+            try:
+                super().visit_VariableNode(node)
+            finally:
+                node.value = value
+            return
         super().visit_VariableNode(node)
 
     def visit_FunctionNode(self, node):
@@ -781,6 +798,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            image_read = self.format_opencl_image_read(func_name, raw_args)
+            if image_read is not None:
+                return image_read
             if is_conversion_name(func_name) and len(raw_args) == 1:
                 return format_conversion(
                     func_name, self.visit(raw_args[0]), self.convert_hip_type_to_crossgl
@@ -794,6 +814,99 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if builtin is not None:
                 return builtin
         return super().visit_FunctionCallNode(node)
+
+    # OpenCL images are read_only unless declared write_only or read_write, and
+    # a read_only image is read through a sampler or a texel fetch, so it is a
+    # sampled texture rather than a storage image.
+    OPENCL_SAMPLED_IMAGE_TYPES = {
+        "image1D": "texture1D",
+        "image2D": "texture2D",
+        "image3D": "texture3D",
+        "image2DArray": "texture2DArray",
+    }
+    OPENCL_WRITABLE_IMAGE_QUALIFIERS = {
+        "write_only",
+        "__write_only",
+        "read_write",
+        "__read_write",
+    }
+
+    def opencl_kernel_image_parameter_type(self, raw_type, param_type):
+        """Map a read_only image kernel argument to a sampled texture type."""
+        sampled_type = self.OPENCL_SAMPLED_IMAGE_TYPES.get(param_type)
+        if sampled_type is None:
+            return param_type
+        if set(str(raw_type).split()) & self.OPENCL_WRITABLE_IMAGE_QUALIFIERS:
+            return param_type
+        return sampled_type
+
+    # 3D images and 2D image arrays take a four-component coordinate in
+    # OpenCL; CrossGL texture and image calls take the three the image has.
+    OPENCL_IMAGE_FOUR_COMPONENT_COORD_TYPES = {
+        "image3D",
+        "image2DArray",
+        "texture3D",
+        "texture2DArray",
+    }
+
+    def format_opencl_image_read(self, func_name, args):
+        """Lower read_imagef to textureLod, texelFetch or imageLoad.
+
+        ``read_imagef(image, sampler, float coord)`` samples level 0 (a kernel
+        has no derivatives); an integer coordinate, with or without a sampler,
+        reads one texel.  A read_write image is a storage image and is read
+        with imageLoad.
+        """
+        if func_name != "read_imagef" or len(args) not in (2, 3):
+            return None
+        image = args[0]
+        image_name = image if isinstance(image, str) else getattr(image, "name", None)
+        image_type = self.lookup_variable_type(image_name) if image_name else None
+        is_texture = image_type in self.OPENCL_SAMPLED_IMAGE_TYPES.values()
+        is_image = image_type in self.OPENCL_SAMPLED_IMAGE_TYPES
+        if not (is_texture or is_image):
+            return None
+        if is_image and len(args) != 2:
+            return None
+
+        raw_coord = args[-1]
+        float_coord = self.opencl_image_coordinate_is_float(raw_coord)
+        rendered_image = self.visit(image)
+        rendered_coord = self.visit(raw_coord)
+        if image_type in self.OPENCL_IMAGE_FOUR_COMPONENT_COORD_TYPES:
+            rendered_coord = f"({rendered_coord}).xyz"
+
+        if is_image:
+            return f"imageLoad({rendered_image}, {rendered_coord})"
+        if len(args) == 3 and float_coord is not False:
+            rendered_sampler = self.visit(args[1])
+            return (
+                f"textureLod({rendered_image}, {rendered_sampler}, "
+                f"{rendered_coord}, 0.0)"
+            )
+        if float_coord:
+            return None
+        return f"texelFetch({rendered_image}, {rendered_coord}, 0)"
+
+    def opencl_image_coordinate_is_float(self, raw_coord):
+        """Return True for a float coordinate, False for an integer one, else None."""
+        name = raw_coord if isinstance(raw_coord, str) else None
+        if name is None and type(raw_coord).__name__ == "VariableNode":
+            name = getattr(raw_coord, "name", None)
+        type_name = None
+        if isinstance(name, str) and self.is_simple_identifier(name):
+            type_name = self.lookup_variable_type(name)
+        text = type_name or self.strip_wrapping_parentheses(
+            str(self.visit(raw_coord)).strip()
+        )
+        match = re.match(r"(?:vec\d<)?([fiu])\d+\b", text)
+        if match:
+            return match.group(1) == "f"
+        if re.fullmatch(r"-?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?f?", text):
+            return True
+        if re.fullmatch(r"-?\d+[uU]?", text):
+            return False
+        return None
 
     def emit_statement(self, stmt):
         can_lower_event_local = self.can_lower_opencl_event_local_memory()

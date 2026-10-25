@@ -490,6 +490,17 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
     )
 
 
+_OPAQUE_RESOURCE_TYPE_PREFIXES = ("texture", "image", "sampler")
+
+
+def _is_opaque_resource_parameter(parameter):
+    """Images, textures and samplers are bound resources, not constant-buffer members."""
+    param_type = getattr(parameter, "param_type", None)
+    if not isinstance(param_type, NamedType):
+        return False
+    return str(param_type.name).startswith(_OPAQUE_RESOURCE_TYPE_PREFIXES)
+
+
 def _resource_qualifiers(parameter):
     return {
         str(qualifier).lower()
@@ -903,6 +914,25 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                         ),
                         (
                             "OpenCL target-lowered storage parameter "
+                            f"{function.name}.{parameter.name}"
+                        ),
+                    )
+                )
+                continue
+            if _is_opaque_resource_parameter(parameter):
+                binding = _parameter_binding(parameter)
+                if binding is None:
+                    binding = next_binding
+                next_binding = max(next_binding, binding + 1)
+                global_variables.append(
+                    _mark_directx_relocatable_binding(
+                        VariableNode(
+                            parameter.name,
+                            _clone_target_type(getattr(parameter, "param_type", None)),
+                            attributes=[_binding_attribute(binding)],
+                        ),
+                        (
+                            "OpenCL target-lowered resource parameter "
                             f"{function.name}.{parameter.name}"
                         ),
                     )
