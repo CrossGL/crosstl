@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,6 +105,12 @@ def find_mojo_compiler():
             f"mojo compiler is not installed or not executable ({mojo}): {output}"
         )
 
+    version = (result.stdout or result.stderr).strip()
+    if not re.match(r"mojo\s+1\.", version, re.IGNORECASE):
+        # Calendar-versioned Mojo (24.x, 25.x) predates `comptime`; like
+        # tools/coverage/validators.py, treat it as absent.
+        pytest.skip(f"mojo compiler predates Mojo 1.x ({mojo}): {version}")
+
     return mojo
 
 
@@ -119,6 +126,19 @@ def test_find_mojo_compiler_skips_non_compiler_on_path(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedProbe())
 
     with pytest.raises(pytest.skip.Exception):
+        find_mojo_compiler()
+
+
+def test_find_mojo_compiler_skips_calendar_versioned_mojo(monkeypatch):
+    class LegacyProbe:
+        returncode = 0
+        stdout = "mojo 24.4.0 (59977802)\n"
+        stderr = ""
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/mojo")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: LegacyProbe())
+
+    with pytest.raises(pytest.skip.Exception, match="predates Mojo 1.x"):
         find_mojo_compiler()
 
 
