@@ -14,7 +14,7 @@ struct HlslProgramConstants {
 // Vertex Shader
 struct SpriteVertexShader_Input {
     float4 position [[attribute(0)]];
-    float4 color [[attribute(1)]];
+    float4 color [[attribute(13)]];
     float2 texCoord [[attribute(5)]];
 };
 

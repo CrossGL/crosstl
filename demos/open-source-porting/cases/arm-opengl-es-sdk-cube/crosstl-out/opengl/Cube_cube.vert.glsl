@@ -1,6 +1,6 @@
 #version 450 core
-in vec4 av4position;
-in vec3 av3colour;
+layout(location = 0) in vec4 av4position;
+layout(location = 1) in vec3 av3colour;
 out vec3 vv3colour;
 // Constant Buffers
 layout(std140, binding = 0) uniform Uniforms {

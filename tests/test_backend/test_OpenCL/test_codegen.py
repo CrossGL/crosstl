@@ -131,6 +131,28 @@ def test_opencl_explicit_atomics_refuse_orders_and_scopes_crossgl_cannot_keep(
     assert raised.value.code == "project.translate.opencl-atomic-order-unsupported"
 
 
+def test_opencl_get_local_linear_id_lowers_to_local_invocation_index(tmp_path):
+    source = """
+        kernel __attribute__((reqd_work_group_size(1, 1, 1)))
+        void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            ulong r = get_local_linear_id();
+            outp[i] = (uint)r;
+        }
+        """
+    crossgl = generate_crossgl(source)
+
+    assert "get_local_linear_id" not in crossgl
+    assert "gl_LocalInvocationIndex" in crossgl
+
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "get_local_linear_id" not in hlsl
+    assert "SV_GroupIndex" in hlsl
+
+
 def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
     source = """
         kernel void saxpy(global float *out, const global float *x, float a) {
