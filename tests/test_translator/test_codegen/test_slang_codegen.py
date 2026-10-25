@@ -325,6 +325,32 @@ def test_float16_aliases_emit_slang_half_types():
     assert "f16(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("crossgl_type", "slang_type"),
+    [
+        ("i8", "int8_t"),
+        ("u8", "uint8_t"),
+        ("i64", "int64_t"),
+        ("u64", "uint64_t"),
+        ("int8", "int8_t"),
+        ("uint8", "uint8_t"),
+        ("int32", "int"),
+        ("uint32", "uint"),
+        ("int64", "int64_t"),
+        ("uint64", "uint64_t"),
+        ("i8vec2", "vector<int8_t, 2>"),
+        ("i8vec4", "vector<int8_t, 4>"),
+        ("u8vec2", "vector<uint8_t, 2>"),
+        ("u64vec2", "vector<uint64_t, 2>"),
+        ("i64vec4", "vector<int64_t, 4>"),
+        ("vec2<i64>", "vector<int64_t, 2>"),
+        ("vec2<u64>", "vector<uint64_t, 2>"),
+    ],
+)
+def test_integer_width_types_convert_to_slang_spellings(crossgl_type, slang_type):
+    assert SlangCodeGen().convert_type(crossgl_type) == slang_type
+
+
 def test_stage_only_shader_emits_slang_entry_point():
     code = """
     shader main {
@@ -3106,6 +3132,163 @@ def test_glsl_fine_coarse_derivative_builtins_lower_to_slang_aliases():
     assert "dFdxCoarse(" not in generated_code
     assert "dFdyFine(" not in generated_code
     assert "dFdyCoarse(" not in generated_code
+
+
+def test_glsl_fine_coarse_fwidth_builtins_lower_to_slang_aliases():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 wFine = fwidthFine(uv);
+                vec2 wCoarse = fwidthCoarse(uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 wFine = fwidth_fine(uv);" in generated_code
+    assert "float2 wCoarse = fwidth_coarse(uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
+def test_glsl_bit_manipulation_builtins_lower_to_slang_intrinsics(tmp_path):
+    code = """
+    shader BuiltinGap {
+        RWStructuredBuffer<int> iin @binding(0);
+        RWStructuredBuffer<uint> uin @binding(1);
+        RWStructuredBuffer<uint2> outp @binding(2);
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint idx = tid.x;
+                ivec2 sv = ivec2(iin[idx], iin[idx + 1u]);
+                uvec2 uv = uvec2(uin[idx], uin[idx + 1u]);
+                let popSigned = bitCount(sv);
+                let popScalar = bitCount(uin[idx]);
+                let msbSigned = findMSB(sv);
+                let lsbUnsigned = findLSB(uv);
+                let revSigned = bitfieldReverse(sv);
+                let revUnsigned = bitfieldReverse(uv);
+                outp[idx] = uvec2(popSigned + ivec2(popScalar) + msbSigned + lsbUnsigned + revSigned) + revUnsigned;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    # Slang's countbits, firstbithigh and firstbitlow return uint; CrossGL's
+    # versions return int, so a scan that finds no bit stays -1.
+    assert "int2 popSigned = int2(countbits(sv));" in generated_code
+    assert "int popScalar = int(countbits(uin[idx]));" in generated_code
+    assert "int2 msbSigned = int2(firstbithigh(sv));" in generated_code
+    assert "int2 lsbUnsigned = int2(firstbitlow(uv));" in generated_code
+    assert "int2 revSigned = reversebits(sv);" in generated_code
+    assert "uint2 revUnsigned = reversebits(uv);" in generated_code
+    for glsl_name in ("bitCount(", "findMSB(", "findLSB(", "bitfieldReverse("):
+        assert glsl_name not in generated_code
+
+    if shutil.which("slangc") is not None:
+        compile_generated_slang(generated_code, tmp_path, "compute")
+
+
+def test_glsl_bit_scans_keep_int_results_for_every_integer_width():
+    code = """
+    shader BuiltinGap {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                u8vec2 a = u8vec2(uint8(1u), uint8(2u));
+                i16vec3 b = i16vec3(int16(1), int16(-2), int16(3));
+                i64 c = i64(-4);
+                u64vec4 d = u64vec4(uint64(5u));
+                let popNarrow = bitCount(a);
+                let msbShort = findMSB(b);
+                let lsbLong = findLSB(c);
+                let popLong = bitCount(d);
+                let revLong = bitfieldReverse(d);
+                bool noBit = findLSB(0u) < 0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int2 popNarrow = int2(countbits(a));" in generated_code
+    assert "int3 msbShort = int3(firstbithigh(b));" in generated_code
+    assert "int lsbLong = int(firstbitlow(c));" in generated_code
+    assert "int4 popLong = int4(countbits(d));" in generated_code
+    assert "vector<uint64_t, 4> revLong = reversebits(d);" in generated_code
+    assert "bool noBit = int(firstbitlow(0u)) < 0;" in generated_code
+
+
+def test_glsl_bit_scan_of_a_non_integer_operand_is_refused():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float x = 1.0;
+                int msb = findMSB(x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(SlangLoweringRefused, match="findMSB"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_user_defined_bit_and_fwidth_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            int bitCount(int x) { return x + 1; }
+            int findMSB(int x) { return x + 2; }
+            int findLSB(int x) { return x + 3; }
+            int bitfieldReverse(int x) { return x + 4; }
+            float fwidthCoarse(float x) { return x + 5.0; }
+            float fwidthFine(float x) { return x + 6.0; }
+
+            void main() {
+                int a = bitCount(1);
+                int b = findMSB(2);
+                int c = findLSB(3);
+                int d = bitfieldReverse(4);
+                float e = fwidthCoarse(0.5);
+                float f = fwidthFine(0.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int a = bitCount(1);" in generated_code
+    assert "int b = findMSB(2);" in generated_code
+    assert "int c = findLSB(3);" in generated_code
+    assert "int d = bitfieldReverse(4);" in generated_code
+    assert "float e = fwidthCoarse(0.5);" in generated_code
+    assert "float f = fwidthFine(0.25);" in generated_code
+    for lowered in (
+        "countbits(",
+        "firstbithigh(",
+        "firstbitlow(",
+        "reversebits(",
+        "fwidth_coarse(",
+        "fwidth_fine(",
+    ):
+        assert lowered not in generated_code
 
 
 def test_user_defined_derivative_function_names_are_not_lowered():
@@ -6546,8 +6729,10 @@ def test_ray_stage_builtins_lower_to_slang_intrinsics():
     )
     assert "float range = RayTCurrent() - RayTMin() + RayTCurrent();" in generated_code
     assert "uint hitKind = HitKind();" in generated_code
-    assert "uint customInstance = InstanceIndex();" in generated_code
-    assert "uint instance = InstanceID();" in generated_code
+    # gl_InstanceCustomIndexEXT is the application-defined value (DXR
+    # InstanceID); gl_InstanceID in ray stages is the index (InstanceIndex).
+    assert "uint customInstance = InstanceID();" in generated_code
+    assert "uint instance = InstanceIndex();" in generated_code
     assert "uint primitive = PrimitiveIndex();" in generated_code
     assert "uint geometryIndex = GeometryIndex();" in generated_code
     assert "gl_LaunchIDEXT" not in generated_code
@@ -6575,6 +6760,202 @@ def test_ray_stage_intrinsic_builtins_respect_local_shadowing():
     assert "uint gl_HitKindEXT = 7;" in generated_code
     assert "uint hitKind = gl_HitKindEXT;" in generated_code
     assert "HitKind()" not in generated_code
+
+
+def test_slang_codegen_lowers_compute_num_workgroups_to_workgroup_count():
+    code = """
+    shader NumWorkGroups {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                uvec3 groups = gl_NumWorkGroups;
+                outp[i] = float(gl_NumWorkGroups.x + groups.y);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 groups = WorkgroupCount();" in generated_code
+    assert "float(WorkgroupCount().x + groups.y)" in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "where"),
+    [
+        (
+            """
+            shader NumWorkGroupsVertex {
+                vertex {
+                    vec4 main() @gl_Position {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a vertex entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsFragment {
+                fragment {
+                    vec4 main() @gl_FragColor {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a fragment entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsHelper {
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    buffer float* outp;
+                    uint groupsX() { return gl_NumWorkGroups.x; }
+                    void main() {
+                        outp[gl_GlobalInvocationID.x] = float(groupsX());
+                    }
+                }
+            }
+            """,
+            "a helper function",
+        ),
+    ],
+    ids=["vertex", "fragment", "helper"],
+)
+def test_slang_codegen_refuses_num_workgroups_outside_a_compute_entry_point(
+    code, where
+):
+    # Slang declares no gl_NumWorkGroups; only a compute entry point reads it as WorkgroupCount().
+    with pytest.raises(
+        SlangLoweringRefused, match=f"gl_NumWorkGroups: .*not in {where}"
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_slang_codegen_maps_builtin_attribute_parameters_to_system_values():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id),
+                      uvec3 lid @builtin(local_invocation_id),
+                      uvec3 wid @builtin(workgroup_id)) {
+                o[gid.x] = lid.x + wid.x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint3 gid : SV_DispatchThreadID" in generated
+    assert "uint3 lid : SV_GroupThreadID" in generated
+    assert "uint3 wid : SV_GroupID" in generated
+    assert ": builtin" not in generated
+
+
+def test_slang_codegen_maps_builtin_attribute_stage_io_like_gl_spellings():
+    code = """
+    shader Q {
+        vertex {
+            vec4 main(vec3 p @ POSITION, uint vid @builtin(vertex_index)) @builtin(position) {
+                return vec4(p, float(vid));
+            }
+        }
+        fragment {
+            vec4 main(vec4 fc @builtin(position)) @gl_FragColor {
+                return fc;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint vid : SV_VertexID) : SV_Position" in generated
+    assert "float4 fc : SV_Position) : SV_Target" in generated
+    assert "builtin" not in generated
+
+
+def test_slang_codegen_maps_builtin_sample_mask_input_and_output_to_coverage():
+    code = """
+    shader Q {
+        struct FOut {
+            vec4 color @gl_FragColor;
+            uint mask @builtin(sample_mask);
+        };
+        fragment {
+            FOut main(uint coverage @builtin(sample_mask)) {
+                FOut o;
+                o.color = vec4(1.0);
+                o.mask = coverage;
+                return o;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint mask : SV_Coverage;" in generated
+    assert "uint coverage : SV_Coverage" in generated
+    assert "builtin" not in generated
+
+
+def test_slang_codegen_refuses_unknown_builtin_attribute():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(bogus_value)) {
+                o[gid.x] = 1u;
+            }
+        }
+    }
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    assert any(
+        "unknown built-in @builtin(bogus_value) on 'gid'" in reason
+        for reason in refused.reasons
+    )
+
+
+def test_slang_codegen_binds_num_workgroups_parameter_from_workgroup_count():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id), uvec3 nwg @gl_NumWorkGroups,
+                      uvec3 count @builtin(num_workgroups)) {
+                o[gid.x] = nwg.x + count.y;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "void main(uint3 gid : SV_DispatchThreadID)" in generated
+    assert "uint3 nwg = WorkgroupCount();" in generated
+    assert "uint3 count = WorkgroupCount();" in generated
+    assert "gl_NumWorkGroups" not in generated
+
+
+def test_slang_codegen_refuses_num_workgroups_parameter_outside_compute():
+    code = """
+    shader P {
+        fragment {
+            vec4 main(uvec3 nwg @gl_NumWorkGroups) @gl_FragColor {
+                return vec4(float(nwg.x));
+            }
+        }
+    }
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    assert any(
+        "gl_NumWorkGroups parameter 'nwg'" in reason for reason in refused.reasons
+    )
 
 
 def test_ray_stage_semantic_parameters_emit_slang_directions():
@@ -7806,9 +8187,9 @@ def test_slang_ray_query_methods_validate_target_result_types():
                 vec3 validOrigin = rq.CandidateObjectRayOrigin();
                 float proceedFloat = rq.Proceed();
                 bool statusBool = rq.CommittedStatus();
-                vec3 rayTVector = rq.CandidateRayT();
+                vec3 rayTVector = rq.CandidateTriangleRayT();
                 float originScalar = rq.CandidateObjectRayOrigin();
-                acceptVector(rq.CandidateRayT());
+                acceptVector(rq.CandidateTriangleRayT());
                 acceptFloat(rq.CommittedObjectRayDirection());
             }
         }
@@ -7833,7 +8214,7 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "float3 rayTVector = float3(0.0);" in generated_code
     assert (
-        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        "Slang RayQuery: CandidateTriangleRayT returns float but target expects float3"
         in refused.reasons
     )
     assert "float originScalar = 0;" in generated_code
@@ -7843,7 +8224,7 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "acceptVector(float3(0.0));" in generated_code
     assert (
-        "Slang RayQuery: CandidateRayT returns float but target expects float3"
+        "Slang RayQuery: CandidateTriangleRayT returns float but target expects float3"
         in refused.reasons
     )
     assert "acceptFloat(0);" in generated_code
@@ -7853,9 +8234,9 @@ def test_slang_ray_query_methods_validate_target_result_types():
     )
     assert "float proceedFloat = rq.Proceed();" not in generated_code
     assert "bool statusBool = rq.CommittedStatus();" not in generated_code
-    assert "float3 rayTVector = rq.CandidateRayT();" not in generated_code
+    assert "float3 rayTVector = rq.CandidateTriangleRayT();" not in generated_code
     assert "float originScalar = rq.CandidateObjectRayOrigin();" not in generated_code
-    assert "acceptVector(rq.CandidateRayT());" not in generated_code
+    assert "acceptVector(rq.CandidateTriangleRayT());" not in generated_code
     assert "acceptFloat(rq.CommittedObjectRayDirection());" not in generated_code
     assert "RayQueryOpNode" not in generated_code
 
@@ -7869,14 +8250,14 @@ def test_slang_ray_query_matrix_methods_validate_target_result_types():
             void acceptMatrix(mat4 value) {
             }
 
-            void acceptMatrix3x4(mat3x4 value) {
+            void acceptMatrix3x4(mat4x3 value) {
             }
 
             void main() {
                 RayDesc ray;
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(scene, 0, 0xFF, ray);
-                mat3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();
+                mat4x3 validObjectToWorld = rq.CommittedObjectToWorld3x4();
                 acceptMatrix3x4(rq.CommittedWorldToObject3x4());
                 float matrixScalar = rq.CommittedObjectToWorld3x4();
                 vec3 matrixVector = rq.CandidateWorldToObject3x4();
@@ -10752,16 +11133,130 @@ def test_matrix_and_non_float_vector_types_emit_slang_names():
     assert "bool3 flags;" in generated_code
     assert "bool2 mask = bool2(true, false);" in generated_code
     assert "float4 transformPosition(float4x4 m, float4 p)" in generated_code
-    assert "float4x4 model = float4x4(1.0);" in generated_code
-    assert "float2x3 nonSquare;" in generated_code
+    assert (
+        "float4x4 model = float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "float3x2 nonSquare;" in generated_code
     assert "double2 preciseUV = double2(1.0, 2.0);" in generated_code
-    assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "double4x3 jacobian;" in generated_code
+    assert (
+        "double2x2 precise = transpose(double2x2(1.0, 0.0, 0.0, 1.0));"
+        in generated_code
+    )
+    assert "double3x4 jacobian;" in generated_code
     assert "return mul(m, p);" in generated_code
     assert "dvec2(" not in generated_code
     assert "bvec2(" not in generated_code
     assert "dmat2(" not in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_slang_matrix_constructors_match_hlsl_orientation():
+    """CrossGL matCxR is floatRxC in Slang; constructors fill columns like GLSL.
+
+    Fixes #2767: scalar args become diagonals (not splats), multi-arg constructors
+    are transposed into row-major HLSL/Slang layout, and non-square names swap.
+    """
+    code = """
+    shader Mat {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 a = mat2(2.0);
+                mat2 b = mat2(fin[i], 1.0, 2.0, 3.0);
+                mat4x3 c = mat4x3(1.0);
+                vec2 v = a * b * vec2(1.0, fin[i]);
+                outp[i] = v.y + c[0][0];
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2x2 a = float2x2(2.0, 0.0, 0.0, 2.0);" in generated_code
+    assert "float2x2 b = transpose(float2x2(fin[i], 1.0, 2.0, 3.0));" in generated_code
+    assert (
+        "float3x4 c = float3x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);"
+        in generated_code
+    )
+    assert "float4x3" not in generated_code
+    assert "float2x2(2.0);" not in generated_code
+
+
+def test_slang_matrix_column_access_matches_hlsl_orientation():
+    """Slang uses HLSL row indexing; rewrite CrossGL column access like DirectX.
+
+    Maintainer follow-up on #2780 / Fixes #2767: constant columns become
+    ``m._m0c_m1c...`` lvalues, ``m[i][j]`` swaps to ``m[j][i]``, and
+    ``mat * buffer_vec`` lowers to ``mul``.
+    """
+    code = """
+    shader Col {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 m = mat2(fin[i], 2.0, 3.0, 4.0);
+                vec2 c = m[0];
+                m[1] = vec2(5.0, 6.0);
+                outp[i] = c.y * 10.0 + m[1][0];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 c = m._m00_m10;" in generated_code
+    assert "m._m01_m11 = float2(5.0, 6.0);" in generated_code
+    assert "outp[i] = c.y * 10.0 + m[0][1];" in generated_code
+    assert "float2 c = m[0];" not in generated_code
+    assert "m[1] = float2(5.0, 6.0);" not in generated_code
+
+
+def test_slang_nonsquare_matrix_column_and_buffer_mul():
+    """Non-square column swizzles and pointer-buffer matrix mul (Fixes #2767)."""
+    nonsquare = """
+    shader NS {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat4x3 r = mat4x3(1.0);
+                outp[i] = r[0].x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(nonsquare)))
+    assert "float3x4 r =" in generated
+    assert "outp[i] = r._m00_m10_m20.x;" in generated
+    assert "r[0].x" not in generated
+
+    mul_code = """
+    shader Mul {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer vec4* fin;
+            buffer vec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat4 m = mat4(1.0);
+                outp[i] = m * fin[i];
+            }
+        }
+    }
+    """
+    mul_generated = generate_code(parse_code(tokenize_code(mul_code)))
+    assert "outp[i] = mul(m, fin[i]);" in mul_generated
+    assert "outp[i] = m * fin[i];" not in mul_generated
 
 
 def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
@@ -10801,7 +11296,7 @@ def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
         generated_code
     )
     assert (
-        "return mul(float2x2(cos(angle), -sin(angle), sin(angle), cos(angle)), "
+        "return mul(transpose(float2x2(cos(angle), -sin(angle), sin(angle), cos(angle))), "
         "direction);" in generated_code
     )
     assert "return mul(modelView, float4(position + normal, 1.0));" in generated_code
@@ -10883,6 +11378,41 @@ def test_narrow_generic_vector_constructors_emit_slang_vector_types():
         assert invalid_token not in generated_code
 
 
+def test_glsl_16bit_integer_spellings_emit_slang_vector_types():
+    # Slang has no u16vec2/i16vec4 or uint16/int16 spellings; its 16-bit
+    # integer types are uint16_t/int16_t and vector<uint16_t, N>.
+    code = """
+    shader Shorts {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u16vec2 a = u16vec2(uint16(uin[i]), uint16(uin[i + 1u]));
+                i16vec4 b = i16vec4(int16(1), int16(2), int16(3), int16(4));
+                u16vec3 c = u16vec3(a, uint16(5));
+                i16vec2 d = i16vec2(b.xy);
+                outp[i] = uvec4(uvec2(a), uint(c.z), uint(d.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vector<uint16_t, 2> a = vector<uint16_t, 2>(uint16_t(uin[i])" in (
+        generated_code
+    )
+    assert "vector<int16_t, 4> b = vector<int16_t, 4>(int16_t(1)" in generated_code
+    assert "vector<uint16_t, 3> c = vector<uint16_t, 3>(a, uint16_t(5));" in (
+        generated_code
+    )
+    assert "vector<int16_t, 2> d = vector<int16_t, 2>(b.xy);" in generated_code
+    for glsl_spelling in ("u16vec", "i16vec", "uint16(", "int16("):
+        assert glsl_spelling not in generated_code
+
+
 def test_scalar_aliases_emit_slang_fundamental_type_names():
     # Slang's fundamental scalar type names are float/int/uint/double
     # (with *_t aliases), not CrossGL's f32/i32/u32/f64 spellings.
@@ -10912,6 +11442,44 @@ def test_scalar_aliases_emit_slang_fundamental_type_names():
     assert " u32 " not in generated_code
     assert " f64 " not in generated_code
     assert "f32(" not in generated_code
+
+
+def test_glsl_8bit_and_64bit_integer_spellings_emit_slang_types():
+    # Slang spells 8-bit and 64-bit integers uint8_t/int8_t/uint64_t/int64_t
+    # and vector<T, N>; GLSL's u8vec/i64vec, int8()/uint64() and CrossGL's
+    # i64/u64 are not Slang types.
+    code = """
+    shader Widths {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+                i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+                u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+                i64 e = i64(uin[i]);
+                vec2<i64> g = vec2<i64>(e, e);
+                outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(g.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i])" in (
+        generated_code
+    )
+    assert "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1)" in generated_code
+    assert "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i])" in (
+        generated_code
+    )
+    assert "int64_t e = int64_t(uin[i]);" in generated_code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in generated_code
+    for glsl_spelling in ("u8vec", "i8vec", "u64vec", "i642", "i64(", "uint8("):
+        assert glsl_spelling not in generated_code
 
 
 def test_resource_types_emit_slang_texture_names():
@@ -11295,6 +11863,157 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     assert "buffer_store(" not in generated_code
     assert "buffer_dimensions(" not in generated_code
     assert "StructuredBuffer<vec4>" not in generated_code
+
+
+def test_storage_buffer_pointer_declarations_become_structured_buffers():
+    """A CrossGL ``buffer T* name`` declares bound storage, not a Slang pointer.
+
+    Fixes #2921: Slang has no pointer to bound memory, so a global pointer is an implicit shader parameter holding one
+    ``PhysicalStorageBuffer`` address per buffer, and no slangc target lets a host bind that as a storage buffer. The
+    README kernel's two buffers are named at the interface, as GLSL, HLSL, Metal, SPIR-V and WGSL declare them.
+    """
+    code = """
+    shader Saxpy {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer float* x;
+            buffer float* y;
+            uniform float a;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                y[i] = a * x[i] + y[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RWStructuredBuffer<float> x : register(u0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> y : register(u1);"
+        in generated_code
+    )
+    assert "float* x" not in generated_code
+    assert "float* y" not in generated_code
+    assert "y[i] = a * x[i] + y[i];" in generated_code
+
+
+def test_readonly_storage_buffer_declaration_binds_a_structured_buffer():
+    """A read-only storage buffer is a ``StructuredBuffer``, the t-register view of the same binding (#2921)."""
+    code = """
+    shader Reduce {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, set = 0, binding = 2) buffer readonly float* src;
+            layout(std430, set = 1, binding = 0) buffer float* dst;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                dst[i] = src[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> src : register(t2, space0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 1)]] RWStructuredBuffer<float> dst : register(u0, space1);"
+        in generated_code
+    )
+    assert "dst[i] = src[i];" in generated_code
+
+
+def test_storage_buffer_of_structs_declares_its_element_type():
+    """``buffer Particle* name`` becomes ``RWStructuredBuffer<Particle>``, so member access reads the element."""
+    code = """
+    shader Particles {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, binding = 0) buffer Particle* particles;
+            buffer float* masses;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                masses[i] = particles[i].position.x + particles[i].mass;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[vk::binding(0, 0)]] RWStructuredBuffer<Particle> particles " in (
+        generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u1);"
+        in generated_code
+    )
+    assert "masses[i] = particles[i].position.x + particles[i].mass;" in generated_code
+    assert "Particle* particles" not in generated_code
+
+    # The importer reads the declaration back, so a round trip keeps the element type.
+    assert "RWStructuredBuffer<Particle> particles" in generate_crossgl_from_slang(
+        generated_code
+    )
+
+
+def test_coherent_storage_buffer_declaration_is_globallycoherent():
+    """A ``coherent`` storage buffer keeps its memory qualifier, which Slang spells ``globallycoherent``."""
+    code = """
+    shader Counters {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            coherent buffer uint* counters;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                counters[i] = counters[i] + 1u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u0);" in generated_code
+    )
+    assert "uint* counters" not in generated_code
+
+
+def test_storage_buffer_dereference_reads_its_first_element():
+    """``*name`` of a storage buffer is ``name[0]``: a structured buffer has no address to dereference."""
+    code = """
+    shader Deref {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* data;
+            buffer float* outp;
+            void main() {
+                *outp = *data + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "outp[0] = data[0] + 1.0;" in generated_code
+    assert "*data" not in generated_code
+    assert "*outp" not in generated_code
 
 
 def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():

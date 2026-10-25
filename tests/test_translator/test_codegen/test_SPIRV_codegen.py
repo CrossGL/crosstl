@@ -534,13 +534,12 @@ kernel void vector_list(device uint* results [[buffer(0)]]) {{
     output = crosstl.translate(str(source), backend="vulkan", format_output=False)
     assert "WARNING" not in output
     if global_scope:
-        variable = spirv_named_variable(output, "value", storage_class="Private")
-        initializer = re.search(
-            rf"{variable} = OpVariable %\d+ Private (%\d+)", output
-        )[1]
-        components = re.search(
-            rf"{initializer} = OpConstantComposite %\d+ (.*)", output
-        )[1].split()
+        # An immutable program-scope vector is a named constant composite.
+        (constant,) = spirv_named_ids(output, "value")
+        assert f"{constant} = OpVariable" not in output
+        components = re.search(rf"{constant} = OpConstantComposite %\d+ (.*)", output)[
+            1
+        ].split()
         constants = spirv_uint_constant_values(output)
         assert [constants[item] for item in components] == list(range(1, count + 1)) + [
             0
@@ -9846,7 +9845,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "hitDistance",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "customAttributeToken",
@@ -9881,7 +9880,7 @@ class TestVulkanSPIRVCodeGen:
             "IntersectionKHR stages"
         ) in spv_code
         assert "Proceed yet" in spv_code
-        assert "CandidateRayT yet" in spv_code
+        assert "CandidateTriangleRayT yet" in spv_code
         assert "CommittedTriangleCustomAttribute yet" in spv_code
         assert "SetMeshOutputCounts yet" in spv_code
         assert (
@@ -11911,7 +11910,7 @@ class TestVulkanSPIRVCodeGen:
                     VariableNode(
                         "candidateT",
                         float_type,
-                        RayQueryOpNode("CandidateRayT", "rq", []),
+                        RayQueryOpNode("CandidateTriangleRayT", "rq", []),
                     ),
                     VariableNode(
                         "committedT",
@@ -11953,7 +11952,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed();
-                    float candidateT = rq.CandidateRayT();
+                    float candidateT = rq.CandidateTriangleRayT();
                     float committedT = rq.CommittedRayT();
                 }
             }
@@ -12068,10 +12067,10 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort();
-                    rq.Terminate();
-                    rq.GenerateIntersection(1.0);
+                    rq.Abort();
+                    rq.CommitProceduralPrimitiveHit(1.0);
                     rq.CommitProceduralPrimitiveHit(2.0);
-                    rq.ConfirmIntersection();
+                    rq.CommitNonOpaqueTriangleHit();
                     rq.CommitNonOpaqueTriangleHit();
                 }
             }
@@ -12087,7 +12086,9 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpRayQueryGenerateIntersectionKHR") == 2
         assert spv_code.count("OpRayQueryConfirmIntersectionKHR") == 2
         assert "RayQuery.Abort yet; using a default" not in spv_code
-        assert "RayQuery.GenerateIntersection yet; using a default" not in spv_code
+        assert (
+            "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
+        )
         assert (
             "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
         )
@@ -12104,7 +12105,7 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     rq.Abort(1);
                     rq.CommitNonOpaqueTriangleHit(1.0);
-                    rq.GenerateIntersection(vec3(0.0, 1.0, 2.0));
+                    rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                     rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
                 }
             }
@@ -12120,7 +12121,7 @@ class TestVulkanSPIRVCodeGen:
             "SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 " "arguments"
         ) in spv_code_refused
         assert (
-            "SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance argument "
             "must be a 32-bit floating-point scalar"
         ) in spv_code_refused
         assert (
@@ -12137,11 +12138,11 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     uint candidateType = rq.CandidateType();
-                    uint committedType = rq.CommittedType();
+                    uint committedType = rq.CommittedStatus();
                     uint candidatePrimitive = rq.CandidatePrimitiveIndex();
                     uint committedPrimitive = rq.CommittedPrimitiveIndex();
-                    uint candidateInstance = rq.CandidateInstanceID();
-                    uint committedInstance = rq.CommittedInstanceID();
+                    uint candidateInstance = rq.CandidateInstanceIndex();
+                    uint committedInstance = rq.CommittedInstanceIndex();
                     uint candidateGeometry = rq.CandidateGeometryIndex();
                     uint committedGeometry = rq.CommittedGeometryIndex();
                     vec2 candidateBarycentrics = rq.CandidateTriangleBarycentrics();
@@ -12213,12 +12214,12 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin();
                     uint rayFlags = rq.RayFlags();
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex();
-                    uint committedCustomIndex = rq.CommittedInstanceCustomIndex();
+                    uint candidateCustomIndex = rq.CandidateInstanceID();
+                    uint committedCustomIndex = rq.CommittedInstanceID();
                     uint candidateSbt =
-                        rq.CandidateInstanceShaderBindingTableRecordOffset();
+                        rq.CandidateInstanceContributionToHitGroupIndex();
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset();
+                        rq.CommittedInstanceContributionToHitGroupIndex();
                 }
             }
         }
@@ -12240,7 +12241,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "RayTMin yet; using a default" not in spv_code
         assert "RayFlags yet; using a default" not in spv_code
-        assert "CandidateInstanceCustomIndex yet; using a default" not in spv_code
+        assert "CandidateInstanceID yet; using a default" not in spv_code
         assert (
             "CommittedInstanceShaderBindingTableRecordOffset yet; using a default"
             not in spv_code
@@ -12256,9 +12257,9 @@ class TestVulkanSPIRVCodeGen:
                     RayQuery<RAY_FLAG_NONE> rq;
                     float rayTMin = rq.RayTMin(1);
                     uint rayFlags = rq.RayFlags(1);
-                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex(1);
+                    uint candidateCustomIndex = rq.CandidateInstanceID(1);
                     uint committedSbt =
-                        rq.CommittedInstanceShaderBindingTableRecordOffset(1);
+                        rq.CommittedInstanceContributionToHitGroupIndex(1);
                 }
             }
         }
@@ -12271,11 +12272,11 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code_refused
         assert "SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code_refused
         assert (
-            "SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 " "arguments"
+            "SPIR-V RayQuery.CandidateInstanceID requires 0 " "arguments"
         ) in spv_code_refused
         assert (
             "SPIR-V "
-            "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
+            "RayQuery.CommittedInstanceContributionToHitGroupIndex requires 0 "
             "arguments"
         ) in spv_code_refused
 
@@ -12437,7 +12438,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque();
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque();
                 }
             }
         }
@@ -12449,7 +12450,11 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCapability RayQueryKHR" in spv_code
         assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
         assert spv_code.count("OpRayQueryGetIntersectionCandidateAABBOpaqueKHR") == 1
-        assert "CandidateAABBOpaque yet; using a default" not in spv_code
+        # DXR asks whether the candidate is non-opaque: the opaque bit is negated.
+        assert spv_code.count("OpLogicalNot") == 1
+        assert (
+            "CandidateProceduralPrimitiveNonOpaque yet; using a default" not in spv_code
+        )
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -12459,7 +12464,7 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
-                    bool aabbOpaque = rq.CandidateAABBOpaque(1);
+                    bool nonOpaque = rq.CandidateProceduralPrimitiveNonOpaque(1);
                 }
             }
         }
@@ -12470,7 +12475,7 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert (
-            "SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            "SPIR-V RayQuery.CandidateProceduralPrimitiveNonOpaque requires 0 arguments"
             in spv_code_refused
         )
 
@@ -12730,7 +12735,7 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     RayQuery<RAY_FLAG_NONE> rq;
                     bool advanced = rq.Proceed(1);
-                    float candidateT = rq.CandidateRayT(2);
+                    float candidateT = rq.CandidateTriangleRayT(2);
                 }
             }
         }
@@ -12741,7 +12746,10 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(ast)
         spv_code_refused = str(refusal.value)
         assert "SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code_refused
-        assert "SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code_refused
+        assert (
+            "SPIR-V RayQuery.CandidateTriangleRayT requires 0 arguments"
+            in spv_code_refused
+        )
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
@@ -21099,24 +21107,23 @@ class TestVulkanSPIRVCodeGen:
                     int layer = 1;
                     vec2 uv = vec2(0.25, 0.75);
                     ivec2 pixel = ivec2(4, 8);
-                    ivec2 offset = ivec2(1, 0);
-                    vec4 offsetColor = textureOffset(colorMap, uv, offset);
+                    vec4 offsetColor = textureOffset(colorMap, uv, ivec2(1, 0));
                     vec4 gathered = textureGather(colorMap, uv);
                     vec4 fetched = texelFetch(colorMap, pixel, 2);
                     vec4 fetchedOffset = texelFetchOffset(
                         colorMap,
                         pixel,
                         2,
-                        offset
+                        ivec2(1, 0)
                     );
-                    vec4 arrayOffset = textureOffset(textures[layer], uv, offset);
+                    vec4 arrayOffset = textureOffset(textures[layer], uv, ivec2(1, 0));
                     vec4 arrayGathered = textureGather(textures[layer], uv, 1);
                     vec4 arrayFetched = texelFetch(textures[layer], pixel, 0);
                     vec4 arrayFetchedOffset = texelFetchOffset(
                         textures[layer],
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -21141,14 +21148,17 @@ class TestVulkanSPIRVCodeGen:
         assert array_type is not None
         assert spv_code.count("OpImageSampleImplicitLod") == 0
         assert spv_code.count("OpImageSampleExplicitLod") == 2
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; a non-constant Offset is valid on gathers only
+        # (VUID-RuntimeSpirv-Offset-10213), and only gathers with offsets need ImageGatherExtended.
+        assert not re.search(r"(?<!Const)Offset %", spv_code)
         assert (
-            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bOffset\b", spv_code)) == 2
+            len(re.findall(r"\bOpImageSampleExplicitLod\b.*\bConstOffset\b", spv_code))
+            == 2
         )
-        assert spv_code.count("OpCapability ImageGatherExtended") == 1
+        assert "OpCapability ImageGatherExtended" not in spv_code
         assert spv_code.count("OpImageGather") == 2
         assert spv_code.count("OpImageFetch") == 4
-        assert len(re.findall(r"\bOpImageFetch\b.*\bOffset\b", spv_code)) == 2
+        assert len(re.findall(r"\bOpImageFetch\b.*\bConstOffset\b", spv_code)) == 2
         assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -21679,7 +21689,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         linearSampler,
                         uv,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGather(colorMap, linearSampler, uv, 1);
                     vec4 gatherOffset = textureGatherOffset(
@@ -21733,8 +21743,10 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageGather") == 6
         assert spv_code.count("OpImageFetch") == 1
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
-        assert len(re.findall(r"\bOffset\b", spv_code)) == 6
+        # The constant textureOffset offset is a ConstOffset; the gathers keep their variable Offset operands,
+        # which Vulkan accepts on gathers only (VUID-RuntimeSpirv-Offset-10213).
+        assert len(re.findall(r"\bConstOffset\b", spv_code)) == 1
+        assert len(re.findall(r"(?<!Const)\bOffset\b", spv_code)) == 5
         assert "ConstOffsets" not in spv_code
         assert f"OpImageGather {vec4_type.group(1)}" in spv_code
         assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
@@ -23282,20 +23294,20 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpBranchConditional" in spv_code
+        # Only the selected arm's call runs; the merge block joins the two results.
         assert re.search(
-            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
-            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpSelectionMerge (?P<merge>%\d+) None\n"
             r"OpBranchConditional %\d+ (?P<true_label>%\d+) (?P<false_label>%\d+)\n"
             r"(?P=true_label) = OpLabel\n"
-            r"OpStore (?P<result>%\d+) (?P=true_value)\n"
+            r"(?P<true_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=false_label) = OpLabel\n"
-            r"OpStore (?P=result) (?P=false_value)\n"
+            r"(?P<false_value>%\d+) = OpFunctionCall[^\n]+\n"
             r"OpBranch (?P=merge)\n"
             r"(?P=merge) = OpLabel\n"
-            r"(?P<loaded>%\d+) = OpLoad %\d+ (?P=result)\n"
-            r"OpReturnValue (?P=loaded)",
+            r"(?P<selected>%\d+) = OpPhi %\d+ (?P=true_value) (?P=true_label) "
+            r"(?P=false_value) (?P=false_label)\n"
+            r"OpReturnValue (?P=selected)",
             spv_code,
         )
         assert not re.search(r"=\s+OpSelect\b", spv_code)
@@ -25651,37 +25663,26 @@ class TestVulkanSPIRVCodeGen:
         assert not re.search(r"OpConstant %\d+ true", spv_code)
 
         def has_composite_selection_flow():
-            lines = spv_code.splitlines()
-            for index in range(len(lines) - 10):
-                merge = re.match(r"OpSelectionMerge (%\d+) None", lines[index])
-                branch = re.match(
-                    r"OpBranchConditional %\d+ (%\d+) (%\d+)",
-                    lines[index + 1],
+            # Each arm calls its constructor in its own block and the merge block joins the
+            # two struct values, so only the selected payload is built.
+            return (
+                re.search(
+                    r"OpSelectionMerge (?P<merge>%\d+) None\n"
+                    r"OpBranchConditional %\d+ (?P<then>%\d+) (?P<else>%\d+)\n"
+                    r"(?P=then) = OpLabel\n"
+                    r"(?P<first>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=else) = OpLabel\n"
+                    r"(?P<second>%\d+) = OpFunctionCall [^\n]+\n"
+                    r"OpBranch (?P=merge)\n"
+                    r"(?P=merge) = OpLabel\n"
+                    r"(?P<selected>%\d+) = OpPhi %\d+ (?P=first) (?P=then) "
+                    r"(?P=second) (?P=else)\n"
+                    r"OpReturnValue (?P=selected)\n",
+                    spv_code,
                 )
-                then_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 3])
-                else_store = re.match(r"OpStore (%\d+) (%\d+)", lines[index + 6])
-                load = re.match(
-                    r"(%\d+) = OpLoad %\d+ (%\d+)",
-                    lines[index + 9],
-                )
-                if not all([merge, branch, then_store, else_store, load]):
-                    continue
-
-                merge_label = merge.group(1)
-                then_label = branch.group(1)
-                else_label = branch.group(2)
-                selected_value = load.group(1)
-                return (
-                    lines[index + 2] == f"{then_label} = OpLabel"
-                    and lines[index + 4] == f"OpBranch {merge_label}"
-                    and lines[index + 5] == f"{else_label} = OpLabel"
-                    and lines[index + 7] == f"OpBranch {merge_label}"
-                    and lines[index + 8] == f"{merge_label} = OpLabel"
-                    and then_store.group(1) == else_store.group(1)
-                    and load.group(2) == then_store.group(1)
-                    and lines[index + 10] == f"OpReturnValue {selected_value}"
-                )
-            return False
+                is not None
+            )
 
         assert has_composite_selection_flow()
 
@@ -26851,7 +26852,7 @@ class TestVulkanSPIRVCodeGen:
                         uv,
                         0.45,
                         1.0,
-                        offset
+                        ivec2(1, 0)
                     );
                     float grad = textureCompareGrad(
                         shadowMap,
@@ -26868,13 +26869,13 @@ class TestVulkanSPIRVCodeGen:
                         0.35,
                         dx,
                         dy,
-                        offset
+                        ivec2(1, 0)
                     );
                     float offsetShadow = textureCompareOffset(
                         shadowMaps[layer],
                         uv,
                         0.3,
-                        offset
+                        ivec2(1, 0)
                     );
                     vec4 gathered = textureGatherCompare(shadowMap, uv, 0.6);
                     vec4 gatheredOffset = textureGatherCompareOffset(
@@ -26919,11 +26920,17 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpImageSampleDrefImplicitLod") == 0
         assert spv_code.count("OpImageDrefGather") == 2
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
-        assert "ConstOffset" not in spv_code
+        # Constant offsets are ConstOffset operands; only the gather keeps a variable Offset
+        # (VUID-RuntimeSpirv-Offset-10213).
         assert (
-            len(re.findall(r"\bOpImageSampleDrefExplicitLod\b.*\bOffset\b", spv_code))
+            len(
+                re.findall(
+                    r"\bOpImageSampleDrefExplicitLod\b.*\bConstOffset\b", spv_code
+                )
+            )
             == 3
         )
+        assert not re.search(r"OpImageSampleDref\w+ .*(?<!Const)Offset %", spv_code)
         assert len(re.findall(r"\bOpImageDrefGather\b.*\bOffset\b", spv_code)) == 1
         assert f"OpImageSampleDrefExplicitLod {float_type.group(1)}" in spv_code
         assert f"OpImageSampleDrefImplicitLod {float_type.group(1)}" not in spv_code
@@ -26937,11 +26944,11 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|Offset %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
             spv_code,
         )
         assert re.search(
-            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|Offset %\d+ %\d+ %\d+",
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
             spv_code,
         )
         assert f"OpLoad {array_type.group(1)}" not in spv_code
@@ -28500,10 +28507,18 @@ class TestVulkanSPIRVCodeGen:
         )
         assert u64_runtime_array is not None
         assert f"OpDecorate {u64_runtime_array.group(1)} ArrayStride 8" in spv_code
+        # Each arm reads only its own buffer, so the unselected index is never dereferenced.
         assert re.search(
-            rf"%\d+ = OpSelect {re.escape(u64_type.group(1))} %\d+ %\d+ %\d+",
+            r"OpBranchConditional %\d+ (?P<left>%\d+) (?P<right>%\d+)\n"
+            r"(?P=left) = OpLabel\n(?:[^\n]+\n)*?"
+            r"(?P<left_value>%\d+) = OpLoad [^\n]+\nOpBranch (?P<merge>%\d+)\n"
+            r"(?P=right) = OpLabel\n(?:[^\n]+\n)*?OpBranch (?P=merge)\n"
+            r"(?P=merge) = OpLabel\n"
+            rf"%\d+ = OpPhi {re.escape(u64_type.group(1))} (?P=left_value) (?P=left) "
+            r"%\d+ %\d+\n",
             spv_code,
         )
+        assert not re.search(r"= OpSelect\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -30332,7 +30347,6 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     vec2 uv = vec2(0.5, 0.5);
                     ivec2 pixel = ivec2(10, 20);
-                    ivec2 offset = ivec2(1, 0);
                     vec2 ddx = vec2(0.1, 0.0);
                     vec2 ddy = vec2(0.0, 0.1);
                     vec4 lodWithOffset = textureLodOffset(
@@ -30352,7 +30366,7 @@ class TestVulkanSPIRVCodeGen:
                         colorMap,
                         pixel,
                         0,
-                        offset
+                        ivec2(1, 0)
                     );
                 }
             }
@@ -30379,7 +30393,7 @@ class TestVulkanSPIRVCodeGen:
         assert grad_offset_match.group(1) == "Grad|ConstOffset"
 
         fetch_offset_match = re.search(
-            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|(?:Const)?Offset) %\d+ %\d+",
+            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|ConstOffset) %\d+ %\d+",
             spv_code,
         )
         assert fetch_offset_match is not None
@@ -32183,7 +32197,7 @@ class TestSpirvShaderValidation:
                     VariableNode(
                         "status",
                         uint_type,
-                        RayQueryOpNode("CommittedType", "rq", []),
+                        RayQueryOpNode("CommittedStatus", "rq", []),
                     ),
                 ]
             ),

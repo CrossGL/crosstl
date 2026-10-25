@@ -289,11 +289,11 @@ def test_copy_contracts_bind_uploaded_metadata_and_launch(tmp_path, target, case
 
 @pytest.mark.parametrize("job", ["portable-host", "metal-host", "mlx-metal-porting"])
 def test_ci_requires_native_copy_parity(job):
+    from tests import workflow_text
     from tests.ci_helpers import assert_workflow_triggers
-    from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, job, "Validate pinned copy layouts"
     )
     assert_native_step_prerequisites(step, job=job, pinned=True)
@@ -317,7 +317,7 @@ def test_ci_requires_native_copy_parity(job):
         "metal-host": ("Retain native host execution evidence", ".mlx-metal-host"),
         "mlx-metal-porting": ("Upload pinned copy evidence", "mlx-copy-results"),
     }[job]
-    upload = ci_coverage.workflow_job_step_section(workflow, job, upload_name)
+    upload = workflow_text.workflow_job_step_section(workflow, job, upload_name)
     assert "if: always()" in upload
     assert "include-hidden-files: true" in upload
     assert upload_path in upload

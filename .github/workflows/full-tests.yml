@@ -23,17 +23,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      tested: ${{ steps.queue.outputs.tested }}
+    steps:
+      - name: Check whether the merge queue tested this commit
+        id: queue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The merge queue moves main to the commit its merge group tested, so a
+          # push to main would repeat a run that already passed on that commit.
+          # When the lookup fails, the push runs every job.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
+          echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-latest
-    # tools/pytest_shard.py splits the suite by test id. Three shards took 21 to 23
-    # minutes each, the longest job of a merge-queue run; six bring a shard close
-    # to the other gating workflows. Each shard still collects the whole suite.
+    # tools/pytest_shard.py splits the suite by test id. Six shards ran their tests
+    # for about 10 minutes each, the longest job of a merge-queue run once macOS
+    # translator tests were split; eight bring a shard under the translator legs.
+    # Each shard still collects the whole suite.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
       - name: Checkout repository
@@ -61,11 +86,14 @@ jobs:
         run: pwsh -NoProfile -NonInteractive -Command '@{ ready = 1 } | ConvertTo-Json | Out-Null'
 
       - name: Run complete test suite
+        # The default xdist scheduler hands each worker a fixed run of consecutive
+        # tests, so the worker that drew the slow ones finished minutes after the
+        # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
           python -m pytest tests demos/integrations \
             -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
-            --durations=25 -n auto --junitxml build/reports/full-tests-pytest.xml
+            --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
         if: always()
@@ -91,6 +119,8 @@ jobs:
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -181,7 +211,8 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -193,6 +224,10 @@ jobs:
               Write-Warning "DXC download failed on attempt $attempt; retrying."
               Start-Sleep -Seconds (10 * $attempt)
             }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
           }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           Join-Path $dxcRoot "bin\x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -236,6 +271,8 @@ jobs:
 
   runtime-parity:
     name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -245,19 +282,17 @@ jobs:
           - os: ubuntu-latest
             adapter: opengl
             required_tools: glslangValidator
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
+            apt_packages: glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
           - os: ubuntu-latest
             adapter: vulkan
             required_tools: spirv-val,spirv-as
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+            apt_packages: glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
           - os: macOS-latest
             adapter: metal
             required_tools: xcrun
-            install_command: xcrun -sdk macosx -f metal
           - os: windows-latest
             adapter: directx
             required_tools: dxc
-            install_command: ""
 
     steps:
       - name: Checkout repository
@@ -270,26 +305,22 @@ jobs:
           cache-dependency-path: pyproject.toml
           python-version: "3.12"
 
-      - name: Install adapter toolchain
-        shell: bash
-        env:
-          INSTALL_COMMAND: ${{ matrix.install_command }}
+      # The packages.microsoft.com sources on hosted runners are not needed here, and apt-get update fails when that
+      # repository is unavailable.
+      - name: Remove optional hosted-runner apt sources
+        if: matrix.apt_packages
         run: |
-          if [ "${RUNNER_OS:-}" = "Linux" ] && [ -n "$INSTALL_COMMAND" ]; then
-            mapfile -t runner_apt_sources < <(
-              grep -rl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true
-            )
+          { grep -rl packages.microsoft.com /etc/apt/sources.list.d || true; } | xargs -r sudo rm -fv
 
-            if ((${#runner_apt_sources[@]})); then
-              printf 'Removing optional hosted-runner apt sources before apt update:\n'
-              printf '  %s\n' "${runner_apt_sources[@]}"
-              sudo rm -f "${runner_apt_sources[@]}"
-            fi
-          fi
+      - name: Install adapter toolchain
+        if: matrix.apt_packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ${{ matrix.apt_packages }}
 
-          if [ -n "$INSTALL_COMMAND" ]; then
-            eval "$INSTALL_COMMAND"
-          fi
+      - name: Check the Metal compiler
+        if: runner.os == 'macOS'
+        run: xcrun -sdk macosx -f metal
 
       - name: Probe runtime parity adapter availability
         id: probe_runtime_parity
@@ -371,16 +402,26 @@ jobs:
         if: (matrix.adapter == 'opengl' || matrix.adapter == 'metal') && steps.probe_runtime_parity.outputs.available == 'true'
         shell: bash
         env:
+          CROSSTL_REQUIRE_BUFFER_STRIDE_EXECUTION: "1"
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
           CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
+          CROSSTL_REQUIRE_BUFFER_PARAMETER_EXECUTION: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           python -m pytest -q \
+            tests/test_translator/test_buffer_strides.py \
             tests/test_backend/test_directx/test_hlsl_value_array_parameters.py \
+            tests/test_backend/test_directx/test_hlsl_buffer_parameter_layouts.py \
             tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
-            tests/test_translator/test_structured_buffer_counters.py
+            tests/test_translator/test_structured_buffer_counters.py \
+            tests/test_translator/test_metal_buffer_arrays.py \
+            tests/test_translator/test_append_consume_layouts.py \
+            tests/test_translator/test_structured_buffer_array_layouts.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'
@@ -395,6 +436,8 @@ jobs:
 
   directx-native-runtime-smoke:
     name: Direct3D 12 Native Runtime Smoke (Windows)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -415,7 +458,8 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -427,6 +471,10 @@ jobs:
               Write-Warning "DXC download failed on attempt $attempt; retrying."
               Start-Sleep -Seconds (10 * $attempt)
             }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
           }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
@@ -447,6 +495,8 @@ jobs:
 
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -628,6 +678,8 @@ jobs:
 
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
     runs-on: macOS-latest
     timeout-minutes: 60
 
@@ -695,7 +747,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue require.
     name: Complete Test Suite result
     if: always()
-    needs: [pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
+    needs: [plan, pytest, shader-validators, runtime-parity, directx-native-runtime-smoke, compiler-smoke-linux, compiler-smoke-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -51,7 +51,7 @@ inspect the project report:
 
 Project reports cover shader and kernel source translation; host runtime API
 migration and build-system changes remain manual work listed in the report.
-See :doc:`project-porting` for the workflow and the report contract.
+See :doc:`porting-guide` for the workflow and the report contract.
 
 Example sources
 ---------------

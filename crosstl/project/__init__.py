@@ -27,6 +27,7 @@ from .dispatch_planning import (
     DispatchArtifactPlanError,
     plan_dispatch_artifacts,
 )
+from .doctor import toolchain_doctor_report
 from .host_reflection import (
     REFLECTION_AMBIGUOUS_BINDING,
     REFLECTION_EMPTY,
@@ -483,6 +484,7 @@ __all__ = [
     "plan_runtime_integration",
     "publish_native_deferred_compilation_cache",
     "scan_project",
+    "toolchain_doctor_report",
     "translate_project",
     "compile_native_deferred_compilation_request",
     "runtime_execution_request_to_graph",

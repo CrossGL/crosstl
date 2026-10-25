@@ -26,8 +26,9 @@ from .model import (
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
-from .spellings import SUBSCRIPT
+from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.base import NESTED_STRUCTS
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -35,6 +36,7 @@ _RAYTRACING_BLOCKS = {
     "intersection": "ray_intersection",
     "any-hit": "ray_any_hit",
     "closest-hit": "ray_closest_hit",
+    "callable": "ray_callable",
 }
 
 
@@ -140,22 +142,24 @@ class CrossGL(Dialect):
         "Payload payload @ payload, "
         "BuiltInTriangleIntersectionAttributes attributes @ hit_attribute"
     )
+    _CALLABLE_PARAMETERS = "Payload payload @ callable_data"
 
     def raytracing(
         self, stage: str, buffers: list[Buffer], body: list[str], **parts
     ) -> str:
         hit = stage in ("any-hit", "closest-hit")
+        callable_ = stage == "callable"
         # A ray-generation probe that traces declares its payload as a local.
         traced = parts.get("traced", False)
         lines = ["shader Probe {"]
         lines += [f"    {line}" for line in parts.get("prelude", ())]
-        if hit or traced:
+        if hit or callable_ or traced:
             lines += ["    struct Payload {", "        vec4 color;", "    }"]
         lines += [f"    {_RAYTRACING_BLOCKS[stage]} {{"]
         lines += [f"        buffer {kind}* {name};" for kind, name in buffers]
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
-            f"        void main({self._HIT_PARAMETERS if hit else ''}) {{",
+            f"        void main({self._HIT_PARAMETERS if hit else self._CALLABLE_PARAMETERS if callable_ else ''}) {{",
             "            uint i = 0u;",
             *([f"            Payload {self.payload};"] if traced else ()),
         ]
@@ -309,10 +313,21 @@ class CrossGL(Dialect):
         # CrossGL declares a pointer to device memory as a uniform of a pointer type, as Slang does.
         return f"uniform {self.type(kind)}* {name};"
 
+    def assignment(
+        self, name: str, kind: Type, arguments: list[str]
+    ) -> tuple[list[str], str] | None:
+        if name != ELEMENT:
+            return None
+        vector, index, element = arguments
+        return [self.declare(kind, "w", vector), f"w[{index}] = {element};"], "w"
+
     def call(self, name: str, arguments: list[str]) -> str:
         if name == SUBSCRIPT:
             vector, index = arguments
             return f"{vector}[{index}]"
+        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument.
+        if "{}" in name:
+            return name.format(*arguments)
         return super().call(name, arguments)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
@@ -485,6 +500,7 @@ CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
     "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),
@@ -504,8 +520,11 @@ CONSTRUCTS: dict[str, Template] = {
     "workgroup-id": Template("outp[i] = float(gl_WorkGroupID.x);"),
     "local-invocation-index": Template("outp[i] = float(gl_LocalInvocationIndex);"),
     "num-workgroups": Template("outp[i] = float(gl_NumWorkGroups.x);"),
+    # The native probes bind the block at slot 3, past the buffers, and so does the CrossGL probe, so that a host binds
+    # the translation the way it binds the native probe.
     "uniform-buffer": Template(
-        "outp[i] = fin[i] * scale;", prelude="cbuffer Params {\n    float scale;\n};"
+        "outp[i] = fin[i] * scale;",
+        prelude="cbuffer Params @binding(3) {\n    float scale;\n};",
     ),
     "read-only-buffer": Template("outp[i] = rin[i];", "readonly buffer float* rin;"),
     "sampled-texture": Template(

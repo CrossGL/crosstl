@@ -1,0 +1,92 @@
+name: Install apt packages
+description: >-
+  Install apt packages on a Linux runner. The archives a run downloads are cached for the runner image and package
+  list, and a later run installs them without contacting a mirror. Without a cache, a stalled mirror can hold
+  apt-get without output until the job times out, so the update and the download each get a time limit and up to
+  three attempts. Packages are installed only after all of them have downloaded, so a retry never interrupts dpkg.
+
+inputs:
+  packages:
+    description: Space-separated package names, optionally pinned as name=version.
+    required: true
+  recommends:
+    description: Set to "false" to pass --no-install-recommends.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # The image decides which dependencies are already installed, so each image version downloads its own set.
+    - name: Name the package cache
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        RECOMMENDS: ${{ inputs.recommends }}
+      run: |
+        digest=$(printf '%s\n%s\n' "$PACKAGES" "$RECOMMENDS" | sha256sum | cut -c1-16)
+        echo "key=apt-${ImageOS:-unknown}-${ImageVersion:-unknown}-${RUNNER_ARCH}-${digest}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore downloaded packages
+      id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Install ${{ inputs.packages }}
+      id: install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        RECOMMENDS: ${{ inputs.recommends }}
+        CACHED: ${{ steps.restore.outputs.cache-hit }}
+        ARCHIVES: ${{ runner.temp }}/apt-archives
+      run: |
+        set -euo pipefail
+        read -ra packages <<<"$PACKAGES"
+        apt=(sudo apt-get -q -y -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        apt+=(-o "Dir::Cache::Archives=$ARCHIVES/")
+        if [ "$RECOMMENDS" = false ]; then
+          apt+=(--no-install-recommends)
+        fi
+        shopt -s nullglob
+        cached=("$ARCHIVES"/*.deb)
+        if [ "$CACHED" = true ] && [ "${#cached[@]}" -gt 0 ]; then
+          if "${apt[@]}" install "${cached[@]}"; then
+            exit 0
+          fi
+          echo "::warning::the cached packages did not install, so apt-get downloads them again"
+        fi
+        mkdir -p "$ARCHIVES/partial"
+        for attempt in 1 2 3; do
+          # A source the job does not install from, such as packages.microsoft.com answering
+          # 403, fails the whole update. The lists that did update are still used, and the
+          # download below is what decides whether the attempt worked.
+          if ! timeout 180 "${apt[@]}" update; then
+            echo "::warning::apt-get update failed or timed out on attempt $attempt"
+          fi
+          if timeout 420 "${apt[@]}" install --download-only "${packages[@]}"; then
+            "${apt[@]}" install "${packages[@]}"
+            sudo rm -rf "$ARCHIVES/partial" "$ARCHIVES/lock"
+            sudo chown -R "$(id -u):$(id -g)" "$ARCHIVES"
+            downloaded=("$ARCHIVES"/*.deb)
+            if [ "${#downloaded[@]}" -gt 0 ]; then
+              echo "downloaded=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          echo "::warning::apt-get attempt $attempt failed or timed out"
+          sleep 20
+        done
+        echo "::error::apt-get could not download ${PACKAGES} in 3 attempts"
+        exit 1
+
+    # Saved straight after the install, so a later failure in the job still leaves the cache for the next run.
+    - name: Save downloaded packages
+      if: steps.restore.outputs.cache-hit != 'true' && steps.install.outputs.downloaded == 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/apt-archives
+        key: ${{ steps.key.outputs.key }}

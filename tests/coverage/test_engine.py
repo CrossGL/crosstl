@@ -1,10 +1,11 @@
 import hashlib
 import json
+import os
 
 import pytest
 
 from tools.coverage import report, runner, upstream, validators
-from tools.coverage.model import Feature, Result, Score, Signature, Type
+from tools.coverage.model import Feature, Param, Result, Score, Signature, Type
 
 ABS = Feature(
     "glsl", "function", "abs", Signature(Type("float", (3,)), ()), crossgl="abs"
@@ -133,6 +134,172 @@ def test_output_probe_end_to_end():
     ), result.detail
 
 
+# slangc 2026.9 writes an OpAtomicCompareExchange on floats for this call, which its SPIR-V validator rejects.
+SPIRV_ONLY_REJECTION = (
+    "error: AtomicCompareExchange: expected Result Type to be integer scalar type"
+)
+
+
+def _slang_compiler(monkeypatch, accepts: set[str]) -> list[tuple[str, str]]:
+    """Stand in for slangc and DXC: accept every source for the targets in ``accepts`` ("" is SPIR-V)."""
+    seen = []
+
+    def validated(language, source, stage, entry="", target=""):
+        seen.append((source, target))
+        if target in accepts:
+            return validators.Verdict(True)
+        if target:
+            return validators.Verdict(False, "error: rejected for HLSL")
+        return validators.Verdict(False, SPIRV_ONLY_REJECTION)
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(runner, "_validated", validated)
+    monkeypatch.setattr(runner, "parse_crossgl", lambda source: None)
+    monkeypatch.setattr(runner, "translate", lambda *args: "translated slang")
+    monkeypatch.setattr(
+        runner,
+        "lower",
+        lambda feature: ("" if feature.target else "OpAtomicCompareExchange", ""),
+    )
+    return seen
+
+
+SLANG_SIN = Feature(
+    "slang",
+    "function",
+    "sin",
+    Signature(Type("float"), (Param(Type("float")),)),
+    crossgl="sin",
+)
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_slangc_cannot_write_as_spirv_is_probed_for_hlsl(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "supported", result.detail
+    assert result.feature.target == "hlsl"
+    # The native probe is tried for SPIR-V first, then HLSL; the translation is checked for HLSL only.
+    assert [target for _, target in seen] == ["", "hlsl", "hlsl"]
+    assert seen[-1][0] == "translated slang"
+    if direction == "output":
+        # The semantic id is the one the SPIR-V probe lowered to.
+        assert result.semantic == "OpAtomicCompareExchange"
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_both_targets_reject_keeps_the_spirv_reason(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, set())
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "untested"
+    assert result.detail == f"the probe itself is rejected: {SPIRV_ONLY_REJECTION}"
+    assert result.feature.target == ""
+    assert [target for _, target in seen] == ["", "hlsl"]
+
+
+def test_a_probe_its_usual_target_accepts_is_not_retried(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {""})
+    result = runner.run_input(SLANG_SIN, "slang")
+    assert (result.outcome, result.feature.target) == ("supported", "")
+    assert [target for _, target in seen] == ["", ""]
+
+
+def test_only_slang_falls_back_to_another_target(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    glsl = Feature("glsl", "function", "sin", SLANG_SIN.signature, crossgl="sin")
+    result = runner.run_input(glsl, "glsl")
+    assert result.outcome == "untested"
+    assert [target for _, target in seen] == [""]
+
+
+# The shape of slangc 2026.9's log for an undefined name: the header names the kind of error, the label the name.
+SLANGC_LOG = """error[E30015]: undefined identifier
+  --> probe.slang:10:15
+   |
+10 | uint2 r = {name}(a0);
+   |           ^^^^^^^^ undefined identifier '{name}'.
+---'
+error[E30019]: type mismatch in expression
+  --> probe.slang:11:5
+   |
+11 | outp[i] = r;
+   |     ^ expected an expression of type 'float', got 'uint2'
+---'"""
+
+
+@pytest.mark.parametrize(
+    ("language", "log", "expected"),
+    [
+        (
+            "slang",
+            SLANGC_LOG.format(name="bitCount"),
+            "error[E30015]: undefined identifier 'bitCount'",
+        ),
+        (
+            "slang",
+            "error[E30011]: left of '=' is not an l-value\n --> probe.slang:9:5\n"
+            "  |\n9 | f(a0) = r;\n  | ^ left of '=' is not an l-value.",
+            "error[E30011]: left of '=' is not an l-value",
+        ),
+        (
+            "slang",
+            SLANGC_LOG.split("---'\n", 1)[1],
+            "error[E30019]: type mismatch in expression: expected an expression of type"
+            " 'float', got 'uint2'",
+        ),
+        (
+            "slang",
+            "error[E30015]: undefined identifier",
+            "error[E30015]: undefined identifier",
+        ),
+        # Other tools' first error line already carries the particulars.
+        ("rust", SLANGC_LOG.format(name="x"), "error[E30015]: undefined identifier"),
+        (
+            "glsl",
+            "note: x\nERROR: 0:4: 'f' : no matching function",
+            "ERROR: 0:4: 'f' : no matching function",
+        ),
+        ("glsl", "nothing to report", "nothing to report"),
+    ],
+)
+def test_first_error_joins_slangc_headers_with_their_label(language, log, expected):
+    assert validators.first_error(log, language) == expected
+
+
+def test_slang_probes_failing_on_different_names_have_different_causes(monkeypatch):
+    from tools.coverage import causes
+
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, *args: validators.Verdict(
+            False, SLANGC_LOG.format(name=source)
+        ),
+    )
+    names = ("bitCount", "findMSB", "gl_NumWorkGroups")
+    details = [runner._validated("slang", name, "compute").log for name in names]
+    features = [
+        {"name": feature, "crossgl": crossgl, "detail": detail}
+        for (feature, crossgl), detail in zip(
+            [
+                ("countbits", "bitCount"),
+                ("firstbithigh", "findMSB"),
+                ("num-workgroups", None),
+            ],
+            details,
+        )
+    ]
+    found = [causes.cause(feature, "slang") for feature in features]
+    assert found[0] == found[1] == "error[E30015]: undefined identifier '<feature>'"
+    assert found[2] == "error[E30015]: undefined identifier 'gl_NumWorkGroups'"
+
+
 def test_a_run_validates_each_distinct_source_once(monkeypatch):
     calls = []
 
@@ -152,6 +319,107 @@ def test_a_run_validates_each_distinct_source_once(monkeypatch):
     runner.run(["good"], workers=1)
     assert calls == ["good", "bad", "good"]
     assert runner._verdicts is None
+
+
+def _counting_validator(monkeypatch, calls, versions):
+    def validate(language, source, stage="compute", entry="", target=""):
+        calls.append(source)
+        if source == "slow":
+            return validators.Verdict(False, "dxc timed out after 60 s", timed_out=True)
+        return validators.Verdict("bad" not in source, "error: bad probe")
+
+    monkeypatch.setattr(validators, "validate", validate)
+    monkeypatch.setattr(validators, "version", lambda tool: versions[tool])
+    monkeypatch.setattr(
+        runner, "_job", lambda job: runner._validated("hlsl", job, "compute")
+    )
+    runner._checker.cache_clear()
+
+
+def test_kept_verdicts_carry_over_for_the_same_tool(monkeypatch, tmp_path):
+    calls, versions = [], {"dxc": "dxcompiler.dll: 1.8"}
+    _counting_validator(monkeypatch, calls, versions)
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    first = runner.run(["good", "bad", "slow"], workers=1)
+    second = runner.run(["good", "bad", "slow"], workers=1)
+    assert first == second
+    assert second[1] == validators.Verdict(False, "error: bad probe")
+    # A timeout depends on the machine's load, so it is checked again.
+    assert calls == ["good", "bad", "slow", "slow"]
+    # Another tool version checks everything again.
+    versions["dxc"] = "dxcompiler.dll: 1.9"
+    runner._checker.cache_clear()
+    runner.run(["good"], workers=1)
+    assert calls[4:] == ["good"]
+
+
+def test_kept_verdicts_are_only_those_the_last_run_used(monkeypatch, tmp_path):
+    calls = []
+    _counting_validator(monkeypatch, calls, {"dxc": "dxcompiler.dll: 1.8"})
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    runner.run(["good", "bad"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 2
+    # Kept verdicts carry the time of the run that wrote them.
+    for path in tmp_path.iterdir():
+        os.utime(path, (1, 1))
+    runner.run(["good"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 1
+    runner.run(["bad"], workers=1)
+    assert calls == ["good", "bad", "bad"]
+
+
+def test_kept_folders_are_file_names_that_two_features_never_share():
+    from tools.coverage.model import kept_folder
+
+    assert kept_folder("glsl", "input", "abs") == "glsl-input/abs"
+    rust = kept_folder("rust", "output", "Float::abs")
+    assert (
+        rust.startswith("rust-output/Float_abs-")
+        and len(rust) == len("rust-output/Float_abs-") + 8
+    )
+    assert rust != kept_folder("rust", "output", "Float:abs")
+
+
+def test_a_kept_run_writes_each_probe_and_its_translations(monkeypatch, tmp_path):
+    from tools.coverage.model import Param
+
+    vec3 = Type("float", (3,))
+    feature = Feature(
+        "glsl", "function", "abs", Signature(vec3, (Param(vec3),)), crossgl="abs"
+    )
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(
+        validators,
+        "validate",
+        lambda language, source, stage="compute", entry="", target="": validators.Verdict(
+            True, ""
+        ),
+    )
+    stale = tmp_path / "glsl-output" / "abs" / "translated.frag"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("from an earlier run")
+    results = runner.run(
+        [(feature, "output", "glsl"), (feature, "input", "glsl")],
+        workers=1,
+        keep=tmp_path,
+    )
+    assert [r.outcome for r in results] == ["supported", "supported"]
+    kept = {
+        str(path.relative_to(tmp_path)): path.read_text()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert sorted(kept) == [
+        "glsl-input/abs/crossgl.cgl",
+        "glsl-input/abs/probe.comp",
+        "glsl-input/abs/translated.comp",
+        "glsl-output/abs/native.comp",
+        "glsl-output/abs/probe.cgl",
+        "glsl-output/abs/translated.comp",
+    ]
+    assert "abs(" in kept["glsl-output/abs/probe.cgl"]
+    assert "#version" in kept["glsl-output/abs/translated.comp"]
+    assert runner._kept is None
 
 
 def test_fetch_rejects_a_changed_upstream_file(monkeypatch, tmp_path):
@@ -241,7 +509,7 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
     monkeypatch.setattr(validators, "can_lower", lambda language, target="": True)
     measured = []
 
-    def run(jobs, workers=None):
+    def run(jobs, workers=None, keep=None):
         measured.extend((f.name, direction) for f, direction, _ in jobs)
         return [Result(f, direction, "supported") for f, direction, _ in jobs]
 

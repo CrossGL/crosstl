@@ -18,6 +18,7 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.semantics.texel_offsets import legalize_texel_offsets
 from tests.lowering_refusal_helpers import refused_glsl
 from tests.metal_refusal_helpers import metal_partial_output
 
@@ -7041,7 +7042,11 @@ def validate_spirv_shader_source(
 
     source = tmp_path / f"{stem}.spvasm"
     output = tmp_path / f"{stem}.spv"
-    code = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(shader_source))
+    program = crosstl.translator.parse(shader_source)
+    # As crosstl.translate does, offsets held in constant locals become ConstOffset operands: Vulkan accepts a
+    # non-constant Offset on gathers only (VUID-RuntimeSpirv-Offset-10213).
+    legalize_texel_offsets(program, "vulkan")
+    code = VulkanSPIRVCodeGen().generate(program)
     assert "WARNING" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9271,9 +9276,9 @@ def test_generated_metal_ray_query_refusal_placeholders_compile_with_metal3(tmp_
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool active = rq.Proceed();
-                uint hitType = rq.CommittedType();
+                uint hitType = rq.CommittedStatus();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }
@@ -12477,7 +12482,8 @@ def test_translated_metal_function_constants_validate_as_opengl_spirv13(tmp_path
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in code
     assert "layout(constant_id = 20) const bool has_w = false;" in code
     assert "layout(constant_id = 21) const int mode = 2;" in code

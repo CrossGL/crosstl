@@ -77,6 +77,34 @@ def crossgl_linear_algebra_product_type(left, right):
     return _vector_spelling(scalar, columns) if vector[1] == rows else None
 
 
+_CROSSGL_SCALARS = frozenset({"float", "double", "int", "uint", "half"})
+
+
+def crossgl_matrix_componentwise_type(operator, left, right):
+    """Result spelling of a componentwise ``+``, ``-`` or ``/`` with a CrossGL matrix operand.
+
+    A matrix and a scalar, or two matrices of one shape, give that matrix type (GLSL 4.60
+    section 5.9). Returns ``None`` for any other operator, for operands without a matrix and
+    for operands that do not conform.
+    """
+    if operator not in {"+", "-", "/"}:
+        return None
+    left_matrix = crossgl_matrix_shape(left)
+    right_matrix = crossgl_matrix_shape(right)
+    if left_matrix is None and right_matrix is None:
+        return None
+    if left_matrix is not None and right_matrix is not None:
+        if left_matrix != right_matrix:
+            return None
+        return crossgl_matrix_spelling(left_matrix[1], left_matrix[2], left_matrix[0])
+    matrix, other = (
+        (left_matrix, right) if left_matrix is not None else (right_matrix, left)
+    )
+    if str(other or "").strip() not in _CROSSGL_SCALARS:
+        return None
+    return crossgl_matrix_spelling(matrix[1], matrix[2], matrix[0])
+
+
 def matrix_type_spelling(type_node, scalar="float", *, short_square=True):
     """The CrossGL spelling of a ``MatrixType`` node.
 

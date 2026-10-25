@@ -1029,7 +1029,7 @@ def test_glsl_fragment_fragcoord_lowers_to_metal_position_input(tmp_path):
     compile_with_metal_if_available(generated_code)
 
 
-def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -1043,16 +1043,18 @@ def test_glsl_input_attachment_reports_unsupported_metal_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_metal(
-        crosstl.translate,
+    metal = crosstl.translate(
         str(shader_path),
         backend="metal",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "input attachment declaration: 'sceneColor' uses subpassInput" in refusal
-    assert "input attachment load: subpassLoad requires" in refusal
+    # MSL has no input attachments here: the attachment is bound as a texture and read at the pixel.
+    assert re.search(r"texture2d<float> sceneColor \[\[texture\(0\)\]\]", metal), metal
+    assert re.search(r"float4 (\w+) \[\[position\]\]", metal), metal
+    assert re.search(r"sceneColor\.read\(uint2\(int2\(\w+\.xy\)\), uint\(0\)\)", metal)
+    assert "subpass" not in metal.lower()
 
 
 def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
@@ -1466,6 +1468,57 @@ def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
     assert "float scalar = mix(0.0, 1.0, phase) + color.x;" in generated_code
     assert "frac(" not in generated_code
     assert "lerp(" not in generated_code
+
+
+def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    # The signed accumulator addition wraps through uint, as in HLSL.
+    assert (
+        "as_type<int>(as_type<uint>(int(acc))+as_type<uint>(int(dot("
+        "float4(as_type<char4>(uint(a[id.x]))),"
+        "float4(as_type<char4>(uint(b[id.x])))))))"
+    ) in compact
+    assert (
+        "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"
+        "float4(as_type<uchar4>(uint(b[id.x]))))))"
+    ) in compact
+    assert "dot4add_" not in generated
+
+
+def test_metal_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint a = tid.x;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
 def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
@@ -5622,28 +5675,23 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input)" in generated_code
-    assert "int one = int(char(int(char(int(1)))));" in generated_code
+    assert "int one = int(char(int(1)));" in generated_code
     assert "uint unsignedScalar(uint input)" in generated_code
-    assert "uint one = uint(uchar(uint(uchar(uint(1u)))));" in generated_code
+    assert "uint one = uint(uchar(uint(1u)));" in generated_code
     assert "int2 signedPair(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(uchar3(uint3(uchar3(uint3(1u, 2u, 3u)))));" in generated_code
-    )
+    assert "uint3 inc = uint3(uchar3(uint3(1u, 2u, 3u)));" in generated_code
     assert "int2 signedShort(int2 input)" in generated_code
-    assert "int2 inc = int2(short2(int2(short2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(short2(int2(1, 2)));" in generated_code
     assert "return int2(short2(input + inc));" in generated_code
     assert "uint3 unsignedShort(uint3 input)" in generated_code
-    assert (
-        "uint3 inc = uint3(ushort3(uint3(ushort3(uint3(1u, 2u, 3u)))));"
-        in generated_code
-    )
+    assert "uint3 inc = uint3(ushort3(uint3(1u, 2u, 3u)));" in generated_code
     assert "return uint3(ushort3(input + inc));" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
-    assert "int4 inc = int4(char4(int4(char4(int4(1, 2, 3, 4)))));" in generated_code
+    assert "int4 inc = int4(char4(int4(1, 2, 3, 4)));" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
-    assert "uint2 inc = uint2(uchar2(uint2(uchar2(uint2(1u, 2u)))));" in generated_code
+    assert "uint2 inc = uint2(uchar2(uint2(1u, 2u)));" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -5665,7 +5713,7 @@ def test_metal_refuses_double_precision_vectors():
     """
 
     with pytest.raises(
-        MetalLoweringRefused, match=r"double-precision value: .*uses double2"
+        MetalLoweringRefused, match=r"double-precision value: .*uses dvec2"
     ):
         generate_code(parse_code(tokenize_code(shader)))
 
@@ -5720,19 +5768,14 @@ def test_metal_generic_vector_constructors_emit_metal_names():
     assert "half2 halfPair(half2 input)" in generated_code
     assert "half2 inc = half2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(char2(int2(char2(int2(1, 2)))));" in generated_code
+    assert "int2 inc = int2(char2(int2(1, 2)));" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert (
-        "uint4 inc = uint4(uchar4(uint4(uchar4(uint4(1u, 2u, 3u, 4u)))));"
-        in generated_code
-    )
+    assert "uint4 inc = uint4(uchar4(uint4(1u, 2u, 3u, 4u)));" in generated_code
     assert "int3 signedShorts(int3 input)" in generated_code
-    assert "int3 inc = int3(short3(int3(short3(int3(1, 2, 3)))));" in generated_code
+    assert "int3 inc = int3(short3(int3(1, 2, 3)));" in generated_code
     assert "return int3(short3(input + inc));" in generated_code
     assert "uint2 unsignedShorts(uint2 input)" in generated_code
-    assert (
-        "uint2 inc = uint2(ushort2(uint2(ushort2(uint2(1u, 2u)))));" in generated_code
-    )
+    assert "uint2 inc = uint2(ushort2(uint2(1u, 2u)));" in generated_code
     assert "return uint2(ushort2(input + inc));" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
@@ -6713,7 +6756,7 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(ushort(uint(1u)))))));"
+        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(1u)))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -7092,8 +7135,19 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
-    assert "array<constant uint*, 2> buffersLength [[buffer(5)]]" in generated
+    assert (
+        "device int* buffers_0 [[buffer(3)]], device int* buffers_1 [[buffer(4)]]"
+        in generated
+    )
+    assert "array<device int*, 2> buffers = {buffers_0, buffers_1};" in generated
+    assert (
+        "constant uint* buffersLength_0 [[buffer(5)]], constant uint* buffersLength_1 [[buffer(6)]]"
+        in generated
+    )
+    assert (
+        "array<constant uint*, 2> buffersLength = {buffersLength_0, buffersLength_1};"
+        in generated
+    )
     assert "int v = buffers[index][tid.x];" in generated
     assert "len = buffersLength[index][0];" in generated
     assert "buffers[index][tid.x] = v + 1;" in generated
@@ -7121,10 +7175,22 @@ def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
 
     generated = generate_code(ast)
 
-    assert "array<device int*, 2> appendValues [[buffer(1)]]" in generated
     assert (
-        "array<device atomic_uint*, 2> appendValuesCounter [[buffer(3)]]" in generated
+        "device int* appendValues_0 [[buffer(1)]], device int* appendValues_1 [[buffer(2)]]"
+        in generated
     )
+    assert (
+        "array<device int*, 2> appendValues = {appendValues_0, appendValues_1};"
+        in generated
+    )
+    assert (
+        "device atomic_uint* appendValuesCounter_0 [[buffer(3)]], "
+        "device atomic_uint* appendValuesCounter_1 [[buffer(4)]]"
+    ) in generated
+    assert (
+        "array<device atomic_uint*, 2> appendValuesCounter = "
+        "{appendValuesCounter_0, appendValuesCounter_1};"
+    ) in generated
     assert (
         "void pushOne(array<device int*, 2> values, array<device atomic_uint*, 2> valuesCounter, uint which, uint value)"
         in generated
@@ -16361,7 +16427,8 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
     ("member_decl", "metal_semantic", "expected_type"),
     [
         ("vec3 position @ gl_Position", "position", "float4"),
-        ("vec3 color @ gl_FragColor", "color\\(0\\)", "float4"),
+        # A colour attachment may be any numeric scalar or vector (MSL 5.2.3.4), but not a matrix.
+        ("mat2 color @ gl_FragColor", "color\\(0\\)", "float4"),
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
         ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
@@ -17768,8 +17835,8 @@ def test_metal_array_member_semantics():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
-    assert "float3 colors[2] [[COLOR]];" in generated_code
-    assert "float4 indexedColor [[user(Color0)]];" in generated_code
+    assert "float3 colors[2] [[attribute(13)]];" in generated_code
+    assert "float4 indexedColor [[attribute(13)]];" in generated_code
 
 
 def test_metal_local_array_declarations_use_c_style_order():
@@ -33498,7 +33565,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
                 rq.TraceRayInline(topLevelAS, RAY_FLAG_NONE, 255, ray);
                 bool advanced = rq.Proceed();
                 float hitT = rq.CommittedRayT();
-                float candidateT = rq.CandidateRayT();
+                float candidateT = rq.CandidateTriangleRayT();
             }
         }
     }
@@ -33518,7 +33585,7 @@ def test_metal_ray_query_operations_lower_to_compile_safe_helpers():
     assert "cgl_ray_query_trace_ray_inline(rq, topLevelAS, 0u, 255, ray);" in generated
     assert "bool advanced = cgl_ray_query_proceed(rq);" in generated
     assert "float hitT = cgl_ray_query_committed_ray_t(rq);" in generated
-    assert "float candidateT = cgl_ray_query_candidate_ray_t(rq);" in generated
+    assert "float candidateT = cgl_ray_query_candidate_triangle_ray_t(rq);" in generated
     assert "RayDesc ray = RayDesc" not in generated
     assert "RayQuery<RAY_FLAG_NONE>" not in generated
     assert "RAY_FLAG_NONE" not in generated

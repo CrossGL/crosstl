@@ -10,6 +10,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     ASTNode,
     BreakNode,
     CbufferNode,
@@ -45,6 +46,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -3503,9 +3505,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if node is None:
             return
 
-        result = self.visit(node)
+        result = self.visit_discarded_expression(node)
         if isinstance(result, str) and result.strip():
             self.add_line(f"{result};")
+
+    def visit_discarded_expression(self, node):
+        """Render a node whose value is unused, such as a statement."""
+        if isinstance(node, AssignmentNode):
+            return self.format_assignment_expression(node)
+        return self.visit(node)
 
     def emit_body(self, body):
         """Render a list-like or block-like function body."""
@@ -3556,11 +3564,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node.init, VariableNode):
             init = self.format_variable_declaration(node.init)
         elif hasattr(node.init, "expression"):
-            init = self.visit(node.init.expression)
+            init = self.visit_discarded_expression(node.init.expression)
         else:
-            init = self.visit(node.init) if node.init else ""
+            init = self.visit_discarded_expression(node.init) if node.init else ""
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit(node.update) if node.update else ""
+        update = self.visit_discarded_expression(node.update) if node.update else ""
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
@@ -3746,6 +3754,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_AssignmentNode(self, node) -> str:
+        return assignment_value_expression(self.format_assignment_expression(node))
+
+    def format_assignment_expression(self, node) -> str:
         operator = getattr(node, "operator", getattr(node, "op", "="))
         diagnostic = self.glsl_buffer_block_write_diagnostic(node.left, "assignment")
         if diagnostic is not None:
@@ -4391,6 +4402,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -4399,6 +4411,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -4430,6 +4450,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         operation = self.normalize_hip_integer_bit_function(func_name)
         source_type = self.expression_result_type(raw_args[0])
+        if source_type is None and operation == "countLeadingZeros":
+            # A sized cast such as uint64_t(x) has no inferred type; read its width from the cast
+            # so that __clz does not truncate a 64-bit value.
+            source_type = self.hip_integer_cast_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
         if source_info is not None:
@@ -4456,6 +4480,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             source_type,
             result_type,
         )
+
+    def hip_integer_cast_type(self, node):
+        """The target type of a scalar integer cast such as ``uint64_t(x)``, or None."""
+        if not isinstance(node, FunctionCallNode):
+            return None
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.scalar_component_type(type_name) in {"int", "uint"}:
+            return type_name
+        return None
 
     def require_hip_integer_bit_vector_helper(
         self,
@@ -4517,6 +4553,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            return f"{clz_intrinsic}({value})"
         if operation == "findLSB":
             return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
@@ -9000,7 +9038,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return f"{helper_name}()"
 
     def visit_ExpressionStatementNode(self, node) -> str:
-        expr = self.visit(node.expression)
+        expr = self.visit_discarded_expression(node.expression)
         self.add_line(f"{expr};")
         return ""
 
@@ -9953,7 +9991,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             operation = getattr(node, "operation", "")
             if operation == "Proceed":
                 return "bool"
-            if operation in {"CandidateRayT", "CommittedRayT"}:
+            if operation in {"CandidateTriangleRayT", "CommittedRayT"}:
                 return "float"
             return "uint"
         if isinstance(node, FunctionCallNode):
