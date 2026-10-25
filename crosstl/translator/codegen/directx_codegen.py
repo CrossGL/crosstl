@@ -26775,7 +26775,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Lower CrossGL's ``gl_HelperInvocation`` to Shader Model 6.6 ``IsHelperLane()``.
 
         HLSL has no helper-invocation variable; the query is the intrinsic. A local or
-        global that happens to use the name is left alone.
+        global that happens to use the name is left alone. The dx10 and dx11 profiles
+        (Shader Model 4 and 5) have no such intrinsic, so the read is refused there.
         """
         if not isinstance(expr, (IdentifierNode, VariableNode)):
             return None
@@ -26784,6 +26785,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for table in ("local_variable_types", "global_variable_types"):
             if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
                 return None
+        if self.target_profile in {"dx10", "dx11"}:
+            return self.refuse_lowering(
+                "gl_HelperInvocation: IsHelperLane() requires Shader Model 6.6, "
+                f"which DirectX profile {self.target_profile} does not provide",
+                "false",
+            )
         return "IsHelperLane()"
 
     def generate_expression(self, expr):
