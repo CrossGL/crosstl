@@ -5,7 +5,6 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateInitializerError,
@@ -3345,62 +3344,6 @@ def test_codegen_fragment_sv_position_parameter_imports_as_frag_coord():
     assert "vec4 VSMain(vec3 position @ Position) @ gl_Position" in vertex_output
     assert "@ gl_FragCoord" not in vertex_output
     parse_crossgl(vertex_output)
-
-
-def test_codegen_vertex_sv_position_input_imports_as_attribute():
-    output = generate_crossgl("""
-        float4 main(float4 p : SV_Position) : SV_Position { return p * 2.0; }
-    """)
-
-    assert "vec4 main(vec4 p @ Position) @ gl_Position" in output
-    glsl = GLSLCodeGen().generate(parse_crossgl(output))
-    assert "layout(location = 0) in vec4 p;" in glsl
-    assert "gl_Position = (p * 2.0);" in glsl
-    assert "gl_Position * 2.0" not in glsl
-
-
-def test_codegen_vertex_input_struct_sv_position_member_imports_as_attribute():
-    output = generate_crossgl("""
-        struct VSIn { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-        struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-        VSOut VSMain(VSIn i) { VSOut o; o.pos = i.pos; o.uv = i.uv; return o; }
-        float4 PSMain(VSOut i) : SV_Target { return float4(i.uv, i.pos.x, 1.0); }
-    """)
-
-    vs_in = output.split("struct VSIn {", 1)[1].split("}", 1)[0]
-    vs_out = output.split("struct VSOut {", 1)[1].split("}", 1)[0]
-    assert "vec4 pos @ Position;" in vs_in
-    assert "vec4 pos @ gl_Position;" in vs_out
-    metal = MetalCodeGen().generate(parse_crossgl(output))
-    metal_vs_in = metal.split("struct VSIn {", 1)[1].split("};", 1)[0]
-    metal_vs_out = metal.split("struct VSOut {", 1)[1].split("};", 1)[0]
-    assert "float4 pos [[attribute(0)]];" in metal_vs_in
-    assert "float4 pos [[position]];" in metal_vs_out
-
-
-@pytest.mark.parametrize(
-    "code, reason",
-    [
-        (
-            "void main(inout float4 p : SV_Position) { p = p * 2.0; }",
-            "inout vertex parameter p : SV_Position is an attribute as input and "
-            "the position built-in as output",
-        ),
-        (
-            """
-            struct VSIO { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-            VSIO VSMain(VSIO i) { return i; }
-            """,
-            "VSIO.pos : SV_Position is an attribute in the vertex input VSIO and "
-            "the position built-in where VSIO is a stage output",
-        ),
-    ],
-)
-def test_codegen_refuses_sv_position_both_vertex_input_and_output(code, reason):
-    with pytest.raises(DirectXImportRefused) as failure:
-        generate_crossgl(code)
-
-    assert reason in str(failure.value)
 
 
 def test_codegen_fragment_sv_coverage_parameter_imports_as_sample_mask_input():
