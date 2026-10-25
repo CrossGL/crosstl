@@ -152,6 +152,14 @@ def _curated() -> list[Construct]:
         c("operator", "matrix-vector-product", "OpMatrixTimesVector"),
         c("operator", "matrix-product", "OpMatrixTimesMatrix"),
         c("operator", "vector-matrix-product", "OpVectorTimesMatrix"),
+        c(
+            "operator",
+            "vector-comparison",
+            "OpFOrdLessThan",
+            "OpFOrdEqual",
+            "OpAny",
+            "OpAll",
+        ),
         c("type", "array", "OpTypeArray"),
         c("type", "struct", "OpTypeStruct"),
         c("type", "array-of-structs", "OpTypeArray", "OpTypeStruct"),
@@ -161,6 +169,10 @@ def _curated() -> list[Construct]:
         c("type", "swizzle", "OpVectorShuffle"),
         c("type", "swizzle-assignment", "OpVectorShuffle", "OpAccessChain"),
         c("type", "matrix-indexing", "OpTypeMatrix", "OpAccessChain"),
+        c("type", "vector-constructor", "OpCompositeConstruct"),
+        c("type", "matrix-from-vectors", "OpTypeMatrix", "OpCompositeConstruct"),
+        c("type", "struct-constructor", "OpTypeStruct", "OpCompositeConstruct"),
+        c("type", "struct-copy", "OpTypeStruct", "OpStore"),
         c("type", "global-constant", "OpConstant"),
         c("type", "runtime-array-length", "OpTypeRuntimeArray", "OpArrayLength"),
         c("compute", "shared-memory", "StorageClass.Workgroup", "OpControlBarrier"),
@@ -268,6 +280,10 @@ def _spellings(dialect) -> dict[str, str]:
         spelled["mat2"] = dialect.type(Type("float", (2, 2)))
     except ProbeError:
         pass  # the language has no matrices, and its templates do not use $mat2
+    try:
+        spelled["bvec2"] = dialect.type(Type("bool", (2,)))
+    except ProbeError:
+        pass  # the language has no bool vectors, and its templates do not use $bvec2
     return spelled
 
 
