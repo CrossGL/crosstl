@@ -2789,8 +2789,8 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Twenty-seven jobs, nine of them on macOS: run them in three waves.
-      max-parallel: 9
+      # Thirty jobs, ten of them on macOS: run them in three waves.
+      max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
         group:
@@ -2804,6 +2804,7 @@ jobs:
             blas-wide,
             blas-gather,
             blas-gather-blocks,
+            blas-masked,
           ]
         target: [opengl, directx, metal]
         include:

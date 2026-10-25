@@ -331,7 +331,8 @@ UPSTREAM_TESTS = (
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
         # and AddMM epilogues of every float dtype, complex64 GEMV, unaligned,
         # batched, broadcast, transposed and strided operands and empty
-        # products, and GatherMM's gathered gemv, steel gather and group offset kernels and
+        # products, BlockMaskedMM's masked gemv and steel kernels, GatherMM's
+        # gathered gemv, steel gather and group offset kernels and
         # SegmentedMM's kernels with their gradients.
         "test_blas.TestBlas." + name
         for name in (
@@ -355,6 +356,7 @@ UPSTREAM_TESTS = (
             "test_empty_matmul",
             "test_wide_matmul",
             "test_wide_addmm",
+            "test_block_masked_matmul",
             "test_gather_matmul",
             "test_gather_matmul_grad",
             "test_gather_mm_sorted",
@@ -441,6 +443,9 @@ GPU_ONLY_TESTS = frozenset(
 # The gathered blocks test takes almost as long on its own: it gathers weight
 # slices of more than 65,535 elements in parts and casts its operands between
 # float32 and the half types in thousands of copy launches.
+# The block-masked test sweeps every mask pair and both block sizes over
+# thousands of products, a hundred masked and plain matrix kernels, longer
+# than the gathered blocks test.
 GROUP_PREFIXES = {
     "normalization": "test_fast.",
     "reductions": "test_reduce.",
@@ -464,6 +469,7 @@ GROUP_TESTS = {
         )
     ),
     "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
+    "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
 }
 
 
