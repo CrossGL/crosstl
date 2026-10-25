@@ -327,26 +327,40 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_no_bias",
         "test_fast.TestFast.test_layer_norm_grad_no_params",
         "test_fast.TestFast.test_layer_norm_grad_params",
-    ) + (
+    ) + tuple(
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
         # and AddMM epilogues of every float dtype, unaligned, batched,
-        # transposed and strided operands, and GatherMM's gathered gemv,
-        # steel gather and group offset kernels with their gradients.
-        "test_blas.TestBlas.test_gather_matmul",
-        "test_blas.TestBlas.test_gather_matmul_grad",
-        "test_blas.TestBlas.test_gather_mm_sorted",
-        "test_blas.TestBlas.test_matmul",
-        "test_blas.TestBlas.test_matmul_unaligned",
-        "test_blas.TestBlas.test_matvec_unaligned",
-        "test_blas.TestBlas.test_matmul_shapes",
-        "test_blas.TestBlas.test_matmul_dtypes",
-        "test_blas.TestBlas.test_matmul_batched",
-        "test_blas.TestBlas.test_matrix_vector",
-        "test_blas.TestBlas.test_matrix_vector_batched",
-        "test_blas.TestBlas.test_matrix_vector_edgecases",
-        "test_blas.TestBlas.test_mismatch_stride_mm",
-        "test_blas.TestBlas.test_gemv_gemm_same_precision",
-        "test_blas.TestBlas.test_wide_addmm",
+        # broadcast, transposed and strided operands and empty products, and
+        # GatherMM's gathered gemv, steel gather and group offset kernels and
+        # SegmentedMM's kernels with their gradients.
+        "test_blas.TestBlas." + name
+        for name in (
+            "test_matmul",
+            "test_matmul_unaligned",
+            "test_matvec_unaligned",
+            "test_matmul_shapes",
+            "test_matmul_dtypes",
+            "test_matmul_batched",
+            "test_matrix_vector",
+            "test_matrix_vector_batched",
+            "test_matrix_vector_broadcast",
+            "test_matrix_vector_attn",
+            "test_matrix_vector_edgecases",
+            "test_mismatch_stride_mm",
+            "test_gemv_gemm_same_precision",
+            "test_addmm",
+            "test_addmm_grad",
+            "test_dot_product",
+            "test_empty_matmul",
+            "test_wide_matmul",
+            "test_wide_addmm",
+            "test_gather_matmul",
+            "test_gather_matmul_grad",
+            "test_gather_mm_sorted",
+            "test_gather_mm_sorted_vjp",
+            "test_segmented_mm",
+            "test_gather_matmul_index_vjp_requires_stop_gradient",
+        )
     )
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
@@ -402,13 +416,21 @@ NO_DISPATCH_TESTS = frozenset(
         "test_reduce.TestReduce.test_zero_size",
     )
 )
+# Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
+# skip each of them and the native worker must run them. They compare the
+# products with NumPy's, so the CPU run is not their reference.
+GPU_ONLY_TESTS = frozenset(
+    "test_blas.TestBlas." + name
+    for name in ("test_dot_product", "test_wide_matmul", "test_wide_addmm")
+)
 # CI runs each group in its own job. The normalization gradients move tens of
 # millions of elements through the host, about as long as every other test, and
 # the reduction tests sweep thousands of axis, dtype and layout subcases. The
 # two longest sweeps translate a package for each new reduction launch, about
 # half an hour each, so each runs in a job of its own. The BLAS tests reach
-# about a hundred matrix kernels, which their job translates ahead of the run
-# (upstream_matrix_packages).
+# about a hundred and fifty matrix kernels, which their jobs translate ahead of
+# the run (upstream_matrix_packages); the wide products and the gathered and
+# segmented ones each take about as long as the other BLAS tests together.
 GROUP_PREFIXES = {
     "normalization": "test_fast.",
     "reductions": "test_reduce.",
@@ -417,6 +439,20 @@ GROUP_PREFIXES = {
 GROUP_TESTS = {
     "reduction-dtypes": ("test_reduce.TestReduce.test_dtypes",),
     "reduction-permutations": ("test_reduce.TestReduce.test_axis_permutation_sums",),
+    "blas-wide": tuple(
+        "test_blas.TestBlas." + name for name in ("test_wide_matmul", "test_wide_addmm")
+    ),
+    "blas-gather": tuple(
+        "test_blas.TestBlas." + name
+        for name in (
+            "test_gather_matmul",
+            "test_gather_matmul_grad",
+            "test_gather_mm_sorted",
+            "test_gather_mm_sorted_vjp",
+            "test_segmented_mm",
+            "test_gather_matmul_index_vjp_requires_stop_gradient",
+        )
+    ),
 }
 
 
@@ -571,7 +607,8 @@ def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
     if [item.get("test") for item in tests] != list(inventory):
         raise ValueError("Upstream op test inventory is incomplete")
     for item in tests:
-        expected = {"testsRun": 1, "failures": 0, "errors": 0, "skips": 0}
+        skips = int(not native and item.get("test") in GPU_ONLY_TESTS)
+        expected = {"testsRun": 1, "failures": 0, "errors": 0, "skips": skips}
         count = item.get("dispatchCount")
         dispatches = native and item.get("test") not in NO_DISPATCH_TESTS
         if (

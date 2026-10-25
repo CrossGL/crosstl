@@ -24,7 +24,7 @@ def records(*, native):
                 "testsRun": 1,
                 "failures": 0,
                 "errors": 0,
-                "skips": 0,
+                "skips": int(not native and name in ops.GPU_ONLY_TESTS),
                 "dispatchCount": (
                     3 if native and name not in ops.NO_DISPATCH_TESTS else 0
                 ),
@@ -32,6 +32,21 @@ def records(*, native):
             for name in ops.UPSTREAM_TESTS
         ]
     }
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_upstream_gpu_only_tests_skip_only_on_the_cpu(native):
+    assert ops.GPU_ONLY_TESTS <= set(ops.UPSTREAM_TESTS)
+    assert not ops.GPU_ONLY_TESTS & ops.NO_DISPATCH_TESTS
+    record = records(native=native)
+    ops.validate_upstream(record, native=native)
+    for item in record["tests"]:
+        if item["test"] in ops.GPU_ONLY_TESTS:
+            # A CPU run must skip it; a native run must not.
+            item["skips"] = int(native)
+            with pytest.raises(ValueError, match="Unchanged upstream test failed"):
+                ops.validate_upstream(record, native=native)
+            item["skips"] = int(not native)
 
 
 def test_upstream_op_tests_without_dispatches_are_exact():
@@ -50,7 +65,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 145
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 155
     assert all(
         name.startswith(
             (
@@ -86,7 +101,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 140 and not set(opengl) & set(excluded)
+    assert len(opengl) == 150 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -103,8 +118,13 @@ def test_upstream_op_groups_partition_the_inventory():
         "blas",
         "reduction-dtypes",
         "reduction-permutations",
+        "blas-wide",
+        "blas-gather",
     ]
-    assert all(len(tests) == 1 for tests in ops.GROUP_TESTS.values())
+    assert all(
+        len(ops.GROUP_TESTS[group]) == 1
+        for group in ("reduction-dtypes", "reduction-permutations")
+    )
     for group, tests in ops.GROUP_TESTS.items():
         assert ops.GROUPS[group] == tests
     combined = [name for group in ops.GROUPS.values() for name in group]
@@ -117,8 +137,10 @@ def test_upstream_op_groups_partition_the_inventory():
         name for tests in ops.GROUP_TESTS.values() for name in tests
     }
     assert all(name.startswith("test_reduce.") for name in ops.GROUPS["reductions"])
-    assert len(ops.GROUPS["blas"]) == 15
-    assert all(name.startswith("test_blas.") for name in ops.GROUPS["blas"])
+    blas = {"blas": 17, "blas-wide": 2, "blas-gather": 6}
+    for group, count in blas.items():
+        assert len(ops.GROUPS[group]) == count
+        assert all(name.startswith("test_blas.") for name in ops.GROUPS[group])
     assert not any(
         name.startswith(("test_fast.", "test_reduce.", "test_blas."))
         for name in ops.GROUPS["operations"]

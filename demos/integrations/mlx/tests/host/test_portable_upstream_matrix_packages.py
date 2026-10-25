@@ -110,13 +110,16 @@ def test_only_the_blas_jobs_warm_their_matrix_kernels_before_the_tests():
     job = workflow["jobs"]["upstream-ops-host"]
     names = [step.get("name") for step in job["steps"]]
     step = job["steps"][names.index("Translate the upstream BLAS matrix kernels")]
-    assert step["if"] == "matrix.group == 'blas'" and set(warm.ENTRIES) == {"blas"}
+    assert step["if"] == "startsWith(matrix.group, 'blas')"
+    blas = {group for group in ops.GROUPS if group.startswith("blas")}
+    assert set(warm.ENTRIES) == blas == {"blas", "blas-wide", "blas-gather"}
     assert names.index(step["name"]) < names.index(
         "Execute unchanged upstream op tests"
     )
     run = step["run"]
     assert "set -euo pipefail" in run
-    assert "portable_host.upstream_matrix_packages" in run and "--group blas" in run
+    assert "portable_host.upstream_matrix_packages" in run
+    assert '--group "${{ matrix.group }}"' in run
     tests = job["steps"][names.index("Execute unchanged upstream op tests")]["run"]
     packages = re.search(r"--packages (\S+)", run).group(1)
     assert f"--packages {packages} " in tests
