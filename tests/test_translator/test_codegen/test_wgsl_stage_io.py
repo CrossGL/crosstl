@@ -86,9 +86,9 @@ def test_unbound_vertex_parameters_take_free_locations(tmp_path):
 
 def test_unbound_fragment_parameters_skip_semantic_locations(tmp_path):
     code = generate_wgsl(FRAGMENT_PARAMETERS)
-    # TEXCOORD0 keeps location 2; the unbound parameters fill 0 and 1.
+    # TEXCOORD0 keeps its fixed location 5; the unbound parameters fill 0 and 1.
     assert entry_signature(code, "fragment") == (
-        "@location(0) color: vec4<f32>, @location(2) uv: vec2<f32>, "
+        "@location(0) color: vec4<f32>, @location(5) uv: vec2<f32>, "
         "@location(1) fade: f32"
     )
     validate_with_naga(tmp_path, code)
@@ -109,7 +109,7 @@ shader S {
 }
 """)
     assert "@location(0) position: vec3<f32>" in struct_body(code, "VSIn")
-    assert "@location(3) uv: vec2<f32>" in struct_body(code, "VSIn")
+    assert "@location(6) uv: vec2<f32>" in struct_body(code, "VSIn")
     assert (
         entry_signature(code, "vertex") == "input: VSIn, @location(1) tint: vec4<f32>"
     )
@@ -218,9 +218,9 @@ shader S {
 """)
     body = struct_body(code, "VSOut")
     assert "@location(0) @interpolate(flat) id: i32" in body
-    assert "@location(5) @interpolate(flat) cell: vec2<u32>" in body
+    assert "@location(8) @interpolate(flat) cell: vec2<u32>" in body
     assert "@location(1) uv: vec2<f32>" in body
-    assert "@location(3) @interpolate(flat) id: i32" in entry_signature(code, "vertex")
+    assert "@location(6) @interpolate(flat) id: i32" in entry_signature(code, "vertex")
     validate_with_naga(tmp_path, code)
 
 

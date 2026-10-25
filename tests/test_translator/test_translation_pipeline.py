@@ -2068,7 +2068,8 @@ def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
     metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
 
     assert "float4 position [[attribute(0)]];" in metal
-    assert "float4 color [[attribute(1)]];" in metal
+    # COLOR takes location 13 on every target (crosstl.translator.codegen.stage_io_semantic_locations).
+    assert "float4 color [[attribute(13)]];" in metal
     assert "float4 position [[position]];" in metal
     assert "[[Color]]" not in metal
     assert "[[COLOR]]" not in metal

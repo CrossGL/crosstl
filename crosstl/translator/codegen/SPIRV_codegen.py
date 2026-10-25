@@ -152,6 +152,10 @@ from .spirv_inline_requirements import (
     apply_inline_spirv_requirements,
     is_inline_spirv_attribute,
 )
+from .spirv_interface_locations import (
+    plan_entry_input_locations,
+    plan_struct_member_locations,
+)
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -228,7 +232,7 @@ from .spirv_uniform_block_arrays import (
     require_non_uniform_block_array_indexing,
 )
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
-from .stage_io_semantic_locations import spirv_semantic_location
+from .stage_io_semantic_locations import semantic_location
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -692,6 +696,7 @@ class VulkanSPIRVCodeGen(
         self.next_input_location = 0
         self.next_output_location = 0
         self.interface_location_counters = {}
+        self.entry_input_locations = {}
         self.used_input_locations = set()
         self.used_output_locations = set()
         self.next_resource_binding = 0
@@ -9459,7 +9464,7 @@ class VulkanSPIRVCodeGen(
         return location
 
     def mesh_output_semantic_location(self, semantic: Optional[str]) -> Optional[int]:
-        return spirv_semantic_location(semantic)
+        return semantic_location(semantic)
 
     def ensure_mesh_primitive_index_output(
         self, literal_index: Optional[int] = None
@@ -14573,6 +14578,19 @@ class VulkanSPIRVCodeGen(
             or self.is_entry_point_descriptor_parameter(param)
             or self.is_bound_uniform_value_parameter(param, execution_model),
         )
+        self.entry_input_locations = plan_entry_input_locations(
+            self,
+            [
+                (param, value_type)
+                for param, _param_type, value_type in runtime_parameters
+                if not (
+                    self.is_storage_resource_parameter(param)
+                    or self.is_entry_point_descriptor_parameter(param)
+                    or self.is_bound_uniform_value_parameter(param, execution_model)
+                )
+            ],
+            execution_model,
+        )
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
             if self.is_storage_resource_parameter(param):
@@ -14602,6 +14620,7 @@ class VulkanSPIRVCodeGen(
                 param, local_variable, param_value_type
             )
         self.entry_descriptor_slots = {}
+        self.entry_input_locations = {}
 
     def resource_parameter_qualifier_names(self, param) -> set:
         return {
@@ -14743,14 +14762,11 @@ class VulkanSPIRVCodeGen(
                 param_value_type.type.base_type, {}
             )
             distances = entry_point_distance_layout(self, members, metadata)
-            # A member that occupies several locations (an array or matrix) moves the later members along.
-            member_location = 0
             for member_type, member_name in members:
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
-                location_index = member_location
-                member_location += self.struct_member_interface_location_span(
-                    member_node
+                location_index = self.entry_input_locations.get(
+                    (id(param), member_name)
                 )
                 distance = distances.slot(member_name)
                 if distance is not None:
@@ -14815,6 +14831,7 @@ class VulkanSPIRVCodeGen(
             ),
             param_value_type,
             param,
+            member_index=self.entry_input_locations.get((id(param), None)),
         )
         return self.load_entry_point_interface_value(variable, param_value_type)
 
@@ -14831,14 +14848,13 @@ class VulkanSPIRVCodeGen(
             struct_outputs = []
             metadata = self.struct_member_metadata.get(return_type.type.base_type, {})
             distances = entry_point_distance_layout(self, members, metadata)
-            member_location = 0
+            planned = plan_struct_member_locations(
+                self, members, metadata, distances, execution_model, "Output"
+            )
             for member_index, (member_type, member_name) in enumerate(members):
                 member_info = metadata.get(member_name, {})
                 member_node = member_info.get("node")
-                location_index = member_location
-                member_location += self.struct_member_interface_location_span(
-                    member_node
-                )
+                location_index = planned.get(member_name)
                 distance = distances.slot(member_name)
                 if distance is not None:
                     array = entry_point_distance_variable(
