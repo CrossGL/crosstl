@@ -153,6 +153,55 @@ def test_a_translation_that_computes_otherwise_is_wrong(
     assert execution.found(result.detail) == (expected == "wrong")
 
 
+# The native Metal probe with its buffers moved from slots 0 and 1, as a host binding the native probe's buffers
+# would not find them.
+REBOUND = NATIVE.replace("[[buffer(0)]]", "[[buffer(2)]]").replace(
+    "[[buffer(1)]]", "[[buffer(3)]]"
+)
+
+
+def test_rebinding_names_what_the_harness_cannot_bind(tmp_path):
+    native, rebound, broken = (tmp_path / f"{name}.metal" for name in "nrb")
+    native.write_text(NATIVE)
+    rebound.write_text(REBOUND)
+    broken.write_text("kernel void a() {}\nkernel void b() {}\n")
+    assert execution.rebinding("metal", native, native) == ""
+    assert (
+        execution.rebinding("metal", native, rebound)
+        == "Expected Metal buffer slots [0, 1], found [2, 3]"
+    )
+    # A native probe the harness cannot bind either is no evidence against the translation.
+    assert execution.rebinding("metal", broken, rebound) == ""
+
+
+@pytest.mark.parametrize("outcome", ["harness-error", "preserved"])
+def test_a_translation_that_binds_other_resources_is_wrong(monkeypatch, outcome):
+    _fake_harness(monkeypatch, outcome, 0)
+    [result], used = execution.run([supported(REBOUND)])
+    assert used == ["metal-apple"]
+    assert (result.outcome, result.runtime) == ("wrong", "metal-apple")
+    assert result.detail == (
+        f"on metal-apple, the translation {execution.REBOUND}\n"
+        "Expected Metal buffer slots [0, 1], found [2, 3]"
+    )
+    assert execution.found(result.detail)
+
+
+def test_a_rebound_translation_keeps_its_result_when_the_native_probe_does_not_run(
+    monkeypatch,
+):
+    _fake_harness(monkeypatch, "harness-error", 0)
+    original = harness.run_suite
+
+    def native_fails(*args, **kwargs):
+        records = original(*args, **kwargs)
+        return [dict(record, outcome="timeout") for record in records]
+
+    monkeypatch.setattr(harness, "run_suite", native_fails)
+    [result], _ = execution.run([supported(REBOUND)])
+    assert (result.outcome, result.runtime) == ("supported", "")
+
+
 def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
     assert execution.runnable("glsl", "#version 460\nvoid main() {}\n") == (
         "#version 450 core\nvoid main() {}\n"
@@ -437,4 +486,8 @@ def test_an_execution_bug_is_reproduced_with_execute():
     body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
     assert "--feature sin --execute" in body
     assert "but run, it does not compute what the native Metal probe computes" in body
+    feature["detail"] = f"on metal-apple, the translation {execution.REBOUND}\nExpected"
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "does not bind the buffers the native Metal probe binds" in body
     assert not execution.found("probe.metal:3:1: error: no matching function")

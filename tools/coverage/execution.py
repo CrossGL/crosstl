@@ -2,8 +2,10 @@
 
 A translation the reference tool accepts can still compute something else. Where Core's conformance harness
 (``tests/conformance``) has a runtime for a language, the native probe and CrossTL's translation run there on the
-same inputs, and a translation that writes other results, writes outside its output buffer, or that the runtime
-rejects is wrong.
+same inputs, and a translation that writes other results, writes outside its output buffer, binds other resources
+than the native probe, or that the runtime rejects is wrong. The harness binds both probes the way it finds the native
+probe's buffers bound, so a translation that turns those buffers into something else, such as pointers in a uniform
+block, cannot run in the native probe's place.
 
 HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
 reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
@@ -62,13 +64,15 @@ _BROKEN = {
     "driver-rejected": "is rejected by the runtime",
 }
 DIVERGED = "computes different results from the native probe"
+REBOUND = "binds other resources than the native probe"
 
 
 def found(detail: str) -> bool:
     """Whether the diagnostic ``detail`` of a wrong result comes from running its probe."""
     first = detail.partition("\n")[0]
     return first.startswith("on ") and any(
-        f"the translation {text}" in first for text in (DIVERGED, *_BROKEN.values())
+        f"the translation {text}" in first
+        for text in (DIVERGED, REBOUND, *_BROKEN.values())
     )
 
 
@@ -177,15 +181,32 @@ def _case(identity: str, path: Path, language: str, data, capture):
     )
 
 
-def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Path):
-    """Run one chunk of results; return ``{index: (native record, translated record, outputs, lowered)}``.
+def rebinding(runs_as: str, native: Path, translated: Path) -> str:
+    """Why the harness cannot bind the ``translated`` probe the way it binds the ``native`` one, or an empty string
+    when it can, or when it cannot bind the native probe either."""
+    from tests.conformance.interface import InterfaceChanged, interface
 
-    ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares.
+    objections = []
+    for path in (native, translated):
+        try:
+            interface(path, runs_as, 1)
+            objections.append("")
+        except InterfaceChanged as error:
+            objections.append(str(error))
+    return "" if objections[0] else objections[1]
+
+
+def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Path):
+    """Run one chunk of results; return ``{index: (native record, translated record, outputs, lowered, rebound)}``.
+
+    ``lowered`` says whether the runtime compiles the translation at a lower language version than it declares, and
+    ``rebound`` is :func:`rebinding`'s objection to the translation's resources.
     """
     from tests.conformance import runner
 
     runs_as = target(language)
     suffix, cases, outputs, lowered = SUFFIXES[runs_as], [], {}, set()
+    rebound = {}
     assemblies = []
     for index, result in chunk:
         [buffer] = set(_INPUT.findall(result.sources[0]))
@@ -203,11 +224,14 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
             continue
         if language in VIA_SPIRV:
             assemblies += texts
+        paths = []
         for role, text in zip(("native", "translated"), texts):
             path = root / "sources" / f"{index:05d}-{role}{suffix}"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
+            paths.append(path)
             cases.append(_case(f"{index:05d}-{role}", path, runs_as, data, outputs))
+        rebound[index] = rebinding(runs_as, *paths)
     if not cases:
         return {}
     # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
@@ -226,13 +250,25 @@ def _execute(language: str, chunk: list[tuple[int, Result]], selection, root: Pa
         index, role = record["case"].split("-")
         found.setdefault(int(index), {})[role] = record
     return {
-        index: (roles.get("native"), roles.get("translated"), outputs, index in lowered)
+        index: (
+            roles.get("native"),
+            roles.get("translated"),
+            outputs,
+            index in lowered,
+            rebound.get(index, ""),
+        )
         for index, roles in found.items()
     }
 
 
 def _judge(
-    result: Result, native, translated, outputs, lowered: bool, index: int
+    result: Result,
+    native,
+    translated,
+    outputs,
+    lowered: bool,
+    rebound: str,
+    index: int,
 ) -> Result:
     if not native or not translated or native["outcome"] != "preserved":
         return result
@@ -243,6 +279,9 @@ def _judge(
     where = f"on {runtime}" + (
         f" as SPIR-V from {validators.TOOLS[language]}" if language in VIA_SPIRV else ""
     )
+    if rebound:
+        detail = f"{where}, the translation {REBOUND}\n{rebound}"
+        return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] in _BROKEN:
         detail = f"{where}, the translation {_BROKEN[translated['outcome']]}"
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
