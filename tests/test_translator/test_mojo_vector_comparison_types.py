@@ -1,12 +1,12 @@
 """Public Mojo translation preserves component-wise comparison masks."""
 
 import re
-import shutil
 import subprocess
 
 import pytest
 
 import crosstl
+from tools.coverage import validators
 
 OPS = [("<", "lt"), ("<=", "le"), (">", "gt"), (">=", "ge"), ("==", "eq"), ("!=", "ne")]
 
@@ -50,7 +50,7 @@ def test_scalar_comparison_remains_scalar(tmp_path):
 
 @pytest.mark.parametrize("width", [2, 3, 4])
 def test_boolean_reductions_run_with_native_mojo(tmp_path, width):
-    mojo = shutil.which("mojo")
+    mojo = validators.command("mojo")
     if mojo is None:
         pytest.skip("Mojo compiler not installed")
     # Equal padding must not make a three-lane <= reduction true; unequal
@@ -83,7 +83,7 @@ def main():
     path = tmp_path / "run-comparison.mojo"
     path.write_text(output)
     result = subprocess.run(
-        [mojo, "run", str(path)], capture_output=True, text=True, timeout=60
+        [*mojo, "run", str(path)], capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["False", "True"]
