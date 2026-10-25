@@ -10,8 +10,9 @@ import re
 
 from . import spellings
 
-# Numbers on their own, such as line and column numbers; the digits of a name such as ``float4`` stay.
-_DIGITS = re.compile(r"(?<!\w)\d+(?!\w)")
+# Numbers on their own, such as line and column numbers, become N. The digits of a name such as ``float3x4`` stay,
+# and so do a template's arguments, which spell a type such as ``matrix<float,3,4>`` (group 1).
+_DIGITS = re.compile(r"(\w+<[^<>'\"`]*>)|(?<!\w)\d+(?!\w)")
 # The buffers, locals and entry points of the generated probes (:mod:`.probes`), quoted in a diagnostic.
 _PLUMBING = re.compile(
     r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
@@ -20,9 +21,10 @@ _PLUMBING = re.compile(
 # are never the name of a feature such as ``round``.
 FEATURE = "<feature>"
 _ROUND_TRIP = "after the round trip: "
-# The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``.
+# The file and position a diagnostic starts with: ``probe.cu(N): error:``, ``probe.hlsl:N:N: error:``, ``ERROR: N:N:``
+# and glslang's ``ERROR: probe.frag:N:``.
 _LOCATION = re.compile(
-    r"^(?:after the round trip: )?(?:\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
+    r"^(?:after the round trip: )?(?:(?:ERROR: )?\S*probe\.\w+[(:][N:)]*:?\s*|ERROR: N:N:\s*)?(?:error:\s*)?"
 )
 
 # A row's wrong results grouped by cause, as (cause, features) pairs.
@@ -34,7 +36,7 @@ def diagnostic(feature: dict) -> str:
     uses."""
     detail = (feature.get("detail") or "no diagnostic was recorded").splitlines()[0]
     detail = _PLUMBING.sub(lambda m: m.group(1) + "<probe>" + m.group(1), detail)
-    return _DIGITS.sub("N", detail).strip()
+    return _DIGITS.sub(lambda m: m.group(1) or "N", detail).strip()
 
 
 def headline(text: str) -> str:
@@ -51,12 +53,17 @@ def cause(feature: dict, language: str = "") -> str:
     detail = diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
     rest = detail[len(prefix) :]
+    names = {feature.get("name"), feature.get("crossgl")}
+    # A CrossGL IR feature carries the diagnostic of one of its members as ``<language>: <diagnostic>``, and that
+    # diagnostic names the member (``cuda/atomicAdd_block``) by its name in that language.
+    member_language = rest.partition(": ")[0]
+    members = [m.split("/", 1) for m in feature.get("members", ())]
+    member_names = {name for lang, name in members if lang == member_language}
+    if member_names:
+        language = member_language
+        names |= member_names
     # An operator spelling such as spellings.SUBSCRIPT names no function a diagnostic could mention.
-    names = {feature.get("name"), feature.get("crossgl")} - {
-        None,
-        "",
-        spellings.SUBSCRIPT,
-    }
+    names -= {None, "", spellings.SUBSCRIPT, spellings.ELEMENT}
     renames = spellings.RENAMES.get(language, {})
     names |= {renames[name] for name in names if name in renames}
     for name in sorted(names, key=lambda n: (-len(n), n)):

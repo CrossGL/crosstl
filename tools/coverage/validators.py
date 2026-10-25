@@ -30,6 +30,7 @@ TOOLS = {
     "hlsl": "dxc",
     "metal": "metal",
     "mojo": "mojo",
+    "opencl": "clang",
     "rust": "rust-gpu",
     "slang": "slangc",
     "spirv": "spirv-val",
@@ -43,6 +44,7 @@ SUFFIX = {
     "hlsl": ".hlsl",
     "metal": ".metal",
     "mojo": ".mojo",
+    "opencl": ".cl",
     "rust": ".rs",
     "slang": ".slang",
     "spirv": ".spvasm",
@@ -104,6 +106,10 @@ METAL_STANDARD = "metal4.1"
 # CUDA probes compile for compute capability 8.0, which has every atomic and half-precision operation the CUDA
 # feature list names, and for C++17.
 CUDA_ARCH = "sm_80"
+# OpenCL C 3.0 for SPIR: Clang's SPIR targets support every optional feature and Khronos extension, so a probe needs
+# no -cl-ext flags. Only half needs the probe to enable cl_khr_fp16 with a pragma.
+OPENCL_STANDARD = "CL3.0"
+OPENCL_TARGET = "spir64"
 # Slang probes compile to SPIR-V, the target whose validator (SPIRV-Tools, built into slangc) checks the result.
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
@@ -117,6 +123,8 @@ HIP_ARCH = "gfx1100"
 class Verdict:
     accepted: bool
     log: str = ""
+    # The tool ran out of time, which says more about the machine's load than about the source.
+    timed_out: bool = False
 
 
 def _executable(name: str) -> str | None:
@@ -153,7 +161,7 @@ def command(name: str) -> tuple[str, ...]:
     return (found,) if found else ()
 
 
-# The Mojo line the probes target: the compute job pins mojo-compiler 1.1.0.
+# The Mojo line the probes target: the compute job pins mojo-compiler 1.2.0.
 _MOJO_RELEASE = re.compile(r"mojo\s+1\.", re.IGNORECASE)
 
 
@@ -186,13 +194,19 @@ def version(name: str) -> str:
     return _first_line([*base, flag])
 
 
-def missing(language: str, target: str = "") -> str:
-    """The first tool that checking ``language`` probes for ``target`` needs and this machine lacks, or ``""``."""
-    needed = {
+def toolchain(language: str, target: str = "") -> tuple[str, ...]:
+    """The tools that checking ``language`` probes for ``target`` runs."""
+    return {
         "spirv": ("spirv-as", "spirv-val"),
         "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
+        # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
+        "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
-    return next((tool for tool in needed if not command(tool)), "")
+
+
+def missing(language: str, target: str = "") -> str:
+    """The first tool that checking ``language`` probes for ``target`` needs and this machine lacks, or ``""``."""
+    return next((tool for tool in toolchain(language, target) if not command(tool)), "")
 
 
 def available(language: str, target: str = "") -> bool:
@@ -218,7 +232,9 @@ def _run(
             env={**os.environ, **environment} if environment else None,
         )
     except subprocess.TimeoutExpired:
-        return Verdict(False, f"{arguments[0]} timed out after {TIMEOUT} s")
+        return Verdict(
+            False, f"{arguments[0]} timed out after {TIMEOUT} s", timed_out=True
+        )
     log = _ANSI.sub("", (result.stdout if stdout else "") + result.stderr)
     # Some compilers (mojo) print the scratch directory's real path, which on macOS is under /private; the longer
     # spelling goes first, since it contains the other.
@@ -231,7 +247,7 @@ def _run(
     return Verdict(result.returncode == 0, log[:2000])
 
 
-def _suffix(language: str, stage: str) -> str:
+def suffix(language: str, stage: str) -> str:
     """The file suffix of a probe, from which glslang tells its stage. A WebGL kernel probe is a fragment shader."""
     if language == "glsl":
         return f".{GLSL_STAGES[stage]}"
@@ -348,6 +364,103 @@ def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdic
     )
 
 
+# The arguments of the validators (:data:`TOOLS`) that only compile the probe; ``{source}`` is its file name.
+COMPILE_ARGUMENTS = {
+    "wgsl": ("{source}",),
+    "cuda": (f"-arch={CUDA_ARCH}", "-std=c++17", "-c", "{source}", "-o", "probe.o"),
+    "hip": (
+        f"--offload-arch={HIP_ARCH}",
+        "-std=c++17",
+        "-c",
+        "{source}",
+        "-o",
+        "probe.o",
+    ),
+    "opencl": (
+        "-x",
+        "cl",
+        f"-cl-std={OPENCL_STANDARD}",
+        "-target",
+        OPENCL_TARGET,
+        "-Xclang",
+        "-finclude-default-header",
+        "-fsyntax-only",
+        "{source}",
+    ),
+    # The Mojo compiler type-checks every function it parses, called or not; emitting LLVM IR needs no main.
+    "mojo": (
+        "build",
+        "--emit",
+        "llvm",
+        "--disable-warnings",
+        "{source}",
+        "-o",
+        "probe.ll",
+    ),
+}
+
+
+def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
+    # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are checked
+    # for Vulkan, as are probes whose feature only GLSL for Vulkan has.
+    if stage in SPIRV_1_4_STAGES:
+        environment = ["--target-env", SPIRV_1_4_ENVIRONMENT]
+    elif target == "vulkan":
+        environment = ["--target-env", SPIRV_ENVIRONMENT]
+    else:
+        environment = []
+    return _run([*command("glslangValidator"), *environment, name], scratch)
+
+
+def _slang(
+    name: str, source: str, stage: str, entry: str, target: str, scratch: str
+) -> Verdict:
+    # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both. For a
+    # source target the output must follow the entry point it holds.
+    attributed = "[shader(" in source
+    entry_point = [
+        *(["-entry", entry or "main"] if target or not attributed else []),
+        *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
+    ]
+    output = "probe.hlsl" if target == "hlsl" else "probe.spv"
+    compiled = _run(
+        [
+            *command("slangc"),
+            name,
+            *entry_point,
+            "-target",
+            target or SLANG_TARGET,
+            "-o",
+            output,
+        ],
+        scratch,
+        SLANG_VALIDATION,
+        stdout=False,
+    )
+    if target != "hlsl" or not compiled.accepted:
+        return compiled
+    # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where HLSL lacks
+    # an operation, Slang's library emits a comment in place of the call.
+    generated = Path(scratch, output).read_text()
+    dropped = _UNSUPPORTED_IN_HLSL.search(generated)
+    if dropped:
+        return Verdict(False, f"error: slangc emits {dropped.group(0)}")
+    return _dxc(output, generated, stage, "", scratch)
+
+
+def _spirv(name: str, stage: str, scratch: str) -> Verdict:
+    environment = [
+        "--target-env",
+        (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
+    ]
+    assembled = _run(
+        [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
+    )
+    if not assembled.accepted:
+        return assembled
+    return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
+
+
 def validate(
     language: str,
     source: str,
@@ -358,118 +471,25 @@ def validate(
     """Check ``source`` with the language's reference validator, compiling for ``target`` when the language has
     more than one (Slang). Call only when :func:`available` is true."""
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-        name = "probe" + _suffix(language, stage)
+        name = "probe" + suffix(language, stage)
         Path(scratch, name).write_text(source)
+        if language in COMPILE_ARGUMENTS:
+            arguments = (a.format(source=name) for a in COMPILE_ARGUMENTS[language])
+            return _run([*command(TOOLS[language]), *arguments], scratch)
         if language == "webgl":
             return _essl(name, source, scratch)
         if language == "glsl":
-            # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are
-            # checked for Vulkan, as are probes whose feature only GLSL for Vulkan has.
-            if stage in SPIRV_1_4_STAGES:
-                environment = ["--target-env", SPIRV_1_4_ENVIRONMENT]
-            elif target == "vulkan":
-                environment = ["--target-env", SPIRV_ENVIRONMENT]
-            else:
-                environment = []
-            return _run([*command("glslangValidator"), *environment, name], scratch)
+            return _glsl(name, stage, target, scratch)
         if language == "hlsl":
             return _dxc(name, source, stage, entry, scratch)
         if language == "metal":
             return _metal(name, stage, scratch)
-        if language == "wgsl":
-            return _run([*command("naga"), name], scratch)
-        if language == "cuda":
-            return _run(
-                [
-                    *command("nvcc"),
-                    f"-arch={CUDA_ARCH}",
-                    "-std=c++17",
-                    "-c",
-                    name,
-                    "-o",
-                    "probe.o",
-                ],
-                scratch,
-            )
-        if language == "hip":
-            return _run(
-                [
-                    *command("hipcc"),
-                    f"--offload-arch={HIP_ARCH}",
-                    "-std=c++17",
-                    "-c",
-                    name,
-                    "-o",
-                    "probe.o",
-                ],
-                scratch,
-            )
-        if language == "mojo":
-            # The Mojo compiler type-checks every function it parses, called or not; emitting LLVM IR needs no main.
-            return _run(
-                [
-                    *command("mojo"),
-                    "build",
-                    "--emit",
-                    "llvm",
-                    "--disable-warnings",
-                    name,
-                    "-o",
-                    "probe.ll",
-                ],
-                scratch,
-            )
         if language == "rust":
-            return _run([*command("rust-gpu"), name, "--out-dir", "."], scratch)
+            compiler = rustgpu.command(rustgpu.target(stage))
+            return _run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
-            # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both.
-            # For a source target the output must follow the entry point it holds.
-            entry_point = [
-                *(
-                    ["-entry", entry or "main"]
-                    if target or "[shader(" not in source
-                    else []
-                ),
-                *(
-                    []
-                    if "[shader(" in source
-                    else ["-stage", SLANG_STAGES.get(stage, stage)]
-                ),
-            ]
-            output = "probe.hlsl" if target == "hlsl" else "probe.spv"
-            compiled = _run(
-                [
-                    *command("slangc"),
-                    name,
-                    *entry_point,
-                    "-target",
-                    target or SLANG_TARGET,
-                    "-o",
-                    output,
-                ],
-                scratch,
-                SLANG_VALIDATION,
-                stdout=False,
-            )
-            if target != "hlsl" or not compiled.accepted:
-                return compiled
-            # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where
-            # HLSL lacks an operation, Slang's library emits a comment in place of the call.
-            generated = Path(scratch, output).read_text()
-            dropped = _UNSUPPORTED_IN_HLSL.search(generated)
-            if dropped:
-                return Verdict(False, f"error: slangc emits {dropped.group(0)}")
-            return _dxc(output, generated, stage, "", scratch)
-        environment = [
-            "--target-env",
-            (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
-        ]
-        assembled = _run(
-            [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
-        )
-        if not assembled.accepted:
-            return assembled
-        return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
+            return _slang(name, source, stage, entry, target, scratch)
+        return _spirv(name, stage, scratch)
 
 
 # How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}``, the HLSL
@@ -519,6 +539,9 @@ SPIRV_COMPILERS = {
     # rust-gpu names the module after the crate, which is named after the file.
     "rust": ("rust-gpu", ("{source}", "--out-dir", ".")),
 }
+# The flags that make a compiler keep the resources a shader declares but never reads, so its SPIR-V keeps the
+# bindings the source gives them. glslang and naga keep them without one.
+KEEP_BINDINGS = {"hlsl": ("-fspv-preserve-bindings",), "slang": ("-preserve-params",)}
 
 
 def can_lower(language: str) -> bool:
@@ -526,10 +549,42 @@ def can_lower(language: str) -> bool:
     return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
-def first_error(log: str) -> str:
-    """The first line of a tool's log that reports an error, or the log's start when none says so."""
-    errors = [line for line in log.splitlines() if "error" in line.lower()]
-    return (errors[0] if errors else log[:300]).strip()
+# slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the
+# particulars, such as the undefined name, in the label under the quoted source line. Its first error is the header
+# joined with that label, so two probes that fail on different names have different causes.
+LABELLED = frozenset({"slang"})
+_HEADER = re.compile(r"error\[(?P<code>E\d+)\]: (?P<message>.+)")
+_LABEL = re.compile(r"\s*\d*\s*\|\s*\^+\s+(?P<label>\S.*)")
+
+
+def first_error(log: str, language: str = "") -> str:
+    """The first line of a tool's log that reports an error, or the log's start when none says so. For a
+    ``language`` in :data:`LABELLED`, the error's header is joined with the label under its source line.
+    """
+    lines = log.splitlines()
+    for index, line in enumerate(lines):
+        if "error" not in line.lower():
+            continue
+        header = _HEADER.fullmatch(line.strip()) if language in LABELLED else None
+        return _labelled(header, lines[index + 1 :]) if header else line.strip()
+    return log[:300].strip()
+
+
+def _labelled(header: re.Match[str], following: list[str]) -> str:
+    """The error ``header`` with the first label of its own block. A label that only repeats the header adds
+    nothing, and one that starts with the header's words replaces them."""
+    for line in following:
+        if _HEADER.fullmatch(line.strip()):
+            break
+        label = _LABEL.fullmatch(line)
+        if label:
+            text, message = label["label"].strip().rstrip("."), header["message"]
+            if text.lower() == message.lower():
+                break
+            if not text.lower().startswith(message.lower()):
+                text = f"{message}: {text}"
+            return f"error[{header['code']}]: {text}"
+    return header.group(0)
 
 
 def lower(
@@ -539,11 +594,13 @@ def lower(
     stage: str = "compute",
     *,
     raw_ids: bool = True,
+    keep_bindings: bool = False,
 ) -> tuple[str, str]:
     """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
 
     ``raw_ids`` numbers every id instead of naming it after its debug name, so assemblies compare by instruction.
-    Call only when :func:`can_lower` is true.
+    ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`). Call only when
+    :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
     name = "probe" + (
@@ -561,7 +618,14 @@ def lower(
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
         Path(scratch, name).write_text(source)
         filled = [a.format(**fields) for a in arguments]
-        compiled = _run([*command(tool), *filled], scratch)
+        if keep_bindings:
+            filled += KEEP_BINDINGS.get(language, ())
+        compiler = (
+            rustgpu.command(rustgpu.target(stage))
+            if tool == "rust-gpu"
+            else command(tool)
+        )
+        compiled = _run([*compiler, *filled], scratch)
         if not compiled.accepted:
             return "", compiled.log
         try:

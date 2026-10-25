@@ -1,10 +1,28 @@
-"""Probe templates for the compute languages: CUDA, HIP, Mojo and Rust."""
+"""Probe templates for the compute languages: CUDA, HIP, OpenCL C, Mojo and Rust."""
 
 from __future__ import annotations
 
+from . import composites, operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 _CSTDINT = "#include <cstdint>"
+# What only the graphics APIs have: fragment discard and every stage but compute.
+_GRAPHICS = (
+    "discard",
+    "vertex",
+    "fragment",
+    "geometry",
+    "tessellation-control",
+    "tessellation-evaluation",
+    "task",
+    "mesh",
+    "ray-generation",
+    "intersection",
+    "any-hit",
+    "closest-hit",
+    "miss",
+    "callable",
+)
 
 CUDA = {
     **C_FAMILY,
@@ -20,9 +38,14 @@ CUDA = {
         C_FAMILY["inout-parameter"].body,
         "__device__ void bump(float& a) {\n    a = a + 1.0f;\n}",
     ),
-    # CUDA vector types are plain structs: no swizzles, and no matrix types at all.
+    **operators.c_casts("unsigned int"),
+    **composites.CUDA,
+    # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
+    "vector-scalar-product": ABSENT,
     "matrix-vector-product": ABSENT,
+    "matrix-product": ABSENT,
+    "vector-matrix-product": ABSENT,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "constexpr float SCALE = 2.0f;"
     ),
@@ -61,25 +84,7 @@ CUDA = {
         params="cudaSurfaceObject_t img",
     ),
     # CUDA has kernels only; graphics and ray-tracing stages belong to the graphics APIs and OptiX.
-    **dict.fromkeys(
-        (
-            "discard",
-            "vertex",
-            "fragment",
-            "geometry",
-            "tessellation-control",
-            "tessellation-evaluation",
-            "task",
-            "mesh",
-            "ray-generation",
-            "intersection",
-            "any-hit",
-            "closest-hit",
-            "miss",
-            "callable",
-        ),
-        ABSENT,
-    ),
+    **dict.fromkeys(_GRAPHICS, ABSENT),
 }
 
 # HIP keeps CUDA's kernel language and renames the runtime types.
@@ -92,6 +97,88 @@ HIP = {
     "storage-image": Template(
         CUDA["storage-image"].body, params="hipSurfaceObject_t img"
     ),
+}
+
+
+def _opencl_scalar(spelling: str, source: str = "iin", prelude: str = "") -> Template:
+    return Template(
+        f"{spelling} v = ({spelling}){source}[i];\noutp[i] = (float)(v * v);",
+        prelude=prelude,
+    )
+
+
+_OPENCL_PAIR = "typedef struct {\n    float a;\n    float b;\n} Pair;"
+
+# OpenCL C is C99 with vector types: C casts instead of constructors, pointers instead of references, typedef'd
+# structs, no matrices, and buffers whose length the kernel is not told.
+OPENCL = {
+    **C_FAMILY,
+    "short-circuit-logic": Template(
+        "if (iin[i] > 0 && fin[i] / (float)iin[i] > 1.0f) {\n    outp[i] = 1.0f;\n}"
+        " else if (iin[i] < 0 || fin[i] < 0.0f) {\n    outp[i] = 2.0f;\n}"
+    ),
+    "out-parameter": Template(
+        "float a;\nfloat b;\nsplit(fin[i], &a, &b);\noutp[i] = a + b;",
+        "void split(float x, float* a, float* b) {\n    *a = x;\n    *b = x * 2.0f;\n}",
+    ),
+    "inout-parameter": Template(
+        "float a = fin[i];\nbump(&a);\noutp[i] = a;",
+        "void bump(float* a) {\n    *a = *a + 1.0f;\n}",
+    ),
+    "array": Template(
+        "float values[4];\nfor (int k = 0; k < 4; k++) {\n    values[k] = fin[i] * (float)k;\n}\n"
+        "outp[i] = values[iin[i] & 3];"
+    ),
+    "struct": Template(C_FAMILY["struct"].body, _OPENCL_PAIR),
+    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, _OPENCL_PAIR),
+    "swizzle": Template(
+        "float4 v = (float4)(fin[i], 1.0f, 2.0f, 3.0f);\noutp[i] = v.wzyx.x + v.xy.y;"
+    ),
+    **operators.c_casts("uint"),
+    **composites.OPENCL,
+    "vector-scalar-product": Template(
+        "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
+    ),
+    "matrix-vector-product": ABSENT,
+    "matrix-product": ABSENT,
+    "vector-matrix-product": ABSENT,
+    "global-constant": Template(
+        "outp[i] = fin[i] * SCALE;", "__constant float SCALE = 2.0f;"
+    ),
+    "runtime-array-length": ABSENT,
+    "half": _opencl_scalar(
+        "half", "fin", "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
+    ),
+    "double": _opencl_scalar("double", "fin"),
+    "int8": _opencl_scalar("char"),
+    "uint8": _opencl_scalar("uchar"),
+    "int16": _opencl_scalar("short"),
+    "uint16": _opencl_scalar("ushort"),
+    "int64": _opencl_scalar("long"),
+    "uint64": _opencl_scalar("ulong"),
+    "shared-memory": Template(
+        "__local float tile[1];\ntile[0] = fin[i];\nbarrier(CLK_LOCAL_MEM_FENCE);\noutp[i] = tile[0];"
+    ),
+    "local-invocation-id": Template("outp[i] = (float)get_local_id(0);"),
+    "workgroup-id": Template("outp[i] = (float)get_group_id(0);"),
+    "local-invocation-index": Template("outp[i] = (float)get_local_linear_id();"),
+    "num-workgroups": Template("outp[i] = (float)get_num_groups(0);"),
+    # A value every invocation shares is a by-value kernel argument.
+    "uniform-buffer": Template("outp[i] = fin[i] * scale;", params="const float scale"),
+    "read-only-buffer": Template(
+        "outp[i] = rin[i];", params="__global const float* restrict rin"
+    ),
+    "sampled-texture": Template(
+        "outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;",
+        "__constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;",
+        params="__read_only image2d_t tex",
+    ),
+    "storage-image": Template(
+        "write_imagef(img, (int2)(0, 0), (float4)(fin[i]));\noutp[i] = 0.0f;",
+        params="__write_only image2d_t img",
+    ),
+    # OpenCL C has kernels only.
+    **dict.fromkeys(_GRAPHICS, ABSENT),
 }
 
 
@@ -163,6 +250,8 @@ MOJO = {
         "outp[i] = fin[i] * SCALE", "comptime SCALE: Float32 = 2.0"
     ),
     "compute": Template("outp[i] = fin[i]"),
+    **operators.MOJO,
+    **composites.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -344,6 +433,8 @@ RUST = {
         "let m = $mat2::from_cols($vec2::new(fin[i], 1.0), $vec2::new(2.0, 3.0));\n"
         "let v = m * $vec2::new(1.0, fin[i]);\noutp[i] = v.y;"
     ),
+    **operators.RUST,
+    **composites.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),
@@ -436,6 +527,24 @@ RUST = {
         "tessellation_evaluation(triangles, spacing_equal, vertex_order_ccw)",
         params="#[spirv(tess_coord)] coord: Vec3, position: [Vec4; 3], #[spirv(position)] out_position: &mut Vec4",
         body="    *out_position = position[0] * coord.x + position[1] * coord.y + position[2] * coord.z;\n",
+    ),
+    # A mesh shader that writes one triangle, and a task shader that launches one mesh workgroup with a payload.
+    "mesh": _rust_stage(
+        "mesh_ext(threads(1), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext)",
+        params="#[spirv(position)] positions: &mut [Vec4; 3], "
+        "#[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1]",
+        body="    unsafe {\n        spirv_std::arch::set_mesh_outputs_ext(3, 1);\n    }\n"
+        "    positions[0] = Vec4::new(0.0, 0.0, 0.0, 1.0);\n"
+        "    positions[1] = Vec4::new(1.0, 0.0, 0.0, 1.0);\n"
+        "    positions[2] = Vec4::new(0.0, 1.0, 0.0, 1.0);\n"
+        "    indices[0] = UVec3::new(0, 1, 2);\n",
+    ),
+    "task": _rust_stage(
+        "task_ext(threads(1))",
+        "pub struct Payload {\n    pub value: u32,\n}\n\n",
+        params="#[spirv(task_payload_workgroup_ext)] payload: &mut Payload",
+        body="    payload.value = 1;\n    unsafe {\n"
+        "        spirv_std::arch::emit_mesh_tasks_ext_payload(1, 1, 1, payload);\n    }\n",
     ),
     **_RUST_RAYTRACING_STAGES,
 }

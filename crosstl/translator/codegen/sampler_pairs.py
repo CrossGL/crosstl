@@ -59,7 +59,11 @@ from .image_access_contracts import (
 )
 from .lowering_refusals import refuse_unsupported
 
+# Annotation of a lowered AST: every pair, for records that name the uniforms a sampler state reaches.
+COMBINED_SAMPLER_PAIRS = "combined_sampler_pairs"
+
 __all__ = [
+    "COMBINED_SAMPLER_PAIRS",
     "canonicalize_separate_textures",
     "lower_combined_sampler_pairs",
     "with_combined_sampler_header",
@@ -295,6 +299,8 @@ class _Lowering:
         self.by_name = {}
         self.calls = []  # (caller, call, callee)
         self.records = []
+        # Every (uniform, texture, sampler) pair, also of textures that keep one uniform.
+        self.pairs = []
         self.taken_names = set()
         self.site_calls = (
             {}
@@ -813,9 +819,11 @@ class _Lowering:
             arguments = getattr(call, "arguments", None)
             if isinstance(arguments, list) and arguments is not operands:
                 arguments[slot] = operands[slot]
-        if len(variants) > 1:
-            for key, shadow in variants:
-                self.records.append(self.record(resource, key, names[key], shadow))
+        for key, shadow in variants:
+            record = self.record(resource, key, names[key], shadow)
+            self.pairs.append(record)
+            if len(variants) > 1:
+                self.records.append(record)
 
     def variant_name(self, resource, key):
         source, shadow = key
@@ -892,6 +900,9 @@ def lower_combined_sampler_pairs(ast, target):
     # Struct members are not resources the pairing tracks: a member texture is declared combined, and its
     # explicit samplers are dropped at the use sites as for any combined texture.
     _combine_remaining_separate_types(lowered, _MEMBER_TYPE)
+    annotations = getattr(lowered, "annotations", None)
+    if isinstance(annotations, dict):
+        annotations[COMBINED_SAMPLER_PAIRS] = list(lowering.pairs)
     return lowered, lowering.records
 
 

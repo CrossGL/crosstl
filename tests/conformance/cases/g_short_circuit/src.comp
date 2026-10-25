@@ -1,0 +1,30 @@
+#version 450
+// GLSL 4.60 section 5.9: the right operand of && and || is evaluated only when the left operand does not
+// decide the result, and ?: evaluates only the selected expression. bump() writes its inout argument, so
+// every unselected evaluation would change `calls`.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { int a[]; } inp;
+layout(std430, binding = 1) buffer Outp { int o[]; } outp;
+
+bool bump(inout int calls) {
+    calls = calls + 1;
+    return calls > 2;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    int x = inp.a[i];
+    int calls = 0;
+    bool both = (x & 1) == 1 && bump(calls);
+    bool either = (x & 2) == 2 || bump(calls);
+    int chosen = (x & 4) == 4 ? (bump(calls) ? 100 : 200) : 7;
+    int trips = 0;
+    while (trips < (x & 3) && bump(calls)) {
+        trips = trips + 1;
+    }
+    do {
+        trips = trips + 10;
+    } while ((x & 8) == 8 && trips < 40 && bump(calls));
+    int guarded = x >= 0 && x < 64 && inp.a[x] == x ? 1 : 0;
+    outp.o[i] = calls * 1000 + int(both) + 2 * int(either) + chosen * 10 + trips * 100000 + guarded * 4;
+}

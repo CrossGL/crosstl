@@ -22,6 +22,7 @@ SCHEMA = 2
 COLUMNS = ("name", "category", "group", "outcome", "detail")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
+    ("opencl", "output"): "CrossTL has no OpenCL C generator",
     ("webgl", "input"): "CrossTL has no WebGL source frontend",
     ("wgsl", "input"): "CrossTL has no WGSL source frontend",
 }
@@ -90,12 +91,21 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
             score = Score()
             for item in group:
                 score.add(item.outcome)
+            executed = [r.runtime for r in group if r.runtime]
             backends.append(
                 {
                     "language": language,
                     "direction": direction,
                     "offered": True,
                     "validator": validators.TOOLS[language],
+                    **(
+                        {
+                            "runtime": ", ".join(sorted(set(executed))),
+                            "executed": len(executed),
+                        }
+                        if executed
+                        else {}
+                    ),
                     "score": None if score.percent is None else round(score.percent, 1),
                     "counts": score.counts,
                     "features": [
@@ -122,7 +132,8 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
     tools = sorted(
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
-        # Slang functions that SPIR-V lacks are compiled for HLSL and checked by DXC.
+        # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
+        # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
         # SPIR-V input probes are glslang's output.

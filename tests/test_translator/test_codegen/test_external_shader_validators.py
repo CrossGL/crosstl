@@ -763,6 +763,92 @@ shader SlangMeshTaskValidator {
 """
 
 
+SLANG_STORAGE_BUFFER_COMPUTE_SHADER = """
+shader SlangStorageBufferValidator {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer readonly Particle* particles;
+        buffer float* masses;
+        coherent buffer uint* counters;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            masses[i] = particles[i].position.x + particles[i].mass + *masses;
+            atomicAdd(counters[0], 1u);
+        }
+    }
+}
+"""
+
+
+SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
+shader SlangWorkgroupCountValidator {
+    RWStructuredBuffer<uint> groupCounts;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID, uvec3 wid @builtin(workgroup_id),
+                  uvec3 count @builtin(num_workgroups)) {
+            uvec3 groups = gl_NumWorkGroups;
+            groupCounts[gid.x] = groups.x + gl_NumWorkGroups.y + count.z + wid.x;
+        }
+    }
+}
+"""
+
+
+SLANG_INTEGER_WIDTH_VALIDATOR_SHADER = """
+shader SlangIntegerWidthValidator {
+    int64 widen(int64 x, u8vec4 y) {
+        return x + int64(y.x);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* uin;
+        buffer uvec4* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+            i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+            u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+            i64 e = i64(uin[i]);
+            vec2<i64> g = vec2<i64>(e, e);
+            int64 w = widen(e, u8vec4(a, a));
+            outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(g.x + w));
+        }
+    }
+}
+"""
+
+
+SLANG_BIT_QUERY_VALIDATOR_SHADER = """
+shader SlangBitQueryValidator {
+    RWStructuredBuffer<int> iin @binding(0);
+    RWStructuredBuffer<uint> uin @binding(1);
+    RWStructuredBuffer<ivec4> outp @binding(2);
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint i = tid.x;
+            ivec2 sv = ivec2(iin[i], iin[i + 1u]);
+            uvec3 uv = uvec3(uin[i], uin[i + 1u], 0u);
+            let pop = bitCount(uv);
+            let msb = findMSB(sv);
+            let lsb = findLSB(uin[i]);
+            let rev = bitfieldReverse(sv);
+            uint urev = bitfieldReverse(uin[i]);
+            bool none = findMSB(iin[i]) < 0;
+            outp[i] = ivec4(pop.x + msb.y + lsb, rev.x, int(urev), none ? 1 : 0);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -1161,7 +1247,7 @@ shader GLSLRayQueryComputeValidator {
                 100.0
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -1195,7 +1281,7 @@ shader GLSLRayQueryTraceRayInlineValidator {
                 ray
             );
             bool active = rayQuery.Proceed();
-            uint hitType = rayQuery.CommittedType();
+            uint hitType = rayQuery.CommittedStatus();
         }
     }
 }
@@ -2878,6 +2964,158 @@ def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
         )
 
 
+def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
+    """``buffer T* name`` is a structured buffer at its own binding, not a pointer parameter (#2921)."""
+    shader_path = tmp_path / "slang_storage_buffers.slang"
+    spirv_path = tmp_path / "slang_storage_buffers.spv"
+    hlsl_path = tmp_path / "slang_storage_buffers.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_STORAGE_BUFFER_COMPUTE_SHADER)
+    )
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Particle> particles : register(t0"
+        in code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u0);" in code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u1);" in code
+    )
+    assert "masses[0]" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+    # A global pointer reached HLSL as ``Ptr<float, ...>``, which DXC rejects.
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
+    )
+    assert "Ptr<" not in hlsl_path.read_text(encoding="utf-8")
+
+
+def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_workgroup_count.slang"
+    spirv_path = tmp_path / "slang_workgroup_count.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_WORKGROUP_COUNT_COMPUTE_SHADER)
+    )
+    assert "uint3 groups = WorkgroupCount();" in code
+    assert "groups.x + WorkgroupCount().y" in code
+    assert "uint3 wid : SV_GroupID" in code
+    assert "uint3 count = WorkgroupCount();" in code
+    assert "gl_NumWorkGroups" not in code
+    assert "builtin" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    # Slang defines WorkgroupCount() for its GLSL and SPIR-V targets only, so
+    # this compiles to SPIR-V rather than to HLSL as the other Slang cases do.
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_8bit_and_64bit_integers_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_integer_widths.slang"
+    spirv_path = tmp_path / "slang_integer_widths.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_INTEGER_WIDTH_VALIDATOR_SHADER)
+    )
+    assert "int64_t widen(int64_t x, vector<uint8_t, 4> y)" in code
+    assert "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i])" in code
+    assert "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1)" in code
+    assert "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i])" in code
+    assert "int64_t e = int64_t(uin[i]);" in code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    # The HLSL target only re-emits source, so build SPIR-V and validate it.
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_bit_queries.slang"
+    spirv_path = tmp_path / "slang_bit_queries.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_BIT_QUERY_VALIDATOR_SHADER)
+    )
+    assert "int3 pop = int3(countbits(uv));" in code
+    assert "int2 msb = int2(firstbithigh(sv));" in code
+    assert "int lsb = int(firstbitlow(uin[i]));" in code
+    assert "int2 rev = reversebits(sv);" in code
+    assert "uint urev = reversebits(uin[i]);" in code
+    assert "bool none = int(firstbithigh(iin[i])) < 0;" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
 @pytest.mark.parametrize(
     ("case_name", "source", "expected_snippets", "forbidden_snippets"),
     [
@@ -4168,7 +4406,7 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "bool active =" not in code
     assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
     assert ".Proceed(" not in code
-    assert ".CommittedType(" not in code
+    assert ".CommittedStatus(" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

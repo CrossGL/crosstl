@@ -14,7 +14,7 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float>
         float2 uv;
         uv.x = mix(input.tex.x, input.tex.z, input.glyphuv.x);
         uv.y = mix(input.tex.y, input.tex.w, input.glyphuv.y);
-        text = tex0.sample(sampler(mag_filter::linear, min_filter::linear), uv.xy).x;
+        text = tex0.sample(sampler(mag_filter::linear, min_filter::linear), uv).x;
     }
     color_out = float4(float3(text), clamp(text + 0.5, 0.0, 1.0));
     return color_out;

@@ -100,7 +100,6 @@ from crosstl.translator.semantics import UnsizedArrayUnsupportedError
 from tests.lowering_refusal_helpers import (
     emitter_refusal,
     hlsl_partial_output,
-    refused_hlsl,
 )
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
@@ -5896,7 +5895,7 @@ def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
     assert "_crossglFragCoord.y" in generated_code
 
 
-def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
+def test_glsl_input_attachment_reads_a_texture_at_the_fragment_position(tmp_path):
     shader = """
     #version 450
     layout(input_attachment_index = 0, set = 0, binding = 0)
@@ -5910,22 +5909,18 @@ def test_glsl_input_attachment_reports_unsupported_hlsl_diagnostic(tmp_path):
     shader_path = tmp_path / "input-attachment.frag"
     shader_path.write_text(shader)
 
-    refusal = refused_hlsl(
-        crosstl.translate,
+    hlsl = crosstl.translate(
         str(shader_path),
         backend="directx",
         format_output=False,
         source_backend="opengl",
     )
 
-    assert "DirectX cannot lower 2 constructs" in refusal
-    assert (
-        "input attachment declaration: 'sceneColor' uses subpassInput; "
-        "subpassInput resources require Vulkan subpass lowering"
-    ) in refusal
-    assert (
-        "input attachment load: subpassLoad requires Vulkan subpass input lowering"
-    ) in refusal
+    # Direct3D has no input attachments: the attachment is bound as a texture and read at the pixel.
+    assert "Texture2D sceneColor : register(t0);" in hlsl
+    assert re.search(r"float4 (\w+) : SV_Position", hlsl), hlsl
+    assert re.search(r"sceneColor\.Load\(int3\(int2\(\w+\.xy\), 0\)\)", hlsl), hlsl
+    assert "subpass" not in hlsl.lower()
 
 
 def test_glsl_fragment_input_locations_lower_to_distinct_hlsl_semantics(tmp_path):
@@ -6655,6 +6650,97 @@ def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_directx_fine_and_coarse_fwidth_lower_to_hlsl_derivatives():
+    shader = """
+    shader FineCoarseFwidth {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 fine = fwidthFine(uv);
+                vec2 coarse = fwidthCoarse(uv * 2.0);
+                return vec4(fine, coarse);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 fine = (abs(ddx_fine(uv)) + abs(ddy_fine(uv)));" in generated_code
+    assert (
+        "float2 coarse = (abs(ddx_coarse((uv * 2.0))) + "
+        "abs(ddy_coarse((uv * 2.0))));"
+    ) in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fwidth_fine_name_is_not_lowered():
+    shader = """
+    shader FwidthFineShadowing {
+        float fwidthFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = fwidthFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fine = fwidthFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "declaration, call, reason",
+    [
+        (
+            "float abs = 1.0;",
+            "fwidthFine(uv) * abs",
+            "would name the shader's own 'abs'",
+        ),
+        (
+            "float ddy_coarse = 1.0;",
+            "fwidthCoarse(uv) * ddy_coarse",
+            "would name the shader's own 'ddy_coarse'",
+        ),
+        (
+            "int i = 0;",
+            "fwidthFine(uv * float(i++))",
+            "would evaluate an argument with side effects twice",
+        ),
+    ],
+)
+def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
+    declaration, call, reason
+):
+    shader = f"""
+    shader FineCoarseFwidthRefusal {{
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                {declaration}
+                vec2 r = {call};
+                return vec4(r, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated_code, message = hlsl_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
+
+    assert "HLSL has no fwidth" in message
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+    assert reason in message
+
+
 def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     shader = """
     shader FineDerivativeShadowing {
@@ -6688,6 +6774,8 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "dFdyFine",
         "dFdyCoarse",
         "fwidth",
+        "fwidthFine",
+        "fwidthCoarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
@@ -7097,8 +7185,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
@@ -7487,9 +7578,10 @@ def test_hlsl_generic_vector_constructors_emit_hlsl_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    # 8-bit vectors widen to 32 bits and wrap like i8vec2 and u8vec4.
+    assert "return (int2(uint2((input + inc)) << 24u) >> 24);" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "return (uint4((input + inc)) & 255u);" in generated_code
     assert "int16_t3 signedShorts(int16_t3 input)" in generated_code
     assert "int16_t3 inc = int16_t3(1, 2, 3);" in generated_code
     assert "uint16_t2 unsignedShorts(uint16_t2 input)" in generated_code
@@ -17121,8 +17213,22 @@ def test_hlsl_output_return_semantics_still_emit():
     ("stage", "return_type", "semantic", "value", "hlsl_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
-        ("fragment", "float", "gl_FragColor", "0.0", "SV_TARGET", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
+        (
+            "fragment",
+            "bool",
+            "gl_FragColor",
+            "true",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
+        (
+            "fragment",
+            "mat2",
+            "gl_FragColor",
+            "mat2(1.0)",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
         ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         (
@@ -17564,7 +17670,11 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
     ("member_decl", "hlsl_semantic", "expected_type"),
     [
         ("float position @ gl_Position", "SV_POSITION", "float4"),
-        ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
+        (
+            "bool color @ gl_FragColor",
+            "SV_TARGET",
+            "scalar or vector numeric render target type",
+        ),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
         ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         (
@@ -23598,10 +23708,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {
@@ -28529,7 +28641,7 @@ def test_directx_ray_query_result_methods_infer_all_hlsl_result_types():
         ("CandidateObjectRayDirection", "float3"),
         ("CommittedObjectRayOrigin", "float3"),
         ("CommittedObjectRayDirection", "float3"),
-        ("CandidateRayT", "float"),
+        ("CandidateTriangleRayT", "float"),
         ("CandidateObjectRayTMin", "float"),
         ("CommittedTriangleBarycentrics", "float2"),
         ("CandidateTriangleFrontFace", "bool"),
@@ -46661,7 +46773,7 @@ def test_directx_ray_query_inline_tracing():
                 RayQuery rq;
                 rq.Proceed();
                 uint candidateType = rq.CandidateType();
-                uint committedType = rq.CommittedType();
+                uint committedType = rq.CommittedStatus();
                 rq.Abort();
                 rq.CommitNonOpaqueTriangleHit();
             }
@@ -46675,7 +46787,7 @@ def test_directx_ray_query_inline_tracing():
     assert "RayQuery" in generated
     assert "rq.Proceed()" in generated
     assert "rq.CandidateType()" in generated
-    assert "rq.CommittedType()" in generated
+    assert "rq.CommittedStatus()" in generated
     assert "rq.Abort()" in generated
     assert "rq.CommitNonOpaqueTriangleHit()" in generated
 

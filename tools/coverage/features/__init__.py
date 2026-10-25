@@ -5,7 +5,20 @@ from __future__ import annotations
 from .. import constructs
 from ..model import Feature
 from ..upstream import fetch
-from . import cuda, glsl, hip, hlsl, metal, mojo, rust, slang, spirv, webgl, wgsl
+from . import (
+    cuda,
+    glsl,
+    hip,
+    hlsl,
+    metal,
+    mojo,
+    opencl,
+    rust,
+    slang,
+    spirv,
+    webgl,
+    wgsl,
+)
 
 
 def _glsl_names(offline: bool) -> set[str]:
@@ -52,6 +65,10 @@ def _mojo(offline: bool) -> list[Feature]:
     )
 
 
+def _opencl(offline: bool) -> list[Feature]:
+    return opencl.parse(fetch("opencl", offline=offline))
+
+
 # The modules of spirv_std::arch, each a source of :data:`..upstream.SOURCES` named ``rust-<module>``.
 RUST_ARCH = (
     "arch",
@@ -84,7 +101,10 @@ def _slang(offline: bool) -> list[Feature]:
 
 
 def _spirv(offline: bool) -> list[Feature]:
-    return spirv.parse(fetch("spirv", offline=offline), fetch("glsl", offline=offline))
+    glsl_text = fetch("glsl", offline=offline)
+    return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
+        fetch("spirv-core", offline=offline), glsl_text
+    )
 
 
 def _webgl(offline: bool) -> list[Feature]:
@@ -102,6 +122,7 @@ PARSERS = {
     "hlsl": _hlsl,
     "metal": _metal,
     "mojo": _mojo,
+    "opencl": _opencl,
     "rust": _rust,
     "slang": _slang,
     "spirv": _spirv,

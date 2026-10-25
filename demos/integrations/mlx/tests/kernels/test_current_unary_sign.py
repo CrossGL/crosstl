@@ -320,14 +320,14 @@ def test_current_mlx_sign_native_loader(tmp_path):
 
 @pytest.mark.parametrize("job_id", ["mlx-metal-porting", "portable-host", "metal-host"])
 def test_ci_requires_boolean_promotion(job_id):
-    from tools import ci_coverage
+    from tests import workflow_text
 
     text = (
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
     step = (
-        ci_coverage.workflow_job_text(text, job_id)
+        workflow_text.workflow_job_text(text, job_id)
         .split("      - name: Validate pinned comparison arithmetic\n", 1)[1]
         .split("      - name:", 1)[0]
     )
@@ -344,11 +344,11 @@ def test_ci_requires_boolean_promotion(job_id):
         assert module in step
         for event in ("push", "pull_request"):
             assert_paths_covered(
-                ci_coverage.workflow_event_path_filters(text, event), module
+                workflow_text.workflow_event_path_filters(text, event), module
             )
     if job_id == "mlx-metal-porting":
         upload = (
-            ci_coverage.workflow_job_text(text, job_id)
+            workflow_text.workflow_job_text(text, job_id)
             .split("      - name: Upload comparison arithmetic evidence\n", 1)[1]
             .split("      - name:", 1)[0]
         )

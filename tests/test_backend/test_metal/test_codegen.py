@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import MetalImportRefused
 from crosstl.backend.Metal.MetalAst import BinaryOpNode as MetalBinaryOpNode
 from crosstl.backend.Metal.MetalAst import CastNode as MetalCastNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
@@ -653,9 +654,10 @@ def test_codegen_attribute_mapping():
     }
     """
     result = convert(code)
-    assert re.search(r"@\s*POSITION", result)
-    assert re.search(r"@\s*NORMAL", result)
-    assert re.search(r"@\s*TEXCOORD0", result)
+    assert re.search(r"position\s*@\s*location\(0\)", result)
+    assert re.search(r"normal\s*@\s*location\(1\)", result)
+    assert re.search(r"uv\s*@\s*location\(5\)", result)
+    assert not re.search(r"@\s*(POSITION|NORMAL|TEXCOORD)", result)
     assert re.search(r"gl_Position", result)
     assert re.search(r"gl_FragColor", result)
     assert re.search(r"gl_VertexID", result)
@@ -1241,7 +1243,7 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
-def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
+def test_codegen_uint_vertex_id_keeps_its_unsigned_type():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -1262,12 +1264,13 @@ def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
     """
     crossgl = convert(code)
 
-    assert "int vid @gl_VertexID" in crossgl
-    assert "uint vid @gl_VertexID" not in crossgl
+    # MSL's [[vertex_id]] is uint (MSL 4.1 section 5.2.3.1); reading it as int changed unsigned arithmetic
+    # such as `vid - 1 < n`. GLSL converts its int gl_VertexID once.
+    assert "uint vid @gl_VertexID" in crossgl
     ast = parse_crossgl(crossgl)
     generated = GLSLCodeGen().generate(ast)
 
-    assert "uint vid" not in generated
+    assert "uint vid = uint(gl_VertexID);" in generated
     assert "verticesBuffer" in generated
 
 
@@ -4413,6 +4416,10 @@ def test_codegen_lowers_as_type_float_template_call():
         pytest.param("uint64_t", "uint2", "uint64", "uvec2", id="uint64-to-uint2"),
         pytest.param("uint2", "uint64_t", "uvec2", "uint64", id="uint2-to-uint64"),
         pytest.param("double", "int2", "double", "ivec2", id="double-to-int2"),
+        pytest.param("uint2", "long", "uvec2", "int64", id="uint2-to-long"),
+        pytest.param("int2", "ulong", "ivec2", "uint64", id="int2-to-ulong"),
+        pytest.param("long", "uint2", "int64", "uvec2", id="long-to-uint2"),
+        pytest.param("uint4", "long2", "uvec4", "i64vec2", id="uint4-to-long2"),
     ],
 )
 def test_codegen_preserves_as_type_target_shape_for_equal_width_reshape(
@@ -5836,7 +5843,8 @@ def test_codegen_access_qualified_1d_storage_textures():
     assert "vec4 c = imageLoad(line, tid);" in result
     assert "imageStore(line, tid, c);" in result
     assert "uint v = imageLoad(counters, uvec2(tid, 0));" in result
-    assert "imageStore(counters, uvec2(tid, 0), v);" in result
+    # The scalar texel value converts to the uint4 texel type (MSL 3.2 section 2.12).
+    assert "imageStore(counters, uvec2(tid, 0), uvec4(v));" in result
 
     shader_ast = parse_crossgl(result)
     assert shader_ast is not None
@@ -6172,6 +6180,48 @@ def test_codegen_packed_and_simd_types():
     assert "vec4 p4" in result
     assert "vec3 s3" in result
     assert "mat4 m4" in result
+
+
+def test_codegen_simd_namespace_types():
+    """The C++ interface of <simd/simd.h> spells Metal's vector and matrix types simd::float3, simd::half3x3."""
+    code = """
+    struct Types {
+        simd::float3 v3;
+        simd::uint2 u2;
+        simd::float3x3 m3;
+        simd::float4x2 m42;
+        simd::half3x3 h3;
+    };
+    """
+    result = convert(code)
+    assert "vec3 v3" in result
+    assert "uvec2 u2" in result
+    assert "mat3 m3" in result
+    assert "mat4x2 m42" in result
+    assert "f16mat3 h3" in result
+    assert "float3x3" not in result
+
+
+def test_codegen_simd_alias_members_resolve_builtin_overloads_and_subscripts():
+    """Builtin overloads and subscripts see simd aliases as the Metal types they name."""
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct Uniforms {
+        simd::float4 plane;
+        simd_float4x4 transform;
+        vector_float3 axis;
+    };
+    kernel void k(device float *out [[buffer(0)]],
+                  constant Uniforms &u [[buffer(1)]],
+                  uint id [[thread_position_in_grid]]) {
+        float4 p = float4(1.0);
+        out[id] = dot(u.plane, p) + u.transform[3].x + length(u.axis);
+    }
+    """
+    result = convert(code)
+    assert "dot(u.plane, p) + u.transform[3].x + length(u.axis)" in result
+    assert "simd" not in result.split("shader", 1)[1]
 
 
 def test_codegen_function_constants_and_argument_buffers():
@@ -6572,12 +6622,48 @@ def test_codegen_raytracing_qualifiers_output():
     miss void miss_main() { }
     callable void callable_main() { }
     """
-    result = convert(code)
-    assert "isect" in result
-    assert "any_hit" in result
-    assert "closest_hit" in result
-    assert "miss_main" in result
-    assert "callable_main" in result
+    # The importer used to print these as plain helpers, dropping the qualifiers the host's function tables need.
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    for qualifier, name in (
+        ("intersection", "isect"),
+        ("anyhit", "any_hit"),
+        ("closesthit", "closest_hit"),
+        ("miss", "miss_main"),
+        ("callable", "callable_main"),
+    ):
+        assert f"Metal {qualifier} function '{name}' has no CrossGL import" in str(
+            refusal.value
+        )
+
+
+def test_codegen_msl_intersection_function_is_refused():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    using namespace raytracing;
+
+    struct BoundingBoxIntersection {
+        bool accept [[accept_intersection]];
+        float distance [[distance]];
+    };
+
+    [[intersection(bounding_box, triangle_data, instancing)]]
+    BoundingBoxIntersection sphere(float3 origin [[origin]],
+                                   float3 direction [[direction]],
+                                   float minDistance [[min_distance]],
+                                   float maxDistance [[max_distance]]) {
+        BoundingBoxIntersection hit;
+        hit.accept = maxDistance > minDistance;
+        hit.distance = minDistance;
+        return hit;
+    }
+    """
+    with pytest.raises(
+        MetalImportRefused,
+        match="Metal intersection function 'sphere' has no CrossGL import",
+    ):
+        convert(code)
 
 
 def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
@@ -6586,7 +6672,7 @@ def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
     using namespace metal;
     namespace rt = raytracing;
 
-    intersection void isect(rt::ray r, intersector inter) { }
+    void isect(rt::ray r, intersector inter) { }
     """
 
     result = convert(code)
@@ -6612,19 +6698,19 @@ def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec()
         float value;
     };
 
-    intersection void intersectPayload(ray_data RayPayload& payload [[payload]],
-                                       object_data ObjectPayload& objectPayload [[payload]]) {
+    void copyPayload(ray_data RayPayload& payload,
+                     object_data ObjectPayload& objectPayload) {
         payload.value = objectPayload.value;
     }
     """
     crossgl = convert(code)
 
-    assert "inout RayPayload payload @ray_data @payload" in crossgl
-    assert "inout ObjectPayload objectPayload @object_data @payload" in crossgl
+    assert "inout RayPayload payload @ray_data" in crossgl
+    assert "inout ObjectPayload objectPayload @object_data" in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "ray_data RayPayload& payload [[payload]]" in metal
-    assert "object_data ObjectPayload& objectPayload [[payload]]" in metal
+    assert "ray_data RayPayload& payload" in metal
+    assert "object_data ObjectPayload& objectPayload" in metal
     assert "thread RayPayload& payload" not in metal
     assert "thread ObjectPayload& objectPayload" not in metal
 
@@ -6873,7 +6959,8 @@ def test_codegen_sizeof_local_type_alias_does_not_leak_between_functions():
         """)
 
     assert "return 2;" in crossgl
-    assert "return sizeof(Scalar);" in crossgl
+    # An operand the importer cannot size keeps Metal's layout through metal_sizeof.
+    assert "return metal_sizeof(Scalar);" in crossgl
 
 
 def test_codegen_resolves_function_local_typedef_uses():
@@ -8427,12 +8514,19 @@ def test_codegen_payload_and_hit_attributes():
     closesthit void closest_hit(Payload& payload [[payload]],
                                 HitAttrib attr [[hit_attribute]]) { }
     """
-    result = convert(code)
-    assert "@payload" in result
-    assert "@hit_attribute" in result
+    # The importer used to print ray-tracing functions as plain helpers, dropping their qualifiers.
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    assert "Metal anyhit function 'any_hit' has no CrossGL import" in str(refusal.value)
+    assert "Metal closesthit function 'closest_hit' has no CrossGL import" in str(
+        refusal.value
+    )
 
 
-def test_codegen_mesh_object_io():
+def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
+    # A mesh function writes its outputs through a metal::mesh parameter and an object function dispatches mesh
+    # threadgroups through mesh_grid_properties; the importer used to print both verbatim as plain functions.
+    # tests/test_backend/test_metal/test_mesh_import.py covers the mesh functions it imports.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8445,14 +8539,20 @@ def test_codegen_mesh_object_io():
     mesh void mesh_main(threadgroup ObjPayload* payload [[payload]],
                         uint3 tid [[thread_position_in_threadgroup]]) { }
     """
-    result = convert(code)
-    assert "object_main" in result
-    assert "mesh_main" in result
-    assert "@payload" in result
-    assert "@gl_WorkGroupID" in result
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    assert (
+        "Metal object function 'object_main': payload 'payload' must be an object_data reference"
+        in str(refusal.value)
+    )
+    assert (
+        "Metal mesh function 'mesh_main' must take exactly one metal::mesh parameter, found 0"
+        in str(refusal.value)
+    )
 
 
-def test_codegen_mesh_output_functions():
+def test_codegen_mesh_function_calling_hlsl_mesh_intrinsics_is_refused():
+    # MSL has no SetMeshOutputCounts, SetVertex or SetPrimitive; a mesh function writes through metal::mesh.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8463,10 +8563,8 @@ def test_codegen_mesh_output_functions():
         SetPrimitive(0, 0);
     }
     """
-    result = convert(code)
-    assert "SetMeshOutputCounts" in result
-    assert "SetVertex" in result
-    assert "SetPrimitive" in result
+    with pytest.raises(MetalImportRefused, match="exactly one metal::mesh parameter"):
+        convert(code)
 
 
 def test_codegen_expands_preprocessor_define():
@@ -13222,7 +13320,11 @@ def test_codegen_component_updates_accept_enum_and_ptrdiff_contracts():
     assert f"uint {helper}(inout uvec4 value, uint lane, uint right)" in normalized
     assert f"{helper}(values, lane, LocalStep);" in normalized
     assert f"{helper}(values, lane, delta);" in normalized
-    assert f"{helper}_resource(values, First, lane, Delta);" in normalized
+    # Unscoped enumerators are written as CrossGL's scoped E::A.
+    assert (
+        f"{helper}_resource(values, ResourceIndex::First, lane, ResourceIndex::Delta);"
+        in normalized
+    )
     assert (
         f"uint {helper}_resource(device uvec4* data, "
         "uint element_index, uint lane, uint right)" in normalized

@@ -527,8 +527,22 @@ def test_codegen_ssbo_instance_arrays_use_structured_buffer_arrays():
     assert "writeBuffers[0].Store(" not in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
-    assert "array<const device int*, 2> readBuffers [[buffer(2)]]" in metal
-    assert "array<device int*, 2> writeBuffers [[buffer(4)]]" in metal
+    assert (
+        "const device int* readBuffers_0 [[buffer(2)]], const device int* readBuffers_1 [[buffer(3)]]"
+        in metal
+    )
+    assert (
+        "array<const device int*, 2> readBuffers = {readBuffers_0, readBuffers_1};"
+        in metal
+    )
+    assert (
+        "device int* writeBuffers_0 [[buffer(4)]], device int* writeBuffers_1 [[buffer(5)]]"
+        in metal
+    )
+    assert (
+        "array<device int*, 2> writeBuffers = {writeBuffers_0, writeBuffers_1};"
+        in metal
+    )
     assert "int value = readBuffers[1][0];" in metal
     assert "writeBuffers[0][0] = value + 1;" in metal
 
@@ -628,7 +642,14 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
-    assert "array<constant uint*, 2> layersLength [[buffer(4)]]" in metal
+    assert (
+        "constant uint* layersLength_0 [[buffer(4)]], constant uint* layersLength_1 [[buffer(5)]]"
+        in metal
+    )
+    assert (
+        "array<constant uint*, 2> layersLength = {layersLength_0, layersLength_1};"
+        in metal
+    )
     assert "len = valuesBlockLength[0];" in metal
     assert "layerLen = layersLength[1][0];" in metal
     assert "unsupported Metal buffer dimensions" not in metal
@@ -676,7 +697,14 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal
     assert "buffers[dynamicIndex][3] = value + 1;" in metal
-    assert "array<constant uint*, 2> buffersLength [[buffer(3)]]" in metal
+    assert (
+        "constant uint* buffersLength_0 [[buffer(3)]], constant uint* buffersLength_1 [[buffer(4)]]"
+        in metal
+    )
+    assert (
+        "array<constant uint*, 2> buffersLength = {buffersLength_0, buffersLength_1};"
+        in metal
+    )
     assert "len = buffersLength[dynamicIndex][0];" in metal
     assert "unsupported Metal buffer dimensions" not in metal
 
@@ -2629,7 +2657,8 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<device uchar*, 2> mixedBlocks [[buffer(72)]]) {
+    kernel void kernel_main(device uchar* mixedBlocks_0 [[buffer(72)]], device uchar* mixedBlocks_1 [[buffer(73)]]) {
+        array<device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
         uint i = (*reinterpret_cast<const device uint*>(mixedBlocks[1] + 0));
         float4 value = float4((*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
         float4 __crossgl_buffer_store_0 = value;
@@ -2699,7 +2728,8 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<const device uchar*, 2> readMixedBlocks [[buffer(73)]]) {
+    kernel void kernel_main(const device uchar* readMixedBlocks_0 [[buffer(73)]], const device uchar* readMixedBlocks_1 [[buffer(74)]]) {
+        array<const device uchar*, 2> readMixedBlocks = {readMixedBlocks_0, readMixedBlocks_1};
         __attribute__((unused)) float2x2 t = float2x2(float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 0)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 4))), float2((*reinterpret_cast<const device float*>(readMixedBlocks[1] + 8)), (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 12))));
         __attribute__((unused)) float value = (*reinterpret_cast<const device float*>(readMixedBlocks[1] + 16));
     }
@@ -2723,7 +2753,7 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer readMixedBlocks" not in hlsl
-    assert "device uchar* readMixedBlocks" not in metal
+    assert not re.search(r"(?<!const )device uchar\* readMixedBlocks", metal)
     assert normalize_codegen_snapshot(hlsl) == normalize_codegen_snapshot(expected_hlsl)
     assert normalize_codegen_snapshot(metal) == normalize_codegen_snapshot(
         expected_metal
@@ -2763,7 +2793,8 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(array<device uchar*, 3> unsizedMixed [[buffer(74)]]) {
+    kernel void kernel_main(device uchar* unsizedMixed_0 [[buffer(74)]], device uchar* unsizedMixed_1 [[buffer(75)]], device uchar* unsizedMixed_2 [[buffer(76)]]) {
+        array<device uchar*, 3> unsizedMixed = {unsizedMixed_0, unsizedMixed_1, unsizedMixed_2};
         uint i = (*reinterpret_cast<const device uint*>(unsizedMixed[2] + 0));
         __attribute__((unused)) float4 value = float4((*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(unsizedMixed[2] + (16 + i * 16 + 12))));
     }
@@ -2825,7 +2856,14 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_propagate_to_metal_helpers():
     assert "helperBlocks[2].Load2(0)" in hlsl
     assert "helperBlocks[2].Load((16 + i * 4))" in hlsl
 
-    assert "array<const device uchar*, 3> helperBlocks [[buffer(75)]]" in metal
+    assert (
+        "const device uchar* helperBlocks_0 [[buffer(75)]], const device uchar* helperBlocks_1 [[buffer(76)]], const device uchar* helperBlocks_2 [[buffer(77)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> helperBlocks = {helperBlocks_0, helperBlocks_1, helperBlocks_2};"
+        in metal
+    )
     assert "readValue(0u, helperBlocks)" in metal
     assert (
         "float readValue(uint i, array<const device uchar*, 3> helperBlocks)" in metal
@@ -2869,7 +2907,14 @@ def test_codegen_mixed_ssbo_helper_array_store_uses_indexed_byte_address_receive
     assert "writeValue(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "helperWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
-    assert "array<device uchar*, 3> helperWriteBlocks [[buffer(79)]]" in metal
+    assert (
+        "device uchar* helperWriteBlocks_0 [[buffer(79)]], device uchar* helperWriteBlocks_1 [[buffer(80)]], device uchar* helperWriteBlocks_2 [[buffer(81)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> helperWriteBlocks = {helperWriteBlocks_0, helperWriteBlocks_1, helperWriteBlocks_2};"
+        in metal
+    )
     assert "writeValue(i, float4(1.0), helperWriteBlocks);" in metal
     assert (
         "void writeValue(uint i, float4 value, "
@@ -2916,7 +2961,14 @@ def test_codegen_mixed_ssbo_helper_array_compound_store_uses_indexed_receiver():
         in hlsl
     )
 
-    assert "array<device uchar*, 2> helperCompoundBlocks [[buffer(80)]]" in metal
+    assert (
+        "device uchar* helperCompoundBlocks_0 [[buffer(80)]], device uchar* helperCompoundBlocks_1 [[buffer(81)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 2> helperCompoundBlocks = {helperCompoundBlocks_0, helperCompoundBlocks_1};"
+        in metal
+    )
     assert "addValue(i, helperCompoundBlocks);" in metal
     assert (
         "void addValue(uint i, array<device uchar*, 2> helperCompoundBlocks)" in metal
@@ -3009,7 +3061,14 @@ def test_codegen_mixed_ssbo_helper_matrix_array_store_uses_indexed_receiver():
         in hlsl
     )
 
-    assert "array<device uchar*, 3> helperMatrixBlocks [[buffer(82)]]" in metal
+    assert (
+        "device uchar* helperMatrixBlocks_0 [[buffer(82)]], device uchar* helperMatrixBlocks_1 [[buffer(83)]], device uchar* helperMatrixBlocks_2 [[buffer(84)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> helperMatrixBlocks = {helperMatrixBlocks_0, helperMatrixBlocks_1, helperMatrixBlocks_2};"
+        in metal
+    )
     assert "writeTransform(i, value, helperMatrixBlocks);" in metal
     assert (
         "void writeTransform(uint i, float4x4 value, "
@@ -3059,7 +3118,14 @@ def test_codegen_mixed_ssbo_helper_matrix_array_compound_store_uses_temp():
     )
     assert "unsupported HLSL GLSL buffer block matrix compound store" not in hlsl
 
-    assert "array<device uchar*, 2> helperMatrixCompoundBlocks [[buffer(83)]]" in metal
+    assert (
+        "device uchar* helperMatrixCompoundBlocks_0 [[buffer(83)]], device uchar* helperMatrixCompoundBlocks_1 [[buffer(84)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 2> helperMatrixCompoundBlocks = {helperMatrixCompoundBlocks_0, helperMatrixCompoundBlocks_1};"
+        in metal
+    )
     assert "addTransform(i, value, helperMatrixCompoundBlocks);" in metal
     assert (
         "void addTransform(uint i, float3x3 value, "
@@ -3188,7 +3254,14 @@ def test_codegen_mixed_ssbo_nested_helper_read_threads_metal_resource_array():
     assert "return leaf(i);" in hlsl
     assert "nestedReadBlocks[2].Load4((16 + i * 16))" in hlsl
 
-    assert "array<const device uchar*, 3> nestedReadBlocks [[buffer(86)]]" in metal
+    assert (
+        "const device uchar* nestedReadBlocks_0 [[buffer(86)]], const device uchar* nestedReadBlocks_1 [[buffer(87)]], const device uchar* nestedReadBlocks_2 [[buffer(88)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> nestedReadBlocks = {nestedReadBlocks_0, nestedReadBlocks_1, nestedReadBlocks_2};"
+        in metal
+    )
     assert "float4 value = middle(i, nestedReadBlocks);" in metal
     assert (
         "float4 leaf(uint i, array<const device uchar*, 3> nestedReadBlocks)" in metal
@@ -3239,7 +3312,14 @@ def test_codegen_mixed_ssbo_nested_helper_write_threads_metal_resource_array():
     assert "leaf(i, value);" in hlsl
     assert "nestedWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
-    assert "array<device uchar*, 3> nestedWriteBlocks [[buffer(87)]]" in metal
+    assert (
+        "device uchar* nestedWriteBlocks_0 [[buffer(87)]], device uchar* nestedWriteBlocks_1 [[buffer(88)]], device uchar* nestedWriteBlocks_2 [[buffer(89)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> nestedWriteBlocks = {nestedWriteBlocks_0, nestedWriteBlocks_1, nestedWriteBlocks_2};"
+        in metal
+    )
     assert "middle(i, float4(1.0), nestedWriteBlocks);" in metal
     assert (
         "void leaf(uint i, float4 value, array<device uchar*, 3> nestedWriteBlocks)"
@@ -3297,7 +3377,14 @@ def test_codegen_mixed_ssbo_nested_helper_matrix_compound_threads_resource_array
         in hlsl
     )
 
-    assert "array<device uchar*, 3> nestedMatrixBlocks [[buffer(88)]]" in metal
+    assert (
+        "device uchar* nestedMatrixBlocks_0 [[buffer(88)]], device uchar* nestedMatrixBlocks_1 [[buffer(89)]], device uchar* nestedMatrixBlocks_2 [[buffer(90)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 3> nestedMatrixBlocks = {nestedMatrixBlocks_0, nestedMatrixBlocks_1, nestedMatrixBlocks_2};"
+        in metal
+    )
     assert "middle(i, value, nestedMatrixBlocks);" in metal
     assert (
         "void leaf(uint i, float2x2 value, array<device uchar*, 3> nestedMatrixBlocks)"
@@ -3351,7 +3438,14 @@ def test_codegen_mixed_ssbo_explicit_readonly_block_array_parameter_lowers():
     assert "return asfloat(localBlocks[2].Load4((16 + i * 16)));" in hlsl
     assert "ParamMixedBlock localBlocks[]" not in hlsl
 
-    assert "array<const device uchar*, 3> blocks [[buffer(89)]]" in metal
+    assert (
+        "const device uchar* blocks_0 [[buffer(89)]], const device uchar* blocks_1 [[buffer(90)]], const device uchar* blocks_2 [[buffer(91)]]"
+        in metal
+    )
+    assert (
+        "array<const device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};"
+        in metal
+    )
     assert "float4 readFrom(array<const device uchar*, 3> localBlocks, uint i)" in metal
     assert "localBlocks[2] + (16 + i * 16 + 12)" in metal
     assert "ParamMixedBlock localBlocks[]" not in metal
@@ -3397,7 +3491,11 @@ def test_codegen_mixed_ssbo_explicit_writable_block_array_parameter_lowers():
     assert "localBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
     assert "ParamWriteBlock localBlocks[]" not in hlsl
 
-    assert "array<device uchar*, 3> blocks [[buffer(90)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(90)]], device uchar* blocks_1 [[buffer(91)]], device uchar* blocks_2 [[buffer(92)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert (
         "void writeTo(array<device uchar*, 3> localBlocks, uint i, float4 value)"
         in metal
@@ -3451,7 +3549,11 @@ def test_codegen_mixed_ssbo_explicit_matrix_block_array_parameter_compound_store
         in hlsl
     )
 
-    assert "array<device uchar*, 3> blocks [[buffer(91)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(91)]], device uchar* blocks_1 [[buffer(92)]], device uchar* blocks_2 [[buffer(93)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert (
         "void addTo(array<device uchar*, 3> localBlocks, uint i, float2x2 value)"
         in metal
@@ -3596,7 +3698,11 @@ def test_codegen_mixed_ssbo_explicit_single_block_parameter_forwards_array_eleme
         in hlsl
     )
 
-    assert "array<device uchar*, 3> blocks [[buffer(94)]]" in metal
+    assert (
+        "device uchar* blocks_0 [[buffer(94)]], device uchar* blocks_1 [[buffer(95)]], device uchar* blocks_2 [[buffer(96)]]"
+        in metal
+    )
+    assert "array<device uchar*, 3> blocks = {blocks_0, blocks_1, blocks_2};" in metal
     assert "void leaf(device uchar* localBlock, uint i, float2x2 value)" in metal
     assert "void middle(device uchar* localBlock, uint i, float2x2 value)" in metal
     assert "middle(blocks[2], i, value);" in metal
@@ -4900,7 +5006,8 @@ def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "textureSize(textures[4], 1)" in hlsl
-    assert "int2(textureQueryLevels(textures[2]))" in hlsl
+    # ivec2(int) splats; HLSL has no one-argument int2 constructor for a scalar.
+    assert "((int2)(textureQueryLevels(textures[2])))" in hlsl
     assert "result = leaf(textures, limit);" in hlsl
     assert "result = (result + leaf(textures, limit));" in hlsl
     assert "DoWhileNode(" not in hlsl
@@ -5028,7 +5135,7 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "imageSize(images[3])" in hlsl
-    assert "int2(textureSamples(images[1]))" in hlsl
+    assert "((int2)(textureSamples(images[1])))" in hlsl
     assert "imageSize(afterImage)" in hlsl
     assert "result = leaf(images, limit);" in hlsl
     assert "result = (result + leaf(images, limit));" in hlsl
@@ -15125,7 +15232,14 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_named_constant_size():
 
     assert "constant int BASE = 1;" in metal
     assert "constant int LAYER = BASE + 2;" in metal
-    assert "array<device uchar*, 4> constMixed [[buffer(76)]]" in metal
+    assert (
+        "device uchar* constMixed_0 [[buffer(76)]], device uchar* constMixed_1 [[buffer(77)]], device uchar* constMixed_2 [[buffer(78)]], device uchar* constMixed_3 [[buffer(79)]]"
+        in metal
+    )
+    assert (
+        "array<device uchar*, 4> constMixed = {constMixed_0, constMixed_1, constMixed_2, constMixed_3};"
+        in metal
+    )
     assert "constMixed[LAYER] + (16 + i * 16)" in metal
 
     assert "const int LAYER = (BASE + 2);" in glsl

@@ -1,7 +1,7 @@
 <!--
 What does this change and why? If it fixes an issue, write "Fixes #123".
-A change to translator or backend code that closes no issue needs this line
-outside the comment: Support issue traceability: no issue closed
+A change that people who install CrossTL would notice also adds a line to the
+[Unreleased] section of CHANGELOG.md.
 -->
 
 ## Testing

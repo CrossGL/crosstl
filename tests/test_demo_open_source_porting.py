@@ -727,6 +727,7 @@ def test_open_source_demo_compare_artifacts_fails_on_source_map_offset_drift(
         runner._compare_artifacts(case_dir, work_dir, ["cgl"])
     except SystemExit as exc:
         assert "shader.source-remap.json" in str(exc)
+        assert "run_demo.py --update --case case`" in str(exc)
     else:
         raise AssertionError("Expected source-map offset drift to fail verification")
 

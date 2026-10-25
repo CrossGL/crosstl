@@ -175,7 +175,7 @@ jobs:
           path: dist/
 
       - name: Publish distributions with repository token
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
