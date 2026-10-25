@@ -17,6 +17,7 @@ from crosstl.translator.semantics.interface_block_instances import (
     declare_interface_block_instances,
 )
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from tests.spirv_friendly_names import translate_spirv
 
 HAS_SPIRV_TOOLS = bool(shutil.which("spirv-as") and shutil.which("spirv-val"))
 HAS_GLSLANG = bool(shutil.which("glslangValidator"))
@@ -149,7 +150,7 @@ def _decorations(spirv, name):
 def test_interface_block_instances_become_spirv_variables(
     tmp_path, name, source, instances
 ):
-    spirv = crosstl.translate(_write(tmp_path, name, source), backend="vulkan")
+    spirv = translate_spirv(_write(tmp_path, name, source))
     for instance, type_prefix in instances.items():
         assert "Location 0" in _decorations(spirv, instance) or (
             "Location 2" in _decorations(spirv, instance)
@@ -170,7 +171,7 @@ def test_interface_block_instances_become_spirv_variables(
 
 
 def test_mesh_block_counts_follow_the_stage_layout(tmp_path):
-    spirv = crosstl.translate(_write(tmp_path, "shader.mesh", MESH), backend="vulkan")
+    spirv = translate_spirv(_write(tmp_path, "shader.mesh", MESH))
     # max_vertices = 4 * 2 * 2 and max_primitives = 2 * 2 * 2.
     assert "%_arr_Block_int_16 = OpTypeArray %Block %int_16" in spirv
     assert "%_arr_PrimitiveBlock_int_8 = OpTypeArray %PrimitiveBlock %int_8" in spirv
