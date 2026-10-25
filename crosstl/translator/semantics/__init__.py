@@ -84,6 +84,7 @@ from .stage_interface_structs import (
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -102,7 +103,12 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .vertex_input_positions import (
+    VertexInputPositionUnsupportedError,
+    attribute_vertex_input_positions,
+)
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
@@ -137,7 +143,9 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
+    "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "UndeclaredTypeError",
@@ -186,7 +194,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). A position built-in on a vertex input names the ``Position``
+    vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
     target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
@@ -209,7 +218,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
     (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
-    (:mod:`.array_parameters`). ``a.length()`` of a sized
+    (:mod:`.array_parameters`). For GLSL, an entry point's stage inputs and built-in values that its body writes are
+    copied into locals, since GLSL inputs are read-only (:mod:`.written_stage_inputs`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D and Vulkan
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
@@ -248,6 +258,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_static_locals(program, report.target)
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
@@ -258,6 +269,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     pass_builtin_inputs(program, report.target)
+    attribute_vertex_input_positions(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
@@ -278,6 +290,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
+    copy_written_stage_inputs(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
     bind_fixed_samplers(program, report.target)
     refuse_colour_attachment_inputs(program, report.target)

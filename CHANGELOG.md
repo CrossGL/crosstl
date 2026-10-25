@@ -7,9 +7,26 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 ### Breaking Changes
 
 - A type name that is neither built in nor declared by the program, as a structure, enumeration, alias, constant block or generic parameter, is refused with a typed error. Every generator used to copy it into the output.
+- WGSL output refuses 64-bit integers, doubles and bfloat16, the vectors and matrices built on them and conversions such as `double(x)`, with `WGSLNumericTypeUnsupportedError`. It used to narrow `double` to `f32` and `long` to `i32`, which changed host buffer layouts, or copy the type unchanged.
+- `buffer T name[]` and `buffer T name[N]` declare one storage buffer of `T` elements for every `T`, structures included, as Metal's `device T*` does. GLSL buffer block arrays (`buffer B { ... } name[N];`) keep their meaning as arrays of descriptors.
+- CrossGL `sizeof` of a scalar, a 2- or 4-component vector or a sized array is folded to a constant on Metal, HLSL and GLSL. Other operands are refused with `SizeofUnsupportedError`; `sizeof` used to be written out unchanged, so GLSL rejected it and HLSL and Metal measured with their own layout rules.
+- The Metal importer refuses `sinpi`, `cospi`, `tanpi`, `asinpi`, `acospi`, `atanpi` and `atan2pi`, which are exact at integers and half-integers where `sin(x * pi)` is not, and calls to functions that the source declares but never defines. Both used to reach every target as calls to undeclared functions.
+
+### Added
+
+- `crosstl doctor` lists, for each backend, the validation tools CrossTL looks for and which of them are on `PATH`. A validation that cannot run now names the missing tool.
+- CrossGL `textureResidency(read, texel)` and `textureResident(code)` query sparse texture residency on GLSL, Metal, HLSL and SPIR-V.
+- `metal_sizeof(x)` measures a type with Metal's layout rules. The Metal importer writes it for operands it cannot size, such as template parameters.
 
 ### Improved
 
+- WGSL output monomorphizes generic functions, passes `inout` and `out` parameters as pointers, copies written parameters into locals, binds every entry parameter with `@location` or `@builtin` and gives integer varyings `@interpolate(flat)`. Memory barriers, matrix-scalar `+`, `-` and `/`, `matrixCompMult`, `outerProduct`, `dot4add_i8packed` and `dot4add_u8packed` are lowered to WGSL instead of being copied.
+- Inline ray queries have one CrossGL spelling, the DXR method names, and translate between HLSL, GLSL and SPIR-V.
+- The Metal importer reads more of the MSL that real headers use: function templates deduce their arguments before applying defaults, partial specializations constrained with `enable_if` are selected, alias templates work as constructors, a local alias may reuse its template's name, `simd` type aliases work as constructors, an unscoped enumerator is found in the enclosing scope as in C++, and `powr` and `exp10` are lowered for other targets.
+- Metal sources keep their argument table indices as SPIR-V bindings, and their fixed sampler state becomes host samplers on Direct3D and Vulkan. Metal output binds arrays of HLSL structured buffers and GLSL storage blocks as one entry argument per element, as MSL requires. Vulkan subpass inputs become texture reads on targets without input attachments.
+- Generic functions deduce a type parameter from a vector argument, as in `pick(ivec2(1, 2))` for `T pick<T>(vec2<T> v)`, and generically spelled vectors such as `vec2<u16>` map to the right type on GLSL, HLSL and MSL.
+- The HLSL importer types shader-scope globals and keeps their initializers, and imports `[[vk::shader_record_ext]]` constant buffers as shader record blocks. The Slang importer keeps `groupshared` on globals.
+- Translating large sources is faster: the lexers pick token patterns by first character, and the Metal preprocessor and several lowering passes walk the program fewer times.
 - Metal output renames identifiers that MSL reads as keywords, such as `kernel`, `device`, `thread` and `half`, gives `gl_InstanceIndex` an `[[instance_id]]` input, binds a ray generation stage's launch index and size to the kernel grid and spells its ray flags as constants, and passes resources and module-scope groupshared values to mesh and object functions.
 - The Metal importer types matrix arithmetic, the `saturate` family and the results of texture methods, imports depth texture reads as the depth value, and keeps `[[attribute(n)]]` vertex inputs at location `n` on every target instead of renaming them to HLSL semantics.
 - SPIR-V output folds module-scope constant expressions exactly, rounding binary32 results after each operation, instead of emitting instructions that module scope cannot hold. Shading-rate built-ins, per-primitive mesh outputs and arrays of constant buffers are declared with their SPIR-V built-ins and capabilities.
@@ -25,6 +42,15 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - CUDA output writes CrossGL scalar casts such as `f64(x)` with C type names.
 - A program with several stages of one kind, such as a Metal library with several vertex functions, has every stage rewritten, not only the first.
 - Translating a malformed shader no longer takes time that grows much faster than its length.
+- An assignment used as a value keeps its own parentheses: `int f = (e = 4) + 1;` used to become `e = 4 + 1` on several targets, which assigns 5.
+- SPIR-V output short-circuits `&&`, `||` and `?:`. The right operand and both arms used to run unconditionally.
+- GLSL output declares `long`, `ulong`, `size_t` and `ptrdiff_t` as 64-bit integers instead of 32-bit ones, which changed arithmetic and block layouts; GLSL ES and WebGL refuse them. SPIR-V output converts `size_t(x)` and `ptrdiff_t(x)` and widens `uint` without sign extension.
+- 8- and 16-bit integer vector arithmetic wraps at its own width on GLSL and Metal, and Metal widens native `ushort2` and similar fields and buffer elements when it reads them.
+- Storage buffer arrays translate to GLSL, SPIR-V, HLSL, WGSL, Slang and Metal. Sized arrays on HLSL used to be `static` arrays whose stores never reached memory, and unsized arrays of structures were refused on HLSL and WGSL.
+- A GLSL entry point that writes one of its inputs, built-ins included, writes a local copy instead of the read-only input.
+- HLSL output stores bfloat16 vectors as per-lane `uint` payloads, writes `fwidthFine` and `fwidthCoarse` with fine and coarse derivatives, and the HLSL importer maps packed 8-bit structured buffer elements.
+- A scalar swizzle such as `s.xxx` becomes a vector constructor on Metal, WGSL and GLSL ES, which do not accept it.
+- Slang output reads `gl_NumWorkGroups` as `WorkgroupCount()`, and Metal output infers the type of a shader-scope `let` from its initializer.
 
 ---
 
