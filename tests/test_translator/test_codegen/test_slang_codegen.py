@@ -3108,6 +3108,127 @@ def test_glsl_fine_coarse_derivative_builtins_lower_to_slang_aliases():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_glsl_fine_coarse_fwidth_builtins_lower_to_slang_aliases(tmp_path):
+    code = """
+    shader BuiltinGap {
+        struct FragmentInput {
+            vec2 uv;
+        }
+        struct FragmentOutput {
+            vec4 color;
+        }
+        fragment {
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                let wFine = fwidthFine(input.uv);
+                let wCoarse = fwidthCoarse(input.uv);
+                output.color = vec4(wFine, wCoarse);
+                return output;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 wFine = fwidth_fine(input.uv);" in generated_code
+    assert "float2 wCoarse = fwidth_coarse(input.uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+    assert "auto wFine" not in generated_code
+    assert "auto wCoarse" not in generated_code
+
+    if shutil.which("slangc") is not None:
+        compile_generated_slang(generated_code, tmp_path, "fragment")
+
+
+def test_glsl_bit_manipulation_builtins_lower_to_slang_intrinsics(tmp_path):
+    code = """
+    shader BuiltinGap {
+        RWStructuredBuffer<int> iin @binding(0);
+        RWStructuredBuffer<uint> uin @binding(1);
+        RWStructuredBuffer<uint2> outp @binding(2);
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint idx = tid.x;
+                ivec2 sv = ivec2(iin[idx], iin[idx + 1u]);
+                uvec2 uv = uvec2(uin[idx], uin[idx + 1u]);
+                let popSigned = bitCount(sv);
+                let popScalar = bitCount(uin[idx]);
+                let msbSigned = findMSB(sv);
+                let lsbUnsigned = findLSB(uv);
+                let revSigned = bitfieldReverse(sv);
+                let revUnsigned = bitfieldReverse(uv);
+                outp[idx] = popSigned + uvec2(popScalar) + msbSigned + lsbUnsigned + uvec2(revSigned) + revUnsigned;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint2 popSigned = countbits(sv);" in generated_code
+    assert "uint popScalar = countbits(uin[idx]);" in generated_code
+    assert "uint2 msbSigned = firstbithigh(sv);" in generated_code
+    assert "uint2 lsbUnsigned = firstbitlow(uv);" in generated_code
+    assert "int2 revSigned = reversebits(sv);" in generated_code
+    assert "uint2 revUnsigned = reversebits(uv);" in generated_code
+    for glsl_name in ("bitCount(", "findMSB(", "findLSB(", "bitfieldReverse("):
+        assert glsl_name not in generated_code
+
+    if shutil.which("slangc") is not None:
+        compile_generated_slang(generated_code, tmp_path, "compute")
+
+
+def test_user_defined_bit_and_fwidth_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            int bitCount(int x) { return x + 1; }
+            int findMSB(int x) { return x + 2; }
+            int findLSB(int x) { return x + 3; }
+            int bitfieldReverse(int x) { return x + 4; }
+            float fwidthCoarse(float x) { return x + 5.0; }
+            float fwidthFine(float x) { return x + 6.0; }
+
+            void main() {
+                int a = bitCount(1);
+                int b = findMSB(2);
+                int c = findLSB(3);
+                int d = bitfieldReverse(4);
+                float e = fwidthCoarse(0.5);
+                float f = fwidthFine(0.25);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int a = bitCount(1);" in generated_code
+    assert "int b = findMSB(2);" in generated_code
+    assert "int c = findLSB(3);" in generated_code
+    assert "int d = bitfieldReverse(4);" in generated_code
+    assert "float e = fwidthCoarse(0.5);" in generated_code
+    assert "float f = fwidthFine(0.25);" in generated_code
+    for lowered in (
+        "countbits(",
+        "firstbithigh(",
+        "firstbitlow(",
+        "reversebits(",
+        "fwidth_coarse(",
+        "fwidth_fine(",
+    ):
+        assert lowered not in generated_code
+
+
 def test_user_defined_derivative_function_names_are_not_lowered():
     code = """
     shader BuiltinGap {

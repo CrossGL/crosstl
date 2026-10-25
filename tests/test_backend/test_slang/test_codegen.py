@@ -3903,6 +3903,48 @@ def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests()
     cgl_translator.parse(generated_code)
 
 
+def test_bit_manipulation_intrinsics_lower_to_crossgl_builtins_and_round_trip():
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint2> outp;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID)
+    {
+        uint i = id.x;
+        int2 a0 = int2(iin[i], iin[i + 1u]);
+        uint2 c = countbits(a0);
+        uint2 hi = firstbithigh(a0);
+        uint2 lo = firstbitlow(a0);
+        int2 rev = reversebits(a0);
+        uint qualified = hlsl::countbits(i) + hlsl::firstbithigh(i) + hlsl::firstbitlow(i) + hlsl::reversebits(i);
+        outp[i] = c + hi + lo + uint2(rev) + uint2(qualified, qualified);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uvec2 c = bitCount(a0);" in generated_code
+    assert "uvec2 hi = findMSB(a0);" in generated_code
+    assert "uvec2 lo = findLSB(a0);" in generated_code
+    assert "ivec2 rev = bitfieldReverse(a0);" in generated_code
+    assert (
+        "bitCount(i) + findMSB(i) + findLSB(i) + bitfieldReverse(i)" in generated_code
+    )
+    for slang_name in ("countbits(", "firstbithigh(", "firstbitlow(", "reversebits("):
+        assert slang_name not in generated_code
+
+    ast = cgl_translator.parse(generated_code)
+    from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+
+    round_tripped = SlangCodeGen().generate(ast)
+    assert "countbits(a0)" in round_tripped
+    assert "firstbithigh(a0)" in round_tripped
+    assert "firstbitlow(a0)" in round_tripped
+    assert "reversebits(a0)" in round_tripped
+
+
 def test_standalone_function_call_statement_codegen():
     code = """
     void helper(float x) {

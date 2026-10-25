@@ -346,12 +346,18 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.function_map = {
             "mix": "lerp",
             "fract": "frac",
+            "bitCount": "countbits",
+            "bitfieldReverse": "reversebits",
+            "findLSB": "firstbitlow",
+            "findMSB": "firstbithigh",
             "dFdx": "ddx",
             "dFdy": "ddy",
             "dFdxCoarse": "ddx_coarse",
             "dFdxFine": "ddx_fine",
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
+            "fwidthCoarse": "fwidth_coarse",
+            "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "floatBitsToInt": "asint",
@@ -8888,6 +8894,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
                 return self.array_element_type(array_type)
+            if self.is_structured_buffer_resource_type(array_type):
+                return self.structured_buffer_element_type(array_type)
             pointer_element_type = self.pointer_pointee_type_name(array_type)
             if pointer_element_type is not None:
                 return pointer_element_type
@@ -9094,6 +9102,8 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name in {
             "fract",
+            "bitfieldReverse",
+            "reversebits",
             "dFdx",
             "dFdy",
             "dFdxCoarse",
@@ -9101,6 +9111,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdyCoarse",
             "dFdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
+            "fwidth_coarse",
+            "fwidth_fine",
             "inversesqrt",
             "inverseSqrt",
         }:
@@ -9109,7 +9123,54 @@ class SlangCodeGen(LoweringRefusalMixin):
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
 
+        bit_query_type = self.slang_bit_query_result_type(func_name, args)
+        if bit_query_type is not None:
+            return bit_query_type
+
         return self.glsl_bitcast_result_type(func_name, args)
+
+    def slang_bit_query_result_type(self, func_name, args):
+        if (
+            func_name not in {
+                "bitCount",
+                "countbits",
+                "findLSB",
+                "firstbitlow",
+                "findMSB",
+                "firstbithigh",
+            }
+            or not args
+        ):
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            return None
+
+        mapped = self.convert_type(arg_type)
+        integer_scalars = {
+            "int",
+            "uint",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int64_t",
+            "uint64_t",
+        }
+        if mapped in integer_scalars:
+            return "uint"
+        for scalar in sorted(integer_scalars, key=len, reverse=True):
+            if mapped.startswith(scalar):
+                suffix = mapped[len(scalar) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"uint{suffix}"
+        vector_match = re.fullmatch(
+            r"vector<\s*([A-Za-z0-9_]+)\s*,\s*([234])\s*>", mapped
+        )
+        if vector_match and vector_match.group(1) in integer_scalars:
+            return f"uint{vector_match.group(2)}"
+        return None
 
     def glsl_bitcast_result_type(self, func_name, args):
         component_type = {
