@@ -23708,10 +23708,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {

@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from crosstl.translator.stage_utils import normalize_stage_name
 
+from ..import_refusals import SlangImportRefused
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -445,6 +446,10 @@ class SlangToCrossGLConverter:
             "uint2": "uvec2",
             "uint3": "uvec3",
             "uint4": "uvec4",
+            # Packed 8-bit vectors are plain 32-bit words in CrossGL, matching
+            # the HLSL importer and the uint results of pack_s8/pack_u8.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             "bool": "bool",
             "bool2": "bvec2",
             "bool3": "bvec3",
@@ -486,19 +491,45 @@ class SlangToCrossGLConverter:
             "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
+            "countbits": "bitCount",
             "ddx": "dFdx",
             "ddx_coarse": "dFdxCoarse",
             "ddx_fine": "dFdxFine",
             "ddy": "dFdy",
             "ddy_coarse": "dFdyCoarse",
             "ddy_fine": "dFdyFine",
+            "firstbithigh": "findMSB",
+            "firstbitlow": "findLSB",
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
             "fmod": "fmod",
             "lerp": "mix",
+            "reversebits": "bitfieldReverse",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
+            # HLSL barrier intrinsics, mapped the same way as the HLSL importer.
+            "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
+            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
+            # which orders buffer and image accesses as well.
+            "GroupMemoryBarrier": "memoryBarrierShared",
+            "DeviceMemoryBarrier": "deviceMemoryBarrier",
+            "AllMemoryBarrier": "allMemoryBarrier",
+        }
+        # A barrier with group sync that orders device memory releases the writes before it and acquires them
+        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
+        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
+        self.function_statement_sequences = {
+            "DeviceMemoryBarrierWithGroupSync": (
+                "deviceMemoryBarrier",
+                "workgroupExecutionBarrier",
+                "deviceMemoryBarrier",
+            ),
+            "AllMemoryBarrierWithGroupSync": (
+                "allMemoryBarrier",
+                "workgroupBarrier",
+                "allMemoryBarrier",
+            ),
         }
         self.user_function_names = set()
         self.function_name_map = {}
@@ -512,6 +543,7 @@ class SlangToCrossGLConverter:
         self.identifier_used_name_scopes = [set()]
         self.struct_member_name_maps = {}
         self.generated_temp_index = 0
+        self.vertex_input_structs = set()
 
         self.semantic_map = {
             # Vertex inputs position
@@ -582,9 +614,10 @@ class SlangToCrossGLConverter:
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
             "SV_PrimitiveID": "gl_PrimitiveID",
-            # Vertex outputs
-            "SV_Position": "Out_Position",
-            "SV_Position0": "Out_Position0",
+            # Vertex outputs. The clip position is the built-in, as the HLSL
+            # importer maps it; a fragment input is gl_FragCoord (map_semantic).
+            "SV_Position": "gl_Position",
+            "SV_Position0": "gl_Position",
             "SV_Position1": "Out_Position1",
             "SV_Position2": "Out_Position2",
             "SV_Position3": "Out_Position3",
@@ -663,6 +696,14 @@ class SlangToCrossGLConverter:
             *exported_functions,
         ]
         local_structs = self.collect_function_local_structs(functions)
+        exported_structs = [
+            exp.item
+            for exp in getattr(ast, "exports", [])
+            if isinstance(getattr(exp, "item", None), StructNode)
+        ]
+        self.vertex_input_structs = self.collect_vertex_input_structs(
+            functions, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
         self.function_name_map = self.collect_function_name_map(functions)
@@ -886,6 +927,59 @@ class SlangToCrossGLConverter:
         if semantic == "SV_POSITION":
             return "vertex"
         return None
+
+    @staticmethod
+    def is_position_semantic(semantic):
+        return re.fullmatch(r"SV_POSITION\d*", str(semantic or "").upper()) is not None
+
+    def collect_vertex_input_structs(self, functions, structs):
+        """Return the structs that entry points use only as vertex inputs.
+
+        A vertex input reads ``SV_Position`` as an ordinary attribute and every other stage interface as the
+        position built-in (DXC's signature interpretation table), so a member of these structs stays an attribute.
+        A CrossGL struct member or parameter carries one semantic, so an ``SV_Position`` that is both a vertex
+        input and a stage output is refused.
+        """
+        vertex_inputs = set()
+        other_uses = set()
+        reasons = []
+        for func in functions:
+            stage = self.effective_function_qualifier(func)
+            if not stage:
+                continue
+            other_uses.add(str(func.return_type))
+            for param in getattr(func, "params", []) or []:
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(param, "qualifiers", []) or []
+                }
+                if stage == "vertex" and "out" not in qualifiers:
+                    vertex_inputs.add(str(param.vtype))
+                if stage != "vertex" or qualifiers.intersection({"out", "inout"}):
+                    other_uses.add(str(param.vtype))
+                if (
+                    stage == "vertex"
+                    and "inout" in qualifiers
+                    and self.is_position_semantic(param.semantic)
+                ):
+                    reasons.append(
+                        f"inout vertex parameter {param.name} : {param.semantic} is an "
+                        "attribute as input and the position built-in as output"
+                    )
+        for struct in structs:
+            name = getattr(struct, "name", None)
+            if name not in vertex_inputs or name not in other_uses:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                if self.is_position_semantic(getattr(member, "semantic", None)):
+                    reasons.append(
+                        f"{name}.{member.name} : {member.semantic} is an attribute in "
+                        f"the vertex input {name} and the position built-in where "
+                        f"{name} is a stage output"
+                    )
+        if reasons:
+            raise SlangImportRefused(reasons)
+        return vertex_inputs - other_uses
 
     def format_import_path(self, path):
         path = str(path)
@@ -1229,6 +1323,12 @@ class SlangToCrossGLConverter:
             if sincos_statement is not None:
                 code += sincos_statement
                 continue
+            lowered_sequence = self.generate_function_call_statement_sequence(
+                stmt, indent
+            )
+            if lowered_sequence is not None:
+                code += lowered_sequence
+                continue
             if isinstance(stmt, ReturnNode):
                 code += self.generate_statement_label(stmt, indent)
                 code += self.generate_deferred_scope_exits(
@@ -1322,6 +1422,20 @@ class SlangToCrossGLConverter:
         for deferred_body in reversed(deferred_statements or []):
             code += self.generate_function_body(deferred_body, indent, is_main)
         return code
+
+    def generate_function_call_statement_sequence(self, stmt, indent=0):
+        if not isinstance(stmt, FunctionCallNode) or stmt.args:
+            return None
+        function_name, is_hlsl_namespace_builtin = self.canonical_function_call_name(
+            stmt.name
+        )
+        if not is_hlsl_namespace_builtin and stmt.name in self.user_function_names:
+            return None
+        sequence = self.function_statement_sequences.get(function_name)
+        if sequence is None:
+            return None
+        indent_text = "    " * indent
+        return "".join(f"{indent_text}{func_name}();\n" for func_name in sequence)
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt, FunctionCallNode):
@@ -1525,7 +1639,8 @@ class SlangToCrossGLConverter:
         )
         if getattr(member, "value", None) is not None:
             declaration += f" = {self.generate_expression(member.value)}"
-        semantic = self.map_semantic(member.semantic)
+        stage = "vertex" if struct_node.name in self.vertex_input_structs else None
+        semantic = self.map_semantic(member.semantic, stage)
         if semantic:
             declaration += f" {semantic}"
         return declaration
@@ -1997,6 +2112,11 @@ class SlangToCrossGLConverter:
             )
             if pointer_buffer_type:
                 return f"{pointer_buffer_type}{pointer_suffix}"
+            packed_buffer_type = self.map_packed_element_buffer_type(
+                slang_type, base_type
+            )
+            if packed_buffer_type:
+                return f"{packed_buffer_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2070,6 +2190,19 @@ class SlangToCrossGLConverter:
         if len(args) != 1 or "*" not in args[0]:
             return None
         return f"buffer<{self.map_type(args[0])}>"
+
+    def map_packed_element_buffer_type(self, slang_type, base_type):
+        # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+        # buffer of them is a structured buffer of uint, as in the HLSL importer.
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or args[0].strip() not in {
+            "int8_t4_packed",
+            "uint8_t4_packed",
+        }:
+            return None
+        return f"{base_type}<uint>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
@@ -2198,6 +2331,7 @@ class SlangToCrossGLConverter:
             or name in self.HLSL_NAMESPACE_BITCAST_BUILTINS
             or name in self.HLSL_NAMESPACE_PASSTHROUGH_BUILTINS
             or name in self.function_map
+            or name in self.function_statement_sequences
         )
 
     def generate_bitcast_intrinsic_call(
@@ -3251,6 +3385,19 @@ class SlangToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_vertex_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not self.is_position_semantic(semantic):
+            return False
+        if str(function_qualifier or "").lower() != "vertex":
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
     def is_fragment_coverage_input_parameter(
         self, semantic, function_qualifier=None, parameter=None
     ):
@@ -3286,6 +3433,12 @@ class SlangToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_vertex_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            # An ordinary vertex attribute, under the name it had before
+            # SV_Position mapped to gl_Position.
+            return f"@ Out_Position{str(semantic)[len('SV_Position'):]}"
         if self.is_fragment_coverage_input_parameter(
             semantic, function_qualifier, parameter
         ):

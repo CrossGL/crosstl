@@ -7,6 +7,9 @@ the helpers take their operands by value, so each argument is evaluated once.
 * ``matrixCompMult(x, y)`` multiplies column ``i`` of ``x`` by column ``i`` of ``y``.
 * ``outerProduct(c, r)`` with ``c`` a ``vecR`` and ``r`` a ``vecC`` is the ``matCxR`` whose column ``j`` is
   ``c * r[j]``.
+
+The componentwise matrix operators MSL lacks (``-m``, ``+`` and ``-`` with a scalar, a scalar divided by a
+matrix and one matrix divided by another, GLSL 4.60 section 5.9) get one helper per shape too.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import re
 __all__ = ["MetalMatrixBuiltins"]
 
 MATRIX_BUILTINS = frozenset({"matrixCompMult", "outerProduct"})
+_COMPONENTWISE_NAMES = {"+": "add", "-": "sub", "/": "div"}
 
 
 class MetalMatrixBuiltins:
@@ -176,6 +180,78 @@ class MetalMatrixBuiltins:
                 "}\n"
             )
         return name
+
+    def componentwise(self, operator, left_expr, right_expr, left, right):
+        """MSL for a componentwise matrix ``+``, ``-`` or ``/`` that MSL has no operator for, or ``None``.
+
+        GLSL defines ``+``, ``-`` and ``/`` componentwise for a matrix and a scalar and for two matrices of one
+        shape (GLSL 4.60 section 5.9). MSL only has ``+`` and ``-`` on two matrices and ``/`` by a scalar, so a
+        scalar ``+`` or ``-`` on either side, a scalar dividend and a matrix divisor go through a helper that
+        applies the operator to each column. ``left`` and ``right`` are the rendered operands.
+        """
+        name = _COMPONENTWISE_NAMES.get(operator)
+        if name is None:
+            return None
+        generator = self.generator
+        left_type = generator.map_type(
+            generator.expression_result_type(left_expr) or ""
+        )
+        right_type = generator.map_type(
+            generator.expression_result_type(right_expr) or ""
+        )
+        left_shape = generator.metal_matrix_dimensions(left_type)
+        right_shape = generator.metal_matrix_dimensions(right_type)
+        if left_shape is None and right_shape is None:
+            return None
+        if left_shape is not None and right_shape is not None:
+            if operator != "/" or left_shape != right_shape:
+                return None
+            shape = left_shape
+        else:
+            shape = left_shape or right_shape
+            scalar_type = right_type if left_shape is not None else left_type
+            if _component_width(scalar_type) != 1 or scalar_type == "bool":
+                return None
+            if operator == "/" and left_shape is not None:
+                return None
+        scalar, columns, rows = shape
+        matrix = f"{scalar}{columns}x{rows}"
+        x_type = matrix if left_shape is not None else scalar
+        y_type = matrix if right_shape is not None else scalar
+        helper = f"__crossgl_{name}_{x_type}_{y_type}"
+        if helper not in self.helpers:
+            x_column = "x[{0}]" if left_shape is not None else "x"
+            y_column = "y[{0}]" if right_shape is not None else "y"
+            columns_text = ", ".join(
+                f"{x_column.format(column)} {operator} {y_column.format(column)}"
+                for column in range(columns)
+            )
+            self.helpers[helper] = (
+                f"inline {matrix} {helper}({x_type} x, {y_type} y) {{\n"
+                f"    return {matrix}({columns_text});\n"
+                "}\n"
+            )
+        return f"{helper}({left}, {right})"
+
+    def negation(self, operand_expr, operand):
+        """MSL for ``-m`` on a matrix ``m``, which MSL has no operator for (GLSL 4.60 section 5.9), or ``None``."""
+        generator = self.generator
+        shape = generator.metal_matrix_dimensions(
+            generator.map_type(generator.expression_result_type(operand_expr) or "")
+        )
+        if shape is None:
+            return None
+        scalar, columns, rows = shape
+        matrix = f"{scalar}{columns}x{rows}"
+        helper = f"__crossgl_negate_{matrix}"
+        if helper not in self.helpers:
+            columns_text = ", ".join(f"-x[{column}]" for column in range(columns))
+            self.helpers[helper] = (
+                f"inline {matrix} {helper}({matrix} x) {{\n"
+                f"    return {matrix}({columns_text});\n"
+                "}\n"
+            )
+        return f"{helper}({operand})"
 
     def code(self):
         return "".join(self.helpers[name] for name in sorted(self.helpers))

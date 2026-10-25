@@ -32,6 +32,7 @@ from crosstl.translator.codegen.hip_codegen import (
     HipCodeGen,
     UnsupportedHIPAstNodeError,
 )
+from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -1268,6 +1269,94 @@ class TestHipCodeGen:
         assert "intBitsToFloat(" not in hip_code
         assert "uintBitsToFloat(" not in hip_code
 
+    def test_64bit_bitcast_builtins_lower_to_hip_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    double d = 1.0;
+                    int64_t l = 1;
+                    int64_t bits = doubleBitsToLong(d);
+                    double fromBits = longBitsToDouble(l);
+                    let inferredBits = doubleBitsToLong(d);
+                    let inferredFromBits = longBitsToDouble(l);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__double_as_longlong(d)" in hip_code
+        assert "__longlong_as_double(l)" in hip_code
+        assert "long long inferredBits = __double_as_longlong(d);" in hip_code
+        assert "double inferredFromBits = __longlong_as_double(l);" in hip_code
+        assert "doubleBitsToLong(" not in hip_code
+        assert "longBitsToDouble(" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            (
+                "dvec2 v = dvec2(1.0, 2.0);",
+                "int64_t bits = doubleBitsToLong(v);",
+                "doubleBitsToLong of double2",
+            ),
+            (
+                "i64vec2 v = i64vec2(1, 2);",
+                "double value = longBitsToDouble(v);",
+                "longBitsToDouble of i64vec2",
+            ),
+        ],
+    )
+    def test_64bit_bitcast_of_a_vector_is_refused(self, declaration, call, reason):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    {call}
+                }}
+            }}
+        }}
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match=reason) as refusal:
+            HipCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.hip-lowering-unsupported"
+
+    def test_64bit_bitcast_refusal_inside_a_match_arm_is_raised(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int mode = 1;
+                    dvec2 v = dvec2(1.0, 2.0);
+                    int64_t bits = match mode {
+                        0 => doubleBitsToLong(v),
+                        _ => int64_t(1),
+                    };
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match="doubleBitsToLong of double2"):
+            HipCodeGen().generate(ast)
+
     def test_hlsl_as_bitcast_aliases_lower_to_hip_intrinsics(self):
         source_code = """
         shader TestShader {
@@ -1507,6 +1596,10 @@ class TestHipCodeGen:
                 return value + 14u;
             }
 
+            uint countLeadingZeros(uint value) {
+                return value + 15u;
+            }
+
             compute {
                 void main(uint3 tid @ gl_GlobalInvocationID) {
                     uint a = bitCount(tid.x);
@@ -1517,6 +1610,7 @@ class TestHipCodeGen:
                     uint f = firstbitlow(tid.z);
                     uint g = findMSB(tid.x);
                     uint h = firstbithigh(tid.y);
+                    uint k = countLeadingZeros(tid.z);
                 }
             }
         }
@@ -1524,6 +1618,10 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+        assert "__device__ unsigned int countLeadingZeros(unsigned int value)" in (
+            hip_code
+        )
+        assert "unsigned int k = countLeadingZeros(" in hip_code
         assert "__device__ unsigned int bitCount(unsigned int value)" in hip_code
         assert "__device__ unsigned int countbits(unsigned int value)" in hip_code
         assert "__device__ unsigned int bitfieldReverse(unsigned int value)" in hip_code
@@ -1544,6 +1642,39 @@ class TestHipCodeGen:
         assert "__brev(" not in hip_code
         assert "__ffs(" not in hip_code
         assert "__clz(" not in hip_code
+
+    def test_count_leading_zeros_lowers_to_hip_clz_intrinsics(self, tmp_path):
+        source_code = """
+        shader Clz {
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* uin;
+                buffer int* outp;
+
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    int a0 = int(uin[i]);
+                    uint64_t w = uint64_t(uin[i]);
+                    int r = countLeadingZeros(a0);
+                    int r64 = countLeadingZeros(w);
+                    int cast64 = countLeadingZeros(uint64_t(i));
+                    int signedCast64 = countLeadingZeros(int64_t(i));
+                    ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                    outp[i] = r + r64 + cast64 + signedCast64 + v.x;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "int r = __clz(a0);" in hip_code
+        assert "int r64 = __clzll(w);" in hip_code
+        assert "int cast64 = __clzll(uint64_t(i));" in hip_code
+        assert "int signedCast64 = __clzll(int64_t(i));" in hip_code
+        assert "make_int2(__clz(value.x), __clz(value.y))" in hip_code
+        assert "= countLeadingZeros(" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_user_defined_rsqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """

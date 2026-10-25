@@ -9,6 +9,7 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 from __future__ import annotations
 
 from .base import ABSENT, C_FAMILY, Template
+from .composites import WEBGL as _COMPOSITES
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -45,6 +46,7 @@ _ABSENT = (
 WEBGL = {
     **C_FAMILY,
     **dict.fromkeys(_ABSENT, ABSENT),
+    **_COMPOSITES,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),

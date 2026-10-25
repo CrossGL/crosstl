@@ -17,6 +17,9 @@ import crosstl
 from crosstl.backend.Metal.default_samplers import is_default_sampler_local
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.translator.codegen.fixed_sampler_contracts import (
+    parse_fixed_sampler_contract,
+)
 from crosstl.translator.semantics.sampler_states import (
     FixedSamplerStateUnsupportedError,
 )
@@ -108,9 +111,18 @@ def test_vulkan_binds_the_default_state(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_opengl_refuses_the_default_state(tmp_path):
+def test_webgl_refuses_the_default_state(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
+        _translate(tmp_path, DEFAULT_SAMPLER, "webgl")
+
+
+def test_opengl_binds_the_default_state_through_a_sampler_object(tmp_path):
+    # The default MSL sampler state reaches OpenGL as a host-bound sampler-object record.
+    records = parse_fixed_sampler_contract(
         _translate(tmp_path, DEFAULT_SAMPLER, "opengl")
+    )
+    assert len(records) == 1
+    assert records[0]["uniforms"]
 
 
 def test_reassigned_sampler_stays_a_variable(tmp_path):

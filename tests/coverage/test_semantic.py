@@ -2,7 +2,7 @@ from collections import Counter
 
 import pytest
 
-from tools.coverage import semantic, validators
+from tools.coverage import semantic, spellings, validators
 from tools.coverage.model import Feature, Param, Signature, Type
 
 VEC2 = Type("float", (2,))
@@ -78,6 +78,19 @@ def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeyp
     assert semantic.lower(metal) == ("GLSL.std.450:Fma", "")
 
 
+@pytest.mark.parametrize(
+    ("language", "name", "instruction"),
+    [("metal", "fmin", "NMin"), ("cuda", "fmaxf", "NMax"), ("hip", "fmin", "NMin")],
+)
+def test_c_and_msl_fmin_and_fmax_share_the_nan_aware_instructions_id(
+    language, name, instruction
+):
+    feature = Feature(language, "function", name, None)
+    assert semantic.lower(feature) == (f"GLSL.std.450:{instruction}", "")
+    # Their probes call CrossGL's fmin and fmax, which are NaN-aware, rather than min and max, which need not be.
+    assert spellings.spelling(language, "fmin", {"min", "fmin"}) == "fmin"
+
+
 @pytest.mark.skipif(
     not validators.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
 )
@@ -93,6 +106,24 @@ def test_lower_names_spirv_features_directly_and_honours_curated_entries(monkeyp
 )
 def test_glsl_features_lower_to_their_instruction(feature, expected):
     assert semantic.lower(feature) == (expected, "")
+
+
+@pytest.mark.skipif(
+    not validators.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
+)
+def test_a_spirv_core_instruction_takes_the_id_of_its_glsl_call():
+    uvec2 = Type("uint", (2,))
+    call = glsl("lessThan", Type("bool", (2,)), uvec2, uvec2)
+    core = Feature(
+        "spirv",
+        "function",
+        "OpULessThan",
+        call.signature,
+        group="core-relational-and-logical",
+        crossgl="lessThan",
+        spelling="lessThan",
+    )
+    assert semantic.lower(core) == semantic.lower(call) == ("OpULessThan", "")
 
 
 BARRIERS = """

@@ -7,10 +7,12 @@ layout(location = 0) out vec4 fragColor;
 #endif
 vec3 tonemap(vec3 color);
 
+#ifdef GL_FRAGMENT_SHADER
 vec3 tonemap(vec3 color) {
     return color;
 }
 
+#endif
 #ifdef GL_FRAGMENT_SHADER
 // Fragment Shader
 void main() {

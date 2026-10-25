@@ -12482,7 +12482,8 @@ def test_translated_metal_function_constants_validate_as_opengl_spirv13(tmp_path
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in code
     assert "layout(constant_id = 20) const bool has_w = false;" in code
     assert "layout(constant_id = 21) const int mode = 2;" in code
