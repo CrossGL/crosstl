@@ -239,6 +239,7 @@ from .glsl_interface_block_io import (
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin
+from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -9243,6 +9244,8 @@ class GLSLCodeGen(
             not program_stage_names or "fragment" in program_stage_names
         )
         data_struct_nodes = []
+        # Stage inputs and outputs of structure type name the data structures, so they follow them.
+        stage_io_code = ""
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
@@ -9268,7 +9271,7 @@ class GLSLCodeGen(
                     or node.name in self.vertex_input_struct_names
                 ):
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_stage_input_declarations(node),
                             "vertex",
                         )
@@ -9283,7 +9286,7 @@ class GLSLCodeGen(
                 ):
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9292,7 +9295,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9301,14 +9304,14 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
                         emitted_io = True
                     if not emitted_io:
                         if emit_vertex_io and legacy_vertex_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
                             )
@@ -9325,7 +9328,7 @@ class GLSLCodeGen(
                 elif node.name in self.vertex_output_struct_names:
                     emitted_io = False
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9334,7 +9337,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9343,7 +9346,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9354,7 +9357,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSInput" and legacy_fragment_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9362,12 +9365,12 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_input_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
                         if node.name in self.fragment_output_struct_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_fragment_output_declarations(node),
                                 "fragment",
                             )
@@ -9382,7 +9385,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_output_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9390,7 +9393,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSOutput":
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9402,6 +9405,7 @@ class GLSLCodeGen(
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
+        code += stage_io_code
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -23296,6 +23300,7 @@ class GLSLCodeGen(
             if private_distance is not None:
                 code += private_distance
                 continue
+            refuse_nested_stage_builtins(self, member, "vertex", "output")
 
             layout = self.stage_io_layout_for_node(member)
             block = block_declared_stage_io(self, "out", member, output_name)
@@ -23333,6 +23338,7 @@ class GLSLCodeGen(
             input_name = self.fragment_input_member_name(member, node.name)
             if input_name is None:
                 continue
+            refuse_nested_stage_builtins(self, member, "fragment", "input")
 
             layout = self.stage_io_layout_for_node(member)
             member_type = self.member_type_name(member)
