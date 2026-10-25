@@ -315,9 +315,15 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
             f"{trip} fails without a typed diagnostic or {rejects}."
         )
     else:
+        # A SPIR-V translation of a NaN-aware instruction must also handle NaN (:mod:`.spirv_input`).
+        rejects = (
+            f"produces code that {tool} rejects or that ignores the NaN operands the feature's instruction handles"
+            if language == "spirv"
+            else f"produces code that {tool} rejects"
+        )
         what = (
             "CrossTL translates the generated CrossGL probe but fails without a typed diagnostic or "
-            f"produces code that {tool} rejects."
+            f"{rejects}."
         )
     first = features[0]
     executed = execution.found(first.get("detail") or "")

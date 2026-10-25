@@ -13,7 +13,14 @@ NMIN = Feature(
     "function",
     "NMin",
     Signature(VEC3, (Param(VEC3), Param(VEC3))),
-    note="NaN-aware min has no GLSL built-in",
+    crossgl="fmin",
+)
+NCLAMP = Feature(
+    "spirv",
+    "function",
+    "NClamp",
+    Signature(VEC3, (Param(VEC3), Param(VEC3), Param(VEC3))),
+    crossgl="fmin(fmax({}, {}), {})",
 )
 needs_glslang = pytest.mark.skipif(
     not (validators.can_lower("glsl") and validators.available("spirv")),
@@ -135,6 +142,30 @@ def test_a_round_trip_that_drops_the_instruction_is_wrong():
     )
     loop = Feature("spirv", "control-flow", "for-loop", None)
     assert spirv_input.dropped(loop, "") == ""
+
+
+def test_a_round_trip_may_write_nclamp_as_the_calls_it_is_defined_as():
+    nested = (
+        "%5 = OpExtInst %v3float %1 NMax %2 %3\n"
+        "%6 = OpExtInst %v3float %1 NMin %5 %4\n"
+    )
+    assert spirv_input.dropped(NCLAMP, nested) == ""
+    assert spirv_input.dropped(NCLAMP, nested.replace("NMax", "FMax")) == (
+        "the round trip no longer calls NClamp"
+    )
+
+
+def test_a_translation_of_a_nan_aware_instruction_must_handle_nan():
+    ignored = "%5 = OpExtInst %v3float %1 FMin %3 %4\n"
+    assert spirv_input.ignores_nan(NMIN, ignored) == (
+        "the translation calls no NMin and tests no operand for NaN"
+    )
+    assert spirv_input.ignores_nan(NMIN, ignored.replace("FMin", "NMin")) == ""
+    tested = "%6 = OpIsNan %v3bool %3\n" + ignored
+    assert spirv_input.ignores_nan(NMIN, tested) == ""
+    # FMin is the instruction of FMin itself.
+    fmin = Feature("spirv", "function", "FMin", NMIN.signature, crossgl="min")
+    assert spirv_input.ignores_nan(fmin, ignored) == ""
 
 
 def test_without_glslang_the_input_probes_are_untested(monkeypatch):
