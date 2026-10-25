@@ -1927,7 +1927,7 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
-def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
+def test_codegen_refuses_tensor_arm_uniforms_from_vulkan_samples():
     # Reduced from KhronosGroup/Vulkan-Samples
     # shaders/tensor_and_data_graph/compute_shaders_with_tensors/glsl/postprocessing.comp.
     code = textwrap.dedent("""
@@ -1952,12 +1952,12 @@ def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
         }
     """).strip()
 
-    crossgl = generate_crossgl(code, "compute")
+    # CrossGL has no tensor resource. Dropping the declarations left tensorReadARM naming an undeclared
+    # input_tensor in every target, so the import refuses them.
+    from crosstl.backend.GLSL.unsupported_types import GLSLTypeUnsupportedError
 
-    assert "tensorARM" not in crossgl
-    assert "cbuffer Uniforms" not in crossgl
-    assert "cbuffer push_constants @push_constant" in crossgl
-    assert "tensorReadARM(input_tensor, pixel_coords, value)" in crossgl
+    with pytest.raises(GLSLTypeUnsupportedError, match="tensorARM"):
+        generate_crossgl(code, "compute")
     assert "tensorWriteARM(output_tensor, pixel_coords, value)" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
