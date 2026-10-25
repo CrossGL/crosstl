@@ -147,15 +147,57 @@ def test_dispatch_artifact_identity_requires_complete_exact_variant_set(
             family, variants, hash_field=hash_field
         )
     else:
-        message = (
-            "identity is incomplete"
-            if mutation == "missing-identity"
-            else "identities changed"
-        )
+        message = {
+            "missing-identity": "identity is incomplete",
+            "hash": "pinned generatedHash changed",
+            "size": "pinned generatedSizeBytes changed",
+        }.get(mutation, "variants changed")
         with pytest.raises(module.PortingCheckError, match=message):
             module._require_directx_dispatch_generated_artifacts(
                 family, variants, hash_field=hash_field
             )
+
+
+@pytest.mark.parametrize("mutation", ["hash", "size", "missing-variant"])
+def test_dispatch_artifact_identity_reports_only_pin_drift(
+    monkeypatch, capsys, mutation
+):
+    module = _load_harness()
+    family, hash_field = "rms_norm", "normalizedSha256"
+    variants = {
+        name: {
+            "generatedHlsl": {
+                hash_field: identity["sha256"],
+                "sizeBytes": identity["sizeBytes"],
+            }
+        }
+        for name, identity in module.MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS[
+            family
+        ].items()
+    }
+    first = next(iter(variants))
+    if mutation == "hash":
+        variants[first]["generatedHlsl"][hash_field] = "0" * 64
+    elif mutation == "size":
+        variants[first]["generatedHlsl"]["sizeBytes"] += 1
+    else:
+        del variants[first]
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "report")
+
+    if mutation == "missing-variant":
+        # A changed variant set is a coverage change, never pin drift.
+        with pytest.raises(module.PortingCheckError, match="variants changed"):
+            module._require_directx_dispatch_generated_artifacts(
+                family, variants, hash_field=hash_field
+            )
+        return
+    module._require_directx_dispatch_generated_artifacts(
+        family, variants, hash_field=hash_field
+    )
+    drift = [
+        line for line in capsys.readouterr().err.splitlines() if "MLX-PIN-DRIFT" in line
+    ]
+    assert len(drift) == 1 and first in drift[0]
 
 
 def test_project_config_writer_emits_general_index_range_assertions(tmp_path):

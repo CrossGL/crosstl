@@ -2099,12 +2099,12 @@ def test_current_mlx_gated_delta_native_parity(
 
 
 def test_ci_requires_native_gated_delta_parity():
+    from tests import workflow_text
     from tests.ci_helpers import (
         CURRENT_PARITY_JOB,
         assert_workflow_triggers,
         current_parity_step,
     )
-    from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
     step = current_parity_step(
@@ -2129,7 +2129,7 @@ def test_ci_requires_native_gated_delta_parity():
     assert_workflow_triggers(
         workflow, "demos/integrations/mlx/tests/kernels/test_current_gated_delta.py"
     )
-    install = ci_coverage.workflow_job_step_section(
+    install = workflow_text.workflow_job_step_section(
         workflow, CURRENT_PARITY_JOB, "Install CrossTL"
     )
     # The reference and the checks run on numpy arrays.

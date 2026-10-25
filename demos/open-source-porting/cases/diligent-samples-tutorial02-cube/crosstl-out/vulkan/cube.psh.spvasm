@@ -15,7 +15,7 @@ OpName %21 "PSIn_Color"
 OpName %22 "Color"
 OpDecorate %13 Location 0
 OpDecorate %15 BuiltIn FragCoord
-OpDecorate %19 Location 0
+OpDecorate %19 Location 13
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

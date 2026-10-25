@@ -267,6 +267,100 @@ def test_bundle_writer_rejects_mismatch_and_duplicate_entries(tmp_path):
         bundles.write_bundle_entry(sources["first"], contract, "first", root)
 
 
+def _drifted_bundle(tmp_path):
+    """Return a contract whose ``first`` entry was exported with drifted bytes."""
+
+    contract, _, sources = _fixture(tmp_path)
+    sources["first"].write_text("kernel void first() { return; }\n")
+    root = tmp_path / "drifted"
+    for index, (name, source) in enumerate(sources.items()):
+        bundles.write_bundle_entry(
+            source, contract, name, root / f"shard-{index}", allow_drift=True
+        )
+    return contract, root, sources
+
+
+def test_bundle_writer_records_allowed_drift_with_the_replaced_pin(tmp_path):
+    contract, root, sources = _drifted_bundle(tmp_path)
+    pins = {
+        entry["entryPoint"]: entry
+        for entry in json.loads(contract.read_text())["entries"]
+    }
+    receipts = {
+        record["entryPoint"]: record
+        for record in (
+            json.loads(path.read_text()) for path in sorted(root.rglob("entry.json"))
+        )
+    }
+    data = sources["first"].read_bytes()
+    assert receipts["first"]["sha256"] == hashlib.sha256(data).hexdigest()
+    assert receipts["first"]["sizeBytes"] == len(data)
+    assert receipts["first"]["pinnedSha256"] == pins["first"]["sha256"]
+    assert receipts["first"]["pinnedSizeBytes"] == pins["first"]["sizeBytes"]
+    # An entry that still matches its pin records no drift fields.
+    assert "pinnedSha256" not in receipts["second"]
+    assert receipts["second"]["sha256"] == pins["second"]["sha256"]
+
+
+def test_bundle_compiles_drifted_entries_only_when_drift_is_allowed(tmp_path):
+    contract, root, sources = _drifted_bundle(tmp_path)
+    strict = bundles.compile_bundle(root, contract, tmp_path / "strict", _command())
+    assert strict["status"] == "failed"
+    assert "Bundle entry drifted from its pin: first" in strict["error"]
+
+    result = bundles.compile_bundle(
+        root, contract, tmp_path / "compiled", _command(), allow_drift=True
+    )
+    assert result["status"] == "passed", result
+    assert result["drifted"] == ["first"]
+    first = next(r for r in result["records"] if r["entryPoint"] == "first")
+    assert Path(first["compiledPath"]).read_bytes() == (
+        b"compiled:" + sources["first"].read_bytes()
+    )
+
+
+def test_bundle_rejects_tampered_drifted_entries(tmp_path):
+    contract, root, _ = _drifted_bundle(tmp_path)
+    receipt = next(
+        path
+        for path in root.rglob("entry.json")
+        if json.loads(path.read_text())["entryPoint"] == "first"
+    )
+    record = json.loads(receipt.read_text())
+    # The drifted bytes on disk must match the recorded identity.
+    (receipt.parent / record["artifact"]).write_text("kernel void first() {}\n// x\n")
+    result = bundles.compile_bundle(
+        root, contract, tmp_path / "compiled", _command(), allow_drift=True
+    )
+    assert result["status"] == "failed"
+    assert "Artifact" in result["error"] and "differs: first" in result["error"]
+
+    # A drift record must name the pin it replaces.
+    record["pinnedSha256"] = "0" * 64
+    receipt.write_text(json.dumps(record))
+    result = bundles.compile_bundle(
+        root, contract, tmp_path / "compiled-2", _command(), allow_drift=True
+    )
+    assert result["status"] == "failed"
+    assert "Bundle identity differs: first" in result["error"]
+
+
+def test_bundle_cli_allows_drift_only_on_request(tmp_path):
+    contract, root, _ = _drifted_bundle(tmp_path)
+    argv = [
+        "--bundle-root",
+        str(root),
+        "--contract",
+        str(contract),
+        "--compiler-command",
+        json.dumps(_command()),
+    ]
+    assert bundles.main([*argv, "--output-dir", str(tmp_path / "a")]) == 1
+    assert (
+        bundles.main([*argv, "--output-dir", str(tmp_path / "b"), "--allow-drift"]) == 0
+    )
+
+
 @pytest.mark.parametrize(
     "damage", ("empty", "duplicate", "hash", "size", "count", "requirements")
 )
