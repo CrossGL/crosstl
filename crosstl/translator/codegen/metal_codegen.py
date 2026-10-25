@@ -435,6 +435,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -6059,7 +6060,13 @@ class MetalCodeGen(
                     code += self.generate_return_wrapper_struct(return_wrapper)
                     return_type = return_wrapper["struct_name"]
                 self.current_function_return_wrapper = return_wrapper
-            code += f"fragment {return_type} {function_name}({params_str}) {{\n"
+            # MSL's [[early_fragment_tests]] precedes the fragment function (MSL 4.1 section 5.1.2).
+            early_tests = (
+                "[[early_fragment_tests]] "
+                if requests_early_fragment_tests(func, stage_node)
+                else ""
+            )
+            code += f"{early_tests}fragment {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func

@@ -4258,8 +4258,21 @@ class HLSLToCrossGLConverter(
         stage_entry=False,
     ):
         """Render one HLSL function node as a CrossGL function block."""
-        code = self.format_attributes(
-            getattr(func, "attributes", []), indent, skip_attribute_names
+        attributes = getattr(func, "attributes", []) or []
+        early_tests = any(
+            str(getattr(attribute, "name", "")).lower() == "earlydepthstencil"
+            for attribute in attributes
+        )
+        code = ""
+        if early_tests and getattr(func, "qualifier", None) == "fragment":
+            # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, as MSL's
+            # [[early_fragment_tests]] imports; it is not a semantic of the function.
+            code += "    " * indent + "layout(early_fragment_tests) in;\n"
+        code += self.format_attributes(
+            attributes,
+            indent,
+            set(skip_attribute_names or ())
+            | ({"earlydepthstencil"} if early_tests else set()),
         )
         precise_as_attribute = (
             self.function_precise_return_needs_attribute(func)

@@ -23727,6 +23727,7 @@ class GLSLCodeGen(
             return {
                 "name": mapped_semantic,
                 "declaration": "",
+                "type": output_type,
             }
 
         layout = mapped_semantic
@@ -23754,6 +23755,7 @@ class GLSLCodeGen(
         return {
             "name": output_name,
             "declaration": declaration,
+            "type": output_type,
         }
 
     def fragment_stage_output(self, func, shader_type):
@@ -23818,6 +23820,7 @@ class GLSLCodeGen(
         return {
             "name": output_name,
             "declaration": declaration,
+            "type": output_type,
         }
 
     def fragment_direct_output_key(self, mapped_semantic, layout, output_type):
@@ -25229,8 +25232,12 @@ class GLSLCodeGen(
                     )
                     value = values
                 else:
+                    # The entry is void in GLSL; its value converts to the output's type, as the source's
+                    # return converted it to the return type (an HLSL float returned as float4 splats).
                     value = self.generate_expression_with_expected(
-                        stmt.value, self.current_function_return_type
+                        stmt.value,
+                        self.current_stage_output.get("type")
+                        or self.current_function_return_type,
                     )
                 return (
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"

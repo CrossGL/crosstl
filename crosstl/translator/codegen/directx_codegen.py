@@ -500,6 +500,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
@@ -14082,6 +14083,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ]
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
+            if effective_shader_type == "fragment" and requests_early_fragment_tests(
+                func, stage_node
+            ):
+                code += "[earlydepthstencil]\n"
             function_name = entry_name or shader_map[effective_shader_type]
             code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
@@ -39184,6 +39189,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return str(value)
 
     def generate_hlsl_stage_attributes(self, func, shader_type, stage_node=None):
+        if shader_type == "fragment":
+            if requests_early_fragment_tests(func, stage_node):
+                return "[earlydepthstencil]\n"
+            return ""
         if shader_type not in {
             "geometry",
             "tessellation_control",
