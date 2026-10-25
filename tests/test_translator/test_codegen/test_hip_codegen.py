@@ -13764,3 +13764,34 @@ class TestHipCodeGen:
         spec_idx = hip_code.index("hipTextureObject_t specular;")
         amb_idx = hip_code.index("hipTextureObject_t ambient;")
         assert diff_idx < spec_idx < amb_idx
+
+
+def test_count_leading_zeros_lowers_to_hip_clz_intrinsics(tmp_path):
+    source_code = """
+    shader Clz {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer int* outp;
+
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int a0 = int(uin[i]);
+                uint64_t w = uint64_t(uin[i]);
+                int r = countLeadingZeros(a0);
+                int r64 = countLeadingZeros(w);
+                ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                outp[i] = r + r64 + v.x;
+            }
+        }
+    }
+    """
+
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "int r = __clz(a0);" in hip_code
+    assert "int r64 = __clzll(w);" in hip_code
+    assert "__clz(value.x), __clz(value.y)" in hip_code
+    assert "countLeadingZeros(a0)" not in hip_code
+    assert "countLeadingZeros(w)" not in hip_code
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
