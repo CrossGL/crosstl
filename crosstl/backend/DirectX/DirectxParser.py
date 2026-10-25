@@ -13,6 +13,7 @@ from ..common_ast import (
     PreprocessorNode,
     TextureSampleNode,
 )
+from ..switch_clauses import record_default_position
 from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
@@ -3442,6 +3443,7 @@ class HLSLParser:
 
         cases = []
         default_body = None
+        default_index = None
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "CASE":
@@ -3451,10 +3453,12 @@ class HLSLParser:
                 nested_default = getattr(case, "additional_default_body", None)
                 if nested_default is not None:
                     default_body = nested_default
+                    default_index = len(cases)
             elif self.current_token[0] == "DEFAULT":
                 self.eat("DEFAULT")
                 self.eat("COLON")
                 default_body = []
+                default_index = len(cases)
                 while self.current_token[0] not in [
                     "CASE",
                     "DEFAULT",
@@ -3478,7 +3482,9 @@ class HLSLParser:
                         default_body.append(stmt)
 
         self.eat("RBRACE")
-        return SwitchNode(condition, cases, default_body)
+        return record_default_position(
+            SwitchNode(condition, cases, default_body), default_index
+        )
 
     def parse_switch_case(self):
         self.eat("CASE")
