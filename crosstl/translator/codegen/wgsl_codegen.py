@@ -3355,7 +3355,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
-        if derivative_name is not None:
+        if derivative_name is not None and not self.is_user_function_name(
+            function_name
+        ):
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)

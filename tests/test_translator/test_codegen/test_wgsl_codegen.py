@@ -3367,3 +3367,28 @@ def test_wgsl_maps_glsl_imported_fine_and_coarse_fwidth(tmp_path):
     assert "fwidthFine(input.uv) + fwidthCoarse(input.uv)" in generated
     assert "fwidth_fine(" not in generated
     assert "fwidth_coarse(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize("name", ["fwidth_fine", "ddx_fine", "dFdx"])
+def test_wgsl_user_function_with_derivative_name_is_not_mapped(tmp_path, name):
+    shader = f"""
+    shader DerivativeShadowing {{
+        float {name}(float value) {{
+            return value + 1.0;
+        }}
+
+        fragment {{
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {{
+                float shifted = {name}(value);
+                return vec4(shifted, 0.0, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"fn {name}(value: f32) -> f32" in generated
+    assert f"var shifted: f32 = {name}(value);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)

@@ -1994,6 +1994,8 @@ class HLSLCodeGen(
         "fwidth": "fwidth",
         "fwidthCoarse": "ddx_coarse/ddy_coarse",
         "fwidthFine": "ddx_fine/ddy_fine",
+        "fwidth_coarse": "ddx_coarse/ddy_coarse",
+        "fwidth_fine": "ddx_fine/ddy_fine",
     }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,

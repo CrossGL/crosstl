@@ -6776,6 +6776,8 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "fwidth",
         "fwidthFine",
         "fwidthCoarse",
+        "fwidth_fine",
+        "fwidth_coarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
