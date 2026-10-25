@@ -1745,10 +1745,21 @@ class VulkanSPIRVCodeGen(
             return left / right
         return None
 
-    def image_offset_operand(self, offset_id: SpirvId) -> str:
+    def image_offset_operand(self, offset_id: SpirvId, *, gather: bool = False) -> str:
+        """``ConstOffset`` for a constant offset; otherwise ``Offset``, which Vulkan allows on gathers only.
+
+        Vulkan accepts a non-constant ``Offset`` image operand only on ``OpImage*Gather`` unless the
+        ``maintenance8`` feature is enabled (VUID-RuntimeSpirv-Offset-10213), so it is refused elsewhere, as GLSL
+        and HLSL refuse non-constant offsets of their sampling functions.
+        """
         if self.is_constant_instruction(offset_id):
             return f"ConstOffset %{offset_id.id}"
 
+        if not gather:
+            self.refuse_lowering(
+                "texture offset: a non-constant texel offset is valid only on gather operations "
+                "(Vulkan requires maintenance8 for others, VUID-RuntimeSpirv-Offset-10213)"
+            )
         self.require_capability("ImageGatherExtended")
         return f"Offset %{offset_id.id}"
 
@@ -5159,7 +5170,7 @@ class VulkanSPIRVCodeGen(
         if isinstance(image_operand, str):
             image_operands = f" {image_operand}"
         elif image_operand is not None:
-            image_operands = f" {self.image_offset_operand(image_operand)}"
+            image_operands = f" {self.image_offset_operand(image_operand, gather=True)}"
 
         id_value = self.get_id()
         self.emit(
@@ -6905,7 +6916,7 @@ class VulkanSPIRVCodeGen(
 
             id_value = self.get_id()
             image_operands = (
-                f" {self.image_offset_operand(extra_args[0])}"
+                f" {self.image_offset_operand(extra_args[0], gather=True)}"
                 if function_name == "textureGatherCompareOffset"
                 else ""
             )
