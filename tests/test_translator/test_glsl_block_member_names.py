@@ -1,4 +1,4 @@
-"""A flattened member of a named uniform block keeps its meaning when a function uses the same name."""
+"""A local named after a member of a named uniform block is renamed once the block is flattened."""
 
 import shutil
 import subprocess
@@ -27,20 +27,24 @@ def translate(tmp_path, backend):
     return crosstl.translate(str(path), backend=backend)
 
 
-def test_members_that_a_function_also_names_are_renamed(tmp_path):
+def test_locals_named_after_block_members_are_renamed(tmp_path):
     cgl = translate(tmp_path, "cgl")
-    # push.color used to become `color`, which read the local instead of the block member.
-    assert "vec4 Push_color;" in cgl and "color = (Push_color * 0.5);" in cgl
-    assert "mat4 Scene_model;" in cgl and "tint(Scene_model, color)" in cgl
-    # A member no function names keeps its name.
-    assert "int mode;" in cgl and "(mode == 1)" in cgl
+    # push.color used to become `color`, which read the local instead of the block member. The members keep
+    # their names (the host may bind them by name); the locals and parameters are renamed.
+    assert "vec4 color;" in cgl and "mat4 model;" in cgl
+    assert "vec4 color_2 = vec4(input.inUV, 0.0, 1.0);" in cgl
+    assert "color_2 = (color * 0.5);" in cgl
+    assert (
+        "vec4 tint(mat4 model_1, vec4 color_1)" in cgl and "(model_1 * color_1)" in cgl
+    )
+    assert "tint(model, color_2)" in cgl and "(mode == 1)" in cgl
 
 
 def test_hlsl_and_glsl_read_the_block_members(tmp_path):
     hlsl = translate(tmp_path, "directx")
-    assert "(Push_color * 0.5)" in hlsl
+    assert "(color * 0.5)" in hlsl and "color_2" in hlsl
     glsl = translate(tmp_path, "opengl")
-    assert "Push_color" in glsl
+    assert "(color * 0.5)" in glsl and "color_2" in glsl
     if shutil.which("glslangValidator"):
         (tmp_path / "out.frag").write_text(glsl)
         result = subprocess.run(

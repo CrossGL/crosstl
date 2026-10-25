@@ -9,7 +9,7 @@ from crosstl.translator.codegen.texture_lod_clamp import (
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
-from .block_member_names import unqualified_names
+from .block_member_names import instance_block_member_names, rename_shadowing_locals
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1347,7 +1347,6 @@ class GLSLToCrossGLConverter:
         self.anonymous_ssbo_member_instances = {}
         self.variable_type_scopes = [{}]
         self.flattened_uniform_block_instances = {}
-        self.unqualified_names = unqualified_names(node)
         self.collect_anonymous_ssbo_blocks(node)
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
@@ -2147,9 +2146,6 @@ class GLSLToCrossGLConverter:
     def cbuffer_field_output_names(self, block_name, uniforms, fields):
         output_names = {}
         block_seen = set()
-        # A member of a block with an instance name is read only through the instance, so a function may
-        # use its name for something else; flattened, the member needs a name of its own.
-        instance_named = bool(self.uniform_block_instance_names(block_name, uniforms))
         for field in fields:
             field_name = getattr(field, "name", None)
             if field_name is None:
@@ -2159,10 +2155,6 @@ class GLSLToCrossGLConverter:
             if (
                 output_name in self.emitted_cbuffer_member_names
                 or output_name in block_seen
-                or (
-                    instance_named
-                    and output_name in getattr(self, "unqualified_names", ())
-                )
             ):
                 output_name = self.unique_cbuffer_member_name(block_name, field_name)
             block_seen.add(output_name)
@@ -2615,7 +2607,7 @@ class GLSLToCrossGLConverter:
         self.local_vars = []
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
-        self.unqualified_names = unqualified_names(node)
+        rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
         self.task_payload_shared_names = {
             var.name
