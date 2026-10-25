@@ -17,6 +17,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
@@ -38,6 +39,12 @@ class OpenCLRecordSemanticError(ValueError):
         super().__init__(
             f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
         )
+
+
+class OpenCLAtomicOrderUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``*_explicit`` atomic whose memory order or scope CrossGL atomics cannot keep."""
+
+    code = CODE_PREFIX + "opencl-atomic-order-unsupported"
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -1054,14 +1061,52 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return len(elements)
         return None
 
+    # CrossGL atomics are relaxed and atomic at device scope (work-group scope on
+    # local memory), so an *_explicit atomic can drop its memory_order and
+    # memory_scope arguments only when it asks for no more than that.
+    OPENCL_ATOMIC_DEVICE_SCOPES = frozenset(
+        {
+            "memory_scope_work_item",
+            "memory_scope_sub_group",
+            "memory_scope_work_group",
+            "memory_scope_device",
+        }
+    )
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
+        node_args = list(node.args)
+        if node.operation.endswith("_explicit"):
+            node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node_args)]
         operation = self.OPENCL_ATOMIC_MAP.get(node.operation, node.operation)
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
         elif node.operation == "atomic_dec" and len(args) == 1:
             args.append("1")
         return f"{operation}({', '.join(args)})"
+
+    def opencl_relaxed_atomic_arguments(self, operation, args):
+        """The plain-form arguments of an ``*_explicit`` atomic, refusing an order or scope CrossGL cannot keep."""
+        arity, orders = (3, 2) if "compare_exchange" in operation else (2, 1)
+        if len(args) not in (arity + orders, arity + orders + 1):
+            raise OpenCLAtomicOrderUnsupportedError(
+                f"{operation} takes {arity + orders} or {arity + orders + 1} "
+                f"arguments, got {len(args)}"
+            )
+        names = [self.visit(arg).strip() for arg in args[arity:]]
+        for order in names[:orders]:
+            if order != "memory_order_relaxed":
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {order}: CrossGL atomics are relaxed, so "
+                    "only memory_order_relaxed keeps its ordering"
+                )
+        for scope in names[orders:]:
+            if scope not in self.OPENCL_ATOMIC_DEVICE_SCOPES:
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {scope}: CrossGL atomics are atomic at "
+                    "device scope at most"
+                )
+        return args[:arity]
 
     def format_opencl_builtin_call(self, func_name, args):
         if func_name == "get_global_size" and len(args) == 1:

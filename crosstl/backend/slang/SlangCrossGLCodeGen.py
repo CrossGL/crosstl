@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from crosstl.translator.stage_utils import normalize_stage_name
 
+from ..import_refusals import SlangImportRefused
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -490,17 +491,21 @@ class SlangToCrossGLConverter:
             "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
+            "countbits": "bitCount",
             "ddx": "dFdx",
             "ddx_coarse": "dFdxCoarse",
             "ddx_fine": "dFdxFine",
             "ddy": "dFdy",
             "ddy_coarse": "dFdyCoarse",
             "ddy_fine": "dFdyFine",
+            "firstbithigh": "findMSB",
+            "firstbitlow": "findLSB",
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
             "fmod": "fmod",
             "lerp": "mix",
+            "reversebits": "bitfieldReverse",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
             # HLSL barrier intrinsics, mapped the same way as the HLSL importer.
@@ -538,6 +543,7 @@ class SlangToCrossGLConverter:
         self.identifier_used_name_scopes = [set()]
         self.struct_member_name_maps = {}
         self.generated_temp_index = 0
+        self.vertex_input_structs = set()
 
         self.semantic_map = {
             # Vertex inputs position
@@ -608,9 +614,10 @@ class SlangToCrossGLConverter:
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
             "SV_PrimitiveID": "gl_PrimitiveID",
-            # Vertex outputs
-            "SV_Position": "Out_Position",
-            "SV_Position0": "Out_Position0",
+            # Vertex outputs. The clip position is the built-in, as the HLSL
+            # importer maps it; a fragment input is gl_FragCoord (map_semantic).
+            "SV_Position": "gl_Position",
+            "SV_Position0": "gl_Position",
             "SV_Position1": "Out_Position1",
             "SV_Position2": "Out_Position2",
             "SV_Position3": "Out_Position3",
@@ -689,6 +696,14 @@ class SlangToCrossGLConverter:
             *exported_functions,
         ]
         local_structs = self.collect_function_local_structs(functions)
+        exported_structs = [
+            exp.item
+            for exp in getattr(ast, "exports", [])
+            if isinstance(getattr(exp, "item", None), StructNode)
+        ]
+        self.vertex_input_structs = self.collect_vertex_input_structs(
+            functions, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
         self.function_name_map = self.collect_function_name_map(functions)
@@ -912,6 +927,59 @@ class SlangToCrossGLConverter:
         if semantic == "SV_POSITION":
             return "vertex"
         return None
+
+    @staticmethod
+    def is_position_semantic(semantic):
+        return re.fullmatch(r"SV_POSITION\d*", str(semantic or "").upper()) is not None
+
+    def collect_vertex_input_structs(self, functions, structs):
+        """Return the structs that entry points use only as vertex inputs.
+
+        A vertex input reads ``SV_Position`` as an ordinary attribute and every other stage interface as the
+        position built-in (DXC's signature interpretation table), so a member of these structs stays an attribute.
+        A CrossGL struct member or parameter carries one semantic, so an ``SV_Position`` that is both a vertex
+        input and a stage output is refused.
+        """
+        vertex_inputs = set()
+        other_uses = set()
+        reasons = []
+        for func in functions:
+            stage = self.effective_function_qualifier(func)
+            if not stage:
+                continue
+            other_uses.add(str(func.return_type))
+            for param in getattr(func, "params", []) or []:
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(param, "qualifiers", []) or []
+                }
+                if stage == "vertex" and "out" not in qualifiers:
+                    vertex_inputs.add(str(param.vtype))
+                if stage != "vertex" or qualifiers.intersection({"out", "inout"}):
+                    other_uses.add(str(param.vtype))
+                if (
+                    stage == "vertex"
+                    and "inout" in qualifiers
+                    and self.is_position_semantic(param.semantic)
+                ):
+                    reasons.append(
+                        f"inout vertex parameter {param.name} : {param.semantic} is an "
+                        "attribute as input and the position built-in as output"
+                    )
+        for struct in structs:
+            name = getattr(struct, "name", None)
+            if name not in vertex_inputs or name not in other_uses:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                if self.is_position_semantic(getattr(member, "semantic", None)):
+                    reasons.append(
+                        f"{name}.{member.name} : {member.semantic} is an attribute in "
+                        f"the vertex input {name} and the position built-in where "
+                        f"{name} is a stage output"
+                    )
+        if reasons:
+            raise SlangImportRefused(reasons)
+        return vertex_inputs - other_uses
 
     def format_import_path(self, path):
         path = str(path)
@@ -1571,7 +1639,8 @@ class SlangToCrossGLConverter:
         )
         if getattr(member, "value", None) is not None:
             declaration += f" = {self.generate_expression(member.value)}"
-        semantic = self.map_semantic(member.semantic)
+        stage = "vertex" if struct_node.name in self.vertex_input_structs else None
+        semantic = self.map_semantic(member.semantic, stage)
         if semantic:
             declaration += f" {semantic}"
         return declaration
@@ -3316,6 +3385,19 @@ class SlangToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_vertex_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not self.is_position_semantic(semantic):
+            return False
+        if str(function_qualifier or "").lower() != "vertex":
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
     def is_fragment_coverage_input_parameter(
         self, semantic, function_qualifier=None, parameter=None
     ):
@@ -3351,6 +3433,12 @@ class SlangToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_vertex_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            # An ordinary vertex attribute, under the name it had before
+            # SV_Position mapped to gl_Position.
+            return f"@ Out_Position{str(semantic)[len('SV_Position'):]}"
         if self.is_fragment_coverage_input_parameter(
             semantic, function_qualifier, parameter
         ):

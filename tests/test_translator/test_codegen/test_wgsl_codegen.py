@@ -749,6 +749,70 @@ def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
     ) in generated
 
 
+def test_wgsl_codegen_locates_slang_importer_target_semantics(tmp_path):
+    # The Slang importer spells SV_Target<n> as Out_Color<n>; n is the colour
+    # attachment, whatever the declaration order.
+    struct_shader = """
+    shader WGSLSlangTargetMembers {
+        struct FragmentOutput {
+            vec4 extra @ Out_Color1;
+            vec4 color @ Out_Color;
+        }
+        fragment {
+            FragmentOutput main(vec4 color @ Color0) {
+                FragmentOutput output;
+                output.color = color;
+                output.extra = color;
+                return output;
+            }
+        }
+    }
+    """
+    result_shader = """
+    shader WGSLSlangTargetResult {
+        fragment {
+            vec4 main(vec4 color @ Color0) @ Out_Color2 {
+                return color;
+            }
+        }
+    }
+    """
+
+    members = WGSLCodeGen().generate(parse_shader(struct_shader))
+    result = WGSLCodeGen().generate(parse_shader(result_shader))
+
+    assert "@location(1) extra: vec4<f32>," in members
+    assert "@location(0) color: vec4<f32>," in members
+    assert ") -> @location(2) vec4<f32> {" in result
+    validate_wgsl_with_naga(tmp_path, members)
+    validate_wgsl_with_naga(tmp_path, result)
+
+
+def test_wgsl_codegen_locates_slang_position_input_and_sv_target_result(tmp_path):
+    vertex_path = tmp_path / "vertex.slang"
+    vertex_path.write_text(
+        '[shader("vertex")]\n'
+        "float4 main(float3 position : POSITION) : SV_Position "
+        "{ return float4(position, 1.0); }\n",
+        encoding="utf-8",
+    )
+    fragment_path = tmp_path / "fragment.slang"
+    fragment_path.write_text(
+        '[shader("fragment")]\n'
+        "float4 main(float4 c : COLOR0) : SV_Target { return c; }\n",
+        encoding="utf-8",
+    )
+
+    vertex = crosstl.translate(str(vertex_path), backend="wgsl")
+    fragment = crosstl.translate(str(fragment_path), backend="wgsl")
+
+    assert "fn vertex_main(@location(0) position: vec3<f32>)" in vertex
+    assert (
+        "fn fragment_main(@location(13) c: vec4<f32>) -> @location(0) vec4<f32>"
+    ) in fragment
+    validate_wgsl_with_naga(tmp_path, fragment)
+
+
 def test_wgsl_codegen_emits_resource_address_spaces_and_bindings():
     shader = """
     shader WGSLResources {
@@ -1411,7 +1475,7 @@ def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
 
     assert "@group(2) @binding(4)\nvar<storage, read> values: array<f32>;" in generated
     assert (
-        "@group(0) @binding(5)\n"
+        "@group(0) @binding(0)\n"
         "var<storage, read_write> outValues: array<f32>;" in generated
     )
     assert "outValues[gid.x] = values[gid.x];" in generated
@@ -3147,3 +3211,30 @@ def test_wgsl_codegen_rejects_mismatched_matrix_comp_mult_operands():
         match=r"matrixCompMult\(\) operands to be two float matrices of the same type",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_two_argument_atan_lowers_to_atan2(tmp_path):
+    # WGSL atan() takes one argument; GLSL's two-argument atan(y, x) is atan2 (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                vec3 r = atan(a0, a0) + atan(a0);
+                float s = atan(fin[i], 2.0);
+                outp[i] = r + vec3(s);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "atan2(a0, a0)" in generated
+    assert "atan(a0)" in generated
+    assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
+    assert "atan(a0, a0)" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)

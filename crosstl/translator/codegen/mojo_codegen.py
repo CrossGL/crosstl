@@ -2828,7 +2828,7 @@ class MojoCodeGen:
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
             value_code = self.generate_expression(value, const_type, f"constant {name}")
-            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
+            code += f"comptime {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 
     def collect_function_return_types(self, ast):
@@ -3766,9 +3766,7 @@ class MojoCodeGen:
                     value_text = self.generate_expression(value)
                     literal_value = self.literal_int_value(value)
                     next_value = literal_value + 1 if literal_value is not None else 0
-                code += (
-                    f"alias {enum_constant_name(name, variant.name)} = {value_text}\n"
-                )
+                code += f"comptime {enum_constant_name(name, variant.name)} = {value_text}\n"
         return code + ("\n" if code else "")
 
     def generate_generic_payload_enum_structs(self):
@@ -5572,7 +5570,7 @@ class MojoCodeGen:
         )
         self.enum_types[node.name] = enum_type
 
-        code = f"alias {node.name} = {enum_type}\n"
+        code = f"comptime {node.name} = {enum_type}\n"
         next_value = 0
         local_aliases = {}
         local_values = {}
@@ -5601,7 +5599,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:
@@ -5661,7 +5659,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:

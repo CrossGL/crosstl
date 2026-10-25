@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import operators
+from . import composites, operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -151,6 +151,7 @@ HLSL = {
         "outp[i] = v.y;"
     ),
     **operators.HLSL,
+    **composites.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -474,6 +475,7 @@ WGSL = {
         "let m = mat2x2<f32>(fin[i], 1.0, 2.0, 3.0);\nlet v = m * vec2<f32>(1.0, fin[i]);\noutp[i] = v.y;"
     ),
     **operators.WGSL,
+    **composites.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

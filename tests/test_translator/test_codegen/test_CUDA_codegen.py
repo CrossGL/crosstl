@@ -4225,6 +4225,10 @@ class TestCudaCodeGen:
                 return value + 14u;
             }
 
+            uint countLeadingZeros(uint value) {
+                return value + 15u;
+            }
+
             compute {
                 void main(uint3 tid @ gl_GlobalInvocationID) {
                     uint a = bitCount(tid.x);
@@ -4235,6 +4239,7 @@ class TestCudaCodeGen:
                     uint f = firstbitlow(tid.z);
                     uint g = findMSB(tid.x);
                     uint h = firstbithigh(tid.y);
+                    uint k = countLeadingZeros(tid.z);
                 }
             }
         }
@@ -4242,6 +4247,8 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+        assert "__device__ uint countLeadingZeros(uint value)" in cuda_code
+        assert "uint k = countLeadingZeros(" in cuda_code
         assert "__device__ uint bitCount(uint value)" in cuda_code
         assert "__device__ uint countbits(uint value)" in cuda_code
         assert "__device__ uint bitfieldReverse(uint value)" in cuda_code
@@ -4262,6 +4269,38 @@ class TestCudaCodeGen:
         assert "__brev(" not in cuda_code
         assert "__ffs(" not in cuda_code
         assert "__clz(" not in cuda_code
+
+    def test_count_leading_zeros_lowers_to_cuda_clz_intrinsics(self, tmp_path):
+        source_code = """
+        shader Clz {
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* uin;
+                buffer int* outp;
+
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    int a0 = int(uin[i]);
+                    uint64_t w = uint64_t(uin[i]);
+                    int r = countLeadingZeros(a0);
+                    int r64 = countLeadingZeros(w);
+                    int cast64 = countLeadingZeros(u64(i));
+                    ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                    outp[i] = r + r64 + cast64 + v.x;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int r = __clz(a0);" in cuda_code
+        assert "int r64 = __clzll(w);" in cuda_code
+        assert "int cast64 = __clzll(static_cast<unsigned long long>(i));" in cuda_code
+        assert "make_int2(__clz(value.x), __clz(value.y))" in cuda_code
+        assert "= countLeadingZeros(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
         source_code = """
@@ -6938,6 +6977,108 @@ class TestCudaCodeGen:
 
         if shutil.which("nvcc") is not None:
             compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_scoped_atomics_emit_cuda_pointer_atomics(self, tmp_path):
+        source_code = """
+        shader ScopedAtomicsCUDA {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                buffer int* signedOut;
+                buffer float* floatOut;
+                void main() {
+                    shared uint2 vectorCounters[4];
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = atomicInc_block(outp[i], 7u);
+                    uint b = atomicDec_system(outp[i], 7u);
+                    uint c = atomicAdd_block(outp[i], 1u);
+                    uint d = atomicCAS_system(outp[i], a, b);
+                    int e = atomicMax_block(signedOut[i], -1);
+                    int f = atomicExch_system(signedOut[i], 2);
+                    float g = atomicAdd_system(floatOut[i], 1.0);
+                    int signedInc = atomicInc_block(signedOut[i], 1);
+                    uint missing = atomicInc_block(outp[i]);
+                    uint2 badVector = atomicAdd_system(
+                        vectorCounters[i],
+                        uint2(1u, 2u)
+                    );
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint a = atomicInc_block(&outp[i], 7u);" in cuda_code
+        assert "uint b = atomicDec_system(&outp[i], 7u);" in cuda_code
+        assert "uint c = atomicAdd_block(&outp[i], 1u);" in cuda_code
+        assert "uint d = atomicCAS_system(&outp[i], a, b);" in cuda_code
+        assert "int e = atomicMax_block(&signedOut[i], -1);" in cuda_code
+        assert "int f = atomicExch_system(&signedOut[i], 2);" in cuda_code
+        assert "float g = atomicAdd_system(&floatOut[i], 1.0);" in cuda_code
+        assert (
+            "int signedInc = /* unsupported CUDA atomic call: atomicInc_block on "
+            "int requires supported scalar uint target */ 0;" in cuda_code
+        )
+        assert (
+            "uint missing = /* unsupported CUDA atomic call: atomicInc_block "
+            "requires 2 argument(s) */ 0u;" in cuda_code
+        )
+        assert (
+            "uint2 badVector = /* unsupported CUDA atomic call: atomicAdd_system on "
+            "uint2 requires supported scalar int/uint/u64/float target */ "
+            "make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "_block(outp[" not in cuda_code
+        assert "_system(outp[" not in cuda_code
+        assert "_block(signedOut[" not in cuda_code
+        assert "_system(signedOut[" not in cuda_code
+
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        "intrinsic",
+        [
+            f"atomic{operation}{scope}"
+            for operation in (
+                "Add",
+                "Sub",
+                "Min",
+                "Max",
+                "And",
+                "Or",
+                "Xor",
+                "Inc",
+                "Dec",
+                "Exch",
+                "CAS",
+            )
+            for scope in ("_block", "_system")
+        ],
+    )
+    def test_every_scoped_atomic_takes_the_target_address(self, intrinsic):
+        operands = "a, b" if intrinsic.startswith("atomicCAS") else "a"
+        source_code = f"""
+        shader EveryScopedAtomicCUDA {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                void main() {{
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = 1u;
+                    uint b = 2u;
+                    uint old = {intrinsic}(outp[i], {operands});
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert f"uint old = {intrinsic}(&outp[i], {operands});" in cuda_code
 
     def test_plain_pointer_reference_atomics_emit_cuda_diagnostics(self, tmp_path):
         source_code = """
