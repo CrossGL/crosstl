@@ -224,8 +224,12 @@ def test_metal_header_parse_reads_atomic_functions():
 
 METAL_ATOMIC_LIST = """metal_atomic atomic_fetch_add_explicit int(inout int, int, memory_order)
 metal_atomic atomic_fetch_add int(inout int, int)
+metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)
 metal_atomic atomic_load_explicit int(inout int, memory_order)
+metal_atomic atomic_load int(inout int)
+metal_atomic atomic_store_explicit void(inout int, int, memory_order)
 metal_atomic atomic_max void(inout ulong, ulong)
+metal_atomic atomic_max_explicit void(inout ulong, ulong, memory_order)
 metal_compute threadgroup_barrier void(mem_flags)
 """
 
@@ -244,12 +248,25 @@ def test_metal_atomic_functions_call_glsl_atomics_from_crossgl():
     assert features["atomic_fetch_add"].crossgl == "atomicAdd"
     assert features["atomic_fetch_add"].counterpart is None
     assert features["atomic_max"].signature.params[0] == Param(Type("uint64"), "inout")
+    # Metal's 64-bit max and min return nothing, and CrossGL calls them atomicMax and atomicMin in either form.
+    wide = (Param(Type("uint64"), "inout"), Param(Type("uint64")))
+    for name in ("atomic_max", "atomic_max_explicit"):
+        assert features[name].crossgl == "atomicMax"
+        assert features[name].counterpart.params == wide
+        assert features[name].counterpart.result == Type.other("void")
     assert features["threadgroup_barrier"].crossgl == "barrier"
     assert features["threadgroup_barrier"].counterpart.params == ()
+    # CrossGL's relaxed load and store, which GLSL lacks, stand in for Metal's in either form.
+    for name in ("atomic_load_explicit", "atomic_load"):
+        assert features[name].crossgl == "atomicLoad"
+        assert features[name].counterpart.params == (Param(Type("int"), "inout"),)
+    store = features["atomic_store_explicit"]
+    assert store.crossgl == "atomicStore"
+    assert store.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
     # An operation CrossGL has only without a memory order is a gap, not an untested probe.
-    load = features["atomic_load_explicit"]
-    assert load.crossgl == ""
-    assert "memory order" in load.note
+    sub = features["atomic_fetch_sub_explicit"]
+    assert sub.crossgl == ""
+    assert "memory order" in sub.note
 
 
 def test_metal_list_records_its_toolchain():
@@ -493,6 +510,15 @@ vector<T, N> sin(vector<T, N> x)
     VECTOR_MAP_UNARY(T, N, sin, x);
 }
 
+[ForceInline]
+__func_extension<T : __BuiltinFloatingPointType, let N : int>
+fwd_diff(CoopVec<T, N>::__subscript::get)(
+    DifferentialPair<CoopVec<T, N>> self,
+    int index) -> DifferentialPair<T>
+{
+    return diffPair(self.p[index], reinterpret<T.Differential, T>(self.d[index]));
+}
+
 ${
 struct SlangAtomicOperationInfo
 {
@@ -560,6 +586,9 @@ SLANG_CORE = """
 __generic<T, U>
 [__unsafeForceInlineEarly]
 T bit_cast(U value);
+
+__intrinsic_op($(kIROp_StaticAssert))
+void static_assert(constexpr bool condition, NativeString errorMessage);
 """
 
 
@@ -580,7 +609,10 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
         "clip",
         "lerp",
         "sin",
+        "static_assert",
     ]
+    # A function extension, such as the derivative of CoopVec's subscript, declares no function of its own.
+    assert "fwd_diff" not in features
     assert features["bit_cast"].group == "core"
     assert features["sin"].group == "hlsl"
     # Generic functions are probed with two-component vectors when they have a vector overload.
@@ -591,6 +623,10 @@ def test_slang_reads_the_public_global_functions_of_the_core_module():
     assert add.params == (Param(Type("int"), "inout"), Param(Type("int")))
     assert features["lerp"].crossgl == "mix"
     assert features["WorkgroupCount"].signature.result == Type("uint", (3,))
+    assert features["static_assert"].signature.params == (
+        Param(Type("bool"), "condition"),
+        Param(STRING, "const"),
+    )
 
 
 def test_slang_spells_its_coarse_and_fine_fwidth_as_crossgl_does():
@@ -787,6 +823,30 @@ T floatCast<T:IFloatingPointCoopElement, U:IFloatingPointCoopElement>(U val);
     assert "float r = floatCast<float>(a0);" in probes.build(cast, "slang").source
 
 
+def test_slang_generic_type_parameters_nothing_fixes_are_untested():
+    text = """
+//@public:
+[ForceInline]
+bool usesNativeSpirvDescriptorHandle<T : IOpaqueDescriptor>()
+{
+    return false;
+}
+
+T getDescriptorFromExplicitHeapIndex<T:IOpaqueDescriptor>(uint2 handle);
+"""
+    features = by_name(slang.parse(text, ""))
+    query = features["usesNativeSpirvDescriptorHandle"]
+    assert (query.signature, query.spelling, query.target) == (None, "", "")
+    assert query.note == "no probe type for the generic parameter T : IOpaqueDescriptor"
+    with pytest.raises(
+        probes.ProbeError, match="no probe type for the generic parameter T"
+    ):
+        probes.build(query, "slang")
+    # The result names the parameter, so the probe reaches the descriptor type and reports that instead.
+    heap = features["getDescriptorFromExplicitHeapIndex"]
+    assert heap.signature is not None and heap.note == ""
+
+
 MOJO_MATH_INIT = """
 from std.utils.numerics import isnan, nan
 from .math import (
@@ -794,6 +854,7 @@ from .math import (
     floor,
     frexp,
     gcd,
+    mulwide,
     rsqrt,
     sqrt,
 )
@@ -845,6 +906,14 @@ def frexp[
 
 def gcd(m: Int, n: Int, /) -> Int:
     return m
+
+
+def mulwide(a: UInt32, b: UInt32) -> UInt64:
+    return UInt64(a) * UInt64(b)
+
+
+def mulwide(a: Int32, b: Int32) -> Int64:
+    return Int64(a) * Int64(b)
 """
 
 MOJO_NUMERICS = """
@@ -894,6 +963,7 @@ def test_mojo_reads_the_functions_the_packages_export():
         "frexp",
         "gcd",
         "isnan",
+        "mulwide",
         "nan",
         "pop_count",
         "rotate_bits_left",
@@ -913,6 +983,10 @@ def test_mojo_reads_the_functions_the_packages_export():
     assert features["pop_count"].crossgl == "bitCount"
     assert features["gcd"].signature == Signature(
         Type("int64"), (Param(Type("int64")), Param(Type("int64")))
+    )
+    # UInt64 is the unsigned 64-bit scalar, and the first of the two definitions is probed.
+    assert features["mulwide"].signature == Signature(
+        Type("uint64"), (Param(Type("uint")), Param(Type("uint")))
     )
     # frexp returns a pair the probe reads the first value of, and CrossGL writes it the way GLSL does.
     assert features["frexp"].signature.result == Type.other("StaticTuple[Float32, 2]")

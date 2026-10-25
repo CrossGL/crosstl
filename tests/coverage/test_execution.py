@@ -6,6 +6,7 @@ import pytest
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
 from tools.coverage import (
+    causes,
     execution,
     issues,
     probes,
@@ -77,11 +78,17 @@ def test_results_match_word_for_word_and_nan_matches_nan():
 
 
 def _fake_harness(
-    monkeypatch, translated_outcome, written, runtime="metal-apple", environments=None
+    monkeypatch,
+    translated_outcome,
+    written,
+    runtime="metal-apple",
+    environments=None,
+    message="",
 ):
     """Make run_suite report the native probe as run and the translation as ``translated_outcome``.
 
-    ``environments``, when given, collects the Vulkan environment of each run.
+    ``environments``, when given, collects the Vulkan environment of each run. ``message`` is what the runtime says
+    about the translation.
     """
 
     class Provided:
@@ -110,7 +117,10 @@ def _fake_harness(
                 words[:] = written
             if outcome in ("preserved", "memory-corruption"):
                 case.check(case.inputs, words)
-            records.append({"case": case.id, "runtime": runtime.id, "outcome": outcome})
+            record = {"case": case.id, "runtime": runtime.id, "outcome": outcome}
+            if role == "translated" and message:
+                record["execution"] = {"status": outcome, "message": message}
+            records.append(record)
         return records
 
     monkeypatch.setattr(harness, "run_suite", run_suite)
@@ -153,6 +163,163 @@ def test_a_translation_that_computes_otherwise_is_wrong(
     assert execution.found(result.detail) == (expected == "wrong")
 
 
+def test_a_rejected_translation_quotes_the_runtime(monkeypatch):
+    errors = "".join(
+        f"0:{line}(1): error: '{line}' : syntax error\n" for line in range(2, 12)
+    )
+    message = "GLSL Compiler failed\n\ncompute_shader\n==============\n" + errors
+    _fake_harness(monkeypatch, "driver-rejected", 0, message=message)
+    [result], _ = execution.run([supported()])
+    first, _, quoted = result.detail.partition("\n")
+    assert first == f"on metal-apple, the translation {execution.REJECTED}"
+    assert quoted.splitlines() == [
+        "GLSL Compiler failed",
+        "compute_shader",
+        "==============",
+        "0:2(1): error: '2' : syntax error",
+        "0:3(1): error: '3' : syntax error",
+        "0:4(1): error: '4' : syntax error",
+    ]
+    # The quote follows the first line, so it does not change the result's cause or its issue.
+    feature = {"name": "sin", "outcome": "wrong", "detail": result.detail}
+    assert causes.diagnostic(feature) == first
+    _fake_harness(monkeypatch, "driver-rejected", 0, message="x" * 2000)
+    [result], _ = execution.run([supported()])
+    quoted = result.detail.partition("\n")[2]
+    assert len(quoted) == 600 and quoted.endswith("…")
+
+
+# The native Metal probe with its buffers moved from slots 0 and 1, as a host binding the native probe's buffers
+# would not find them.
+REBOUND = NATIVE.replace("[[buffer(0)]]", "[[buffer(2)]]").replace(
+    "[[buffer(1)]]", "[[buffer(3)]]"
+)
+
+
+def test_rebinding_names_what_the_harness_cannot_bind(tmp_path):
+    native, rebound, broken = (tmp_path / f"{name}.metal" for name in "nrb")
+    native.write_text(NATIVE)
+    rebound.write_text(REBOUND)
+    broken.write_text("kernel void a() {}\nkernel void b() {}\n")
+    assert execution.rebinding("metal", native, native, False) == ""
+    assert (
+        execution.rebinding("metal", native, rebound, False)
+        == "Expected Metal buffer slots [0, 1], found [2, 3]"
+    )
+    # A native probe the harness cannot bind either is no evidence against the translation.
+    assert execution.rebinding("metal", broken, rebound, False) == ""
+
+
+@pytest.mark.parametrize("outcome", ["harness-error", "preserved"])
+def test_a_translation_that_binds_other_resources_is_wrong(monkeypatch, outcome):
+    _fake_harness(monkeypatch, outcome, 0)
+    [result], used = execution.run([supported(REBOUND)])
+    assert used == ["metal-apple"]
+    assert (result.outcome, result.runtime) == ("wrong", "metal-apple")
+    assert result.detail == (
+        f"on metal-apple, the translation {execution.REBOUND}\n"
+        "Expected Metal buffer slots [0, 1], found [2, 3]"
+    )
+    assert execution.found(result.detail)
+
+
+def test_a_rebound_translation_keeps_its_result_when_the_native_probe_does_not_run(
+    monkeypatch,
+):
+    _fake_harness(monkeypatch, "harness-error", 0)
+    original = harness.run_suite
+
+    def native_fails(*args, **kwargs):
+        records = original(*args, **kwargs)
+        return [dict(record, outcome="timeout") for record in records]
+
+    monkeypatch.setattr(harness, "run_suite", native_fails)
+    [result], _ = execution.run([supported(REBOUND)])
+    assert (result.outcome, result.runtime) == ("supported", "")
+
+
+# A Metal probe that scales its input by the first float of a constants block, as the uniform-buffer probe does.
+SCALED = """#include <metal_stdlib>
+using namespace metal;
+struct Params {
+    float scale;
+};
+kernel void probe(device float* fin [[buffer(0)]], device float* outp [[buffer(1)]],
+                  uint3 id [[thread_position_in_grid]], constant Params& params [[buffer(3)]]) {
+    uint i = id.x;
+    outp[i] = fin[i] * params.scale;
+}
+"""
+
+
+def _constants_given(monkeypatch):
+    """Collect the constants block of every case the fake harness runs, by case id."""
+    given = {}
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        given.update((case.id, case.constants) for case in cases)
+        return original(cases, *args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    return given
+
+
+def test_a_probe_that_declares_a_constants_block_gets_one(monkeypatch, tmp_path):
+    _fake_harness(monkeypatch, "preserved", 0)
+    given = _constants_given(monkeypatch)
+    [scaled, plain], _ = execution.run(
+        [
+            Result(SIN, "output", "supported", sources=(SCALED, SCALED)),
+            supported(),
+        ]
+    )
+    assert scaled.outcome == plain.outcome == "supported"
+    assert given == {
+        "00000-native": execution.CONSTANTS,
+        "00000-translated": execution.CONSTANTS,
+        "00001-native": None,
+        "00001-translated": None,
+    }
+    assert np.frombuffer(execution.CONSTANTS, np.float32).tolist() == [
+        2.5,
+        -1.75,
+        3.25,
+        0.5,
+    ]
+    path = tmp_path / "scaled.metal"
+    path.write_text(SCALED)
+    assert execution.declares_constants("metal", path)
+    path.write_text(NATIVE)
+    assert not execution.declares_constants("metal", path)
+
+
+def test_a_translation_without_the_native_constants_block_is_wrong(monkeypatch):
+    _fake_harness(monkeypatch, "preserved", 0)
+    [result], _ = execution.run(
+        [Result(SIN, "output", "supported", sources=(SCALED, NATIVE))]
+    )
+    assert result.outcome == "wrong"
+    assert result.detail.startswith(
+        f"on metal-apple, the translation {execution.REBOUND}\n"
+    )
+    assert "Expected one constants block" in result.detail
+
+
+@pytest.mark.skipif(not metal_runs(), reason="no Metal runtime")
+def test_metal_reads_the_constants_block_at_the_translation_offsets():
+    shifted = SCALED.replace("float scale;", "float pad;\n    float scale;")
+    (same, other), used = execution.run(
+        [
+            Result(SIN, "output", "supported", sources=(SCALED, SCALED)),
+            Result(SIN, "output", "supported", sources=(SCALED, shifted)),
+        ]
+    )
+    assert used == ["metal-apple"]
+    assert (same.outcome, same.runtime) == ("supported", "metal-apple")
+    assert other.outcome == "wrong" and execution.DIVERGED in other.detail
+
+
 def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
     assert execution.runnable("glsl", "#version 460\nvoid main() {}\n") == (
         "#version 450 core\nvoid main() {}\n"
@@ -161,22 +328,121 @@ def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
     assert execution.runnable("metal", NATIVE) == NATIVE
 
 
-@pytest.mark.parametrize(
-    ("declared", "expected"),
-    [("#version 460", "supported"), ("#version 450 core", "wrong")],
-)
-def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
-    monkeypatch, declared, expected
-):
-    _fake_harness(monkeypatch, "driver-rejected", 0, "opengl-llvmpipe")
+def test_glsl_460_group_votes_run_through_arb_shader_group_vote():
+    source = "#version 460\nvoid main() { bool r = allInvocationsEqual (b) || anyInvocation(c); }\n"
+    assert execution.runnable("glsl", source) == (
+        "#version 450 core\n#extension GL_ARB_shader_group_vote : require\n"
+        "void main() { bool r = allInvocationsEqualARB (b) || anyInvocationARB(c); }\n"
+    )
+    # GLSL 4.50 has no unsuffixed vote functions, so a source that declares 4.50 runs as written.
+    written = "#version 450 core\nvoid main() { bool r = allInvocations(b); }\n"
+    assert execution.runnable("glsl", written) == written
+
+
+def _glsl(declared="#version 460"):
     feature = Feature("glsl", "function", "sin", SIN.signature, crossgl="sin")
     native = probes.build(feature, "glsl").source
     assert native.startswith("#version 460\n")
     translated = native.replace("#version 460", declared, 1)
-    probe = Result(feature, "input", "supported", sources=(native, translated))
-    [result], used = execution.run([probe])
-    assert used == ["opengl-llvmpipe"]
+    return Result(feature, "input", "supported", sources=(native, translated))
+
+
+def _opengl_then_vulkan(monkeypatch, outcomes, written=0):
+    """Run GLSL on llvmpipe and SPIR-V on lavapipe, giving each probe ``outcomes[(target, role)]``, or "preserved".
+
+    A translation that runs as SPIR-V writes ``written``. Returns the targets of the runs, in order.
+    """
+
+    class Provided:
+        available = True
+
+    on = {
+        "glsl": runtimes.RUNTIMES["opengl-llvmpipe"],
+        "spirv": runtimes.RUNTIMES["vulkan-lavapipe"],
+    }
+    monkeypatch.setattr(
+        harness,
+        "select_runtimes",
+        lambda spec, targets: {t: [(on[t], Provided())] for t in targets},
+    )
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        execution, "as_spirv", lambda language, source: f"; {language} as SPIR-V\n"
+    )
+    ran = []
+
+    def run_suite(
+        cases, targets, configs, selection, root, *, reference=False, environment
+    ):
+        [target] = targets
+        ran.append(target)
+        records = []
+        for case in cases:
+            role = case.id.split("-")[1]
+            outcome = outcomes.get((target, role), "preserved")
+            words = np.zeros(case.out_count, dtype=np.uint32)
+            if role == "translated" and target == "spirv":
+                words[:] = written
+            if outcome == "preserved":
+                case.check(case.inputs, words)
+            records.append(
+                {"case": case.id, "runtime": on[target].id, "outcome": outcome}
+            )
+        return records
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    return ran
+
+
+@pytest.mark.parametrize(
+    ("declared", "ran", "expected"),
+    [
+        # llvmpipe compiles a 4.60 translation as 4.50, so its rejection decides nothing and both run on Vulkan.
+        ("#version 460", ["glsl", "spirv"], "supported"),
+        ("#version 450 core", ["glsl"], "wrong"),
+    ],
+)
+def test_a_rejected_glsl_translation_is_wrong_unless_it_declares_460(
+    monkeypatch, declared, ran, expected
+):
+    targets = _opengl_then_vulkan(
+        monkeypatch, {("glsl", "translated"): "driver-rejected"}
+    )
+    [result], used = execution.run([_glsl(declared)])
+    assert targets == ran
     assert result.outcome == expected
+    assert used == ["opengl-llvmpipe", "vulkan-lavapipe"][: len(ran)]
+
+
+@pytest.mark.parametrize("rejection", ["driver-rejected", "invalid"])
+@pytest.mark.parametrize(("written", "expected"), [(0, "supported"), (1, "wrong")])
+def test_glsl_probes_llvmpipe_rejects_run_as_spirv_on_vulkan(
+    monkeypatch, rejection, written, expected
+):
+    targets = _opengl_then_vulkan(monkeypatch, {("glsl", "native"): rejection}, written)
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl", "spirv"]
+    assert used == ["opengl-llvmpipe", "vulkan-lavapipe"]
+    assert (result.outcome, result.runtime) == (expected, "vulkan-lavapipe")
+    detail = f"on vulkan-lavapipe as SPIR-V from glslangValidator, the translation {execution.DIVERGED}"
+    assert result.detail.startswith(detail) == (expected == "wrong")
+    assert execution.found(result.detail) == (expected == "wrong")
+
+
+def test_a_glsl_probe_glslang_cannot_lower_keeps_its_validation_result(monkeypatch):
+    targets = _opengl_then_vulkan(monkeypatch, {("glsl", "native"): "driver-rejected"})
+    monkeypatch.setattr(execution, "as_spirv", lambda language, source: "")
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl"]
+    assert used == ["opengl-llvmpipe"]
+    assert result.outcome == "supported" and not result.runtime
+
+
+def test_a_glsl_probe_llvmpipe_runs_does_not_run_again(monkeypatch):
+    targets = _opengl_then_vulkan(monkeypatch, {}, written=1)
+    [result], used = execution.run([_glsl()])
+    assert targets == ["glsl"] and used == ["opengl-llvmpipe"]
+    assert (result.outcome, result.runtime) == ("supported", "opengl-llvmpipe")
 
 
 def _hlsl(translated=None):
@@ -346,6 +612,59 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     assert execution.as_spirv(language, "not a shader") == ""
 
 
+COUNTED = """\
+               OpEntryPoint GLCompute %main "main" %id %counter_var_outp
+               OpName %type_ACSBuffer_counter "type.ACSBuffer.counter"
+               OpName %counter_var_outp "counter.var.outp"
+               OpDecorate %outp Binding 1
+               OpDecorate %counter_var_outp DescriptorSet 0
+               OpDecorate %counter_var_outp Binding 2
+%type_ACSBuffer_counter = OpTypeStruct %int
+%_ptr_Uniform_type_ACSBuffer_counter = OpTypePointer Uniform %type_ACSBuffer_counter
+%counter_var_outp = OpVariable %_ptr_Uniform_type_ACSBuffer_counter Uniform
+       %outp = OpVariable %_ptr_Uniform_float Uniform
+"""
+
+
+def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
+    # DXC declares one for a RWStructuredBuffer a function takes; the host binds no such buffer.
+    kept = execution.without_unused_counters(COUNTED)
+    assert "counter_var_outp" not in kept
+    assert '"main" %id\n' in kept and "%outp Binding 1" in kept
+    assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
+    used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
+    assert execution.without_unused_counters(used) == used
+    plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
+    assert execution.without_unused_counters(plain) == plain
+
+
+HELPER = """\
+RWStructuredBuffer<float> fin : register(u0);
+RWStructuredBuffer<float> outp : register(u1);
+void store(RWStructuredBuffer<float> buffer, uint index, float value) {
+    buffer[index] = value;%s
+}
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    store(outp, id.x, fin[id.x]);
+}
+"""
+
+
+def test_a_buffer_passed_to_a_function_keeps_the_hlsl_interface(tmp_path):
+    if not validators.can_lower("hlsl"):
+        pytest.skip(f"{validators.TOOLS['hlsl']} or spirv-dis is not installed")
+    from tests.conformance import interface
+
+    path = tmp_path / "probe.spvasm"
+    path.write_text(execution.as_spirv("hlsl", HELPER % ""))
+    assert interface.interface(path, "spirv", 1)["bindings"] == (0, 1)
+    # A translation that uses the counter needs a buffer the native probe does not bind.
+    path.write_text(execution.as_spirv("hlsl", HELPER % " buffer.IncrementCounter();"))
+    with pytest.raises(interface.InterfaceChanged, match=r"\[0, 1, 2\]"):
+        interface.interface(path, "spirv", 1)
+
+
 def test_nothing_runs_without_a_runtime(monkeypatch):
     monkeypatch.setattr(
         harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}
@@ -363,7 +682,7 @@ def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
     path = tmp_path / "probe.metal"
     path.write_text(NATIVE)
     case = execution._case(
-        "00000-native", path, "metal", execution.inputs("fin"), outputs
+        "00000-native", path, "metal", execution.inputs("fin"), None, outputs
     )
     [record] = harness.run_suite(
         [case], ["metal"], ["strict"], {"metal": []}, tmp_path / "run", reference=True
@@ -437,4 +756,12 @@ def test_an_execution_bug_is_reproduced_with_execute():
     body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
     assert "--feature sin --execute" in body
     assert "but run, it does not compute what the native Metal probe computes" in body
+    feature["detail"] = f"on metal-apple, the translation {execution.REBOUND}\nExpected"
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "does not bind the buffers the native Metal probe binds" in body
+    feature["detail"] = f"on metal-apple, the translation {execution.REJECTED}\nerror"
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "but the runtime that runs the native Metal probe rejects it." in body
     assert not execution.found("probe.metal:3:1: error: no matching function")

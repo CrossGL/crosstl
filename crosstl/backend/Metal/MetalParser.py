@@ -3,6 +3,7 @@
 import re
 import sys
 
+from ..switch_clauses import record_default_position
 from .floating_point import reject_contraction_tokens
 from .MetalAst import *
 from .MetalLexer import *
@@ -5586,6 +5587,7 @@ class MetalParser:
 
         cases = []
         default = None
+        default_index = None
         try:
             while self.current_token[0] not in ["RBRACE", "EOF"]:
                 if self.current_token[0] == "CASE":
@@ -5594,17 +5596,15 @@ class MetalParser:
                     self.eat("DEFAULT")
                     self.eat("COLON")
                     default_statements = []
+                    default_index = len(cases)
 
+                    # A clause keeps its own jumps: one without a break falls through.
                     while self.current_token[0] not in [
                         "CASE",
                         "DEFAULT",
                         "RBRACE",
                         "EOF",
                     ]:
-                        if self.current_token[0] == "BREAK":
-                            self.eat("BREAK")
-                            self.eat("SEMICOLON")
-                            break
                         statement = self.parse_statement()
                         if isinstance(statement, list):
                             default_statements.extend(statement)
@@ -5619,7 +5619,9 @@ class MetalParser:
                     )
 
             self.eat("RBRACE")
-            return SwitchNode(expression, cases, default)
+            return record_default_position(
+                SwitchNode(expression, cases, default), default_index
+            )
         finally:
             self.known_types.difference_update(self.local_type_scopes.pop())
 
@@ -5631,15 +5633,10 @@ class MetalParser:
         statements = []
 
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
-            if self.current_token[0] == "BREAK":
-                self.eat("BREAK")
-                self.eat("SEMICOLON")
-                break
-            else:
-                statement = self.parse_statement()
-                if isinstance(statement, list):
-                    statements.extend(statement)
-                elif statement is not None:
-                    statements.append(statement)
+            statement = self.parse_statement()
+            if isinstance(statement, list):
+                statements.extend(statement)
+            elif statement is not None:
+                statements.append(statement)
 
         return CaseNode(value, statements)

@@ -28,6 +28,7 @@ from .struct_result_import import (
     spirv_struct_result_call,
     spirv_struct_result_member,
 )
+from .subpass_import import is_subpass_image, subpass_load_expression
 from .VulkanAst import *
 from .VulkanLexer import *
 
@@ -1935,6 +1936,26 @@ class VulkanParser:
                             constants,
                         )
                     ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if (
+                result_id
+                and opcode == "OpImageRead"
+                and len(operands) >= 3
+                and is_subpass_image(operands[1], expression_type_ids, types)
+            ):
+                parsed_operands = self.spirv_assembly_image_operands(
+                    operands[3:], expressions, names, decorations, constants
+                )
+                expressions[result_id] = subpass_load_expression(
+                    self.spirv_assembly_operand_expression(
+                        operands[1], expressions, names, decorations, constants
+                    ),
+                    operands[2],
+                    constants,
+                    self.spirv_assembly_image_sample_operand(parsed_operands),
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
