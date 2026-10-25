@@ -50,7 +50,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 130
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 145
     assert all(
         name.startswith(
             (
@@ -58,6 +58,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_reduce.TestReduce.test_",
                 "test_bf16.TestBF16.test_",
                 "test_fast.TestFast.test_",
+                "test_blas.TestBlas.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
@@ -85,7 +86,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 125 and not set(opengl) & set(excluded)
+    assert len(opengl) == 140 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -99,6 +100,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "operations",
         "normalization",
         "reductions",
+        "blas",
         "reduction-dtypes",
         "reduction-permutations",
     ]
@@ -115,8 +117,10 @@ def test_upstream_op_groups_partition_the_inventory():
         name for tests in ops.GROUP_TESTS.values() for name in tests
     }
     assert all(name.startswith("test_reduce.") for name in ops.GROUPS["reductions"])
+    assert len(ops.GROUPS["blas"]) == 15
+    assert all(name.startswith("test_blas.") for name in ops.GROUPS["blas"])
     assert not any(
-        name.startswith(("test_fast.", "test_reduce."))
+        name.startswith(("test_fast.", "test_reduce.", "test_blas."))
         for name in ops.GROUPS["operations"]
     )
     for target in ("metal", "directx", "opengl"):
@@ -326,6 +330,37 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         "col_reduce_small_1_reduce_sumint32",
         "vv_Addint64",
     } <= set(audit.seen["native"])
+
+
+GATHERED_MATRIX_ENTRIES = (
+    # GatherMM's group offsets share the general gather prefix.
+    "gather_mm_offsets",
+    "gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4",
+    "gemv_t_gather_float32_bm1_bn8_sm1_sn32_tm4_tn4",
+    "steel_gather_mm_nn_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n"
+    "_align_M_n_align_N_n_align_K_t",
+    "steel_segmented_mm_tn_float32_float32_bm64_bn64_bk16_wm2_wn2"
+    "_segments_contiguous_n_align_M_n_align_N_n",
+)
+
+
+def test_upstream_op_gathered_matrix_kernels_reach_only_the_lazy_audit(audit):
+    trace = [event(entry) for entry in GATHERED_MATRIX_ENTRIES]
+    for entry in GATHERED_MATRIX_ENTRIES:
+        assert ops.indexing_auditor(entry) is None
+    assert ops.indexing_auditor("gatherint32int32_2_1_int") is not None
+    count = ops.audit_trace(
+        None,
+        audit.args,
+        trace,
+        "metal",
+        audit.indexes,
+        audit.reductions,
+        require_indexing=False,
+    )
+    assert count == 0
+    assert audit.seen["lazy"] == list(GATHERED_MATRIX_ENTRIES)
+    assert "gather_evidence" not in audit.seen
 
 
 def test_upstream_op_divmod_dispatch_must_use_the_package_target(audit):

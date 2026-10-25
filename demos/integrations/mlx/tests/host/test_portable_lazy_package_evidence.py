@@ -59,6 +59,21 @@ def event(entry, descriptor, **extra):
             "gemm",
         ),
         ("steel_gemm_splitk_accum_float32_float32", "gemm-splitk"),
+        # The gathered gemv prefixes would also match GEMV's.
+        ("gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4", "gather-mv"),
+        ("gemv_t_gather_float32_bm1_bn8_sm1_sn32_tm4_tn4", "gather-mv"),
+        (
+            "steel_gather_mm_nn_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n"
+            "_align_M_n_align_N_n_align_K_t",
+            "gather-mm",
+        ),
+        ("gather_mm_offsets", "gather-mm-offsets"),
+        ("gather_mm_offsets_extra", None),
+        (
+            "steel_segmented_mm_tn_float32_float32_bm64_bn64_bk16_wm2_wn2"
+            "_segments_contiguous_n_align_M_n_align_N_n",
+            "segmented-mm",
+        ),
         ("row_reduce_looped_1_32_32_reduce_sumint32", None),
         ("all_reduce_sumint32", None),
         ("vv_Addint64", None),
@@ -162,6 +177,10 @@ def test_matrix_caches_are_derived_per_entry(tmp_path):
             get=lambda entry, name=name: requested.append((name, entry)) or ("d", "p")
         )
     entries = [
+        "gemv_t_gather_float32_bm1_bn8_sm1_sn32_tm4_tn4",
+        "steel_gather_mm_rhs_nt_float32_float32_bm16_bn64_bk16_wm1_wn2",
+        "gather_mm_offsets",
+        "steel_segmented_mm_nn_float16_float16_bm64_bn64_bk16_wm2_wn2",
         "gemv_t_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0",
         "dot_product_bfloat16_it32_tg512_sg16",
         "steel_gemm_fused_tn_float16_float16_bm64_bn64_bk16_wm2_wn2",

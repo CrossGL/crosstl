@@ -2786,14 +2786,14 @@ jobs:
     name: MLX upstream op tests (${{ matrix.target }}, ${{ matrix.group }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 330
+    timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Fifteen jobs, five of them on macOS: run them in two waves.
+      # Eighteen jobs, six of them on macOS: run them in two waves.
       max-parallel: 9
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
-        group: [operations, normalization, reductions, reduction-dtypes, reduction-permutations]
+        group: [operations, normalization, reductions, blas, reduction-dtypes, reduction-permutations]
         target: [opengl, directx, metal]
         include:
           - os: ubuntu-24.04
@@ -2958,6 +2958,18 @@ jobs:
               --target "${{ matrix.target }}" --family column-half --jobs 4 \
               --output-dir .mlx-portable-upstream-ops/column-half-reductions \
               2>&1 | tee .mlx-portable-upstream-ops/column-half-reductions.log
+      - name: Translate the upstream BLAS matrix kernels
+        # The BLAS tests reach about eighty matrix kernels; translating them
+        # several at a time leaves the native worker its deadline for the
+        # tests. Entries outside the budget translate on demand.
+        if: matrix.group == 'blas'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 2100 --label "MLX upstream BLAS matrix translation" -- \
+            python -m demos.integrations.mlx.portable_host.upstream_matrix_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages --group blas \
+              --jobs ${{ matrix.target == 'metal' && 3 || 4 }} --budget-seconds 1800 \
+              2>&1 | tee .mlx-portable-upstream-ops/blas-translation.log
       - name: Execute unchanged upstream op tests
         env:
           EGL_PLATFORM: surfaceless

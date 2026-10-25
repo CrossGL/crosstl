@@ -1,7 +1,8 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
 Scans, small row reductions, small column reductions, GEMV, dot-product,
-steel GEMM and split-K GEMM kernels are translated from the pinned sources on first use, so
+steel GEMM, split-K GEMM, GatherMM and SegmentedMM kernels are translated from
+the pinned sources on first use, so
 no static index lists their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
 metadata, and by comparing the recorded artifact with the unchanged cached
@@ -17,10 +18,13 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host import (
     column_small_layout,
     dot_layout,
+    gather_mm_layout,
+    gather_mv_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
     scan_layout,
+    segmented_mm_layout,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -36,6 +40,14 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
 )
+from demos.integrations.mlx.portable_host.gather_mm_packages import (
+    GATHER_MM_CACHE,
+    GATHER_MV_CACHE,
+    GATHER_OFFSETS_CACHE,
+    GatherMmPackageCache,
+    GatherMvPackageCache,
+    GatherOffsetsPackageCache,
+)
 from demos.integrations.mlx.portable_host.gemm_packages import (
     CACHE_DIRECTORY as GEMM_CACHE,
 )
@@ -49,6 +61,10 @@ from demos.integrations.mlx.portable_host.gemv_packages import (
 )
 from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
+from demos.integrations.mlx.portable_host.segmented_mm_packages import (
+    SEGMENTED_MM_CACHE,
+    SegmentedMmPackageCache,
+)
 from demos.integrations.mlx.portable_host.small_row_packages import (
     ALL_SMALL_ROW_ENTRIES,
     SMALL_ROW_ENTRIES,
@@ -56,8 +72,13 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
 )
 
 # Matrix kernels: one package per entry, launched by the source-specialized
-# executor like scans.
+# executor like scans. The first matching prefix names the family, so the
+# gathered gemv prefixes precede GEMV's.
 MATRIX_FAMILIES = {
+    "gather-mv": gather_mv_layout.ENTRY_PREFIXES,
+    "gather-mm": gather_mm_layout.ENTRY_PREFIXES,
+    "gather-mm-offsets": (gather_mm_layout.OFFSETS_ENTRY,),
+    "segmented-mm": segmented_mm_layout.ENTRY_PREFIXES,
     "gemv": gemv_layout.ENTRY_PREFIXES,
     "dot": dot_layout.ENTRY_PREFIXES,
     "gemm": gemm_layout.ENTRY_PREFIXES,
@@ -78,7 +99,10 @@ def family(entry):
     if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
         return "small-column"
     for name, prefixes in MATRIX_FAMILIES.items():
-        if entry.startswith(prefixes):
+        if name == "gather-mm-offsets":
+            if entry in prefixes:
+                return name
+        elif entry.startswith(prefixes):
             return name
     return None
 
@@ -90,6 +114,18 @@ class LazyPackages:
         packages = Path(packages)
         self.target = target
         self.caches = {
+            "gather-mv": GatherMvPackageCache(
+                mlx_root, packages / GATHER_MV_CACHE, target
+            ),
+            "gather-mm": GatherMmPackageCache(
+                mlx_root, packages / GATHER_MM_CACHE, target
+            ),
+            "gather-mm-offsets": GatherOffsetsPackageCache(
+                mlx_root, packages / GATHER_OFFSETS_CACHE, target
+            ),
+            "segmented-mm": SegmentedMmPackageCache(
+                mlx_root, packages / SEGMENTED_MM_CACHE, target
+            ),
             "scan": ScanPackageCache(mlx_root, packages / "scans", target),
             "small-row": SmallRowPackageCache(
                 mlx_root, packages / "small-rows", target

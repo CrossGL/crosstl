@@ -33,8 +33,11 @@ normalization rows and their gradients are translated per threadgroup width
 on first use; each dispatch must name its cached package, upload its
 retained operands, keep its output guards and leave an absent weight's
 gradient placeholder unwritten, and the upstream tests compare their values
-with MLX's composed normalization. Every other dispatch
-must come from one of those indexes, so a test that reaches an uninstalled
+with MLX's composed normalization. GEMV, dot-product, steel GEMM, split-K,
+GatherMM and SegmentedMM kernels are translated per entry on first use; each
+dispatch must name the package its cache derives again and its native
+modules, and the upstream tests compare the products with NumPy's. Every
+other dispatch must come from one of those indexes, so a test that reaches an uninstalled
 family fails the trace instead of passing on an unchecked package.
 """
 
@@ -324,6 +327,26 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_no_bias",
         "test_fast.TestFast.test_layer_norm_grad_no_params",
         "test_fast.TestFast.test_layer_norm_grad_params",
+    ) + (
+        # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
+        # and AddMM epilogues of every float dtype, unaligned, batched,
+        # transposed and strided operands, and GatherMM's gathered gemv,
+        # steel gather and group offset kernels with their gradients.
+        "test_blas.TestBlas.test_gather_matmul",
+        "test_blas.TestBlas.test_gather_matmul_grad",
+        "test_blas.TestBlas.test_gather_mm_sorted",
+        "test_blas.TestBlas.test_matmul",
+        "test_blas.TestBlas.test_matmul_unaligned",
+        "test_blas.TestBlas.test_matvec_unaligned",
+        "test_blas.TestBlas.test_matmul_shapes",
+        "test_blas.TestBlas.test_matmul_dtypes",
+        "test_blas.TestBlas.test_matmul_batched",
+        "test_blas.TestBlas.test_matrix_vector",
+        "test_blas.TestBlas.test_matrix_vector_batched",
+        "test_blas.TestBlas.test_matrix_vector_edgecases",
+        "test_blas.TestBlas.test_mismatch_stride_mm",
+        "test_blas.TestBlas.test_gemv_gemm_same_precision",
+        "test_blas.TestBlas.test_wide_addmm",
     )
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
@@ -383,8 +406,14 @@ NO_DISPATCH_TESTS = frozenset(
 # millions of elements through the host, about as long as every other test, and
 # the reduction tests sweep thousands of axis, dtype and layout subcases. The
 # two longest sweeps translate a package for each new reduction launch, about
-# half an hour each, so each runs in a job of its own.
-GROUP_PREFIXES = {"normalization": "test_fast.", "reductions": "test_reduce."}
+# half an hour each, so each runs in a job of its own. The BLAS tests reach
+# about a hundred matrix kernels, which their job translates ahead of the run
+# (upstream_matrix_packages).
+GROUP_PREFIXES = {
+    "normalization": "test_fast.",
+    "reductions": "test_reduce.",
+    "blas": "test_blas.",
+}
 GROUP_TESTS = {
     "reduction-dtypes": ("test_reduce.TestReduce.test_dtypes",),
     "reduction-permutations": ("test_reduce.TestReduce.test_axis_permutation_sums",),
@@ -578,6 +607,10 @@ def load_indexes(args):
 
 def indexing_auditor(entry):
     """Return the evidence check for a source-specialized indexing entry."""
+    # GatherMM's group offsets share the gather prefix; the lazy matrix audit
+    # owns them.
+    if lazy_package_evidence.family(entry) is not None:
+        return None
     auditors = {
         "gather": gather_evidence.audit_event,
         "scatter_axis": scatter_axis_evidence.audit_event,
