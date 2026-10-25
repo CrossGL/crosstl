@@ -1,5 +1,6 @@
 """Structure members carrying system values that DXIL delivers as uint are declared uint."""
 
+import re
 import shutil
 import subprocess
 
@@ -35,9 +36,11 @@ def test_int_layer_and_viewport_members_are_uint(tmp_path):
     # Vulkan HLSL accepts int; DXIL requires uint ("SV_RenderTargetArrayIndex must be uint").
     path = tmp_path / "shader.geom"
     path.write_text(SOURCE)
-    hlsl = crosstl.translate(str(path), backend="directx", source_backend="directx")
-    assert "uint Layer : SV_RenderTargetArrayIndex;" in hlsl
-    assert "uint Viewport : SV_ViewportArrayIndex;" in hlsl
+    hlsl = crosstl.translate(
+        str(path), backend="directx", source_backend="directx", format_output=False
+    )
+    assert re.search(r"uint Layer\s*:\s*SV_RenderTargetArrayIndex;", hlsl)
+    assert re.search(r"uint Viewport\s*:\s*SV_ViewportArrayIndex;", hlsl)
     if shutil.which("dxc"):
         (tmp_path / "out.hlsl").write_text(hlsl)
         result = subprocess.run(

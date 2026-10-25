@@ -27,7 +27,7 @@ vertex VOut v(constant Frame& frame [[buffer(1)]], uint vid [[vertex_id]], uint 
 def translate(tmp_path, source, backend, suffix=".metal"):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def test_metal_constant_data_over_64_kib_is_refused_for_hlsl(tmp_path):

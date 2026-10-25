@@ -19,7 +19,9 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
 def test_a_local_named_texture_size_does_not_hide_the_helper(tmp_path):
     path = tmp_path / "shader.frag.hlsl"
     path.write_text(SOURCE)
-    hlsl = crosstl.translate(str(path), backend="directx", source_backend="directx")
+    hlsl = crosstl.translate(
+        str(path), backend="directx", source_backend="directx", format_output=False
+    )
     # The query lowers to a textureSize helper; the local of that name used to hide it ("type 'float2' does not
     # provide a call operator").
     assert "float2 textureSize_;" in hlsl

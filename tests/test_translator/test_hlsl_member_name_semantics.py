@@ -1,5 +1,6 @@
 """A structure member's name never selects an HLSL system value."""
 
+import re
 import shutil
 import subprocess
 
@@ -24,9 +25,10 @@ def test_varyings_named_view_and_layer_are_user_varyings(tmp_path):
     # They used to become SV_ViewID, SV_RenderTargetArrayIndex and SV_ViewportArrayIndex by name alone.
     path = tmp_path / "shader.metal"
     path.write_text(SOURCE)
-    hlsl = crosstl.translate(str(path), backend="directx")
-    assert "float3 view : TEXCOORD" in hlsl
-    assert "float layer : TEXCOORD" in hlsl and "float viewport : TEXCOORD" in hlsl
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert re.search(r"float3 view\s*:\s*TEXCOORD", hlsl)
+    assert re.search(r"float layer\s*:\s*TEXCOORD", hlsl)
+    assert re.search(r"float viewport\s*:\s*TEXCOORD", hlsl)
     assert "SV_ViewID" not in hlsl and "SV_RenderTargetArrayIndex" not in hlsl
     assert "SV_ViewportArrayIndex" not in hlsl
     if shutil.which("dxc"):
