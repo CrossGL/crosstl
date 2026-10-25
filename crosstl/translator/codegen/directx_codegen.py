@@ -2874,6 +2874,7 @@ class HLSLCodeGen(
             "gl_VertexID": "SV_VertexID",
             "gl_VertexIndex": "SV_VertexID",
             "gl_InstanceID": "SV_InstanceID",
+            "gl_InstanceIndex": "SV_InstanceID",
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_PrimitiveID": "SV_PrimitiveID",
@@ -40414,7 +40415,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return params_str
 
     def used_hlsl_vertex_builtin_names(self, body):
-        builtin_names = {"gl_VertexIndex", "gl_ViewIndex"}
+        builtin_names = {"gl_VertexIndex", "gl_InstanceIndex", "gl_ViewIndex"}
         used_names = set()
         for node in self.walk_ast(body):
             class_name = node.__class__.__name__
@@ -40428,8 +40429,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def required_hlsl_vertex_builtin_parameters(self, func):
         used_names = self.used_hlsl_vertex_builtin_names(getattr(func, "body", []))
+        # Like SV_VertexID for gl_VertexIndex, SV_InstanceID does not include the draw's base instance, which
+        # gl_InstanceIndex does (Vulkan) and SV_StartInstanceLocation (Shader Model 6.8) carries.
         builtin_parameters = [
             ("gl_VertexIndex", "uint", "SV_VertexID"),
+            ("gl_InstanceIndex", "uint", "SV_InstanceID"),
             ("gl_ViewIndex", "uint", "SV_ViewID"),
         ]
         return [

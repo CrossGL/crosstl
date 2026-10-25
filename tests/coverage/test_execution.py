@@ -488,6 +488,59 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     assert execution.as_spirv(language, "not a shader") == ""
 
 
+COUNTED = """\
+               OpEntryPoint GLCompute %main "main" %id %counter_var_outp
+               OpName %type_ACSBuffer_counter "type.ACSBuffer.counter"
+               OpName %counter_var_outp "counter.var.outp"
+               OpDecorate %outp Binding 1
+               OpDecorate %counter_var_outp DescriptorSet 0
+               OpDecorate %counter_var_outp Binding 2
+%type_ACSBuffer_counter = OpTypeStruct %int
+%_ptr_Uniform_type_ACSBuffer_counter = OpTypePointer Uniform %type_ACSBuffer_counter
+%counter_var_outp = OpVariable %_ptr_Uniform_type_ACSBuffer_counter Uniform
+       %outp = OpVariable %_ptr_Uniform_float Uniform
+"""
+
+
+def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
+    # DXC declares one for a RWStructuredBuffer a function takes; the host binds no such buffer.
+    kept = execution.without_unused_counters(COUNTED)
+    assert "counter_var_outp" not in kept
+    assert '"main" %id\n' in kept and "%outp Binding 1" in kept
+    assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
+    used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
+    assert execution.without_unused_counters(used) == used
+    plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
+    assert execution.without_unused_counters(plain) == plain
+
+
+HELPER = """\
+RWStructuredBuffer<float> fin : register(u0);
+RWStructuredBuffer<float> outp : register(u1);
+void store(RWStructuredBuffer<float> buffer, uint index, float value) {
+    buffer[index] = value;%s
+}
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    store(outp, id.x, fin[id.x]);
+}
+"""
+
+
+def test_a_buffer_passed_to_a_function_keeps_the_hlsl_interface(tmp_path):
+    if not validators.can_lower("hlsl"):
+        pytest.skip(f"{validators.TOOLS['hlsl']} or spirv-dis is not installed")
+    from tests.conformance import interface
+
+    path = tmp_path / "probe.spvasm"
+    path.write_text(execution.as_spirv("hlsl", HELPER % ""))
+    assert interface.interface(path, "spirv", 1)["bindings"] == (0, 1)
+    # A translation that uses the counter needs a buffer the native probe does not bind.
+    path.write_text(execution.as_spirv("hlsl", HELPER % " buffer.IncrementCounter();"))
+    with pytest.raises(interface.InterfaceChanged, match=r"\[0, 1, 2\]"):
+        interface.interface(path, "spirv", 1)
+
+
 def test_nothing_runs_without_a_runtime(monkeypatch):
     monkeypatch.setattr(
         harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}

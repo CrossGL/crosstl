@@ -25,6 +25,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
+from .constant_extents import fold_constant_extents
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -283,6 +284,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_undeclared_types(program, report.target)
     refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
+    fold_constant_extents(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
