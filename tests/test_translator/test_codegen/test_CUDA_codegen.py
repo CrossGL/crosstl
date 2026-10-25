@@ -19480,3 +19480,35 @@ def test_unsized_scalar_constructors_keep_functional_casts():
     cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     assert "return double(float(int(uint(value))));" in cuda_code
+
+
+def test_count_leading_zeros_lowers_to_cuda_clz_intrinsics(tmp_path):
+    source_code = """
+    shader Clz {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer int* outp;
+
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int a0 = int(uin[i]);
+                uint64_t w = uint64_t(uin[i]);
+                int r = countLeadingZeros(a0);
+                int r64 = countLeadingZeros(w);
+                ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                outp[i] = r + r64 + v.x;
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    cuda_code = CudaCodeGen().generate(ast)
+
+    assert "int r = __clz(a0);" in cuda_code
+    assert "int r64 = __clzll(w);" in cuda_code
+    assert "make_int2(__clz(value.x), __clz(value.y))" in cuda_code
+    assert "countLeadingZeros(a0)" not in cuda_code
+    assert "countLeadingZeros(w)" not in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)

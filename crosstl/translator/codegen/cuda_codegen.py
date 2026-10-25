@@ -3578,6 +3578,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -3586,6 +3587,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -3700,6 +3709,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            intrinsic_name = "__clzll" if bit_width == 64 else "__clz"
+            return f"{intrinsic_name}({value})"
         if operation == "findLSB":
             return f"(__ffs({value}) - 1)"
         if operation == "findMSB":
