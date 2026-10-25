@@ -10866,6 +10866,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "u16vec4": "vector<uint16_t, 4>",
             "i32": "int",
             "u32": "uint",
+            "int32": "int",
+            "uint32": "uint",
             "i64": "int64_t",
             "u64": "uint64_t",
             "int8": "int8_t",
