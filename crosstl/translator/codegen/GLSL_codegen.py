@@ -284,6 +284,7 @@ from .glsl_stage_output_values import (
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
+from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
@@ -562,6 +563,7 @@ from .subgroup_reassignments import (
     followed_locals,
     followed_offsets,
 )
+from .task_payload_variables import dispatch_mesh_payload_names
 from .texture_lod_clamp import (
     GLSL_LOD_CLAMP_EXTENSION,
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
@@ -8732,6 +8734,8 @@ class GLSLCodeGen(
             self.GLSL_UNAVAILABLE_BUILTINS,
             self.GLSL_UNAVAILABLE_FUNCTION_PATTERNS,
         ):
+            self.refuse_lowering(reason)
+        for reason in string_literal_reasons(code):
             self.refuse_lowering(reason)
         return code
 
@@ -31278,6 +31282,7 @@ class GLSLCodeGen(
 
         for func in self.glsl_emitted_functions_for_shared_lowering(ast, target_stage):
             func_name = getattr(func, "name", None) or "shader"
+            payload_names = dispatch_mesh_payload_names(getattr(func, "body", None))
             for node in self.walk_ast(getattr(func, "body", [])):
                 if not isinstance(node, VariableNode):
                     continue
@@ -31301,6 +31306,17 @@ class GLSLCodeGen(
                 aliases_by_declaration[id(node)] = alias
                 owners_by_declaration[id(node)] = f"{func_name}:{alias}"
                 declaration_ids.add(id(node))
+                if name in payload_names:
+                    # task_payload_variables.py: the DispatchMesh payload is taskPayloadSharedEXT storage.
+                    node._glsl_task_payload_shared = True
+                    self.task_payload_shared_variables.append(
+                        {
+                            "name": alias,
+                            "type": self.map_type(declared_type),
+                            "raw_type": self.type_name_string(declared_type),
+                            "array_suffix": "",
+                        }
+                    )
 
         self.glsl_hoisted_shared_declarations = declarations
         self.glsl_hoisted_shared_aliases_by_declaration = aliases_by_declaration
@@ -31395,9 +31411,14 @@ class GLSLCodeGen(
             self.map_type(vtype), alias
         )
         declaration = format_c_style_array_declaration(storage_type, alias)
+        qualifier = (
+            "taskPayloadSharedEXT "
+            if getattr(node, "_glsl_task_payload_shared", False)
+            else self.global_variable_qualifier(node)
+        )
         return (
             self.float_atomic_storage.take_definitions()
-            + f"{self.global_variable_qualifier(node)}{declaration};\n"
+            + f"{qualifier}{declaration};\n"
         )
 
     def activate_glsl_hoisted_shared_declaration(self, node):
@@ -57987,6 +58008,7 @@ complex64_t crossgl_complex64_mod_assign(
             "max_vertices",
             "max_primitives",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "maxprimitivecount",
             "maxvertexcount",
             "numthreads",

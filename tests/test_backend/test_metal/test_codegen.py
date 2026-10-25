@@ -6622,12 +6622,48 @@ def test_codegen_raytracing_qualifiers_output():
     miss void miss_main() { }
     callable void callable_main() { }
     """
-    result = convert(code)
-    assert "isect" in result
-    assert "any_hit" in result
-    assert "closest_hit" in result
-    assert "miss_main" in result
-    assert "callable_main" in result
+    # The importer used to print these as plain helpers, dropping the qualifiers the host's function tables need.
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    for qualifier, name in (
+        ("intersection", "isect"),
+        ("anyhit", "any_hit"),
+        ("closesthit", "closest_hit"),
+        ("miss", "miss_main"),
+        ("callable", "callable_main"),
+    ):
+        assert f"Metal {qualifier} function '{name}' has no CrossGL import" in str(
+            refusal.value
+        )
+
+
+def test_codegen_msl_intersection_function_is_refused():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    using namespace raytracing;
+
+    struct BoundingBoxIntersection {
+        bool accept [[accept_intersection]];
+        float distance [[distance]];
+    };
+
+    [[intersection(bounding_box, triangle_data, instancing)]]
+    BoundingBoxIntersection sphere(float3 origin [[origin]],
+                                   float3 direction [[direction]],
+                                   float minDistance [[min_distance]],
+                                   float maxDistance [[max_distance]]) {
+        BoundingBoxIntersection hit;
+        hit.accept = maxDistance > minDistance;
+        hit.distance = minDistance;
+        return hit;
+    }
+    """
+    with pytest.raises(
+        MetalImportRefused,
+        match="Metal intersection function 'sphere' has no CrossGL import",
+    ):
+        convert(code)
 
 
 def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
@@ -6636,7 +6672,7 @@ def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
     using namespace metal;
     namespace rt = raytracing;
 
-    intersection void isect(rt::ray r, intersector inter) { }
+    void isect(rt::ray r, intersector inter) { }
     """
 
     result = convert(code)
@@ -6662,19 +6698,19 @@ def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec()
         float value;
     };
 
-    intersection void intersectPayload(ray_data RayPayload& payload [[payload]],
-                                       object_data ObjectPayload& objectPayload [[payload]]) {
+    void copyPayload(ray_data RayPayload& payload,
+                     object_data ObjectPayload& objectPayload) {
         payload.value = objectPayload.value;
     }
     """
     crossgl = convert(code)
 
-    assert "inout RayPayload payload @ray_data @payload" in crossgl
-    assert "inout ObjectPayload objectPayload @object_data @payload" in crossgl
+    assert "inout RayPayload payload @ray_data" in crossgl
+    assert "inout ObjectPayload objectPayload @object_data" in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "ray_data RayPayload& payload [[payload]]" in metal
-    assert "object_data ObjectPayload& objectPayload [[payload]]" in metal
+    assert "ray_data RayPayload& payload" in metal
+    assert "object_data ObjectPayload& objectPayload" in metal
     assert "thread RayPayload& payload" not in metal
     assert "thread ObjectPayload& objectPayload" not in metal
 
@@ -8478,9 +8514,13 @@ def test_codegen_payload_and_hit_attributes():
     closesthit void closest_hit(Payload& payload [[payload]],
                                 HitAttrib attr [[hit_attribute]]) { }
     """
-    result = convert(code)
-    assert "@payload" in result
-    assert "@hit_attribute" in result
+    # The importer used to print ray-tracing functions as plain helpers, dropping their qualifiers.
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    assert "Metal anyhit function 'any_hit' has no CrossGL import" in str(refusal.value)
+    assert "Metal closesthit function 'closest_hit' has no CrossGL import" in str(
+        refusal.value
+    )
 
 
 def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
@@ -8501,7 +8541,10 @@ def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
     """
     with pytest.raises(MetalImportRefused) as refusal:
         convert(code)
-    assert "Metal object function 'object_main'" in str(refusal.value)
+    assert (
+        "Metal object function 'object_main': payload 'payload' must be an object_data reference"
+        in str(refusal.value)
+    )
     assert (
         "Metal mesh function 'mesh_main' must take exactly one metal::mesh parameter, found 0"
         in str(refusal.value)

@@ -3,7 +3,8 @@
 The importer used to print a mesh function verbatim as a plain helper that still called the ``metal::mesh``
 methods, so no target got a mesh stage. It now rewrites the ``metal::mesh<V, P, NV, NP, topology>`` parameter into
 ``@vertices``, ``@primitives`` and ``@indices`` out arrays, ``set_primitive_count`` into ``SetMeshOutputCounts`` and
-stages ``set_index`` writes so that every target receives whole index vectors.
+stages ``set_index`` writes so that every target receives whole index vectors. An ``[[object]]`` function becomes a
+task stage whose ``groupshared`` payload and grid size reach one ``DispatchMesh`` at the end of the entry.
 """
 
 import re
@@ -209,15 +210,6 @@ def test_mesh_stage_with_host_chosen_size_needs_the_threadgroup_size(tmp_path):
             ),
             "uses its metal::mesh parameter 'output' other than in statement-level set_\\* calls",
         ),
-        (
-            TRIANGLES + """
-[[object]] void objectMain(object_data Payload& payload [[payload]], mesh_grid_properties grid) {
-    payload.count = 1;
-    grid.set_threadgroups_per_grid(uint3(1, 1, 1));
-}
-""",
-            "Metal object function 'objectMain'",
-        ),
     ],
 )
 def test_mesh_constructs_without_a_faithful_form_are_refused(tmp_path, source, reason):
@@ -302,5 +294,165 @@ def test_imported_triangle_mesh_and_fragment_compile_with_dxc(tmp_path):
     shader = tmp_path / "mesh.hlsl"
     shader.write_text(hlsl, encoding="utf-8")
     for profile, entry in (("ms_6_5", "MSMain"), ("ps_6_5", "PSMain")):
+        result = _run([dxc, "-T", profile, "-E", entry, str(shader)])
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+OBJECT = """
+[[object, max_total_threads_per_threadgroup(32), max_total_threadgroups_per_mesh_grid(4)]]
+void objectMain(object_data Payload& payload [[payload]],
+                mesh_grid_properties grid,
+                constant uint& count [[buffer(0)]],
+                uint lid [[thread_index_in_threadgroup]])
+{
+    if (count == 0) {
+        return;
+    }
+    if (lid == 0) {
+        payload.count = count;
+        payload.color = float3(1.0, 0.0, 0.0);
+        grid.set_threadgroups_per_grid(uint3(1, 1, 1));
+    }
+}
+"""
+
+PIPELINE = (
+    TRIANGLES
+    + OBJECT
+    + "fragment float4 fragMain(VOut in [[stage_in]]) { return float4(in.normal, 1.0); }\n"
+)
+
+
+def test_object_function_imports_as_a_task_stage_with_one_dispatch(tmp_path):
+    crossgl = _translate(tmp_path, TRIANGLES + OBJECT, "cgl")
+
+    assert "set_threadgroups_per_grid" not in crossgl
+    assert "mesh_grid_properties" not in crossgl
+    assert "task {\n        @ host_workgroup_size\n" in crossgl
+    assert (
+        "void objectMain(constant uint& count @buffer(0), uint lid @gl_LocalInvocationIndex) "
+        "@max_total_threads_per_threadgroup(32) @max_total_threadgroups_per_mesh_grid(4) {"
+    ) in crossgl
+    task = crossgl[crossgl.index("void objectMain(") :]
+    expected = [
+        "groupshared Payload payload;",
+        "groupshared uvec3 grid_threadgroups;",
+        "if (lid == 0u) {",
+        "grid_threadgroups = uvec3(0u);",
+        "workgroupBarrier();",
+        "for (uint object_body = 0u; object_body < 1u; object_body++) {",
+        "break;",
+        "grid_threadgroups = uvec3(uvec3(1, 1, 1));",
+        "workgroupBarrier();",
+        "DispatchMesh(grid_threadgroups.x, grid_threadgroups.y, grid_threadgroups.z, payload);",
+    ]
+    position = 0
+    for line in expected:
+        position = task.index(line, position)
+    assert task.count("DispatchMesh(") == 1
+
+
+def test_object_function_without_a_thread_index_gains_one_for_the_grid_reset(
+    tmp_path,
+):
+    source = TRIANGLES + OBJECT.replace(
+        ",\n                uint lid [[thread_index_in_threadgroup]]", ""
+    ).replace("if (lid == 0)", "if (count > 1)")
+    crossgl = _translate(tmp_path, source, "cgl")
+
+    assert "uint object_invocation @gl_LocalInvocationIndex" in crossgl
+    assert "if (object_invocation == 0u) {" in crossgl
+
+
+@pytest.mark.parametrize(
+    ("object_source", "reason"),
+    [
+        (
+            OBJECT.replace(
+                "    if (count == 0) {\n        return;\n    }\n",
+                "    for (uint i = 0; i < count; i++) {\n        if (i > 4) { return; }\n    }\n",
+            ),
+            "returns from inside a loop or switch",
+        ),
+        (
+            OBJECT.replace("object_data Payload& payload [[payload]],\n", ""),
+            r"must take exactly one \[\[payload\]\] parameter",
+        ),
+        (
+            OBJECT.replace(
+                "        grid.set_threadgroups_per_grid(uint3(1, 1, 1));\n",
+                "        mesh_grid_properties other = grid;\n",
+            ),
+            "uses its mesh_grid_properties parameter 'grid'",
+        ),
+    ],
+)
+def test_object_constructs_without_a_faithful_form_are_refused(
+    tmp_path, object_source, reason
+):
+    with pytest.raises(MetalImportRefused, match=reason):
+        _translate(tmp_path, TRIANGLES + object_source, "cgl")
+
+
+def test_imported_object_and_mesh_pipeline_compiles_for_metal(tmp_path):
+    if shutil.which("xcrun") is None:
+        pytest.skip("xcrun is not available")
+    if _run(["xcrun", "-sdk", "macosx", "--find", "metal"]).returncode != 0:
+        pytest.skip("the Metal compiler is not available")
+    metal = _translate(tmp_path, PIPELINE, "metal", {"threadgroup_size": (32, 1, 1)})
+    assert "max_total_threadgroups_per_mesh_grid(4)" in metal
+    shader = tmp_path / "pipeline.metal"
+    shader.write_text(metal, encoding="utf-8")
+    result = _run(
+        [
+            "xcrun",
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(shader),
+            "-o",
+            str(tmp_path / "pipeline.air"),
+        ]
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_imported_object_and_mesh_pipeline_validates_as_spirv(tmp_path):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if not (spirv_as and spirv_val):
+        pytest.skip("spirv-as and spirv-val are required")
+    assembly = _translate(
+        tmp_path, PIPELINE, "vulkan", {"threadgroup_size": (32, 1, 1)}
+    )
+    assert "OpEmitMeshTasksEXT" in assembly
+    assert "TaskPayloadWorkgroupEXT" in assembly
+    spvasm = tmp_path / "pipeline.spvasm"
+    spvasm.write_text(assembly, encoding="utf-8")
+    binary = tmp_path / "pipeline.spv"
+    result = _run(
+        [spirv_as, "--target-env", "vulkan1.3", str(spvasm), "-o", str(binary)]
+    )
+    assert result.returncode == 0, result.stderr
+    result = _run([spirv_val, "--target-env", "vulkan1.3", str(binary)])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_imported_object_and_mesh_pipeline_compiles_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not available")
+    hlsl = _translate(tmp_path, PIPELINE, "directx", {"threadgroup_size": (32, 1, 1)})
+    assert "max_total_threadgroups_per_mesh_grid" not in hlsl
+    assert "DispatchMesh(" in hlsl
+    shader = tmp_path / "pipeline.hlsl"
+    shader.write_text(hlsl, encoding="utf-8")
+    for profile, entry in (
+        ("as_6_5", "ASMain"),
+        ("ms_6_5", "MSMain"),
+        ("ps_6_5", "PSMain"),
+    ):
         result = _run([dxc, "-T", profile, "-E", entry, str(shader)])
         assert result.returncode == 0, result.stdout + result.stderr
