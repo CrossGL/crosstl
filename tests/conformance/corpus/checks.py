@@ -215,7 +215,9 @@ def _glsl_command(path, stage, scratch):
 # #version (crosstl/translator/codegen/glsl_specialization_macros.py), as an MSL host passes MTLFunctionConstantValues.
 # The check defines each macro with the value the artifact's SPIR-V path encodes, as spirv-val checks a SPIR-V module
 # under its default specialization.
-SPECIALIZATION_MACRO = re.compile(r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)")
+SPECIALIZATION_MACRO = re.compile(
+    r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)"
+)
 GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
 
 
@@ -228,7 +230,9 @@ def glsl_specialized_source(path, text, scratch):
     if not macros or version is None:
         return path
     following_line = text.count("\n", 0, version.end()) + 1
-    defines = "".join(f"#define {name} {value}\n" for name, value in sorted(macros.items()))
+    defines = "".join(
+        f"#define {name} {value}\n" for name, value in sorted(macros.items())
+    )
     copy = Path(scratch) / Path(path).name
     copy.write_text(
         f"{text[: version.end()]}{defines}#line {following_line}\n{text[version.end() :]}"
