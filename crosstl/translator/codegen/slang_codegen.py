@@ -62,6 +62,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .c_family_operands import postfix_operand, prefix_unary_operand
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -9238,7 +9239,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if matrix_access is not None:
                 return matrix_access
-            array = self.generate_expression(array_expr)
+            array = postfix_operand(self.generate_expression(array_expr))
             index = self.format_array_access_index(index_expr)
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
@@ -9269,10 +9270,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if member_info is not None:
                 return member_info["global_name"]
-            obj = self.generate_expression_without_expected(node.object)
+            obj = postfix_operand(
+                self.generate_expression_without_expected(node.object)
+            )
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
-            pointer = self.generate_expression(node.pointer_expr)
+            pointer = postfix_operand(self.generate_expression(node.pointer_expr))
             return f"{pointer}->{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
@@ -9452,8 +9455,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             if isinstance(node.operand, BinaryOpNode):
                 operand = f"({operand})"
             if getattr(node, "is_postfix", False):
-                return f"{operand}{node.op}"
-            return f"{node.op}{operand}"
+                return f"{postfix_operand(operand)}{node.op}"
+            return f"{node.op}{prefix_unary_operand(node.op, operand)}"
         elif isinstance(node, TernaryOpNode):
             bool_vector_select = self.generate_bool_vector_select_expression(
                 node.condition, node.true_expr, node.false_expr
@@ -14042,6 +14045,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if coord_spec is None:
             return None
         numerator, divisor = coord_spec
+        coord = postfix_operand(coord)
         return f"{coord}.{numerator} / {coord}.{divisor}"
 
     def unsupported_texture_projected_call(self, func_name, reason):

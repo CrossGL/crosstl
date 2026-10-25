@@ -25,6 +25,7 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
+from ..switch_clauses import ordered_switch_clauses
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
@@ -5990,25 +5991,15 @@ class HLSLToCrossGLConverter(
             + f"switch ({self.generate_expression(expression, is_main)}) {{\n"
         )
 
-        for case in node.cases:
-            code += (
-                "    " * (indent + 1)
-                + f"case {self.generate_expression(case.value, is_main)}:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value, is_main)}"
             )
-            case_body = getattr(case, "body", None) or getattr(case, "statements", [])
+            code += "    " * (indent + 1) + f"{label}:\n"
             code += self.generate_function_body(
-                case_body, indent + 2, is_main, new_scope=False
-            )
-
-        default_body = (
-            getattr(node, "default_body", None)
-            or getattr(node, "default_case", None)
-            or getattr(node, "default", None)
-        )
-        if default_body:
-            code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(
-                default_body, indent + 2, is_main, new_scope=False
+                statements, indent + 2, is_main, new_scope=False
             )
 
         code += "    " * indent + "}\n"
@@ -6118,13 +6109,15 @@ class HLSLToCrossGLConverter(
         condition = self.generate_expression(node.condition)
         code = f"switch ({condition}) {{\n"
 
-        for case in node.cases:
-            code += self.visit_CaseNode(case)
-
-        if node.default_body:
-            code += self.get_indent() + "default:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value)}"
+            )
+            code += self.get_indent() + f"{label}:\n"
             self.indentation += 1
-            for stmt in node.default_body:
+            for stmt in statements:
                 code += self.get_indent() + self.generate_statement(stmt) + "\n"
             self.indentation -= 1
 

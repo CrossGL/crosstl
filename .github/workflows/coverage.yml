@@ -24,7 +24,7 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONHASHSEED: "0"
   NAGA_VERSION: "30.0.1"
-  SLANG_VERSION: "2026.9.1"
+  SLANG_VERSION: "2026.20"
   # tools/coverage/upstream.py reads spirv_std from the same release.
   RUST_GPU_VERSION: "0.11.0"
   RUST_GPU_COMMIT: "62401280ab4b512c734ad1aceee7553385e17418"
@@ -151,7 +151,7 @@ jobs:
           archive="$RUNNER_TEMP/slang.tar.gz"
           curl -fsSLo "$archive" --retry 5 --retry-all-errors --connect-timeout 30 \
             "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64-glibc-2.27.tar.gz"
-          echo "b57ea8869aa6d61a449145a8048591fdd9311c478496f012bbd2440e31ea0130  $archive" | sha256sum --check --strict
+          echo "b831477e994dee2fb36a3e83c54ad89cbfeefd47b4d973b2d8bed65b64780996  $archive" | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/slang"
           tar -xzf "$archive" -C "$RUNNER_TEMP/slang"
           echo "$RUNNER_TEMP/slang/bin" >> "$GITHUB_PATH"
@@ -260,15 +260,15 @@ jobs:
 
       # The Mojo compiler and MAX's GPU package, at the release tools/coverage/upstream.py reads Mojo's standard library
       # from. They live in their own environment, and the wheels are pinned by digest.
-      - name: Install mojo 1.1.0
+      - name: Install mojo 1.2.0
         if: matrix.backend == 'mojo'
         run: |
           set -euo pipefail
           python -m venv "$RUNNER_TEMP/mojo"
           cat > "$RUNNER_TEMP/mojo-requirements.txt" <<'EOF'
-          mojo-compiler==1.1.0 --hash=sha256:b47442278eb39705075f23d058b38a364bd68bdaa542ad514c187cee633beab7
-          mojo-compiler-mojo-libs==1.1.0 --hash=sha256:dd8c5382e27fe5c1ffe0834d267f549abbffee35bf1a8d605cf24252ff95a2e6
-          max-mojo-libs==26.6.0 --hash=sha256:7880630afbfb544bd66cf7ab725f5e7b91fcaac02c7e4c9a74a877eba1546e2b
+          mojo-compiler==1.2.0 --hash=sha256:3ee34a3b26c6cccaa9523a0e8db8f67bea954497d782d97c9e61c3c4ecbdac7b
+          mojo-compiler-mojo-libs==1.2.0 --hash=sha256:3d631f7e798c11d0029c4a892ebae1f5742751fac0c526af74b45a8ae07c3acb
+          max-mojo-libs==26.7.0 --hash=sha256:c9eeaef01a19565b8467da9c6b7cd57fa787759ce5954140b0e031d095c630b9
           EOF
           "$RUNNER_TEMP/mojo/bin/pip" install --quiet --no-deps --require-hashes -r "$RUNNER_TEMP/mojo-requirements.txt"
           echo "CROSSTL_COVERAGE_MOJO=$RUNNER_TEMP/mojo/bin/mojo" >> "$GITHUB_ENV"
