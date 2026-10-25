@@ -253,9 +253,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "atomic_add": "atomicAdd",
         "atomic_fetch_add": "atomicAdd",
         "atomic_fetch_add_explicit": "atomicAdd",
-        "atomic_sub": "atomicSub",
-        "atomic_fetch_sub": "atomicSub",
-        "atomic_fetch_sub_explicit": "atomicSub",
+        "atomic_sub": "atomicAdd",
+        "atomic_fetch_sub": "atomicAdd",
+        "atomic_fetch_sub_explicit": "atomicAdd",
         "atomic_xchg": "atomicExchange",
         "atomic_exchange": "atomicExchange",
         "atomic_exchange_explicit": "atomicExchange",
@@ -280,7 +280,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "atomic_fetch_xor": "atomicXor",
         "atomic_fetch_xor_explicit": "atomicXor",
         "atomic_inc": "atomicAdd",
-        "atomic_dec": "atomicSub",
+        "atomic_dec": "atomicAdd",
     }
     OPENCL_SIZEOF_SCALAR_SIZES = {
         "bool": 1,
@@ -1543,8 +1543,45 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
         elif node.operation == "atomic_dec" and len(args) == 1:
-            args.append("1")
+            args.append(self.negate_atomic_operand(node.args[0], "1"))
+        elif node.operation in self.OPENCL_ATOMIC_SUB_OPERATIONS and len(args) >= 2:
+            # CrossGL has no atomicSub, so subtract by adding the negated
+            # operand; both return the value the memory held before.
+            args[1] = self.negate_atomic_operand(node.args[0], args[1])
         return f"{operation}({', '.join(args)})"
+
+    OPENCL_ATOMIC_SUB_OPERATIONS = frozenset(
+        {"atomic_sub", "atomic_fetch_sub", "atomic_fetch_sub_explicit"}
+    )
+    OPENCL_ATOMIC_UINT_TYPES = frozenset({"u32", "uint", "unsigned int", "atomic_uint"})
+
+    def negate_atomic_operand(self, pointer, operand):
+        """``-operand``, or ``0u - operand`` on uint memory: WGSL has no unary minus on u32."""
+        text = operand.strip()
+        pointee = self.indexed_expression_type(self.expression_declared_type(pointer))
+        if (
+            pointee
+            and self.strip_type_qualifiers(pointee) in self.OPENCL_ATOMIC_UINT_TYPES
+        ):
+            if text.isdigit():
+                text += "u"
+            return f"0u - {self.parenthesize_atomic_operand(text)}"
+        return f"-{self.parenthesize_atomic_operand(text)}"
+
+    @staticmethod
+    def parenthesize_atomic_operand(text):
+        if text.isidentifier() or re.fullmatch(r"[0-9][0-9A-Za-z_.]*", text):
+            return text
+        if text.startswith("(") and text.endswith(")"):
+            depth = 0
+            for index, char in enumerate(text):
+                depth += char == "("
+                depth -= char == ")"
+                if depth == 0 and index < len(text) - 1:
+                    break
+            else:
+                return text
+        return f"({text})"
 
     def opencl_relaxed_atomic_arguments(self, operation, args):
         """The plain-form arguments of an ``*_explicit`` atomic, refusing an order or scope CrossGL cannot keep."""

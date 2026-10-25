@@ -17,6 +17,7 @@ from crosstl.backend.OpenCL.target_lowering import (
     OpenCLTargetUnsupportedError,
     validate_opencl_intermediate_for_target,
 )
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -82,7 +83,7 @@ def test_opencl_explicit_atomics_drop_memory_order_and_scope():
 
     assert "memory_order" not in crossgl
     assert "memory_scope" not in crossgl
-    assert "atomicSub(outp[i], iin[i]);" in crossgl
+    assert "atomicAdd(outp[i], -(iin[i]));" in crossgl
     assert "atomicAdd(outp[i], iin[i]);" in crossgl
     assert "atomicExchange(outp[i], iin[i]);" in crossgl
     assert "atomicOr(outp[i], iin[i]);" in crossgl
@@ -1063,6 +1064,60 @@ def test_opencl_function_local_anonymous_records_materialize_named_types():
     assert "struct None" not in crossgl
     assert "struct <anonymous>" not in crossgl
     assert "union <anonymous>" not in crossgl
+
+
+def test_opencl_atomic_subtraction_lowers_to_atomic_add_of_negated_operand():
+    source = """
+        kernel void probe(global int *outp, global uint *counts, int v) {
+          uint i = get_global_id(0);
+          atomic_dec(&outp[i]);
+          int a = atomic_sub(&outp[i], v);
+          int b = atomic_fetch_sub(&outp[i], v - 2);
+          uint c = atomic_sub(&counts[i], 3u);
+          outp[0] = a + b + (int)c;
+        }
+        """
+
+    cgl_ast, crossgl = parse_crossgl_from_opencl(source)
+
+    assert "atomicSub" not in crossgl
+    assert "atomicAdd(outp[i], -1);" in crossgl
+    assert "atomicAdd(outp[i], -v)" in crossgl
+    assert "atomicAdd(outp[i], -(v - 2))" in crossgl
+    assert "atomicAdd(counts[i], 0u - 3u)" in crossgl
+
+    hlsl = HLSLCodeGen().generate(cgl_ast)
+    assert "atomicSub" not in hlsl
+    assert "InterlockedAdd(outp[i], -1" in hlsl
+
+
+def test_opencl_atomic_subtraction_on_uint_memory_subtracts_from_unsigned_zero(
+    tmp_path,
+):
+    source = """
+        kernel __attribute__((reqd_work_group_size(64, 1, 1)))
+        void probe(global uint *counts, global uint *res, uint v) {
+          local uint tmp[64];
+          uint l = get_local_id(0);
+          tmp[l] = 100u;
+          barrier(CLK_LOCAL_MEM_FENCE);
+          uint d = atomic_dec(&tmp[l]);
+          uint a = atomic_sub(&counts[l], v);
+          uint b = atomic_fetch_sub(&tmp[l], 1);
+          res[l] = a + b + d;
+        }
+        """
+
+    crossgl = generate_crossgl(source)
+    assert "atomicAdd(tmp[l], 0u - 1u)" in crossgl
+    assert "atomicAdd(counts[l], 0u - v)" in crossgl
+    assert crossgl.count("0u - 1u") == 2
+
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    glsl = crosstl.translate(str(opencl_path), backend="glsl", format_output=False)
+    assert "atomicAdd(probe_tmp[l], (0u - 1u))" in glsl
+    assert "atomicAdd(counts[l], (0u - v))" in glsl
 
 
 def test_opencl_memory_fences_lower_to_crossgl_fences_by_flag():
