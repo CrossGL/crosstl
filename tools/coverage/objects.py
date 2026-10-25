@@ -139,8 +139,10 @@ def _same(*names: str) -> dict[str, Uniform]:
     return {name: Uniform(name) for name in names}
 
 
+# Every GLSL function lists its sampler2D overload before its sampler2DShadow one, so the shadow sampler only adds the
+# depth-comparison overloads that SPIR-V's Dref instructions are probed through.
 _GLSL_UNIFORMS = {
-    **_same("sampler2D", "sampler2DMS"),
+    **_same("sampler2D", "sampler2DMS", "sampler2DShadow"),
     "image2D": Uniform("image2D", "rgba32f"),
     "image2DMS": Uniform("image2DMS", "rgba32f"),
     "iimage2D": Uniform("iimage2D", "r32i"),
@@ -173,11 +175,11 @@ def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
 # the 2D forms; functions that only take the others stay untested. CrossGL calls texture functions as GLSL does.
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
-    # The CrossGL counterparts of WGSL's depth and array textures (:data:`.spellings.COUNTERPARTS`) take two more.
-    # CrossGL spells an acceleration structure as every generator reads it, and byte-address buffers as Slang does.
+    # The CrossGL counterpart of WGSL's array textures (:data:`.spellings.COUNTERPARTS`) takes one more. CrossGL
+    # spells an acceleration structure as every generator reads it, and byte-address buffers as Slang does.
     "crossgl": {
         **_GLSL_UNIFORMS,
-        **_same("sampler2DShadow", "sampler2DArray"),
+        **_same("sampler2DArray"),
         **_acceleration_structure("accelerationStructureEXT"),
         **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
     },

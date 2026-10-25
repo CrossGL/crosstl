@@ -19,8 +19,8 @@ from demos.integrations.mlx.tests.kernels.test_current_unary_logarithms import (
     _compare_complex_source,
     _workload,
 )
+from tests import workflow_text
 from tests.test_translator.test_metal_precise_trig import _bits
-from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_COMPLEX_INVERSE_TRIG"
 
@@ -152,7 +152,7 @@ def test_current_complex_inverse_trig_native_comparison(
 
 def test_ci_requires_guarded_complex_inverse_trig():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    job = ci_coverage.workflow_job_text(workflow, "mlx-metal-porting")
+    job = workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
     step = job.split("      - name: Validate pinned complex inverse trigonometry\n", 1)[
         1
     ].split("      - name:", 1)[0]

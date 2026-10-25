@@ -1,5 +1,5 @@
 #version 330 core
-in vec4 position;
+layout(location = 0) in vec4 position;
 // Constant Buffers
 layout(std140) uniform Uniforms {
     mat4 modelViewProjectionMatrix;

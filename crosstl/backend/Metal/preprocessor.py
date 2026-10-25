@@ -32,6 +32,7 @@ from .floating_point import reject_contraction_tokens
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
+    deducible_template_parameters,
 )
 from .template_constants import unresolved_constant_references
 from .text_scanners import (
@@ -42,6 +43,12 @@ from .text_scanners import (
     strip_top_level_default_value,
 )
 from .type_layout import metal_type_layout, metal_type_size
+from .value_traits import (
+    complete_template_arguments,
+    enable_if_parts,
+    simdgroup_type_trait,
+    struct_value_trait_definitions,
+)
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 # Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
@@ -444,6 +451,10 @@ class _MetalBooleanVariableTemplate:
     is_partial_specialization: bool
     span: Tuple[int, int]
     namespace: str
+    # ``value`` for a struct template read as a trait (``Name<T>::value``).
+    member: str = ""
+    # Every declared template parameter as ``(name or "", default or None)``.
+    parameter_slots: Tuple[Tuple[str, Optional[str]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -500,6 +511,9 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+    # ``using``/``typedef`` names a type: it shadows outer constants but is no
+    # unresolved value.
+    type_alias: bool = False
 
 
 @dataclass(frozen=True)
@@ -1391,6 +1405,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     template,
                     template_arguments,
                 ):
+                    continue
+                if not template.variadic_template_parameters and (
+                    set(template.template_parameters[len(template_arguments) :])
+                    & deducible_template_parameters(self, template)
+                ):
+                    # A defaulted parameter the call can deduce takes the
+                    # deduced type, not its default; argument deduction decides.
                     continue
                 specialized_name = materialized_names.get(key)
                 if specialized_name is not None:
@@ -4852,7 +4873,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 resolved,
                 qualified_replacements,
             )
-            candidate = self._replace_identifiers(candidate, replacements)
+            candidate = self._replace_identifiers(
+                candidate,
+                replacements,
+                skip_template_names=True,
+            )
             if candidate == resolved:
                 break
             resolved = candidate
@@ -5200,6 +5225,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     scope_start=scope_start,
                     scope_end=scope_end,
                     value=value,
+                    type_alias=bool(type_tokens)
+                    and type_tokens[0] in {"using", "typedef"},
                 )
             )
         record_parameters_through(len(code))
@@ -7040,7 +7067,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if name.rsplit("::", 1)[-1] in boolean_templates:
                 angle_start = expr.find("<", named.start())
                 angle_end = self._find_matching_angle(expr, angle_start)
-                if angle_end is None or expr[angle_end + 1 :].strip():
+                suffix = "" if angle_end is None else expr[angle_end + 1 :].strip()
+                member = re.fullmatch(r"::\s*(value)", suffix)
+                if angle_end is None or (suffix and member is None):
                     raise self._UnrecognizedConstraint(expression)
                 return self._evaluate_boolean_variable_template(
                     name,
@@ -7053,7 +7082,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     position=position,
                     namespace_visibility=namespace_visibility,
                     lookup_position=lookup_position,
+                    member=member.group(1) if member else "",
                 )
+
+        simdgroup_trait = simdgroup_type_trait(
+            self,
+            expr,
+            lambda operand: self._canonical_type_trait_operand(
+                operand,
+                lambda text: self._canonicalize_type_aliases_at(
+                    self._resolve_constraint_type(text, bindings),
+                    type_aliases or {},
+                    position if lookup_position is None else lookup_position,
+                ),
+            ),
+            {struct.name for struct in structs or ()},
+        )
+        if simdgroup_trait is not None:
+            if simdgroup_trait[0] is None:
+                raise self._UnrecognizedConstraint(expression)
+            return simdgroup_trait[0]
 
         parsed_trait = self._parse_metal_type_trait_expression(expr)
         if parsed_trait is not None:
@@ -9404,6 +9452,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
                 )
             cursor = semicolon + 1
+        traits = struct_value_trait_definitions(
+            self, code, _MetalBooleanVariableTemplate
+        )
+        for trait_name, trait_definitions in traits.items():
+            definitions.setdefault(trait_name, []).extend(trait_definitions)
         return definitions
 
     def _evaluate_boolean_variable_template(
@@ -9419,10 +9472,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         position: int = 0,
         namespace_visibility: Optional[_MetalNamespaceVisibility] = None,
         lookup_position: Optional[int] = None,
+        member: str = "",
     ) -> bool:
         visible = self._visible_boolean_variable_templates(
             name, definitions, position, namespace_visibility, lookup_position
         )
+        if any(definition.member != member for definition in visible):
+            raise self._UnrecognizedConstraint(name)
 
         def canonical(argument: str, at: int) -> str:
             normalized = self._canonical_type_trait_operand(
@@ -9435,9 +9491,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 raise self._UnrecognizedConstraint(name)
             return normalized
 
+        concrete_arguments = complete_template_arguments(
+            self,
+            visible[0],
+            [
+                canonical(self._replace_identifiers(argument, bindings), position)
+                for argument in arguments
+            ],
+        )
+        if concrete_arguments is None:
+            raise self._UnrecognizedConstraint(name)
         concrete_arguments = tuple(
-            canonical(self._replace_identifiers(argument, bindings), position)
-            for argument in arguments
+            canonical(argument, position) for argument in concrete_arguments
         )
         qualified_name = f"{visible[0].namespace}::{visible[0].name}"
         key = (qualified_name, concrete_arguments)
@@ -9445,19 +9510,30 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             raise self._UnrecognizedConstraint(name)
         candidates = []
         for definition in visible:
-            if len(definition.argument_patterns) != len(concrete_arguments):
+            patterns = complete_template_arguments(
+                self, visible[0], definition.argument_patterns
+            )
+            if patterns is None or len(patterns) != len(concrete_arguments):
                 continue
             local_bindings: Dict[str, str] = {}
+            constraints: List[Tuple[Tuple[str, str], str]] = []
             matched = True
             score = (
                 2
                 if not definition.template_parameters
                 else 1 if definition.is_partial_specialization else 0
             )
-            for pattern, concrete in zip(
-                definition.argument_patterns, concrete_arguments
-            ):
+            for pattern, concrete in zip(patterns, concrete_arguments):
                 normalized_pattern = self._normalize_template_argument_text(pattern)
+                constraint = (
+                    enable_if_parts(self, normalized_pattern)
+                    if definition.is_partial_specialization
+                    else None
+                )
+                if constraint is not None:
+                    # Decided once the other arguments have bound the parameters.
+                    constraints.append((constraint, concrete))
+                    continue
                 if normalized_pattern in definition.template_parameters:
                     existing = local_bindings.get(normalized_pattern)
                     if existing is not None and existing != concrete:
@@ -9490,7 +9566,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 parameter in local_bindings
                 for parameter in definition.template_parameters
             ):
-                candidates.append((score, definition, local_bindings))
+                for (condition, result_type), concrete in constraints:
+                    enabled = self._evaluate_boolean_constraint(
+                        condition,
+                        local_bindings,
+                        boolean_templates=definitions,
+                        variable_stack=(*stack, key),
+                        structs=structs,
+                        type_aliases=type_aliases,
+                        position=position,
+                        namespace_visibility=namespace_visibility,
+                        lookup_position=definition.span[0],
+                    )
+                    if not enabled or canonical(
+                        self._replace_identifiers(result_type, local_bindings),
+                        definition.span[0],
+                    ) != canonical(concrete, position):
+                        matched = False
+                        break
+                if matched:
+                    candidates.append((score, definition, local_bindings))
         if not candidates:
             raise self._UnrecognizedConstraint(name)
         best_score = max(candidate[0] for candidate in candidates)
@@ -23671,7 +23766,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 (
                     name
                     for name, binding in visible_local_constants.items()
-                    if binding.value is None
+                    if binding.value is None and not binding.type_alias
                 ),
             )
             if unresolved_local_constants:
@@ -23990,7 +24085,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     (
                         name
                         for name, binding in visible_local_constants.items()
-                        if binding.value is None
+                        if binding.value is None and not binding.type_alias
                     ),
                 )
                 if unresolved_local_constants:
@@ -28376,7 +28471,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _split_top_level_commas(self, text: str) -> List[str]:
         return split_top_level_commas(text, self._read_string)
 
-    def _replace_identifiers(self, text: str, replacements: Dict[str, str]) -> str:
+    def _replace_identifiers(
+        self,
+        text: str,
+        replacements: Dict[str, str],
+        *,
+        skip_template_names: bool = False,
+    ) -> str:
+        # With ``skip_template_names`` an identifier followed by ``<`` is kept: a
+        # plain alias takes no template arguments, so ``Op<`` after
+        # ``using Op = Op<T>;`` names the template the alias refers to.
         result = ""
         i = 0
         while i < len(text):
@@ -28403,7 +28507,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 continue
             if text[i].isalpha() or text[i] == "_":
                 ident, consumed = self._read_identifier(text, i)
-                if self._is_member_identifier_context(text, i):
+                if self._is_member_identifier_context(text, i) or (
+                    skip_template_names
+                    and ident in replacements
+                    and text[i + consumed :].lstrip().startswith("<")
+                ):
                     result += ident
                 else:
                     result += replacements.get(ident, ident)

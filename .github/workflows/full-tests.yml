@@ -211,7 +211,8 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -223,6 +224,10 @@ jobs:
               Write-Warning "DXC download failed on attempt $attempt; retrying."
               Start-Sleep -Seconds (10 * $attempt)
             }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
           }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           Join-Path $dxcRoot "bin\x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -400,6 +405,7 @@ jobs:
           CROSSTL_REQUIRE_BUFFER_STRIDE_EXECUTION: "1"
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
+          CROSSTL_REQUIRE_BUFFER_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
           CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
@@ -413,6 +419,7 @@ jobs:
             tests/test_backend/test_directx/test_hlsl_buffer_parameter_layouts.py \
             tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
             tests/test_translator/test_structured_buffer_counters.py \
+            tests/test_translator/test_metal_buffer_arrays.py \
             tests/test_translator/test_append_consume_layouts.py \
             tests/test_translator/test_structured_buffer_array_layouts.py
 
@@ -451,7 +458,8 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
           $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
           $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
-          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $dxcSha256 = "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4"
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             try {
               Invoke-WebRequest -Uri $dxcUri -OutFile $archive
@@ -463,6 +471,10 @@ jobs:
               Write-Warning "DXC download failed on attempt $attempt; retrying."
               Start-Sleep -Seconds (10 * $attempt)
             }
+          }
+          $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $dxcSha256) {
+            throw "DXC archive checksum mismatch: expected $dxcSha256, got $actualSha256."
           }
           Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
           $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |

@@ -25,7 +25,10 @@ from demos.integrations.mlx.tests.corpus_evidence import (
     assert_deferred_metal_compiler_diagnostics,
     corpus_workspace,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    drift_allowed,
+)
 from tools.compile_artifact_bundle import write_bundle_entry
 
 MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -791,8 +794,13 @@ def _translate_quantized_metal_artifact(
 
     generated_path = mlx_root / artifact["path"]
     generated_bytes = generated_path.read_bytes()
-    assert len(generated_bytes) == workload.size_bytes
-    assert hashlib.sha256(generated_bytes).hexdigest() == workload.sha256
+    # check_generated_artifact compared the report's identity with its pin; the
+    # file on disk must carry exactly the identity the report recorded.
+    assert len(generated_bytes) == artifact["generatedSizeBytes"]
+    assert (
+        hashlib.sha256(generated_bytes).hexdigest()
+        == artifact["generatedHash"]["value"]
+    )
     generated = generated_bytes.decode("utf-8")
     assert generated.count("kernel void ") == 1
     assert f"kernel void {workload.entry_point}" in generated
@@ -858,6 +866,7 @@ def _roundtrip_pinned_mlx_quantized_through_metal(
                 QUANTIZED_METAL_CONTRACT_PATH,
                 workload.entry_point,
                 bundle_root,
+                allow_drift=drift_allowed(),
             )
             return
 

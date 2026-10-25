@@ -25,6 +25,7 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
+from ..switch_clauses import ordered_switch_clauses
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
@@ -33,6 +34,7 @@ from .hlsl_matrix_import import (
     crossgl_matrix_type_name,
     hlsl_matrix_type_map,
 )
+from .implicit_vector_truncation import HLSLImplicitVectorTruncationMixin
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
@@ -41,6 +43,7 @@ from .struct_methods import (
     collect_struct_methods,
     method_local_names,
 )
+from .subpass_inputs import SUBPASS_INPUT_TYPES
 from .texel_access import HLSLTexelAccessMixin
 from .texel_buffers import HLSLTexelBufferMixin
 from .trigonometric_reduction import HLSLTrigonometricReductionMixin
@@ -83,6 +86,7 @@ class HLSLToCrossGLConverter(
     HLSLTexelBufferMixin,
     HLSLTrigonometricReductionMixin,
     HLSLValueShapeMixin,
+    HLSLImplicitVectorTruncationMixin,
 ):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
@@ -1031,7 +1035,7 @@ class HLSLToCrossGLConverter(
             return None
         if (
             member == "SubpassLoad"
-            and self.raw_type_base(resource_type) == "SubpassInput"
+            and self.raw_type_base(resource_type) in SUBPASS_INPUT_TYPES
         ):
             return {
                 "member": member,
@@ -2177,8 +2181,13 @@ class HLSLToCrossGLConverter(
             "min16uint",
             "min16int",
             "min12int",
+            "float16_t",
+            "uint16_t",
+            "int16_t",
             "double",
             "float",
+            "half",
+            "fixed",
             "uint",
             "int",
             "bool",
@@ -4046,7 +4055,7 @@ class HLSLToCrossGLConverter(
                 f"    {self.render_identifier(struct_name)} {self.render_identifier(node.name)}"
                 f" @glsl_buffer_block({record}, {layout});\n"
             )
-        if self.raw_type_base(getattr(node, "vtype", None)) == "SubpassInput":
+        if self.raw_type_base(getattr(node, "vtype", None)) in SUBPASS_INPUT_TYPES:
             code = self.format_subpass_input_attributes(
                 getattr(node, "attributes", []), 1
             )
@@ -4146,7 +4155,7 @@ class HLSLToCrossGLConverter(
                 "PointStream",
                 "LineStream",
                 "TriangleStream",
-                "SubpassInput",
+                *SUBPASS_INPUT_TYPES,
             }
         ):
             return False
@@ -4256,8 +4265,21 @@ class HLSLToCrossGLConverter(
         stage_entry=False,
     ):
         """Render one HLSL function node as a CrossGL function block."""
-        code = self.format_attributes(
-            getattr(func, "attributes", []), indent, skip_attribute_names
+        attributes = getattr(func, "attributes", []) or []
+        early_tests = any(
+            str(getattr(attribute, "name", "")).lower() == "earlydepthstencil"
+            for attribute in attributes
+        )
+        code = ""
+        if early_tests and getattr(func, "qualifier", None) == "fragment":
+            # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, as MSL's
+            # [[early_fragment_tests]] imports; it is not a semantic of the function.
+            code += "    " * indent + "layout(early_fragment_tests) in;\n"
+        code += self.format_attributes(
+            attributes,
+            indent,
+            set(skip_attribute_names or ())
+            | ({"earlydepthstencil"} if early_tests else set()),
         )
         precise_as_attribute = (
             self.function_precise_return_needs_attribute(func)
@@ -4432,6 +4454,7 @@ class HLSLToCrossGLConverter(
                     value = self.generate_expression(
                         stmt.value, is_main, expected_type=stmt.vtype
                     )
+                    value = self.truncated_initializer_value(stmt, value)
                     self.record_variable_type(stmt)
                     code += (
                         f"{qualifier_prefix}{self.map_variable_type(stmt)} "
@@ -5124,6 +5147,7 @@ class HLSLToCrossGLConverter(
             return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
+        rhs = self.truncated_assignment_value(node, rhs)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
@@ -5161,6 +5185,7 @@ class HLSLToCrossGLConverter(
                 return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
+            right = self.truncated_assignment_value(expr, right)
             op = expr.operator
             return f"{left} {op} {right}"
 
@@ -5513,6 +5538,9 @@ class HLSLToCrossGLConverter(
             "float64_t": "double",
             "int32_t": "int",
             "uint32_t": "uint",
+            # HLSL declares the packed 8-bit dot-product types as uint aliases.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
         }
         if text in fixed_width_aliases:
             return fixed_width_aliases[text]
@@ -5986,25 +6014,15 @@ class HLSLToCrossGLConverter(
             + f"switch ({self.generate_expression(expression, is_main)}) {{\n"
         )
 
-        for case in node.cases:
-            code += (
-                "    " * (indent + 1)
-                + f"case {self.generate_expression(case.value, is_main)}:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value, is_main)}"
             )
-            case_body = getattr(case, "body", None) or getattr(case, "statements", [])
+            code += "    " * (indent + 1) + f"{label}:\n"
             code += self.generate_function_body(
-                case_body, indent + 2, is_main, new_scope=False
-            )
-
-        default_body = (
-            getattr(node, "default_body", None)
-            or getattr(node, "default_case", None)
-            or getattr(node, "default", None)
-        )
-        if default_body:
-            code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(
-                default_body, indent + 2, is_main, new_scope=False
+                statements, indent + 2, is_main, new_scope=False
             )
 
         code += "    " * indent + "}\n"
@@ -6114,13 +6132,15 @@ class HLSLToCrossGLConverter(
         condition = self.generate_expression(node.condition)
         code = f"switch ({condition}) {{\n"
 
-        for case in node.cases:
-            code += self.visit_CaseNode(case)
-
-        if node.default_body:
-            code += self.get_indent() + "default:\n"
+        for value, statements in ordered_switch_clauses(node):
+            label = (
+                "default"
+                if value is None
+                else f"case {self.generate_expression(value)}"
+            )
+            code += self.get_indent() + f"{label}:\n"
             self.indentation += 1
-            for stmt in node.default_body:
+            for stmt in statements:
                 code += self.get_indent() + self.generate_statement(stmt) + "\n"
             self.indentation -= 1
 

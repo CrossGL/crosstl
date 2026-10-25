@@ -6579,6 +6579,82 @@ def test_ray_stage_intrinsic_builtins_respect_local_shadowing():
     assert "HitKind()" not in generated_code
 
 
+def test_slang_codegen_lowers_compute_num_workgroups_to_workgroup_count():
+    code = """
+    shader NumWorkGroups {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                uvec3 groups = gl_NumWorkGroups;
+                outp[i] = float(gl_NumWorkGroups.x + groups.y);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 groups = WorkgroupCount();" in generated_code
+    assert "float(WorkgroupCount().x + groups.y)" in generated_code
+    assert "gl_NumWorkGroups" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "where"),
+    [
+        (
+            """
+            shader NumWorkGroupsVertex {
+                vertex {
+                    vec4 main() @gl_Position {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a vertex entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsFragment {
+                fragment {
+                    vec4 main() @gl_FragColor {
+                        return vec4(float(gl_NumWorkGroups.x), 0.0, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "a fragment entry point",
+        ),
+        (
+            """
+            shader NumWorkGroupsHelper {
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                    buffer float* outp;
+                    uint groupsX() { return gl_NumWorkGroups.x; }
+                    void main() {
+                        outp[gl_GlobalInvocationID.x] = float(groupsX());
+                    }
+                }
+            }
+            """,
+            "a helper function",
+        ),
+    ],
+    ids=["vertex", "fragment", "helper"],
+)
+def test_slang_codegen_refuses_num_workgroups_outside_a_compute_entry_point(
+    code, where
+):
+    # Slang declares no gl_NumWorkGroups; only a compute entry point reads it as WorkgroupCount().
+    with pytest.raises(
+        SlangLoweringRefused, match=f"gl_NumWorkGroups: .*not in {where}"
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_ray_stage_semantic_parameters_emit_slang_directions():
     code = """
     shader RayStageSemantics {
@@ -10997,6 +11073,41 @@ def test_narrow_generic_vector_constructors_emit_slang_vector_types():
 
     for invalid_token in ("i82", "u84", "i163", "u162", "vec2<", "vec3<", "vec4<"):
         assert invalid_token not in generated_code
+
+
+def test_glsl_16bit_integer_spellings_emit_slang_vector_types():
+    # Slang has no u16vec2/i16vec4 or uint16/int16 spellings; its 16-bit
+    # integer types are uint16_t/int16_t and vector<uint16_t, N>.
+    code = """
+    shader Shorts {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u16vec2 a = u16vec2(uint16(uin[i]), uint16(uin[i + 1u]));
+                i16vec4 b = i16vec4(int16(1), int16(2), int16(3), int16(4));
+                u16vec3 c = u16vec3(a, uint16(5));
+                i16vec2 d = i16vec2(b.xy);
+                outp[i] = uvec4(uvec2(a), uint(c.z), uint(d.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vector<uint16_t, 2> a = vector<uint16_t, 2>(uint16_t(uin[i])" in (
+        generated_code
+    )
+    assert "vector<int16_t, 4> b = vector<int16_t, 4>(int16_t(1)" in generated_code
+    assert "vector<uint16_t, 3> c = vector<uint16_t, 3>(a, uint16_t(5));" in (
+        generated_code
+    )
+    assert "vector<int16_t, 2> d = vector<int16_t, 2>(b.xy);" in generated_code
+    for glsl_spelling in ("u16vec", "i16vec", "uint16(", "int16("):
+        assert glsl_spelling not in generated_code
 
 
 def test_scalar_aliases_emit_slang_fundamental_type_names():

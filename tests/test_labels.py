@@ -1,7 +1,7 @@
 import json
 import re
 import subprocess
-from fnmatch import fnmatch
+from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -115,6 +115,132 @@ def test_load_rejects_a_bad_color_a_duplicate_name_and_a_short_file(tmp_path):
         )
     with pytest.raises(ValueError, match="at least"):
         load(_write(tmp_path, _many(3)))
+
+
+def test_load_rejects_a_path_pattern_that_cannot_match(tmp_path):
+    entry = {"name": "x", "color": "ffffff", "paths": ["crosstl/backend/Metal/*"]}
+    with pytest.raises(ValueError, match="never match"):
+        load(_write(tmp_path, [*_many(), entry]))
+
+
+def test_every_path_pattern_matches_a_tracked_file():
+    # A pattern that matches nothing has gone stale with a rename and labels nothing.
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.lower()
+    files = tracked.splitlines()
+    for label in load():
+        for pattern in label.paths:
+            assert any(fnmatchcase(name, pattern) for name in files), (
+                label.name,
+                pattern,
+            )
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        (
+            [
+                "crosstl/backend/Metal/MetalParser.py",
+                "tests/test_backend/test_metal/x.py",
+            ],
+            ["backend:metal", "direction:input", "area:frontend"],
+        ),
+        (
+            ["crosstl/translator/codegen/GLSL_codegen.py"],
+            ["backend:glsl", "direction:output", "area:codegen"],
+        ),
+        (
+            ["crosstl/translator/codegen/directx_codegen.py"],
+            ["backend:hlsl", "direction:output", "area:codegen"],
+        ),
+        (["tests/test_translator/test_codegen/test_CUDA_codegen.py"], ["backend:cuda"]),
+        (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),
+        ([".github/workflows/coverage.yml", "tools/coverage/run.py"], ["area:ci"]),
+        (["docs/source/index.rst", "README.md"], ["area:docs"]),
+        (["demos/integrations/mlx/README.md"], []),
+    ],
+)
+def test_pull_requests_get_the_labels_their_paths_match(files, expected):
+    assert labels.labels_for(files, load()) == expected
+
+
+def test_only_pull_requests_without_labels_are_labelled():
+    open_pulls = [
+        {"number": 5, "labels": []},
+        {"number": 6, "labels": [{"name": "bug"}]},
+        {"number": 7, "labels": []},
+    ]
+    responses = {
+        ("GET", "pulls?state=open&per_page=100&page=1"): open_pulls,
+        ("GET", "pulls/5/files?per_page=100&page=1"): [
+            {
+                "filename": "crosstl/translator/codegen/wgsl_codegen.py",
+                "previous_filename": "crosstl/backend/Metal/MetalLexer.py",
+            }
+        ],
+        ("GET", "pulls/7/files?per_page=100&page=1"): [
+            {"filename": "demos/integrations/mlx/README.md"}
+        ],
+    }
+    dry = _Recorder(responses)
+    labels.label_pull_requests(GitHub("CrossGL/crosstl", dry), load(), apply=False)
+    assert [method for method, *_ in dry.calls] == ["GET", "GET", "GET"]
+
+    recorder = _Recorder(responses)
+    labels.label_pull_requests(GitHub("CrossGL/crosstl", recorder), load(), apply=True)
+    assert [call for call in recorder.calls if call[0] == "POST"] == [
+        (
+            "POST",
+            "issues/5/labels",
+            {
+                "labels": [
+                    "backend:metal",
+                    "backend:wgsl",
+                    "direction:input",
+                    "direction:output",
+                    "area:frontend",
+                    "area:codegen",
+                ]
+            },
+        )
+    ]
+    assert not any(path.startswith("pulls/6/") for _, path, _ in recorder.calls)
+
+
+def _workflow(name):
+    return yaml.safe_load(
+        (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    )
+
+
+def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
+    workflow = _workflow("pull-request-labels.yml")
+    # Scheduled runs start hours late here, so pushes to main do most of the work.
+    # Only events whose code is main's may hold the write token.
+    assert set(workflow[True]) == {"push", "schedule", "workflow_dispatch"}
+    assert workflow[True]["push"] == {"branches": ["main"]}
+    assert workflow[True]["schedule"]
+    (job,) = workflow["jobs"].values()
+    assert "if" not in job
+    assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
+    checkout = job["steps"][0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"] == {"persist-credentials": False}
+    assert "--pull-requests --apply" in job["steps"][-1]["run"]
+
+
+def test_label_set_changes_apply_only_from_main():
+    workflow = _workflow("labels.yml")
+    assert "schedule" not in workflow[True]
+    assert set(workflow["jobs"]) == {"plan", "sync"}
+    assert workflow["jobs"]["sync"]["if"] == (
+        "github.event_name == 'push' || github.event_name == 'workflow_dispatch'"
+    )
+    assert "--apply" not in "".join(
+        step.get("run", "") for step in workflow["jobs"]["plan"]["steps"]
+    )
 
 
 def test_plan_creates_updates_and_deletes_in_a_stable_order():

@@ -4,13 +4,14 @@ name: Coverage
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
 # job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc,
 # and OpenCL C input with the runner image's clang-18 and DXC, and runs the GLSL and SPIR-V compute probes on Mesa's
-# llvmpipe and lavapipe. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one
-# measures Rust with rust-gpu, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on
-# the GPU. Both runs go through Core's conformance harness (tools/coverage/execution.py). The report job merges the
-# reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage`
-# branch with coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the
-# trend chart drawn from it; main itself never receives generated files. The issues job then reconciles the tracking
-# and bug issues (tools/coverage/issues.py); pull requests only print its plan, and the comment job posts their change
+# llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe as the SPIR-V DXC, slangc and naga write for
+# them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust
+# with rust-gpu, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. Both
+# runs go through Core's conformance harness (tools/coverage/execution.py). The report job merges the reports and adds
+# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
+# coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart
+# drawn from it; main itself never receives generated files. The issues job then reconciles the tracking and bug
+# issues (tools/coverage/issues.py); pull requests only print its plan, and coverage-comment.yml posts their change
 # against main on the pull request.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
@@ -23,7 +24,7 @@ env:
   PYTHONUNBUFFERED: "1"
   PYTHONHASHSEED: "0"
   NAGA_VERSION: "30.0.1"
-  SLANG_VERSION: "2026.9.1"
+  SLANG_VERSION: "2026.20"
   # tools/coverage/upstream.py reads spirv_std from the same release.
   RUST_GPU_VERSION: "0.11.0"
   RUST_GPU_COMMIT: "62401280ab4b512c734ad1aceee7553385e17418"
@@ -150,7 +151,7 @@ jobs:
           archive="$RUNNER_TEMP/slang.tar.gz"
           curl -fsSLo "$archive" --retry 5 --retry-all-errors --connect-timeout 30 \
             "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64-glibc-2.27.tar.gz"
-          echo "b57ea8869aa6d61a449145a8048591fdd9311c478496f012bbd2440e31ea0130  $archive" | sha256sum --check --strict
+          echo "b831477e994dee2fb36a3e83c54ad89cbfeefd47b4d973b2d8bed65b64780996  $archive" | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/slang"
           tar -xzf "$archive" -C "$RUNNER_TEMP/slang"
           echo "$RUNNER_TEMP/slang/bin" >> "$GITHUB_PATH"
@@ -162,9 +163,20 @@ jobs:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-linux-${{ hashFiles('tools/coverage/upstream.py') }}
 
+      # The verdicts of the last run on main, so that only sources CrossTL now writes differently are checked again
+      # (tools/coverage/runner.py). The key changes with the pinned tools and the code that runs them.
+      - name: Restore verdicts
+        id: verdicts
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          restore-keys: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
+
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
           # The clang whose opencl-c.h tools/coverage/upstream.py pins.
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
@@ -172,6 +184,13 @@ jobs:
           python -m tools.coverage run --strict --execute --jobs 4 \
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
             --backend opencl --output coverage-linux.json
+
+      - name: Keep verdicts
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -241,15 +260,15 @@ jobs:
 
       # The Mojo compiler and MAX's GPU package, at the release tools/coverage/upstream.py reads Mojo's standard library
       # from. They live in their own environment, and the wheels are pinned by digest.
-      - name: Install mojo 1.1.0
+      - name: Install mojo 1.2.0
         if: matrix.backend == 'mojo'
         run: |
           set -euo pipefail
           python -m venv "$RUNNER_TEMP/mojo"
           cat > "$RUNNER_TEMP/mojo-requirements.txt" <<'EOF'
-          mojo-compiler==1.1.0 --hash=sha256:b47442278eb39705075f23d058b38a364bd68bdaa542ad514c187cee633beab7
-          mojo-compiler-mojo-libs==1.1.0 --hash=sha256:dd8c5382e27fe5c1ffe0834d267f549abbffee35bf1a8d605cf24252ff95a2e6
-          max-mojo-libs==26.6.0 --hash=sha256:7880630afbfb544bd66cf7ab725f5e7b91fcaac02c7e4c9a74a877eba1546e2b
+          mojo-compiler==1.2.0 --hash=sha256:3ee34a3b26c6cccaa9523a0e8db8f67bea954497d782d97c9e61c3c4ecbdac7b
+          mojo-compiler-mojo-libs==1.2.0 --hash=sha256:3d631f7e798c11d0029c4a892ebae1f5742751fac0c526af74b45a8ae07c3acb
+          max-mojo-libs==26.7.0 --hash=sha256:c9eeaef01a19565b8467da9c6b7cd57fa787759ce5954140b0e031d095c630b9
           EOF
           "$RUNNER_TEMP/mojo/bin/pip" install --quiet --no-deps --require-hashes -r "$RUNNER_TEMP/mojo-requirements.txt"
           echo "CROSSTL_COVERAGE_MOJO=$RUNNER_TEMP/mojo/bin/mojo" >> "$GITHUB_ENV"
@@ -261,11 +280,27 @@ jobs:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-${{ matrix.backend }}-${{ hashFiles('tools/coverage/upstream.py') }}
 
+      - name: Restore verdicts
+        id: verdicts
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          restore-keys: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
+
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
+
+      - name: Keep verdicts
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/coverage-verdicts
+          key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -435,24 +470,21 @@ jobs:
           path: coverage.json
           retention-days: 14
 
-      # The coverage branch is public, so reading it needs no token.
+      # The coverage branch is public, so reading it needs no token; naming the pull requests in between reads commits.
       - name: Compare with the published coverage
         if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json coverage.json | tee compare.md
+            python -m tools.coverage compare published.json coverage.json \
+              --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
             { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No published coverage to compare with yet." | tee compare.md
+            echo "No published coverage to compare with yet."
           fi
-
-      - uses: actions/upload-artifact@v7
-        if: github.event_name == 'pull_request'
-        with:
-          name: coverage-change
-          path: compare.md
-          retention-days: 3
 
       # Pull requests and the merge queue only print what the issues job would change on main.
       - name: Plan the issue changes
@@ -469,49 +501,6 @@ jobs:
             cat plan.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # Posts the change against main on the pull request, and edits that one comment on later pushes. The job runs no
-  # code from the pull request; it only reads the report job's comparison as text. Fork pull requests get a read-only
-  # token, so only same-repository pull requests get the comment; the report job's summary has it for every one.
-  # `!cancelled()` replaces the implicit `success()`, which is false whenever a planned-out leg was skipped.
-  comment:
-    name: Comment the coverage change
-    needs: report
-    if: >-
-      !cancelled() && github.event_name == 'pull_request' && needs.report.result == 'success'
-      && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: coverage-change
-
-      - name: Post or update the comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          marker="<!-- coverage-change -->"
-          {
-            echo "$marker"
-            echo "### Coverage change against main"
-            echo
-            cat compare.md
-            echo
-            echo "Measured by [this Coverage run]($RUN_URL)."
-          } > body.md
-          comments="repos/$GITHUB_REPOSITORY/issues/$PR/comments"
-          existing="$(gh api --paginate "$comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- coverage-change -->"))) | .id' | sed -n 1p)"
-          if [ -n "$existing" ]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@body.md > /dev/null
-          else
-            gh api --method POST "$comments" -F body=@body.md > /dev/null
-          fi
 
   publish:
     name: Publish coverage
@@ -632,7 +621,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, compute, rust, metal, report, comment, publish, issues]
+    needs: [plan, linux, compute, rust, metal, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

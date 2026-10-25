@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 85,
-        "endOffset": 2086,
+        "endLine": 90,
+        "endOffset": 2186,
         "file": "crosstl-out/vulkan/noise.frag.spvasm",
-        "length": 2086,
+        "length": 2186,
         "line": 1,
         "offset": 0
       },

@@ -13,9 +13,10 @@ directly and generate every target from one source file.
 ![CrossTL coverage per language and direction](https://raw.githubusercontent.com/CrossGL/crosstl/coverage/coverage.svg)
 
 CI measures this chart on every push to `main` and nightly. Every feature in a pinned upstream feature list gets a
-generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result. Metal,
-GLSL and SPIR-V compute probes also run, on the GPU or on Mesa's software drivers, where the translation must
-compute what the native probe computes. The score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result.
+Compute probes also run, on the GPU or on Mesa's software drivers, where the translation must compute what the
+native probe computes: Metal, GLSL and SPIR-V directly, and HLSL, Slang and WGSL as the SPIR-V their reference
+compilers produce. The score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 lists every gap behind each bar.
 
 ## Install
@@ -26,7 +27,7 @@ pip install crosstl
 
 CrossTL needs Python 3.11 or later. Validating the generated code needs the target's own compiler or validator
 (glslang, DXC, spirv-tools, naga, the Metal compiler, nvcc, hipcc, slangc, rust-gpu or the Mojo compiler), which
-CrossTL does not install.
+CrossTL does not install. `crosstl doctor` lists the tools it looks for and which of them are on `PATH`.
 
 ## Quickstart
 

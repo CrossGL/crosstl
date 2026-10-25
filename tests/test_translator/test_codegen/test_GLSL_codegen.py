@@ -2421,7 +2421,8 @@ def test_glsl_global_function_constants_emit_scalar_specializations_and_validate
 
     assert (
         "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
-        "required_override=true; encoding_default=false */"
+        "required_override=true; encoding_default=false; "
+        "source_macro=CROSSGL_SPECIALIZE_has_w */"
     ) in generated
     assert "layout(constant_id = 20) const bool has_w = false;" in generated
     assert "layout(constant_id = 21) const int mode = 2;" in generated
@@ -6338,11 +6339,11 @@ def test_structured_buffer_fixed_width_aliases_lower_to_standard_ssbo_types():
         in generated
     )
     assert (
-        "layout(std430, binding = 5) buffer offsetsBuffer { uint offsets[]; };"
+        "layout(std430, binding = 5) buffer offsetsBuffer { uint64_t offsets[]; };"
         in generated
     )
     assert generated.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
-    assert "uint64_t offset = uint64_t(offsets[index]);" in generated
+    assert "uint64_t offset = offsets[index];" in generated
     assert "uint count = bitfieldExtract(counts[index], 0, 16);" in generated
     assert "int64_t signedValue = signedValues[index];" in generated
     assert (
@@ -6757,7 +6758,7 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "layout(std430, binding = 5) readonly buffer offsetsBuffer { uint data[]; } offsets[2];"
+        "layout(std430, binding = 5) readonly buffer offsetsBuffer { uint64_t data[]; } offsets[2];"
         in generated
     )
     assert (
@@ -6769,8 +6770,8 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "uint64_t readOffset(uint localOffsets_0[], uint localOffsets_1[], uint which, uint index)"
-        in generated
+        "uint64_t readOffset(uint64_t localOffsets_0[], uint64_t localOffsets_1[], "
+        "uint which, uint index)" in generated
     )
     assert (
         "len = ((which == 0u) ? localOffsets_0.length() : localOffsets_1.length());"
@@ -21224,10 +21225,10 @@ def test_glsl_fixed_width_scalar_aliases_lower_to_standard_glsl_scalars():
     assert "uint64_t unsignedLong(uint64_t input_)" in generated_code
     assert "int64_t signedLongT(int64_t input_)" in generated_code
     assert "uint64_t unsignedLongT(uint64_t input_)" in generated_code
-    assert "uint sizeValue(uint input_)" in generated_code
-    assert "int ptrDiff(int input_)" in generated_code
-    assert "int longValue(int input_)" in generated_code
-    assert "uint ulongValue(uint input_)" in generated_code
+    assert "uint64_t sizeValue(uint64_t input_)" in generated_code
+    assert "int64_t ptrDiff(int64_t input_)" in generated_code
+    assert "int64_t longValue(int64_t input_)" in generated_code
+    assert "uint64_t ulongValue(uint64_t input_)" in generated_code
     assert "int one = int(1);" in generated_code
     assert "uint one = uint(1u);" in generated_code
     assert "int64_t one = int64_t(1);" in generated_code
@@ -21283,12 +21284,12 @@ def test_glsl_fixed_width_scalar_array_aliases_lower_in_aggregate_declarations()
     assert "int bytes[2];" in generated_code
     assert "uint words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
-    assert "uint offsets[2];" in generated_code
+    assert "uint64_t offsets[2];" in generated_code
     assert "int globalBytes[2];" in generated_code
     assert "uint64_t globalCounters[2];" in generated_code
     assert "int smalls[2];" in generated_code
     assert "uint count;" in generated_code
-    assert "int delta;" in generated_code
+    assert "int64_t delta;" in generated_code
     assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
     assert "uint64_t localCounters[2];" in generated_code
     assert "uint64_t one = uint64_t(1u);" in generated_code
@@ -21337,20 +21338,21 @@ def test_glsl_fixed_width_nested_array_aliases_lower_to_standard_glsl_types():
 
     assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "int bytes[2][3];" in generated_code
-    assert "uint offsets[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
     assert "uint64_t[2] makeCounters()" in generated_code
     assert "uint64_t counters[2];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code
     assert (
-        "int readPayload(AliasGridPayload payload, int row, int col)" in generated_code
+        "int64_t readPayload(AliasGridPayload payload, int row, int col)"
+        in generated_code
     )
     assert "uint(1u)" in generated_code
     assert "uint64_t(2u)" in generated_code
-    assert "int(payload.bytes[row][col])" in generated_code
-    assert "int(payload.offsets[row][col])" in generated_code
+    assert "int64_t(payload.bytes[row][col])" in generated_code
+    assert "int64_t(payload.offsets[row][col])" in generated_code
     assert "int[2] bytes[3]" not in generated_code
-    assert "uint[2] offsets[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
     for invalid_pattern in (
         r"\bint8_t\b",
         r"\buint16_t\b",
@@ -21383,12 +21385,12 @@ def test_glsl_fixed_width_nested_cbuffer_array_aliases_lower_to_standard_types()
     assert "layout(std140, binding = 2) uniform AliasNestedConstants" in generated_code
     assert "int64_t signedGrid[2][3];" in generated_code
     assert "uint unsignedGrid[2][3];" in generated_code
-    assert "uint offsets[2][3];" in generated_code
+    assert "uint64_t offsets[2][3];" in generated_code
     assert "uint64_t readConstant(int row, int col)" in generated_code
     assert "uint64_t(offsets[row][col])" in generated_code
     assert "uint64_t(unsignedGrid[row][col])" in generated_code
     assert "int[2] signedGrid[3]" not in generated_code
-    assert "uint[2] offsets[3]" not in generated_code
+    assert "uint64_t[2] offsets[3]" not in generated_code
     for invalid_pattern in (
         r"\buint16_t\b",
         r"\buint64\s",

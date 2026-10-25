@@ -16,6 +16,9 @@ from crosstl.translator.codegen.glsl_refusals import (
     OpenGLLoweringRefused,
     WebGLLoweringRefused,
 )
+from crosstl.translator.codegen.texture_residency import (
+    TextureResidencyUnsupportedError,
+)
 from crosstl.translator.semantics import DebugPrintfUnsupportedError
 
 ES_FORMS_CGL = """
@@ -169,19 +172,6 @@ layout(location = 0) out vec4 color;
 void main() { color = vec4(gl_BaryCoordEXT, 1.0); }
 """
     ),
-    "sparseTextureARB": (
-        """#version 450
-#extension GL_ARB_sparse_texture2 : enable
-layout(binding = 0) uniform sampler2D tex;
-layout(location = 0) in vec2 uv;
-layout(location = 0) out vec4 color;
-void main() {
-    vec4 texel = vec4(0.0);
-    int code = sparseTextureARB(tex, uv, texel);
-    color = texel + vec4(float(code));
-}
-"""
-    ),
     "gl_PrimitiveID": (
         """#version 450
 layout(location = 0) out vec4 color;
@@ -196,6 +186,30 @@ def test_webgl_refuses_builtins_glsl_es_3_00_lacks(tmp_path, builtin):
     source = ES_ONLY_MISSING_GLSL[builtin]
     with pytest.raises(WebGLLoweringRefused, match=builtin):
         _translate(tmp_path, source, ".frag", "webgl")
+
+
+SPARSE_TEXTURE_GLSL = """#version 450
+#extension GL_ARB_sparse_texture2 : enable
+layout(binding = 0) uniform sampler2D tex;
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 color;
+void main() {
+    vec4 texel = vec4(0.0);
+    int code = sparseTextureARB(tex, uv, texel);
+    color = texel + vec4(float(code));
+}
+"""
+
+
+def test_webgl_refuses_sparse_texture_reads(tmp_path):
+    # sparseTextureARB imports as a CrossGL residency query, which GLSL ES 3.00 has no form of.
+    with pytest.raises(
+        TextureResidencyUnsupportedError, match="GLSL ES 3.00 has no sparse textures"
+    ) as raised:
+        _translate(tmp_path, SPARSE_TEXTURE_GLSL, ".frag", "webgl")
+    assert raised.value.project_diagnostic_code == (
+        "project.translate.webgl-texture-residency-unsupported"
+    )
 
 
 SCALAR_CLIP_HLSL = """
