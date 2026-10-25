@@ -130,7 +130,7 @@ def test_native_mixed_inputs_reproduce_the_oracle(tmp_path, name, input_count):
     runtime = RUNTIMES[name]
     provided = provision(runtime)
     if not provided.available:
-        if name in os.environ.get("CROSSTL_CONFORMANCE_REQUIRE", "").split(","):
+        if name in REQUIRED:
             pytest.fail(provided.reason)
         pytest.skip(provided.reason)
     case = make_case(
