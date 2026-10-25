@@ -764,6 +764,50 @@ python -m demos.integrations.mlx.portable_host.verify_addmm \
   --mlx-root mlx-upstream --packages host-packages --output-dir addmm
 ```
 
+## Floating-Point GatherMM
+
+`GatherMM::eval_gpu`, which `mx.gather_mm` and mixture-of-experts layers
+reach, lives in `gather_mm.inc` and follows matmul.cpp on a device without NAX
+and without `gemv_wide`, so `gather_mm_wide` never dispatches:
+
+- one output row with sorted right indices (`sorted_indices=True` without left
+  indices): `gather_mm_rhs`, which broadcasts `A` to the index batch, finds
+  each group's first row with `gather_mm_offsets` and then runs
+  `steel_gather_mm_rhs` over every row;
+- one output row or column otherwise: `gather_mv` with `gemv_gather` or
+  `gemv_t_gather`, its tile shape and the matrix transposition flipped for
+  vector-matrix products;
+- every other product: `gather_mm` with the medium-device 64x64x16 tile,
+  `has_batch` for index batches of two or more axes and the alignment
+  constants in its hash name.
+
+An empty contraction fills the output with zeros. Indices bind as uint32
+views; the host copies only views with negative strides, and binds one unread
+element for scalar indices where MLX passes empty vectors.
+`gather_mv_layout.py` and `gather_mm_layout.py` read every index, or every
+group offset, the kernel will read and require each gathered operand to lie
+inside its buffer; the dispatcher checks the translated group offsets against
+the same binary search before MLX sees them. Entries translate on first use
+into the `gather-mv`, `gather-mm` and `gather-mm-offsets` caches with the
+options of their kernel gates.
+
+The `MLX quantized host` jobs run `verify_gather_mm.py` through
+`mx.gather_mm`. Its 10 cases cover both gathered gemv kernels, `gather_mm`
+in every element type with index batches of zero, one and two axes, broadcast
+right indices, transposed and copied operands, MLX's default left indices,
+both sorted-route transpositions with an empty group and a broadcast `A`, and
+an empty contraction. Inputs lie on dyadic grids, so every output must match
+the exact float64 reference bit for bit, and float32 outputs must also match
+MLX's CPU backend. DirectX and OpenGL do not yet translate the sorted route's
+software-subgroup tile scheduler (CrossGL/crosstl#2546); on those targets the
+sorted cases must fail with that diagnostic after the group offsets and before
+the product launches.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_gather_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir gather-mm
+```
+
 ## Block Quantization
 
 The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization

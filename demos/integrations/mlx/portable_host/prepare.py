@@ -71,6 +71,7 @@ def adapted_sources(original, primitives, events):
         "QuantizedMatmul",
         "Matmul",
         "AddMM",
+        "GatherMM",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -152,6 +153,7 @@ else()
         "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
         "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
         "crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),
+        "crosstl_gather_mm.inc": (HERE / "gather_mm.inc").read_bytes(),
     }
 
 

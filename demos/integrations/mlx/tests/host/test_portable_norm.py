@@ -638,10 +638,13 @@ def test_runtime_and_host_adapter_route_normalization():
     assert "array view({int(count), int(axis_size)}" in body
     assert body.rstrip().endswith("Reduce(s, Reduce::Sum, {0}).eval_gpu({view}, out);")
     backend = (here / "backend.cpp").read_text(encoding="utf-8")
+    # The normalization ports come first among the ports included at the end.
     assert backend.rstrip().endswith(
         '#include "mlx/backend/no_gpu/crosstl_normalization.inc"\n'
         "// So does the port of the compiled elementwise kernels.\n"
-        '#include "mlx/backend/no_gpu/crosstl_compiled.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_compiled.inc"\n'
+        "// So does the port of GatherMM's gathered products.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

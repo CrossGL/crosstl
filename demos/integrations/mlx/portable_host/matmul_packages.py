@@ -120,6 +120,11 @@ class TranslatedEntryCache:
         """The source entry point an entry translates; entries may add constants."""
         return entry
 
+    def translated_workgroup_size(self, entry, artifact):
+        """The workgroup size the entry's template materialization recorded."""
+        (execution,) = artifact["execution"]["entryPoints"]
+        return execution["workgroupSize"]
+
     def __init__(self, root, directory, target):
         if target not in {"metal", "directx", "opengl"}:
             raise ValueError(f"Unsupported {self.LABEL.lower()} target")
@@ -246,8 +251,9 @@ class TranslatedEntryCache:
             (artifact,) = payload["artifacts"]
             if artifact["entryPoint"]["source"] != self.source_entry(entry):
                 raise ValueError(f"{self.LABEL} translation selected another entry")
-            (execution,) = artifact["execution"]["entryPoints"]
-            if execution["workgroupSize"] != list(self.workgroup_size(entry)):
+            if self.translated_workgroup_size(entry, artifact) != list(
+                self.workgroup_size(entry)
+            ):
                 raise ValueError(f"{self.LABEL} translation changed the workgroup size")
             manifest = build_runtime_artifact_manifest(work / "report.json")
             if not manifest["success"]:

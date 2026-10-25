@@ -924,7 +924,8 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         2400,
         1800,
         1200,
-        # AddMM verification.
+        # AddMM and GatherMM verification.
+        600,
         600,
     ]
     # Split-K products sum their partitions with translated column kernels.

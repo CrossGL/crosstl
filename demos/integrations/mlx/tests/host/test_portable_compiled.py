@@ -477,9 +477,8 @@ def test_backend_ports_build_kernel_and_the_variant_selection():
     for header in packages.HEADERS:
         assert f'"#include \\"{header}\\"\\n"' in port, header
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_compiled.inc"'
-    )
+    tail = backend[backend.rindex("} // namespace mlx::core::fast") :]
+    assert '#include "mlx/backend/no_gpu/crosstl_compiled.inc"\n' in tail
     adapter = (HOST / "prepare.py").read_text(encoding="utf-8")
     assert '"crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),' in adapter
     assert '"Compiled", "DivMod", "Quantize"' in adapter

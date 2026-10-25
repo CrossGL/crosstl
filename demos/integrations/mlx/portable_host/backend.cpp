@@ -4380,3 +4380,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_normalization.inc"
 // So does the port of the compiled elementwise kernels.
 #include "mlx/backend/no_gpu/crosstl_compiled.inc"
+// So does the port of GatherMM's gathered products.
+#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"

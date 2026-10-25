@@ -3295,7 +3295,7 @@ jobs:
     name: MLX quantized host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 350
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -3336,7 +3336,8 @@ jobs:
             demos/integrations/mlx/tests/host/test_portable_fp_quantized_matmul.py \
             demos/integrations/mlx/tests/host/test_portable_quantized_qmm.py \
             demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py \
-            demos/integrations/mlx/tests/host/test_portable_addmm.py
+            demos/integrations/mlx/tests/host/test_portable_addmm.py \
+            demos/integrations/mlx/tests/host/test_portable_gather_mm.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -3522,6 +3523,18 @@ jobs:
             python -m demos.integrations.mlx.portable_host.verify_addmm --mlx-root mlx-upstream \
               --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/addmm \
               2>&1 | tee .mlx-portable-quantized/addmm.log
+      - name: Execute GatherMM products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX GatherMM host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_gather_mm --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/gather-mm \
+              2>&1 | tee .mlx-portable-quantized/gather-mm.log
       - name: Retain quantized execution evidence
         if: always()
         uses: actions/upload-artifact@v7

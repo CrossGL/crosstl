@@ -44,6 +44,7 @@ from demos.integrations.mlx.portable_host import (
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
+    gather_mm_dispatch,
     gemm_dispatch,
     gemm_layout,
     gemm_splitk_dispatch,
@@ -126,6 +127,14 @@ from demos.integrations.mlx.portable_host.fp_qmm_packages import (
 )
 from demos.integrations.mlx.portable_host.fp_qmm_packages import (
     FpQuantizedQmmPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_mm_packages import (
+    GATHER_MM_CACHE,
+    GATHER_MV_CACHE,
+    GATHER_OFFSETS_CACHE,
+    GatherMmPackageCache,
+    GatherMvPackageCache,
+    GatherOffsetsPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
@@ -535,6 +544,28 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # GatherMM's gathered gemv, steel gather and group offset kernels.
+        self.gather_mvs = (
+            GatherMvPackageCache(
+                mlx_root, self.directory / GATHER_MV_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.gather_mms = (
+            GatherMmPackageCache(
+                mlx_root, self.directory / GATHER_MM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.gather_offsets = (
+            GatherOffsetsPackageCache(
+                mlx_root, self.directory / GATHER_OFFSETS_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -748,6 +779,9 @@ class HostRuntime:
             ):
                 divmod_signature(name)
                 return 1
+            if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
+                kind = gather_mm_dispatch.family(name)
+                return int(gather_mm_dispatch.cache_for(self, kind) is not None)
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
@@ -960,6 +994,10 @@ class HostRuntime:
                 count,
                 threads,
                 launch,
+            )
+        if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
+            return gather_mm_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
             )
         if entry.startswith(gemv_layout.ENTRY_PREFIXES):
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
