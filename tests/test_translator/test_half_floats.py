@@ -603,6 +603,37 @@ def test_half_bit_casts_use_the_binary16_encoding(tmp_path):
     assert "cgl_half_to_bits" in names and "cgl_half_from_bits" in names
 
 
+def test_metal_half_and_float_operands_make_a_binary32_operation(tmp_path):
+    # MSL half converts to float in a mixed operation, so ``c * y`` and the enclosing ``1.0h + ...`` are float3.
+    body = (
+        "    const half c = half(a[i]);\n"
+        "    float3 y = float3(a[i], a[i + 1], a[i + 2]);\n"
+        "    float3 d = float3(1.0h + c * y);\n"
+        "    o[i] = d.x + d.y + d.z;"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert names == ["cgl_half_round"]
+    assert "cgl_half_round((1.0 + (c * y)))" not in wgsl
+    assert "d: vec3<f32> = vec3<f32>((1.0 + (c * y)));" in wgsl
+
+
+def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_path):
+    # ``(l + s)`` becomes a rounding call; its product with a float is a float4 the compound assignment rounds.
+    body = (
+        "    half4 l = half4(a[i]);\n"
+        "    half4 s = half4(a[i + 1]);\n"
+        "    float w = a[i + 2];\n"
+        "    l += (l + s) * w;\n"
+        "    o[i] = float(max(l + s, half4(0.0h)).x);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert "cgl_half_round4" in names
+    assert (
+        "l = cgl_half_round4(vec4<f32>((l + (cgl_half_round4((l + s)) * w))));" in wgsl
+    )
+    assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
+
+
 @pytest.mark.parametrize(
     "body, reason",
     [
