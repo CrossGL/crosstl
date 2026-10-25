@@ -39,8 +39,8 @@ MATRIX_MEMBER_CGL = """
 shader main {
     struct VSOutput {
         vec4 Pos @ gl_Position;
-        mat3 frame @ TexCoord0;
-        vec2 uv @ TexCoord1;
+        mat3 frame @ FRAME;
+        vec2 uv @ UV;
     }
     vertex {
     VSOutput main(vec3 p @ Position) {
@@ -114,6 +114,7 @@ def test_structure_members_after_a_matrix_take_later_locations(tmp_path):
     code = _translate(tmp_path, MATRIX_MEMBER_CGL)
 
     locations = _decorations(code, "Location")
-    assert locations["CrossGL_vertex_output_main_frame"] == "1"
-    assert locations["CrossGL_vertex_output_main_uv"] == "4"
+    # Built-ins take no location; the matrix takes 0..2 and moves uv to 3.
+    assert locations["CrossGL_vertex_output_main_frame"] == "0"
+    assert locations["CrossGL_vertex_output_main_uv"] == "3"
     _validate(tmp_path, code)

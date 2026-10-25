@@ -3,7 +3,8 @@ name: Labels
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# Pull requests that touch the label set print the changes; pushes to main make them.
+# Pull requests that touch the label set print the changes; pushes to main make them. pull-request-labels.yml applies
+# the labels to pull requests.
 on:
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
     paths:
       - .github/labels.yml
       - .github/workflows/labels.yml
+      - .github/workflows/pull-request-labels.yml
       - tools/labels.py
   workflow_dispatch:
 
@@ -33,6 +35,7 @@ jobs:
     permissions:
       contents: read
       issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,10 +50,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m tools.labels --repo "$GITHUB_REPOSITORY"
+      - name: Print pull request labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.labels --repo "$GITHUB_REPOSITORY" --pull-requests
 
   sync:
     name: Sync labels
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

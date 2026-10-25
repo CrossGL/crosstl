@@ -59,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help="fail when a requested backend's validator is missing, instead of reporting its probes as untested, "
-        "and with --execute when no runtime runs a language's executable probes",
+        "and with --execute when none of a language's executable probes runs",
     )
     merging = commands.add_parser(
         "merge",
@@ -97,6 +97,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     comparing.add_argument("published", type=Path)
     comparing.add_argument("report", type=Path)
+    comparing.add_argument(
+        "--repository",
+        help="owner/name; with --head, also name the pull requests between the published coverage and the main "
+        "the report was measured on, read through gh api",
+    )
+    comparing.add_argument(
+        "--head", help="the head commit of the pull request the report measured"
+    )
     commands.add_parser(
         "tools", help="list each language's reference tool and the version found"
     )
@@ -154,9 +162,9 @@ def _run(args: argparse.Namespace) -> int:
         results, used = execution.run(results)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
-        idle = execution.idle(results, used)
+        idle = execution.idle(results)
         if args.strict and idle:
-            print(f"error: no runtime executes {', '.join(idle)}", file=sys.stderr)
+            print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
     data = report.build(results, languages, directions)
     report.write(data, args.output)
@@ -272,7 +280,15 @@ def main(argv: list[str] | None = None) -> int:
             published, current = (
                 report.load(path) for path in (args.published, args.report)
             )
-            print(compare.compare(published, current), end="")
+            lag = None
+            if args.repository and args.head:
+                lag = compare.baseline(
+                    args.repository,
+                    str(published.get("commit", "")),
+                    str(current.get("commit", "")),
+                    args.head,
+                )
+            print(compare.compare(published, current, baseline=lag), end="")
             return 0
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")

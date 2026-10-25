@@ -9,15 +9,29 @@ in :data:`CURATED` when it is known to equal another feature, and otherwise stay
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections import Counter
 
 from . import constructs, probes, validators
+from .features.spirv import is_core
 from .model import Feature
 
 # Features with no SPIR-V lowering, keyed ``language/category/name``, and the semantic id they share with features
-# that have one.
-CURATED: dict[str, str] = {}
+# that have one. C's and MSL's fmin and fmax return the operand that is not NaN (C17 7.12.12, MSL 3.2 section 6.5),
+# as NMin and NMax do; the languages that borrow ids would otherwise take FMin's and FMax's through GLSL's min and max.
+CURATED: dict[str, str] = {
+    "cuda/function/fmin": "GLSL.std.450:NMin",
+    "cuda/function/fminf": "GLSL.std.450:NMin",
+    "cuda/function/fmax": "GLSL.std.450:NMax",
+    "cuda/function/fmaxf": "GLSL.std.450:NMax",
+    "hip/function/fmin": "GLSL.std.450:NMin",
+    "hip/function/fminf": "GLSL.std.450:NMin",
+    "hip/function/fmax": "GLSL.std.450:NMax",
+    "hip/function/fmaxf": "GLSL.std.450:NMax",
+    "metal/function/fmin": "GLSL.std.450:NMin",
+    "metal/function/fmax": "GLSL.std.450:NMax",
+}
 # Languages whose functions, or some of them, have no id of their own. They take the id of the function of the named
 # language that CrossGL spells the same way: Metal ``fabs`` and CUDA ``fabsf`` are CrossGL ``abs``, so they share
 # GLSL ``abs``'s id. WGSL ``frexp`` returns a result structure that its probe cannot spell, so it has no id either and
@@ -137,6 +151,13 @@ def lower(feature: Feature) -> tuple[str, str]:
         return constructs.semantic_id(feature), ""
     if feature.key in CURATED:
         return CURATED[feature.key], ""
+    if is_core(feature):
+        # A core instruction's id is the one of the GLSL call that compiles to it.
+        return lower(
+            dataclasses.replace(
+                feature, language="glsl", name=feature.spelling, spelling=""
+            )
+        )
     if feature.language == "spirv":
         return f"GLSL.std.450:{feature.name}", ""
     if (feature.language, feature.group) in UNIDENTIFIED:

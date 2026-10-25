@@ -7,8 +7,8 @@ struct VertexOutput {
 // Constant Buffers
 cbuffer buf : register(b0) {
     float4x4 MVP;
-    float4 position[(12 * 3)];
-    float4 attr[(12 * 3)];
+    float4 position[36];
+    float4 attr[36];
 };
 // Vertex Shader
 VertexOutput VSMain(uint gl_VertexIndex : SV_VertexID) {

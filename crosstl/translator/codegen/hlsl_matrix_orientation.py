@@ -103,13 +103,11 @@ class HLSLMatrixOrientation:
         return f"{scalar}{columns}" if width == rows else None
 
     def arithmetic_type(self, operator, left_type, right_type):
-        """The type of CrossGL ``left operator right`` for ``+ - * /`` when either operand is a matrix.
+        """The type of a componentwise CrossGL ``+``, ``-`` or ``/`` with a matrix operand.
 
-        ``*`` is the product of :meth:`product_type`. ``+``, ``-`` and ``/`` are componentwise (GLSL 4.60 section
-        5.9), so a matrix with a scalar, or two matrices of one shape, keep the matrix type.
+        A matrix and a scalar, or two matrices of one shape, give that matrix type (GLSL 4.60 section 5.9).
+        ``None`` for every other operation, which keeps the caller's typing.
         """
-        if operator == "*":
-            return self.product_type(left_type, right_type)
         if operator not in {"+", "-", "/"}:
             return None
         left = self.dimensions(left_type)
@@ -122,9 +120,34 @@ class HLSLMatrixOrientation:
         matrix_type, other = (
             (left_type, right_type) if left is not None else (right_type, left_type)
         )
-        if generator.is_vector_value_type(other):
+        if other is None or not generator.is_scalar_value_type(other):
             return None
         return generator.map_type(matrix_type)
+
+    def call_type(self, func_name, arg_types):
+        """The type of ``matrixCompMult(a, b)`` or ``outerProduct(c, r)``, or ``None``.
+
+        ``matrixCompMult`` keeps its operands' type, and ``outerProduct(c, r)`` has as many rows as ``c`` has
+        components and as many columns as ``r`` (GLSL 4.60 section 8.6).
+        """
+        if len(arg_types) != 2:
+            return None
+        generator = self.generator
+        if func_name == "matrixCompMult":
+            if self.dimensions(arg_types[0]) is None:
+                return None
+            return generator.map_type(arg_types[0])
+        if func_name == "outerProduct":
+            column, row = arg_types
+            if not (
+                generator.is_vector_value_type(column)
+                and generator.is_vector_value_type(row)
+            ):
+                return None
+            rows = generator.value_component_count(column)
+            columns = generator.value_component_count(row)
+            return f"{generator.vector_component_type(column)}{rows}x{columns}"
+        return None
 
     def constant_index(self, index_expr):
         return self.generator.literal_int_value(

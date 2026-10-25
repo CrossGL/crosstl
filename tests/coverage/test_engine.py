@@ -1,10 +1,11 @@
 import hashlib
 import json
+import os
 
 import pytest
 
 from tools.coverage import report, runner, upstream, validators
-from tools.coverage.model import Feature, Result, Score, Signature, Type
+from tools.coverage.model import Feature, Param, Result, Score, Signature, Type
 
 ABS = Feature(
     "glsl", "function", "abs", Signature(Type("float", (3,)), ()), crossgl="abs"
@@ -133,6 +134,90 @@ def test_output_probe_end_to_end():
     ), result.detail
 
 
+# slangc 2026.9 writes an OpAtomicCompareExchange on floats for this call, which its SPIR-V validator rejects.
+SPIRV_ONLY_REJECTION = (
+    "error: AtomicCompareExchange: expected Result Type to be integer scalar type"
+)
+
+
+def _slang_compiler(monkeypatch, accepts: set[str]) -> list[tuple[str, str]]:
+    """Stand in for slangc and DXC: accept every source for the targets in ``accepts`` ("" is SPIR-V)."""
+    seen = []
+
+    def validated(language, source, stage, entry="", target=""):
+        seen.append((source, target))
+        if target in accepts:
+            return validators.Verdict(True)
+        if target:
+            return validators.Verdict(False, "error: rejected for HLSL")
+        return validators.Verdict(False, SPIRV_ONLY_REJECTION)
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(runner, "_validated", validated)
+    monkeypatch.setattr(runner, "parse_crossgl", lambda source: None)
+    monkeypatch.setattr(runner, "translate", lambda *args: "translated slang")
+    monkeypatch.setattr(
+        runner,
+        "lower",
+        lambda feature: ("" if feature.target else "OpAtomicCompareExchange", ""),
+    )
+    return seen
+
+
+SLANG_SIN = Feature(
+    "slang",
+    "function",
+    "sin",
+    Signature(Type("float"), (Param(Type("float")),)),
+    crossgl="sin",
+)
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_slangc_cannot_write_as_spirv_is_probed_for_hlsl(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "supported", result.detail
+    assert result.feature.target == "hlsl"
+    # The native probe is tried for SPIR-V first, then HLSL; the translation is checked for HLSL only.
+    assert [target for _, target in seen] == ["", "hlsl", "hlsl"]
+    assert seen[-1][0] == "translated slang"
+    if direction == "output":
+        # The semantic id is the one the SPIR-V probe lowered to.
+        assert result.semantic == "OpAtomicCompareExchange"
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_a_slang_probe_both_targets_reject_keeps_the_spirv_reason(
+    monkeypatch, direction
+):
+    seen = _slang_compiler(monkeypatch, set())
+    run = runner.run_input if direction == "input" else runner.run_output
+    result = run(SLANG_SIN, "slang")
+    assert result.outcome == "untested"
+    assert result.detail == f"the probe itself is rejected: {SPIRV_ONLY_REJECTION}"
+    assert result.feature.target == ""
+    assert [target for _, target in seen] == ["", "hlsl"]
+
+
+def test_a_probe_its_usual_target_accepts_is_not_retried(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {""})
+    result = runner.run_input(SLANG_SIN, "slang")
+    assert (result.outcome, result.feature.target) == ("supported", "")
+    assert [target for _, target in seen] == ["", ""]
+
+
+def test_only_slang_falls_back_to_another_target(monkeypatch):
+    seen = _slang_compiler(monkeypatch, {"hlsl"})
+    glsl = Feature("glsl", "function", "sin", SLANG_SIN.signature, crossgl="sin")
+    result = runner.run_input(glsl, "glsl")
+    assert result.outcome == "untested"
+    assert [target for _, target in seen] == [""]
+
+
 # The shape of slangc 2026.9's log for an undefined name: the header names the kind of error, the label the name.
 SLANGC_LOG = """error[E30015]: undefined identifier
   --> probe.slang:10:15
@@ -234,6 +319,53 @@ def test_a_run_validates_each_distinct_source_once(monkeypatch):
     runner.run(["good"], workers=1)
     assert calls == ["good", "bad", "good"]
     assert runner._verdicts is None
+
+
+def _counting_validator(monkeypatch, calls, versions):
+    def validate(language, source, stage="compute", entry="", target=""):
+        calls.append(source)
+        if source == "slow":
+            return validators.Verdict(False, "dxc timed out after 60 s", timed_out=True)
+        return validators.Verdict("bad" not in source, "error: bad probe")
+
+    monkeypatch.setattr(validators, "validate", validate)
+    monkeypatch.setattr(validators, "version", lambda tool: versions[tool])
+    monkeypatch.setattr(
+        runner, "_job", lambda job: runner._validated("hlsl", job, "compute")
+    )
+    runner._checker.cache_clear()
+
+
+def test_kept_verdicts_carry_over_for_the_same_tool(monkeypatch, tmp_path):
+    calls, versions = [], {"dxc": "dxcompiler.dll: 1.8"}
+    _counting_validator(monkeypatch, calls, versions)
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    first = runner.run(["good", "bad", "slow"], workers=1)
+    second = runner.run(["good", "bad", "slow"], workers=1)
+    assert first == second
+    assert second[1] == validators.Verdict(False, "error: bad probe")
+    # A timeout depends on the machine's load, so it is checked again.
+    assert calls == ["good", "bad", "slow", "slow"]
+    # Another tool version checks everything again.
+    versions["dxc"] = "dxcompiler.dll: 1.9"
+    runner._checker.cache_clear()
+    runner.run(["good"], workers=1)
+    assert calls[4:] == ["good"]
+
+
+def test_kept_verdicts_are_only_those_the_last_run_used(monkeypatch, tmp_path):
+    calls = []
+    _counting_validator(monkeypatch, calls, {"dxc": "dxcompiler.dll: 1.8"})
+    monkeypatch.setenv(runner.VERDICTS, str(tmp_path))
+    runner.run(["good", "bad"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 2
+    # Kept verdicts carry the time of the run that wrote them.
+    for path in tmp_path.iterdir():
+        os.utime(path, (1, 1))
+    runner.run(["good"], workers=1)
+    assert len(list(tmp_path.iterdir())) == 1
+    runner.run(["bad"], workers=1)
+    assert calls == ["good", "bad", "bad"]
 
 
 def test_kept_folders_are_file_names_that_two_features_never_share():

@@ -49,11 +49,11 @@ RENAMES = {
         "WaveActiveAnyTrue": "anyInvocation",
         "WaveActiveAllEqual": "allInvocationsEqual",
     },
-    # CUDA after :mod:`.features.cuda` drops the single-precision suffix: ``fabsf`` arrives here as ``fabs``.
+    # CUDA after :mod:`.features.cuda` drops the single-precision suffix: ``fabsf`` arrives here as ``fabs``. CrossGL's
+    # fmin and fmax return the operand that is not NaN, as C's, MSL's and SPIR-V's NMin and NMax do, and its min and
+    # max need not, so CUDA's and Metal's fmin and fmax keep their names.
     "cuda": {
         "fabs": "abs",
-        "fmin": "min",
-        "fmax": "max",
         "rsqrt": "inversesqrt",
         "atan2": "atan",
         "rint": "roundEven",
@@ -108,8 +108,6 @@ RENAMES = {
     "metal": {
         "atan2": "atan",
         "fabs": "abs",
-        "fmax": "max",
-        "fmin": "min",
         "rsqrt": "inversesqrt",
         "rint": "roundEven",
         "select": "mix",
@@ -192,9 +190,13 @@ RENAMES = {
         "end_primitive": "EndPrimitive",
     },
 }
-# HIP spells its device functions the way CUDA does, and Slang its built-in functions the way HLSL does.
+# HIP spells its device functions the way CUDA does. Slang spells its built-in functions the way HLSL does, and adds
+# the coarse and fine fwidth that HLSL lacks.
 RENAMES["hip"] = RENAMES["cuda"]
-RENAMES["slang"] = RENAMES["hlsl"]
+RENAMES["slang"] = RENAMES["hlsl"] | {
+    "fwidth_coarse": "fwidthCoarse",
+    "fwidth_fine": "fwidthFine",
+}
 
 
 # Functions CrossGL writes with other arguments than the backend, as GLSL prototypes. WGSL's texture functions take a
@@ -272,10 +274,47 @@ _METAL_ATOMICS = {
     "fetch_xor": "atomicXor",
 }
 RENAMES["metal"].update({f"atomic_{op}": name for op, name in _METAL_ATOMICS.items()})
+# OpenCL C has no generator, so none of its probes is written in CrossGL, but issue reconciliation still needs the
+# CrossGL names of its atomic functions to find them in a diagnostic. OpenCL C 2.0's are Metal's, with and without a
+# memory order; the older ones of OpenCL C 1.1 and the cl_khr_*_atomics extensions start with atomic_ or atom_.
+_OPENCL_ATOMICS = {
+    "add": "atomicAdd",
+    "and": "atomicAnd",
+    "max": "atomicMax",
+    "min": "atomicMin",
+    "or": "atomicOr",
+    "xor": "atomicXor",
+    "xchg": "atomicExchange",
+    "cmpxchg": "atomicCompSwap",
+}
+RENAMES["opencl"] = {
+    f"{prefix}_{op}": name
+    for prefix in ("atomic", "atom")
+    for op, name in _OPENCL_ATOMICS.items()
+} | {
+    f"atomic_{op}{suffix}": name
+    for op, name in _METAL_ATOMICS.items()
+    for suffix in ("", "_explicit")
+}
 COUNTERPARTS["metal"].update(
     {
         f"atomic_{op}_explicit": f"int {name}(inout int, int)"
         for op, name in _METAL_ATOMICS.items()
+    }
+)
+# CrossGL's relaxed atomicLoad and atomicStore, which GLSL lacks, are the ones the Metal importer writes for
+# atomic_load_explicit and atomic_store_explicit. Metal's atomic_max and atomic_min are its 64-bit ones, which return
+# nothing.
+COUNTERPARTS["metal"].update(
+    {
+        f"atomic_{op}{suffix}": prototype
+        for op, prototype in (
+            ("load", "int atomicLoad(inout int)"),
+            ("store", "void atomicStore(inout int, int)"),
+            ("max", "void atomicMax(inout uint64_t, uint64_t)"),
+            ("min", "void atomicMin(inout uint64_t, uint64_t)"),
+        )
+        for suffix in ("", "_explicit")
     }
 )
 

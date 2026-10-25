@@ -94,6 +94,13 @@ INTEGER_TYPES = frozenset(
         "long",
         "ulong",
         "size_t",
+        # CrossGL spellings of the fixed-width integers.
+        "int8",
+        "uint8",
+        "int16",
+        "uint16",
+        "int64",
+        "uint64",
     }
 )
 REGISTER_SPELLING = re.compile(r"(?i)(?:set|space|[btsu])?\d+")

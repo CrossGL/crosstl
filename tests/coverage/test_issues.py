@@ -411,6 +411,43 @@ def test_a_method_shares_a_cause_under_the_name_crossgl_gives_it():
     assert causes.cause(row["features"][0]).endswith("'atomicAnd'")
 
 
+@pytest.mark.parametrize(
+    "language, detail, spelled",
+    [
+        # OpenCL C features have no CrossGL spelling of their own, since nothing is generated for OpenCL C.
+        (
+            "opencl",
+            "ValueError: DirectX typed buffer atomic '{}' original argument must be scalar int, "
+            "got memory_order_relaxed",
+            {
+                "atomic_fetch_add_explicit": "atomicAdd",
+                "atomic_exchange_explicit": "atomicExchange",
+                "atomic_xchg": "atomicExchange",
+                "atom_cmpxchg": "atomicCompSwap",
+            },
+        ),
+        (
+            "slang",
+            "after the round trip: error[E30015]: undefined identifier '{}'",
+            {"fwidth_coarse": "fwidthCoarse", "fwidth_fine": "fwidthFine"},
+        ),
+    ],
+    ids=["opencl", "slang"],
+)
+def test_a_function_shares_a_cause_under_the_crossgl_name_of_its_language(
+    language, detail, spelled
+):
+    row = _row(
+        language,
+        "input",
+        [
+            _feature(name, "wrong", detail=detail.format(crossgl))
+            for name, crossgl in spelled.items()
+        ],
+    )
+    assert set(causes.causes_of(row).values()) == {detail.format(causes.FEATURE)}
+
+
 def _wrong(row_features):
     """An HLSL output row of wrong results, from ``(name, detail)`` pairs."""
     return _report(
@@ -610,6 +647,16 @@ def test_spirv_input_bugs_name_the_dropped_instruction_as_a_failure():
     assert detail in body
     glsl = _row("glsl", "input", [_feature("x", "wrong", detail="bad")])
     assert "instruction" not in issues.plan(_report(glsl), [])[1].body
+
+
+def test_spirv_output_bugs_name_ignored_nan_operands_as_a_failure():
+    detail = "the translation calls no NMin and tests no operand for NaN"
+    row = _row("spirv", "output", [_feature("NMin", "wrong", detail=detail)])
+    body = issues.plan(_report(row), [])[1].body
+    assert "or that ignores the NaN operands the feature's instruction handles" in body
+    assert detail in body
+    glsl = _row("glsl", "output", [_feature("x", "wrong", detail="bad")])
+    assert "NaN" not in issues.plan(_report(glsl), [])[1].body
 
 
 def test_long_gap_lists_are_cut_to_the_body_limit(monkeypatch):

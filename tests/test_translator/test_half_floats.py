@@ -485,10 +485,7 @@ def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
     output = crosstl.translate(str(path), backend=backend, format_output=False)
-    # WGSL from Metal kernels has an unrelated interface defect (scalar invocation-id builtins), so only WGSL from
-    # GLSL is checked natively.
-    if backend == "vulkan" or suffix == ".comp":
-        validate(tmp_path, output, backend)
+    validate(tmp_path, output, backend)
     return output
 
 
@@ -606,10 +603,44 @@ def test_half_bit_casts_use_the_binary16_encoding(tmp_path):
     assert "cgl_half_to_bits" in names and "cgl_half_from_bits" in names
 
 
+def test_metal_half_and_float_operands_make_a_binary32_operation(tmp_path):
+    # MSL half converts to float in a mixed operation, so ``c * y`` and the enclosing ``1.0h + ...`` are float3.
+    body = (
+        "    const half c = half(a[i]);\n"
+        "    float3 y = float3(a[i], a[i + 1], a[i + 2]);\n"
+        "    float3 d = float3(1.0h + c * y);\n"
+        "    o[i] = d.x + d.y + d.z;"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert names == ["cgl_half_round"]
+    assert "cgl_half_round((1.0 + (c * y)))" not in wgsl
+    assert "d: vec3<f32> = vec3<f32>((1.0 + (c * y)));" in wgsl
+
+
+def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_path):
+    # ``(l + s)`` becomes a rounding call; its product with a float is a float4 the compound assignment rounds.
+    body = (
+        "    half4 l = half4(a[i]);\n"
+        "    half4 s = half4(a[i + 1]);\n"
+        "    float w = a[i + 2];\n"
+        "    l += (l + s) * w;\n"
+        "    o[i] = float(max(l + s, half4(0.0h)).x);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert "cgl_half_round4" in names
+    assert (
+        "l = cgl_half_round4(vec4<f32>((l + (cgl_half_round4((l + s)) * w))));" in wgsl
+    )
+    assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
+
+
 @pytest.mark.parametrize(
     "body, reason",
     [
-        ("    half4x4 m = half4x4(1.0h);\n    o[i] = float(m[0][0]);", "matrix"),
+        (
+            "    half4x4 m = half4x4(half(a[i]));\n    o[i] = float((m / half(2.0h))[0][0]);",
+            "matrix-division",
+        ),
         ("    half h = half(a[i]);\n    o[i] = float(h++);", "step-value"),
         (
             "    half h = half(a[i]);\n    o[i] = float(fmod(h, half(2.0h)));",
@@ -708,3 +739,135 @@ def test_initializers_outside_function_bodies_are_legalized(tmp_path):
     body = "    float16_t h = float16_t(a[i]) + bias;\n    o[i] = float(h);"
     wgsl, _ = helpers_in(tmp_path, glsl, body, glsl_helpers)
     assert "0.0999755859375" in wgsl
+
+
+HALF_MATRIX_KERNEL = """#include <metal_stdlib>
+using namespace metal;
+struct Frame {{ float3x3 normal_matrix; }};
+half3x3 scaled(half3x3 m, half s) {{ return m * s; }}
+kernel void k(device const float* a [[buffer(0)]], device float* o [[buffer(1)]],
+              constant Frame& frame [[buffer(2)]], uint i [[thread_position_in_grid]]) {{
+{body}
+}}
+"""
+
+
+def test_half_matrices_hold_binary16_elements(tmp_path):
+    """A half matrix is a float matrix of binary16 values: conversions round per element, products round once."""
+    body = (
+        "    half3x3 m = half3x3(frame.normal_matrix);\n"
+        "    half3 c = half3(a[i], a[i + 1], a[i + 2]);\n"
+        "    half3x3 k(c, c * c, half3(1.0h));\n"
+        "    half3x3 p = m * k + transpose(k);\n"
+        "    p = scaled(p, half(a[i]));\n"
+        "    p *= 2;\n"
+        "    p[1] = c;\n"
+        "    half3 v = p * c;\n"
+        "    o[i] = float(v.x) + float(determinant(p)) + float(p[0][1]);"
+    )
+    source = HALF_MATRIX_KERNEL.format(body=body)
+    wgsl = translate(tmp_path, source, "wgsl", ".metal")
+    translate(tmp_path, source, "vulkan", ".metal")
+    names = re.findall(r"^fn (cgl_half\w+)\(", wgsl, flags=re.M)
+    assert names == ["cgl_half_round", "cgl_half_round3", "cgl_half_round3x3"]
+    assert (
+        "return mat3x3<f32>(cgl_half_round3(x0[0]), cgl_half_round3(x0[1]), "
+        "cgl_half_round3(x0[2]));" in wgsl
+    )
+    assert "var m: mat3x3<f32> = cgl_half_round3x3(frame.normal_matrix);" in wgsl
+    assert (
+        "var k: mat3x3<f32> = mat3x3<f32>(c, cgl_half_round3((c * c)), vec3<f32>(1.0));"
+        in wgsl
+    )
+    assert (
+        "var p: mat3x3<f32> = cgl_half_round3x3((cgl_half_round3x3((m * k)) + transpose(k)));"
+        in wgsl
+    )
+    assert "return cgl_half_round3x3((m * s));" in wgsl
+    assert "p = cgl_half_round3x3((p * 2.0));" in wgsl
+    assert "p[1] = c;" in wgsl
+    assert "var v: vec3<f32> = cgl_half_round3((p * c));" in wgsl
+    assert "cgl_half_round(determinant(p))" in wgsl
+
+
+def test_non_square_half_matrices_keep_their_shape(tmp_path):
+    """``f16mat3x2`` has three columns of two rows: ``m * v3`` is a half2 and ``v2 * m`` a half3."""
+    helpers = (
+        "f16mat3x2 grow(f16mat2 m) { return f16mat3x2(m[0], m[1], f16vec2(1.0hf)); }\n"
+    )
+    body = (
+        "    f16mat2 s = f16mat2(a[i], a[i + 1], a[i + 2], a[i + 3]);\n"
+        "    f16mat3x2 m = grow(s);\n"
+        "    f16vec2 v = m * f16vec3(float16_t(a[i]), 2.0hf, 3.0hf);\n"
+        "    f16vec3 w = f16vec2(1.0hf, 0.5hf) * m;\n"
+        "    mat3x2 f = mat3x2(m);\n"
+        "    o[i] = float(v.x + w.z) + f[2][1];"
+    )
+    wgsl, names = helpers_in(tmp_path, glsl, body, helpers)
+    assert names == ["cgl_half_round", "cgl_half_round2", "cgl_half_round3"]
+    assert "return mat3x2<f32>(m[0], m[1], vec2<f32>(1.0));" in wgsl
+    assert (
+        "var s: mat2x2<f32> = mat2x2<f32>(cgl_half_round(f32(inp.a[i])), "
+        "cgl_half_round(f32(inp.a[(i + 1)]))" in wgsl
+    )
+    assert "var v: vec2<f32> = cgl_half_round2((m * vec3<f32>(" in wgsl
+    assert "var w: vec3<f32> = cgl_half_round3((vec2<f32>(1.0, 0.5) * m));" in wgsl
+    assert "var f: mat3x2<f32> = mat3x2<f32>(m);" in wgsl
+
+
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    m++;\n    o[i] = float(m[0][0]);",
+            "matrix-step",
+        ),
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    m = matrixCompMult(m, m);\n    o[i] = float(m[0][0]);",
+            "matrix-builtin",
+        ),
+        (
+            "    f16mat2 m = f16mat2(a[i]);\n    f16mat2 n = m * f16mat3(1.0hf);\n    o[i] = float(n[0][0]);",
+            "matrix-shape",
+        ),
+    ],
+)
+@pytest.mark.parametrize("target", TARGETS)
+def test_unsupported_half_matrix_constructs_are_refused(tmp_path, target, body, reason):
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        glsl(tmp_path, body, target)
+    assert raised.value.reason_code == reason
+
+
+def test_half_matrices_in_buffers_and_unshaped_spellings_are_refused(tmp_path):
+    source = METAL_KERNEL.replace(
+        "uint i [[thread_position_in_grid]]",
+        "device half3x3* p [[buffer(2)]], uint i [[thread_position_in_grid]]",
+    ).format(helpers="", body="    o[i] = float(p[0][0][0]);")
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        translate(tmp_path, source, "wgsl", ".metal")
+    assert raised.value.reason_code == "matrix-storage"
+    # ``half3x3`` has three columns in MSL and three rows in HLSL; CrossGL spells half matrices f16matCxR.
+    register_default_sources()
+    program = SOURCE_REGISTRY.get("cgl").parse(
+        "shader s { compute { void main() { half3x3 m = half3x3(1.0); } } }"
+    )
+    with pytest.raises(HalfFloatUnsupportedError) as raised:
+        legalize_half_floats(program, "cgl", "vulkan")
+    assert raised.value.reason_code == "matrix"
+
+
+def test_matrix_helpers_follow_their_column_helpers():
+    assert H.helper_name("cgl_half_round", (3, 2)) == "cgl_half_round3x2"
+    assert H.closure({("cgl_half_round", (3, 2)), ("cgl_half_div", 2)}) == [
+        ("cgl_half_round", 1),
+        ("cgl_half_index", 1),
+        ("cgl_half_value", 1),
+        ("cgl_half_midpoint", 1),
+        ("cgl_half_div", 1),
+        ("cgl_half_round", 2),
+        ("cgl_half_div", 2),
+        ("cgl_half_round", (3, 2)),
+    ]
+    with pytest.raises(ValueError):
+        H.helper_source("cgl_half_div", (2, 2))

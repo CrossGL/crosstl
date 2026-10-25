@@ -5006,7 +5006,8 @@ def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "textureSize(textures[4], 1)" in hlsl
-    assert "int2(textureQueryLevels(textures[2]))" in hlsl
+    # ivec2(int) splats; HLSL has no one-argument int2 constructor for a scalar.
+    assert "((int2)(textureQueryLevels(textures[2])))" in hlsl
     assert "result = leaf(textures, limit);" in hlsl
     assert "result = (result + leaf(textures, limit));" in hlsl
     assert "DoWhileNode(" not in hlsl
@@ -5134,7 +5135,7 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert hlsl.count("do {") == 2
     assert hlsl.count("} while (false);") == 2
     assert "imageSize(images[3])" in hlsl
-    assert "int2(textureSamples(images[1]))" in hlsl
+    assert "((int2)(textureSamples(images[1])))" in hlsl
     assert "imageSize(afterImage)" in hlsl
     assert "result = leaf(images, limit);" in hlsl
     assert "result = (result + leaf(images, limit));" in hlsl
