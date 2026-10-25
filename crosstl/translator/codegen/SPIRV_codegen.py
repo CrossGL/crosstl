@@ -160,6 +160,7 @@ from .spirv_mesh_builtins import (
     glsl_mesh_builtin_output_infos,
     is_glsl_mesh_builtin_output_declaration,
 )
+from .spirv_module_constants import module_constant
 from .spirv_per_vertex_builtins import (
     lower_per_vertex_builtin_arrays,
     per_vertex_builtin_info,
@@ -20594,6 +20595,10 @@ class VulkanSPIRVCodeGen(
             if self.has_attribute(node, "precise"):
                 self.precise_global_variables.add(node.name)
             return initializer
+        if storage_class == "Private" and not self.has_attribute(node, "precise"):
+            constant = module_constant(self, node, var_type, initializer)
+            if constant is not None:
+                return constant
 
         if storage_class in {"Input", "Output"}:
             var_type = sized_per_vertex_interface_type(self, var_type, storage_class)

@@ -534,13 +534,12 @@ kernel void vector_list(device uint* results [[buffer(0)]]) {{
     output = crosstl.translate(str(source), backend="vulkan", format_output=False)
     assert "WARNING" not in output
     if global_scope:
-        variable = spirv_named_variable(output, "value", storage_class="Private")
-        initializer = re.search(
-            rf"{variable} = OpVariable %\d+ Private (%\d+)", output
-        )[1]
-        components = re.search(
-            rf"{initializer} = OpConstantComposite %\d+ (.*)", output
-        )[1].split()
+        # An immutable program-scope vector is a named constant composite.
+        (constant,) = spirv_named_ids(output, "value")
+        assert f"{constant} = OpVariable" not in output
+        components = re.search(rf"{constant} = OpConstantComposite %\d+ (.*)", output)[
+            1
+        ].split()
         constants = spirv_uint_constant_values(output)
         assert [constants[item] for item in components] == list(range(1, count + 1)) + [
             0
