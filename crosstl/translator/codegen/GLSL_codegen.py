@@ -224,6 +224,7 @@ from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
     wrap_glsl_helper_stage_guard,
 )
+from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
@@ -18006,25 +18007,31 @@ class GLSLCodeGen(
         layout = f"layout(constant_id = {constant_id}) "
         if value is None:
             value_code = self.zero_value_expression(const_type)
+            macro = glsl_specialization_macro_name(name)
             metadata = (
                 "/* CrossGL specialization metadata: "
                 f"name={name}; constant_id={constant_id}; "
                 "required_override=true; "
-                f"encoding_default={value_code} */\n"
+                f"encoding_default={value_code}; source_macro={macro} */\n"
             )
+            # A driver compiling the source has no specialization, so the host supplies the value the way OpenGL
+            # programs select variants: as a macro defined after #version, like MTLFunctionConstantValues for MSL.
             fallback = (
-                f'#error "specialization constant {name} has no default: '
-                'compile this shader to SPIR-V and specialize it"\n'
+                f"#elif defined({macro})\n"
+                f"const {declaration} = {mapped_type}({macro});\n"
+                "#else\n"
+                f'#error "specialization constant {name} has no default: define {macro} '
+                'or compile this shader to SPIR-V and specialize it"\n'
             )
         else:
             value_code = self.generate_constant_expression(value, const_type)
             metadata = ""
-            fallback = f"const {declaration} = {value_code};\n"
+            fallback = f"#else\nconst {declaration} = {value_code};\n"
         # constant_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.5,
         # GL_ARB_gl_spirv, GL_KHR_vulkan_glsl); a driver compiling the source keeps the default value.
         return (
             f"{GLSL_SPIRV_GUARD}{metadata}{layout}const {declaration} = {value_code};\n"
-            f"#else\n{fallback}#endif\n"
+            f"{fallback}#endif\n"
         )
 
     def glsl_builtin_specialization_constant_declaration(
