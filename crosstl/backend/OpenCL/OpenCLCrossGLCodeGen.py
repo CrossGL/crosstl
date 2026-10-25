@@ -781,6 +781,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            image_write = self.format_opencl_image_write(func_name, raw_args)
+            if image_write is not None:
+                return image_write
             if is_conversion_name(func_name) and len(raw_args) == 1:
                 return format_conversion(
                     func_name, self.visit(raw_args[0]), self.convert_hip_type_to_crossgl
@@ -794,6 +797,26 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if builtin is not None:
                 return builtin
         return super().visit_FunctionCallNode(node)
+
+    OPENCL_IMAGE_WRITE_FUNCTIONS = {"write_imagef", "write_imagei", "write_imageui"}
+
+    # OpenCL addresses 3D images and 2D image arrays with an int4 coordinate;
+    # imageStore takes the three components the image has.
+    OPENCL_IMAGE_INT4_COORD_TYPES = {"image3D", "image2DArray"}
+
+    def format_opencl_image_write(self, func_name, args):
+        """Lower write_image{f,i,ui}(image, coord, color) to imageStore."""
+        if func_name not in self.OPENCL_IMAGE_WRITE_FUNCTIONS or len(args) != 3:
+            return None
+        image, coord, color = args
+        image_name = image if isinstance(image, str) else getattr(image, "name", None)
+        image_type = self.lookup_variable_type(image_name) if image_name else None
+        rendered_image = self.visit(image)
+        rendered_coord = self.visit(coord)
+        if image_type in self.OPENCL_IMAGE_INT4_COORD_TYPES:
+            rendered_coord = f"({rendered_coord}).xyz"
+        rendered_color = self.visit(color)
+        return f"imageStore({rendered_image}, {rendered_coord}, {rendered_color})"
 
     def emit_statement(self, stmt):
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
