@@ -97,6 +97,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     comparing.add_argument("published", type=Path)
     comparing.add_argument("report", type=Path)
+    comparing.add_argument(
+        "--repository",
+        help="owner/name; with --head, also name the pull requests between the published coverage and the main "
+        "the report was measured on, read through gh api",
+    )
+    comparing.add_argument(
+        "--head", help="the head commit of the pull request the report measured"
+    )
     commands.add_parser(
         "tools", help="list each language's reference tool and the version found"
     )
@@ -272,7 +280,15 @@ def main(argv: list[str] | None = None) -> int:
             published, current = (
                 report.load(path) for path in (args.published, args.report)
             )
-            print(compare.compare(published, current), end="")
+            lag = None
+            if args.repository and args.head:
+                lag = compare.baseline(
+                    args.repository,
+                    str(published.get("commit", "")),
+                    str(current.get("commit", "")),
+                    args.head,
+                )
+            print(compare.compare(published, current, baseline=lag), end="")
             return 0
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")
