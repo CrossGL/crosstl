@@ -192,7 +192,11 @@ def test_boolean_mix_selects_on_every_target(tmp_path):
 
 def test_wgsl_boolean_mix_is_select(tmp_path):
     # WGSL's mix takes only a floating-point weight; select(f, t, cond) keeps the argument order.
-    wgsl = WGSLCodeGen().generate(parse(SELECTS))
+    source = SELECTS.replace(
+        "void main(uint i @gl_GlobalInvocationID) {",
+        "void main(uvec3 id @gl_GlobalInvocationID) {\n            uint i = id.x;",
+    )
+    wgsl = WGSLCodeGen().generate(parse(source))
 
     assert "select(values[i], 2.0, c)" in wgsl
     assert (
@@ -210,7 +214,8 @@ def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
     RWStructuredBuffer<vec3> values @register(u0);
     compute {
         @numthreads(64, 1, 1)
-        void main(uint i @gl_GlobalInvocationID) {
+        void main(uvec3 id @gl_GlobalInvocationID) {
+            uint i = id.x;
             vec3 a = values[i];
             vec3 b = vec3(1.0);
             vec3 r = mix(a, b, a.x > 0.5);
