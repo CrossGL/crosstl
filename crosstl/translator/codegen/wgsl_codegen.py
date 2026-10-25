@@ -59,6 +59,7 @@ from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
 )
+from .fragment_output_targets import frag_data_attribute_index
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
@@ -66,6 +67,11 @@ from .image_access_contracts import (
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_entry_outputs import (
+    EntryOutputLoweringError,
+    entry_output_parameters,
+    lower_entry_output_parameters,
+)
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
@@ -1124,9 +1130,31 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             if getattr(struct, "name", "")
         }
         lowerings = {}
+        used_type_names = used_struct_names | self.module_declaration_names(ast)
+        structs_by_name = {
+            getattr(struct, "name", ""): struct
+            for struct in existing_structs
+            if getattr(struct, "name", "")
+        }
         for stage_node in self._stage_nodes(ast, target_stage):
             output_variable = self.vertex_position_output_variable(stage_node)
             entry_point = getattr(stage_node, "entry_point", None)
+            stage_name = normalize_stage_name(getattr(stage_node, "stage", None))
+            if entry_output_parameters(entry_point, stage_name):
+                if output_variable is not None:
+                    raise EntryOutputLoweringError(
+                        f"WGSL target cannot combine the output parameters of "
+                        f"entry point {entry_point.name} with the stage output "
+                        f"variable {output_variable.name}"
+                    )
+                struct_node, lowered = lower_entry_output_parameters(
+                    self, entry_point, stage_name, structs_by_name, used_type_names
+                )
+                lowerings[id(stage_node)] = {
+                    "struct": struct_node,
+                    "entry_point": lowered,
+                }
+                continue
             if output_variable is None or entry_point is None:
                 continue
             if not self.is_void_type(getattr(entry_point, "return_type", None)):
@@ -1154,6 +1182,32 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 "struct": struct_node,
             }
         return lowerings
+
+    def module_declaration_names(self, ast):
+        """Names declared at module scope in any stage, which a generated structure must not reuse."""
+        names = set()
+        containers = [ast, *(getattr(ast, "stages", None) or {}).values()]
+        fields = (
+            "structs",
+            "functions",
+            "global_variables",
+            "constants",
+            "cbuffers",
+            "local_variables",
+            "local_functions",
+            "local_structs",
+            "local_cbuffers",
+        )
+        for container in containers:
+            for field in fields:
+                for node in getattr(container, field, None) or []:
+                    name = getattr(node, "name", None)
+                    if isinstance(name, str):
+                        names.add(name)
+            entry_point = getattr(container, "entry_point", None)
+            if isinstance(getattr(entry_point, "name", None), str):
+                names.add(entry_point.name)
+        return names
 
     def unique_stage_output_struct_name(self, preferred, used_names):
         if preferred not in used_names:
@@ -1323,6 +1377,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return "location", self.attribute_integer_argument(attr)
             if self.BUILTIN_SEMANTICS.get(key):
                 return "builtin", None
+            if key == "gl_fragdata":
+                attachment = frag_data_attribute_index(attr)
+                if attachment is not None:
+                    return "location", attachment
             location = self.semantic_location(semantic, direction="generic")
             if location is not None:
                 return "location", location
@@ -1378,6 +1436,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         lowering = self._stage_output_lowerings.get(id(stage_node))
         if lowering is None:
             return entry_point
+        if "entry_point" in lowering:
+            return lowering["entry_point"]
         lowered = copy.copy(entry_point)
         lowered.return_type = NamedType(lowering["struct_name"])
         lowered.body = self.rewrite_stage_output_body(entry_point.body, lowering)
@@ -6546,6 +6606,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             if builtin:
                 rendered.append(f"@builtin({builtin})")
                 continue
+
+            if key == "gl_fragdata":
+                attachment = frag_data_attribute_index(attr)
+                if attachment is not None:
+                    rendered.append(f"@location({attachment})")
+                    continue
 
             location = self.semantic_location(semantic, direction)
             if location is not None:
