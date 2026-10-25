@@ -213,16 +213,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     OPENCL_MEM_FENCE_FUNCTIONS = frozenset(
         {"mem_fence", "read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
     )
-    # The CrossGL fences order memory at device scope at most, and
-    # subgroupBarrier() orders it for the sub-group only.
-    OPENCL_DEVICE_FENCE_SCOPES = frozenset(
-        {
-            "memory_scope_work_item",
-            "memory_scope_sub_group",
-            "memory_scope_work_group",
-            "memory_scope_device",
-        }
-    )
+    # The CrossGL fences order memory at device scope at most, the scopes in
+    # OPENCL_ATOMIC_DEVICE_SCOPES, and subgroupBarrier() orders it for the
+    # sub-group only.
     OPENCL_SUB_GROUP_FENCE_SCOPES = frozenset(
         {"memory_scope_work_item", "memory_scope_sub_group"}
     )
@@ -857,7 +850,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             # The memory order is dropped: the CrossGL fences are acquire-release
             # fences and no target has a stronger one, so seq_cst lowers the same.
             self.require_opencl_fence_scope(
-                func_name, args[2:], self.OPENCL_DEVICE_FENCE_SCOPES
+                func_name, args[2:], self.OPENCL_ATOMIC_DEVICE_SCOPES
             )
         flags = set(re.findall(r"\bCLK_\w+\b", self.visit(args[0])))
         if len(flags) == 1:
