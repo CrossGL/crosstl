@@ -329,9 +329,9 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_params",
     ) + tuple(
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
-        # and AddMM epilogues of every float dtype, unaligned, batched,
-        # broadcast, transposed and strided operands and empty products, and
-        # GatherMM's gathered gemv, steel gather and group offset kernels and
+        # and AddMM epilogues of every float dtype, complex64 GEMV, unaligned,
+        # batched, broadcast, transposed and strided operands and empty
+        # products, and GatherMM's gathered gemv, steel gather and group offset kernels and
         # SegmentedMM's kernels with their gradients.
         "test_blas.TestBlas." + name
         for name in (
@@ -348,6 +348,7 @@ UPSTREAM_TESTS = (
             "test_matrix_vector_edgecases",
             "test_mismatch_stride_mm",
             "test_gemv_gemm_same_precision",
+            "test_complex_gemv",
             "test_addmm",
             "test_addmm_grad",
             "test_dot_product",

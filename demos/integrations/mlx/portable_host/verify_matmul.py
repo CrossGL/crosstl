@@ -1,4 +1,4 @@
-"""Exercise MLX matmul through translated floating-point matmul kernels.
+"""Exercise MLX matmul through translated floating-point and complex64 matmul kernels.
 
 Every case routes one ``mx.matmul`` call to one translated ``gemv``,
 ``gemv_t`` or ``steel_gemm_fused`` entry, to a ``gemm_splitk`` entry and the
@@ -6,6 +6,8 @@ accumulation that sums its partitions, or to a ``dot_product`` entry, the
 whole-array sum of its float32 partial sums and the copy to the output type,
 and checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
+complex64 products take ``gemv`` or ``gemv_t`` even for a single dot product,
+with both parts of every operand on such grids.
 """
 
 import argparse
@@ -23,6 +25,8 @@ from demos.integrations.mlx.portable_host import (
 from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_quantized_matmul import rounded
+
+COMPLEX = gemv_layout.COMPLEX
 
 # (name, dtype, a, b). Each operand is (stored shape, view): "dense" binds the
 # stored array, "swap" its last two axes swapped, "step" every other element
@@ -144,6 +148,28 @@ CASES = (
     ("dot-product-tail", "float16", ((1, 1001), "dense"), ((1001, 1), "dense")),
     ("dot-product-groups", "bfloat16", ((1, 40000), "dense"), ((40000, 1), "dense")),
     ("dot-product-copied", "float32", ((1, 66), "step"), ((33, 1), "dense")),
+    # complex64 matrix-vector products: both kernels, a batch that does not
+    # collapse, and a single dot product, which matmul.cpp sends to gemv.
+    ("complex-matrix-vector", "complex64", ((16, 50), "dense"), ((50, 1), "dense")),
+    (
+        "complex-transposed-matrix-vector",
+        "complex64",
+        ((50, 16), "swap"),
+        ((50, 1), "dense"),
+    ),
+    (
+        "complex-vector-matrix-batched",
+        "complex64",
+        ((2, 3, 1, 96), "dense"),
+        ((1, 3, 96, 40), ("broadcast", (2, 3, 96, 40))),
+    ),
+    (
+        "complex-vector-matrix-rows",
+        "complex64",
+        ((1, 128), "dense"),
+        ((40, 128), "swap"),
+    ),
+    ("complex-dot-product", "complex64", ((1, 72), "dense"), ((72, 1), "dense")),
 )
 # Translated product kernels each family dispatches per product; a dot
 # product also sums its partials and copies the total (``route["kernels"]``).
@@ -226,21 +252,46 @@ def _view(np, values, view):
     return np.broadcast_to(values, view[1])
 
 
+def _grid(np, rng, shape, scale, dtype):
+    values = rng.integers(-4, 5, size=shape) / scale
+    if dtype == COMPLEX:
+        values = values + 1j * (rng.integers(-4, 5, size=shape) / scale)
+    return values
+
+
+def _rounded(total, dtype):
+    """The exact product in ``dtype``; complex64 rounds each part to float32."""
+    if dtype != COMPLEX:
+        return rounded(total, dtype)
+    return rounded(total.real, "float32") + 1j * rounded(total.imag, "float32")
+
+
 def case_data(np, record, seed):
     """Stored operands on dyadic grids and the exact rounded product."""
     rng = np.random.default_rng(seed)
-    a = rng.integers(-4, 5, size=record["a"]["stored"]) / 4.0
-    b = rng.integers(-4, 5, size=record["b"]["stored"]) / 8.0
+    dtype = record["dtype"]
+    a = _grid(np, rng, record["a"]["stored"], 4.0, dtype)
+    b = _grid(np, rng, record["b"]["stored"], 8.0, dtype)
     total = np.matmul(
         _view(np, a, record["a"]["view"]), _view(np, b, record["b"]["view"])
     )
-    if np.abs(total).max() >= 2**19:
+    if max(np.abs(total.real).max(), np.abs(total.imag).max()) >= 2**19:
         raise ValueError("Matmul case exceeds the exact float32 budget")
-    return {"a": a, "b": b, "expected": rounded(total, record["dtype"])}
+    expected = _rounded(total, dtype)
+    if dtype == COMPLEX:
+        expected = expected.astype(np.complex64)
+    return {"a": a, "b": b, "expected": expected}
 
 
 def float_bits(values):
     return b"".join(struct.pack("<f", float(value)) for value in values)
+
+
+def stored_bits(np, value, dtype):
+    """The float64 bits of every stored element, both parts of a complex one."""
+    kind = np.complex128 if dtype == COMPLEX else np.float64
+    values = np.asarray(value.tolist(), dtype=kind).reshape(-1)
+    return float_bits(values.view(np.float64))
 
 
 def run_case(mx, np, host, record, seed):
@@ -251,14 +302,14 @@ def run_case(mx, np, host, record, seed):
     mx.eval(a_stored, b_stored)
     stored = {"a": a_stored, "b": b_stored}
     before = {
-        name: float_bits(np.asarray(value.tolist(), dtype=np.float64).reshape(-1))
-        for name, value in stored.items()
+        name: stored_bits(np, value, record["dtype"]) for name, value in stored.items()
     }
     start = host.dispatch_count
     y = mx.matmul(a, b)
     mx.eval(y)
     count = host.dispatch_count - start
-    actual = np.asarray(y.tolist(), dtype=np.float32)
+    kind = np.complex64 if record["dtype"] == COMPLEX else np.float32
+    actual = np.asarray(y.tolist(), dtype=kind)
     expected = data["expected"]
     if actual.shape != expected.shape or y.dtype != dtype:
         raise AssertionError(f"Matmul output layout differs: {record['name']}")
@@ -269,14 +320,12 @@ def run_case(mx, np, host, record, seed):
     if count != kernels + record["copies"]:
         raise AssertionError(f"Matmul dispatch count differs: {record['name']}")
     for name, value in stored.items():
-        if before[name] != float_bits(
-            np.asarray(value.tolist(), dtype=np.float64).reshape(-1)
-        ):
+        if before[name] != stored_bits(np, value, record["dtype"]):
             raise AssertionError(f"Matmul input changed: {record['name']}")
     cpu = None
-    if record["dtype"] == "float32":
+    if record["dtype"] in ("float32", COMPLEX):
         reference = mx.matmul(a, b, stream=mx.cpu)
-        cpu = np.asarray(reference.tolist(), dtype=np.float32)
+        cpu = np.asarray(reference.tolist(), dtype=kind)
         if cpu.view(np.uint32).tobytes() != actual.view(np.uint32).tobytes():
             raise AssertionError(f"Matmul differs from MLX CPU: {record['name']}")
     return {
@@ -369,7 +418,7 @@ def _gemv_covered(records):
     return (
         {info["kind"] for info in signatures} == {"gemv", "gemv_t"}
         and {info["nc"] for info in signatures} == {False, True}
-        and {info["dtype"] for info in signatures} == set(gemv_layout.DTYPES)
+        and {info["dtype"] for info in signatures} == set(gemv_layout.ELEMENT_DTYPES)
         and len(tiles) >= 10
         and any(record["copies"] for record in records)
         and any(record["route"]["M"] > 1 for record in records)

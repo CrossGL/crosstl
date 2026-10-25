@@ -3150,6 +3150,9 @@ uint64_t matmul_span(const array& in) {
 }
 
 const char* matmul_storage(Dtype dtype) {
+  if (dtype == complex64) {
+    return "complex64";
+  }
   return dtype == float32 ? "float32" : dtype == float16 ? "float16" : "bfloat16";
 }
 
@@ -4122,9 +4125,11 @@ void dispatch_gemv(
 void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   const auto dtype = out.dtype();
-  if (inputs.size() != 2 || (dtype != float32 && dtype != float16 && dtype != bfloat16) ||
+  if (inputs.size() != 2 ||
+      (dtype != float32 && dtype != float16 && dtype != bfloat16 && dtype != complex64) ||
       inputs[0].dtype() != dtype || inputs[1].dtype() != dtype) {
-    throw std::invalid_argument("CrossTL matmul supports float32, float16 and bfloat16 only.");
+    throw std::invalid_argument(
+        "CrossTL matmul supports float32, float16, bfloat16 and complex64 only.");
   }
   const auto& a_pre = inputs[0];
   const auto& b_pre = inputs[1];
@@ -4162,13 +4167,19 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     batch_shape = {1};
   }
   if (M == 1 && N == 1 && batch_size_out == 1 && a.flags().row_contiguous &&
-      b.flags().row_contiguous) {
+      b.flags().row_contiguous && dtype != complex64) {
     dispatch_dot_product(a, b, out, K);
     return;
   }
   // MLX takes gemv_wide only from Apple GPU generation 15, which the host
   // does not report.
   if (std::min(M, N) != 1) {
+    // Steel GEMM's complex64 BlockMMA specialization does not translate yet
+    // (#2261).
+    if (dtype == complex64) {
+      throw std::invalid_argument(
+          "CrossTL complex64 matmul supports matrix-vector products only.");
+    }
     dispatch_steel_gemm(
         a, b, out, M, N, K, batch_size_out, a_cols, b_cols, a_transposed, b_transposed,
         batch_shape, A_batch_stride, B_batch_stride);

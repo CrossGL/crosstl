@@ -1,11 +1,11 @@
-"""Execute floating-point matrix-vector packages and commit guarded MLX outputs."""
+"""Execute floating-point and complex64 matrix-vector packages and commit guarded MLX outputs."""
 
 import ctypes
 import hashlib
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
-from demos.integrations.mlx.portable_host import gemv_layout
+from demos.integrations.mlx.portable_host import element_storage, gemv_layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.matmul_dispatch import (
     GUARD_COUNT,
@@ -18,8 +18,12 @@ from demos.integrations.mlx.portable_host.quantization_dispatch import (
     WORD_FORMATS,
     decode,
 )
-from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.portable_host.trace_records import write_trace
+
+COMPLEX = gemv_layout.COMPLEX
+# (1.5, 1.5): exact in complex64, and no route may read it into an output.
+COMPLEX_POISON = 0x3FC000003FC00000
+FORMATS = {**WORD_FORMATS, 8: "Q"}
 
 # The bindings the translation must reflect: the kernels read nothing else
 # that is not a scalar, and the bias only with axpby.
@@ -37,18 +41,48 @@ def _float_word(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
+def _guard(dtype):
+    return element_storage.GUARDS[COMPLEX] if dtype == COMPLEX else GUARDS[dtype]
+
+
+def _poison(dtype):
+    return COMPLEX_POISON if dtype == COMPLEX else POISON[dtype]
+
+
+def _matrix_words(buffer, dtype):
+    """A matrix buffer's storage words: complex64 as one 64-bit word each."""
+    if dtype == COMPLEX:
+        return element_storage.buffer_words(buffer, dtype)
+    return _words(buffer, dtype)
+
+
+def _decode(value, dtype, target, physical):
+    """The output's logical storage words, refusing a carrier they do not fill."""
+    if dtype != COMPLEX:
+        return decode(value, dtype, physical)
+    words = value.get("values")
+    if not isinstance(words, list):
+        raise RuntimeError("Native matrix-vector readback words are missing")
+    words = element_storage.unpack(dtype, target, words)
+    if element_storage.packet(dtype, target, words) != value:
+        raise RuntimeError("Native matrix-vector readback storage differs")
+    return words
+
+
 def _storage(entry, supplied, counts, parameters, metadata):
     """Every kernel parameter's words, with guards after the matrix buffers."""
     info = gemv_layout.signature(entry)
     dtype = info["dtype"]
     storage = {
-        "out_vec": [GUARDS[dtype]] * (counts["out_vec"] + GUARD_COUNT),
+        "out_vec": [_guard(dtype)] * (counts["out_vec"] + GUARD_COUNT),
         # Without axpby the kernels never read the bias.
-        "bias": [POISON[dtype]] * GUARD_COUNT,
+        "bias": [_poison(dtype)] * GUARD_COUNT,
     }
     matrices = ("mat", "in_vec", "bias") if info["axpby"] else ("mat", "in_vec")
     for name in matrices:
-        storage[name] = _words(supplied[name], dtype) + [POISON[dtype]] * GUARD_COUNT
+        storage[name] = _matrix_words(supplied[name], dtype) + (
+            [_poison(dtype)] * GUARD_COUNT
+        )
     for name, value in parameters.items():
         if name in gemv_layout.FLOAT_PARAMETERS:
             storage[name] = [_float_word(value)]
@@ -144,16 +178,15 @@ def dispatch(host, entry, buffers, count, threads, launch):
         key: item for key, item in initial.items() if key != "values"
     }:
         raise RuntimeError("Native matrix-vector output layout differs")
-    words = decode(value, dtype, initial["dtype"])
+    words = _decode(value, dtype, host.target, initial["dtype"])
     size = counts["out_vec"]
     if (
         len(words) != size + GUARD_COUNT
-        or words[size:] != [GUARDS[dtype]] * GUARD_COUNT
+        or words[size:] != [_guard(dtype)] * GUARD_COUNT
     ):
         raise RuntimeError("Native matrix-vector output guard differs")
-    payload = struct.pack(
-        "<" + str(size) + WORD_FORMATS[ITEM_SIZES[dtype]], *words[:size]
-    )
+    itemsize = gemv_layout.ELEMENT_SIZES[dtype]
+    payload = struct.pack("<" + str(size) + FORMATS[itemsize], *words[:size])
     event = {
         "entry": entry,
         "target": host.target,
@@ -170,7 +203,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
             name: (
                 hashlib.sha256(
                     ctypes.string_at(
-                        supplied[name].data, supplied[name].count * ITEM_SIZES[dtype]
+                        supplied[name].data, supplied[name].count * itemsize
                     )
                 ).hexdigest()
             )

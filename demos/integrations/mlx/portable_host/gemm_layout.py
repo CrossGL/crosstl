@@ -225,10 +225,14 @@ def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
     operands = (dtype, a_shape, a_strides, b_shape, b_strides)
     prepared = gemv_layout.operands(a_shape, a_strides, b_shape, b_strides)
     m, n, k = prepared["M"], prepared["N"], prepared["K"]
-    if prepared["dot"]:
+    if prepared["dot"] and dtype != gemv_layout.COMPLEX:
         return "dot", dot_layout.route(*operands)
     if min(m, n) == 1:
         return "gemv", gemv_layout.route(*operands)
+    if dtype == gemv_layout.COMPLEX:
+        # The steel BlockMMA complex64 specialization does not translate yet
+        # (#2261), so the host refuses these products.
+        raise ValueError("complex64 matrix-matrix products are not translated yet")
     if split_k(m, n, k, prepared["batches"]):
         return "splitk", gemm_splitk_layout.route(*operands)
     return "gemm", route(*operands)
