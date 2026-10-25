@@ -569,7 +569,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         '(batch_shape.size() == 1 ? "0" : "1") + "_axpby0"',
         "{32, uint32_t(bn), uint32_t(bm)}",
         "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
-        "does not route single dot products yet",
+        "dispatch_dot_product(a, b, out, K);",
     ):
         assert text in backend, text
     for name in layout.HOST_PARAMETERS:
@@ -611,6 +611,16 @@ def trace_events(record, target):
                 "parameters": dict(route["accumParams"]),
                 "inputHashes": {"C_split": f"partitions-{record['name']}"},
             },
+        ]
+    if record["family"] == "dot":
+        passes = route["reductionPasses"]
+        return [
+            {
+                "entry": record["entry"],
+                "target": target,
+                "dotMetadata": {"K": route["K"], "partials": route["partials"]},
+            },
+            *[{"entry": "all_reduce_sumfloat32", "target": target}] * passes,
         ]
     return [trace_event(record, target)]
 
@@ -683,7 +693,22 @@ def test_trace_validation_requires_the_routed_entries():
     with pytest.raises(RuntimeError, match="routed entries"):
         verify.validate_trace(trace[:accum] + trace[accum + 1 :], ALL_RECORDS, "opengl")
     # Each family must cover its routes on its own.
-    for family in ("gemv", "gemm", "splitk"):
+    # A dot product's partials must reach the whole-array sum next.
+    dot = next(
+        index
+        for index, event in enumerate(trace)
+        if event["entry"].startswith("dot_product_")
+    )
+    trace[dot + 1]["entry"] = "all_reduce_sumfloat16"
+    with pytest.raises(RuntimeError, match="reach their sum"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[dot + 1]["entry"] = "all_reduce_sumfloat32"
+    trace[dot]["dotMetadata"]["partials"] += 1
+    with pytest.raises(RuntimeError, match="launch differs"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[dot]["dotMetadata"]["partials"] -= 1
+    verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    for family in ("gemv", "gemm", "splitk", "dot"):
         kept = [record for record in ALL_RECORDS if record["family"] != family] + [
             record for record in ALL_RECORDS if record["family"] == family
         ][:3]
@@ -716,6 +741,13 @@ def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
         assert "set -euo pipefail" in item["run"]
         assert "--packages .mlx-portable-quantized/base/packages" in item["run"]
     assert "portable_host.gemv_packages" in translate["run"]
+    # Dot products sum their partials through the on-demand whole-array sums.
+    assert "portable_host.dot_packages" in translate["run"]
+    assert (
+        "--family all --on-demand --output-dir .mlx-portable-quantized/all-reductions"
+        in translate["run"]
+    )
+    assert "--reductions .mlx-portable-quantized/all-reductions" in execute["run"]
     assert "portable_host.gemm_packages" in gemm["run"]
     assert "portable_host.gemm_splitk_packages" in splitk["run"]
     for item in (translate, gemm, splitk):

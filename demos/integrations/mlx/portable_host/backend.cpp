@@ -3905,6 +3905,54 @@ void dispatch_steel_gemm(
     throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
   }
 }
+
+// matmul.cpp dot_product: 512-thread groups of 32 items each write one float32
+// partial sum, all_reduce_dispatch sums the partials and copy_gpu converts the
+// total to the output type.
+void dispatch_dot_product(const array& a, const array& b, array& out, int K) {
+  constexpr uint64_t items_per_thread = 32, thread_group_size = 512;
+  const char* storage = matmul_storage(out.dtype());
+  const std::string entry = std::string("dot_product_") + storage + "_it32_tg512_sg16";
+  require_entry(entry);
+  const uint64_t threads = (uint64_t(K) + items_per_thread - 1) / items_per_thread;
+  const uint64_t blocks = (threads + thread_group_size - 1) / thread_group_size;
+  if (K < 1 || uint64_t(K) > max_matmul_elements || blocks > 65535 || out.size() != 1 ||
+      matmul_span(a) < uint64_t(K) || matmul_span(b) < uint64_t(K)) {
+    throw std::invalid_argument("CrossTL dot product exceeds its bounds.");
+  }
+  array partials({static_cast<int>(blocks)}, float32, nullptr, {});
+  partials.set_data(allocator::malloc(partials.nbytes()));
+  int32_t n = K;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  CrosstlMlxBuffer buffers[] = {
+      {"a", storage, data(a), matmul_span(a), 0},
+      {"b", storage, data(b), matmul_span(b), 0},
+      {"output", "float32", partials.data<void>(), blocks, 1},
+      {"n", "int32", &n, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {uint32_t(blocks), 1, 1}, {uint32_t(thread_group_size), 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 4, blocks, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native dot product failed: ") + error);
+  }
+  array total(out.shape(), float32, nullptr, {});
+  if (partials.size() <= 4096) {
+    dispatch_all_reduce(partials, total, "sum", "float32");
+  } else {
+    array intermediate({static_cast<int>(all_reduce_rows(partials))}, float32, nullptr, {});
+    dispatch_all_reduce(partials, intermediate, "sum", "float32");
+    dispatch_all_reduce(intermediate, total, "sum", "float32");
+  }
+  if (out.dtype() == float32) {
+    dispatch_copy(total, out);
+  } else {
+    dispatch_cast({total}, out);
+  }
+}
 } // namespace
 
 void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -3951,7 +3999,8 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
   if (M == 1 && N == 1 && batch_size_out == 1 && a.flags().row_contiguous &&
       b.flags().row_contiguous) {
-    throw std::invalid_argument("CrossTL matmul does not route single dot products yet.");
+    dispatch_dot_product(a, b, out, K);
+    return;
   }
   // MLX takes gemv_wide only from Apple GPU generation 15, which the host
   // does not report.

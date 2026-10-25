@@ -1,11 +1,11 @@
 """Exercise MLX matmul through translated floating-point matmul kernels.
 
 Every case routes one ``mx.matmul`` call to one translated ``gemv``,
-``gemv_t`` or ``steel_gemm_fused`` entry, or to a ``gemm_splitk`` entry and
-the accumulation that sums its partitions, and checks each output bit against
-an exact float64 reference: inputs lie on dyadic grids that keep every float32
-partial sum exact, whatever its order. Products MLX sends to other kernels
-must fail with the host's explicit error.
+``gemv_t`` or ``steel_gemm_fused`` entry, to a ``gemm_splitk`` entry and the
+accumulation that sums its partitions, or to a ``dot_product`` entry, the
+whole-array sum of its float32 partial sums and the copy to the output type,
+and checks each output bit against an exact float64 reference: inputs lie on
+dyadic grids that keep every float32 partial sum exact, whatever its order.
 """
 
 import argparse
@@ -15,6 +15,7 @@ import struct
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    dot_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
@@ -137,11 +138,16 @@ CASES = (
     ),
     # 208 / 16 = 13 K tiles over 16 partitions: only the last one has work.
     ("splitk-copied-operand", "float32", ((24, 416), "step"), ((208, 24), "dense")),
+    # Dot products: every type, whole and partial vector loads, several
+    # threadgroups' partial sums and a copied operand.
+    ("dot-product", "float32", ((1, 16), "dense"), ((16, 1), "dense")),
+    ("dot-product-tail", "float16", ((1, 1001), "dense"), ((1001, 1), "dense")),
+    ("dot-product-groups", "bfloat16", ((1, 40000), "dense"), ((40000, 1), "dense")),
+    ("dot-product-copied", "float32", ((1, 66), "step"), ((33, 1), "dense")),
 )
-# Products the host refuses, with the error it raises.
-REFUSALS = (("dot-product", (1, 16), (16, 1), "single dot products"),)
-# Translated kernels each family dispatches per product.
-KERNELS = {"gemv": 1, "gemm": 1, "splitk": 2}
+# Translated product kernels each family dispatches per product; a dot
+# product also sums its partials and copies the total (``route["kernels"]``).
+KERNELS = {"gemv": 1, "gemm": 1, "splitk": 2, "dot": 1}
 
 
 def _row_strides(shape):
@@ -259,7 +265,8 @@ def run_case(mx, np, host, record, seed):
     if actual.view(np.uint32).tobytes() != expected.view(np.uint32).tobytes():
         raise AssertionError(f"Matmul output differs: {record['name']}")
     # One translated copy for each operand matmul.cpp copies, then the product.
-    if count != KERNELS[record["family"]] + record["copies"]:
+    kernels = record["route"].get("kernels", KERNELS[record["family"]])
+    if count != kernels + record["copies"]:
         raise AssertionError(f"Matmul dispatch count differs: {record['name']}")
     for name, value in stored.items():
         if before[name] != float_bits(
@@ -283,24 +290,6 @@ def run_case(mx, np, host, record, seed):
     }
 
 
-def run_refusal(mx, host, refusal):
-    name, a_shape, b_shape, message = refusal
-    a = mx.ones(a_shape, dtype=mx.float32)
-    b = mx.ones(b_shape, dtype=mx.float32)
-    mx.eval(a, b)
-    start = host.dispatch_count
-    try:
-        mx.eval(mx.matmul(a, b))
-    except ValueError as error:
-        if message not in str(error):
-            raise AssertionError(f"Matmul refusal differs: {name}: {error}") from error
-    else:
-        raise AssertionError(f"Matmul refusal did not raise: {name}")
-    if host.dispatch_count != start:
-        raise AssertionError(f"Matmul refusal dispatched: {name}")
-    return {"name": name, "message": message}
-
-
 def _gemv_launch_matches(event, record):
     route, metadata = record["route"], event["gemvMetadata"]
     parameters = event["parameters"]
@@ -318,6 +307,11 @@ def _gemv_launch_matches(event, record):
         route["vectorBatchStride"],
         route["matrixBatchStride"],
     )
+
+
+def _dot_launch_matches(event, record):
+    route, metadata = record["route"], event["dotMetadata"]
+    return (metadata["K"], metadata["partials"]) == (route["K"], route["partials"])
 
 
 def _gemm_launch_matches(event, record):
@@ -382,6 +376,33 @@ def _gemv_covered(records):
     )
 
 
+def _dot_covered(records):
+    routes = [record["route"] for record in records]
+    return (
+        {dot_layout.signature(record["entry"])["dtype"] for record in records}
+        == set(dot_layout.DTYPES)
+        and any(route["K"] % 4 == 0 for route in routes)
+        and any(route["K"] % 8 for route in routes)
+        and any(route["partials"] > 1 for route in routes)
+        and any(record["copies"] for record in records)
+    )
+
+
+def _dot_sums(trace, records):
+    """Each dot product's partials reach the whole-array float32 sum next."""
+    chosen = iter(record for record in records if record["family"] == "dot")
+    for index, event in enumerate(trace):
+        if not event.get("entry", "").startswith(dot_layout.ENTRY_PREFIXES):
+            continue
+        passes = next(chosen)["route"]["reductionPasses"]
+        sums = trace[index + 1 : index + 1 + passes]
+        if len(sums) != passes or any(
+            item.get("entry") != "all_reduce_sumfloat32" for item in sums
+        ):
+            return False
+    return True
+
+
 def _gemm_covered(records):
     signatures = [gemm_layout.signature(record["entry"]) for record in records]
     constants = [info["constants"] for info in signatures]
@@ -423,6 +444,7 @@ def _entries(record):
 # (family, entry prefix, launch check, coverage check)
 FAMILIES = (
     ("gemv", gemv_layout.ENTRY_PREFIXES, _single(_gemv_launch_matches), _gemv_covered),
+    ("dot", dot_layout.ENTRY_PREFIXES, _single(_dot_launch_matches), _dot_covered),
     ("gemm", gemm_layout.ENTRY_PREFIXES, _single(_gemm_launch_matches), _gemm_covered),
     (
         "splitk",
@@ -453,9 +475,11 @@ def validate_trace(trace, records, target):
             start += size
         if not covered(chosen):
             raise RuntimeError("Matmul cases do not cover every route")
+    if not _dot_sums(trace, records):
+        raise RuntimeError("Dot-product partials do not reach their sum")
 
 
-def verify(root, packages, output):
+def verify(root, packages, output, reductions=None):
     import mlx.core as mx
     import numpy as np
 
@@ -463,9 +487,11 @@ def verify(root, packages, output):
     output.mkdir(parents=True, exist_ok=False)
     preparation = verify_prepared(root)
     (output / "adaptation.json").write_text(json.dumps(preparation, indent=2))
-    host = HostRuntime(packages, output / "trace.jsonl", mlx_root=root)
+    host = HostRuntime(
+        packages, output / "trace.jsonl", mlx_root=root, reductions=reductions
+    )
     host.install()
-    records, refusals = [], []
+    records = []
     try:
         for seed, case in enumerate(CASES):
             record = run_case(mx, np, host, case_record(case), seed)
@@ -473,12 +499,10 @@ def verify(root, packages, output):
             print(
                 json.dumps({key: record[key] for key in ("name", "entry")}), flush=True
             )
-        for refusal in REFUSALS:
-            refusals.append(run_refusal(mx, host, refusal))
     finally:
         (output / "results.json").write_text(
             json.dumps(
-                {"target": host.target, "cases": records, "refusals": refusals},
+                {"target": host.target, "cases": records},
                 indent=2,
             )
         )
@@ -495,7 +519,6 @@ def verify(root, packages, output):
         json.dumps(
             {
                 "cases": len(records),
-                "refusals": len(refusals),
                 "dispatches": host.dispatch_count,
                 "elements": sum(
                     record["route"]["batches"]
@@ -518,5 +541,11 @@ if __name__ == "__main__":
     parser.add_argument("--mlx-root", type=Path, required=True)
     parser.add_argument("--packages", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--reductions",
+        type=Path,
+        action="append",
+        help="reduction package directories; dot products sum their partials",
+    )
     args = parser.parse_args()
-    verify(args.mlx_root, args.packages, args.output_dir)
+    verify(args.mlx_root, args.packages, args.output_dir, args.reductions)

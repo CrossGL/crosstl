@@ -234,6 +234,9 @@ UPSTREAM_TESTS = (
             "test_take",
             # This reaches int32 and float32 replacement axis-scatters.
             "test_put_along_axis",
+            # This reaches the lazily translated dot product, its whole-array
+            # partial sum, and matrix-vector products.
+            "test_inner",
             # This also reaches lazily translated aranges.
             "test_round",
             # These reach lazily translated wide whole-array, small-row and

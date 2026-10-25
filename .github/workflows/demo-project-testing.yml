@@ -3295,7 +3295,7 @@ jobs:
     name: MLX quantized host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 330
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix:
@@ -3474,6 +3474,14 @@ jobs:
             python -m demos.integrations.mlx.portable_host.gemv_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/matmul-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX dot-product translation" -- \
+            python -m demos.integrations.mlx.portable_host.dot_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/dot-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX on-demand reduction packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family all --on-demand --output-dir .mlx-portable-quantized/all-reductions \
+              2>&1 | tee .mlx-portable-quantized/all-reductions.log
       - name: Translate steel GEMM packages
         run: |
           set -euo pipefail
@@ -3498,7 +3506,8 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX matmul host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_matmul --mlx-root mlx-upstream \
-              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/matmul \
+              --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/all-reductions \
+              --output-dir .mlx-portable-quantized/matmul \
               2>&1 | tee .mlx-portable-quantized/matmul.log
       - name: Retain quantized execution evidence
         if: always()

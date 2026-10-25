@@ -182,13 +182,15 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
 
 
 def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
-    """The gemv, steel GEMM or split-K route Matmul::eval_gpu takes, by family."""
-    from demos.integrations.mlx.portable_host import gemm_splitk_layout
+    """The dot, gemv, steel GEMM or split-K route Matmul::eval_gpu takes, by family."""
+    from demos.integrations.mlx.portable_host import dot_layout, gemm_splitk_layout
 
     operands = (dtype, a_shape, a_strides, b_shape, b_strides)
     prepared = gemv_layout.operands(a_shape, a_strides, b_shape, b_strides)
     m, n, k = prepared["M"], prepared["N"], prepared["K"]
-    if prepared["dot"] or min(m, n) == 1:
+    if prepared["dot"]:
+        return "dot", dot_layout.route(*operands)
+    if min(m, n) == 1:
         return "gemv", gemv_layout.route(*operands)
     if split_k(m, n, k, prepared["batches"]):
         return "splitk", gemm_splitk_layout.route(*operands)

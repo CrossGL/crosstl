@@ -36,6 +36,8 @@ from demos.integrations.mlx.portable_host import (
     copy_dispatch,
     copy_layout,
     divmod_dispatch,
+    dot_dispatch,
+    dot_layout,
     elementwise_dispatch,
     fp_matmul_layout,
     fp_qmm_layout,
@@ -94,6 +96,10 @@ from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCa
 from demos.integrations.mlx.portable_host.divmod_packages import (
     signature as divmod_signature,
 )
+from demos.integrations.mlx.portable_host.dot_packages import (
+    CACHE_DIRECTORY as DOT_CACHE,
+)
+from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     CACHE as ELEMENTWISE_CACHE,
 )
@@ -500,6 +506,11 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.dots = (
+            DotPackageCache(mlx_root, self.directory / DOT_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.gemms = (
             GemmPackageCache(mlx_root, self.directory / GEMM_CACHE, self.target)
             if mlx_root is not None
@@ -755,6 +766,9 @@ class HostRuntime:
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
+            if name.startswith(dot_layout.ENTRY_PREFIXES) and self.dots is not None:
+                dot_layout.signature(name)
+                return 1
             if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
                 gemm_layout.signature(name)
                 return 1
@@ -927,6 +941,8 @@ class HostRuntime:
             )
         if entry.startswith(gemv_layout.ENTRY_PREFIXES):
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(dot_layout.ENTRY_PREFIXES):
+            return dot_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gemm_layout.ENTRY_PREFIXES):
             return gemm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gemm_splitk_layout.ENTRY_PREFIXES):

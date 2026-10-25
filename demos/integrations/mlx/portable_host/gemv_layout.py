@@ -5,9 +5,8 @@ column as matmul.cpp does: ``check_transpose`` on both operands,
 ``collapse_batches``, the fold of a contiguous batch into ``M``, then
 ``gemv_axbpy``'s choice of ``gemv`` or ``gemv_t`` and its tile shape. MLX takes
 ``gemv_wide`` only from Apple GPU generation 15, which the portable host never
-reports, and ``Matmul`` never asks for ``axpby``. Single dot products, which
-MLX sends to ``dot_product`` and an all-reduce, fail with an explicit error;
-``gemm_layout`` describes the matrix-matrix route.
+reports, and ``Matmul`` never asks for ``axpby``. Single dot products take
+``dot_layout``'s route; ``gemm_layout`` describes the matrix-matrix route.
 """
 
 import ctypes
@@ -292,7 +291,7 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
     prepared = operands(a_shape, a_strides, b_shape, b_strides)
     m, n, k = prepared["M"], prepared["N"], prepared["K"]
     if prepared["dot"]:
-        raise ValueError("Single dot products are not routed")
+        raise ValueError("Single dot products take the dot-product route")
     if min(m, n) != 1:
         raise ValueError("Matrix-matrix products take the steel GEMM route")
     is_b_matrix = n != 1

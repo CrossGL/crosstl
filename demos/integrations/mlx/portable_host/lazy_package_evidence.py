@@ -1,7 +1,7 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
-Scans, small row reductions, small column reductions, GEMV, steel GEMM and
-split-K GEMM kernels are translated from the pinned sources on first use, so
+Scans, small row reductions, small column reductions, GEMV, dot-product,
+steel GEMM and split-K GEMM kernels are translated from the pinned sources on first use, so
 no static index lists their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
 metadata, and by comparing the recorded artifact with the unchanged cached
@@ -16,6 +16,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
     column_small_layout,
+    dot_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
@@ -27,6 +28,10 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
 )
+from demos.integrations.mlx.portable_host.dot_packages import (
+    CACHE_DIRECTORY as DOT_CACHE,
+)
+from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -54,6 +59,7 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
 # executor like scans.
 MATRIX_FAMILIES = {
     "gemv": gemv_layout.ENTRY_PREFIXES,
+    "dot": dot_layout.ENTRY_PREFIXES,
     "gemm": gemm_layout.ENTRY_PREFIXES,
     "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
 }
@@ -92,6 +98,7 @@ class LazyPackages:
                 mlx_root, packages / SMALL_COLUMN_CACHE, target
             ),
             "gemv": GemvPackageCache(mlx_root, packages / GEMV_CACHE, target),
+            "dot": DotPackageCache(mlx_root, packages / DOT_CACHE, target),
             "gemm": GemmPackageCache(mlx_root, packages / GEMM_CACHE, target),
             "gemm-splitk": SplitKPackageCache(
                 mlx_root, packages / SPLITK_CACHE, target

@@ -651,8 +651,8 @@ operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
 so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
 copies the operands MLX would copy and, in addition, views with negative
 strides. Empty inputs produce zeros through the translated copy. Single dot
-products, which MLX sends to `dot_product` and an all-reduce, fail with an
-explicit error. Matrix-matrix products take the steel GEMM route below.
+products take the dot-product route below; matrix-matrix products take the
+steel GEMM route.
 
 `gemv_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound sizes, leading dimension and batch
@@ -665,9 +665,26 @@ entry with `python -m demos.integrations.mlx.portable_host.gemv_packages
 cases reach ten of the twelve instantiated tiles in all three element types,
 both batch variants, transposed and strided operands, broadcast and
 `as_strided` batches, and the batch fold. Each output must match an exact
-float64 reference bit for bit, float32 outputs must also match MLX's CPU
-backend, and a single dot product must fail with the host's error without
-dispatching.
+float64 reference bit for bit, and float32 outputs must also match MLX's CPU
+backend.
+
+## Floating-Point Dot Products
+
+A product with one output element, no batch and row-contiguous operands takes
+matmul.cpp's `dot_product` route: the translated `dot_product` entry of the
+unchanged `dot.metal` runs 512-thread groups of 32 items, each writing one
+float32 partial sum; the installed whole-array float32 sum reduces the
+partials in one pass, or two beyond 4,096 of them, as `all_reduce_dispatch`
+does; and a translated copy converts the total to the output type.
+`dot_layout.py` rejects a launch unless its entry, grid and partial count are
+the ones MLX's routing would choose for the bound length, and both vectors
+hold at least that many of their at most 2^28 - 1 elements. The `MLX quantized
+host` jobs translate the three entries with `python -m
+demos.integrations.mlx.portable_host.dot_packages --verification --jobs 3`,
+and `verify_matmul.py` runs four dot products through `mx.matmul`: every
+element type, whole and partial vector loads, three threadgroups' partials and
+a copied operand. Each sum must reach the whole-array float32 sum next in the
+trace, and each output must match the exact rounded reference bit for bit.
 
 ## Floating-Point Matrix-Matrix Products
 
@@ -1878,8 +1895,8 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-A dedicated job then runs 125 more unchanged `test_ops`, `test_reduce`,
-`test_bf16` and `test_fast` tests on all three platforms (120 on OpenGL; see
+A dedicated job then runs 126 more unchanged `test_ops`, `test_reduce`,
+`test_bf16` and `test_fast` tests on all three platforms (121 on OpenGL; see
 below). They run in five groups, each in its own job per platform with its
 own deadlines: `operations` (the `test_ops` and `test_bf16` tests, which also
 run the rejection check and must reach a gather or scatter), `normalization`

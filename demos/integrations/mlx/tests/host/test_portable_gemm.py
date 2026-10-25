@@ -183,8 +183,7 @@ def test_routes_mirror_matmul_eval_gpu():
             layout.route("float32", *a, *b)
     assert layout.matmul_route("float32", [4, 8], [8, 1], [8, 5], [5, 1])[0] == "gemm"
     assert layout.matmul_route("float32", [1, 8], [8, 1], [8, 5], [5, 1])[0] == "gemv"
-    with pytest.raises(ValueError, match="dot products"):
-        layout.matmul_route("float32", [1, 16], [16, 1], [16, 1], [1, 1])
+    assert layout.matmul_route("float32", [1, 16], [16, 1], [16, 1], [1, 1])[0] == "dot"
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])

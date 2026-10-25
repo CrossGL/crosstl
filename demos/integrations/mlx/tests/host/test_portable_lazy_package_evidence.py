@@ -163,6 +163,7 @@ def test_matrix_caches_are_derived_per_entry(tmp_path):
         )
     entries = [
         "gemv_t_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0",
+        "dot_product_bfloat16_it32_tg512_sg16",
         "steel_gemm_fused_tn_float16_float16_bm64_bn64_bk16_wm2_wn2",
         "steel_gemm_splitk_nn_float32_float32_bm16_bn32_bk16_wm2_wn2",
     ]
