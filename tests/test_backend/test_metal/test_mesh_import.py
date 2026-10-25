@@ -6,6 +6,7 @@ methods, so no target got a mesh stage. It now rewrites the ``metal::mesh<V, P, 
 stages ``set_index`` writes so that every target receives whole index vectors.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -285,3 +286,21 @@ def test_imported_mesh_stage_validates_as_glsl_and_spirv(tmp_path, source):
     assert result.returncode == 0, result.stderr
     result = _run([spirv_val, "--target-env", "vulkan1.3", str(binary)])
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_imported_triangle_mesh_and_fragment_compile_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not available")
+    source = TRIANGLES + (
+        "fragment float4 fragMain(VOut in [[stage_in]]) "
+        "{ return float4(in.normal, 1.0); }\n"
+    )
+    hlsl = _translate(tmp_path, source, "directx", {"threadgroup_size": (32, 1, 1)})
+    assert re.search(r"float3 normal\s*:\s*TEXCOORD0;", hlsl)
+    assert re.search(r"float3 color\s*:\s*TEXCOORD1;", hlsl)
+    shader = tmp_path / "mesh.hlsl"
+    shader.write_text(hlsl, encoding="utf-8")
+    for profile, entry in (("ms_6_5", "MSMain"), ("ps_6_5", "PSMain")):
+        result = _run([dxc, "-T", profile, "-E", entry, str(shader)])
+        assert result.returncode == 0, result.stdout + result.stderr
