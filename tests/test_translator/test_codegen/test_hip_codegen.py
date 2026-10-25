@@ -1268,6 +1268,36 @@ class TestHipCodeGen:
         assert "intBitsToFloat(" not in hip_code
         assert "uintBitsToFloat(" not in hip_code
 
+    def test_64bit_bitcast_builtins_lower_to_hip_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    double d = 1.0;
+                    int64_t l = 1;
+                    int64_t bits = doubleBitsToLong(d);
+                    double fromBits = longBitsToDouble(l);
+                    let inferredBits = doubleBitsToLong(d);
+                    let inferredFromBits = longBitsToDouble(l);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__double_as_longlong(d)" in hip_code
+        assert "__longlong_as_double(l)" in hip_code
+        assert "long long inferredBits = __double_as_longlong(d);" in hip_code
+        assert "double inferredFromBits = __longlong_as_double(l);" in hip_code
+        assert "doubleBitsToLong(" not in hip_code
+        assert "longBitsToDouble(" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_hlsl_as_bitcast_aliases_lower_to_hip_intrinsics(self):
         source_code = """
         shader TestShader {

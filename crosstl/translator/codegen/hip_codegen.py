@@ -191,6 +191,11 @@ HIP_BITCAST_FUNCTION_TARGETS = {
     "asuint": "uint",
 }
 
+HIP_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
+}
+
 HIP_INTEGER_BIT_FUNCTION_ALIASES = {
     "countbits": "bitCount",
     "reversebits": "bitfieldReverse",
@@ -4348,6 +4353,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return HIP_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def hip_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            if self.is_user_defined_function(func_name) or len(raw_args or []) != 1:
+                return None
+            # The intrinsics take one scalar and have no vector form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                return None
+            return wide_bitcast[1]
+
         target_component = HIP_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -4375,6 +4393,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         result_type = self.hip_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None
+
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            return f"{wide_bitcast[0]}({args[0]})"
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
