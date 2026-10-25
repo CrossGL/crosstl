@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import MetalImportRefused
 from crosstl.backend.Metal.MetalAst import BinaryOpNode as MetalBinaryOpNode
 from crosstl.backend.Metal.MetalAst import CastNode as MetalCastNode
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
@@ -8459,7 +8460,10 @@ def test_codegen_payload_and_hit_attributes():
     assert "@hit_attribute" in result
 
 
-def test_codegen_mesh_object_io():
+def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
+    # A mesh function writes its outputs through a metal::mesh parameter and an object function dispatches mesh
+    # threadgroups through mesh_grid_properties; the importer used to print both verbatim as plain functions.
+    # tests/test_backend/test_metal/test_mesh_import.py covers the mesh functions it imports.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8472,14 +8476,17 @@ def test_codegen_mesh_object_io():
     mesh void mesh_main(threadgroup ObjPayload* payload [[payload]],
                         uint3 tid [[thread_position_in_threadgroup]]) { }
     """
-    result = convert(code)
-    assert "object_main" in result
-    assert "mesh_main" in result
-    assert "@payload" in result
-    assert "@gl_WorkGroupID" in result
+    with pytest.raises(MetalImportRefused) as refusal:
+        convert(code)
+    assert "Metal object function 'object_main'" in str(refusal.value)
+    assert (
+        "Metal mesh function 'mesh_main' must take exactly one metal::mesh parameter, found 0"
+        in str(refusal.value)
+    )
 
 
-def test_codegen_mesh_output_functions():
+def test_codegen_mesh_function_calling_hlsl_mesh_intrinsics_is_refused():
+    # MSL has no SetMeshOutputCounts, SetVertex or SetPrimitive; a mesh function writes through metal::mesh.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -8490,10 +8497,8 @@ def test_codegen_mesh_output_functions():
         SetPrimitive(0, 0);
     }
     """
-    result = convert(code)
-    assert "SetMeshOutputCounts" in result
-    assert "SetVertex" in result
-    assert "SetPrimitive" in result
+    with pytest.raises(MetalImportRefused, match="exactly one metal::mesh parameter"):
+        convert(code)
 
 
 def test_codegen_expands_preprocessor_define():
