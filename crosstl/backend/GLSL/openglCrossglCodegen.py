@@ -40,6 +40,7 @@ from .OpenglAst import (
 from .shadow_textures import retype_shadow_textures
 from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
+from .unsupported_types import refuse_unsupported_glsl_types
 
 try:
     from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -2600,6 +2601,7 @@ class GLSLToCrossGLConverter:
             self.shader_type = previous_shader_type
 
     def generate_shader(self, node):
+        refuse_unsupported_glsl_types(node)
         retype_shadow_textures(node)
         self.uniform_vars = []
         self.inputs = []

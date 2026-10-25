@@ -38338,6 +38338,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return base.lower(), int(suffix) if suffix else 0
 
     def hlsl_struct_member_semantic_slot_count(self, struct_name, member, semantic):
+        count = self.hlsl_struct_member_array_slot_count(struct_name, member, semantic)
+        return count * self.hlsl_matrix_semantic_slot_count(member)
+
+    def hlsl_matrix_semantic_slot_count(self, member):
+        """The semantic indices one element of a matrix member takes: a column-major matrix (HLSL's default)
+        takes one per column and a row-major one one per row; anything else takes one.
+        """
+        raw_type = self.hlsl_struct_member_raw_type(member)
+        element = (
+            getattr(raw_type, "element_type", None)
+            if hasattr(raw_type, "size")
+            else None
+        )
+        type_name = self.map_type(element if element is not None else raw_type)
+        base_type, _suffix = split_array_type_suffix(str(type_name or ""))
+        shape = re.fullmatch(
+            r"(?:float|half|double|int|uint|bool|min16float|float16_t)([1-4])x([1-4])",
+            base_type,
+        )
+        if shape is None:
+            return 1
+        rows, columns = int(shape.group(1)), int(shape.group(2))
+        return (
+            rows
+            if self.hlsl_matrix_orientation_prefix(member).strip() == "row_major"
+            else columns
+        )
+
+    def hlsl_struct_member_array_slot_count(self, struct_name, member, semantic):
         raw_type = self.hlsl_struct_member_raw_type(member)
         size_expr = None
         if isinstance(member, ArrayNode):
