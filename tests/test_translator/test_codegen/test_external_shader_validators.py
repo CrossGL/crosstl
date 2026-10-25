@@ -785,6 +785,25 @@ shader SlangStorageBufferValidator {
 """
 
 
+CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER = """
+shader NamedStructInitializerValidator {
+    struct Pair {
+        float a;
+        float b;
+    };
+    RWStructuredBuffer<float> values;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uint3 gid @ gl_GlobalInvocationID) {
+            Pair q = Pair { b: values[gid.x], a: 1.0 };
+            Pair r = Pair { values[gid.x], 3.0 };
+            values[gid.x] = q.a + q.b + r.a + r.b;
+        }
+    }
+}
+"""
+
+
 SLANG_WORKGROUP_COUNT_COMPUTE_SHADER = """
 shader SlangWorkgroupCountValidator {
     RWStructuredBuffer<uint> groupCounts;
@@ -2213,6 +2232,7 @@ def _run_validator_or_skip_unsupported_extension(
         CROSSGL_WGSL_RESOURCE_SHADER,
         CROSSGL_WGSL_COMPUTE_SHADER,
         CROSSGL_WGSL_BUFFER_BLOCK_SHADER,
+        CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER,
     ),
 )
 def test_generated_wgsl_validates_with_naga(tmp_path, shader_source):
@@ -3114,6 +3134,23 @@ def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
         ]
     )
     _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_named_struct_initializer_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_named_struct_initializer.slang"
+    hlsl_path = tmp_path / "slang_named_struct_initializer.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER)
+    )
+    assert "Pair q = Pair(1.0, values[gid.x]);" in code
+    assert "Pair r = Pair(values[gid.x], 3.0);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "cs_6_0"
+    )
 
 
 @pytest.mark.parametrize(
