@@ -13959,8 +13959,8 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "e456c317f23916352917aa9c81975f068a035ea5ac71aa67dad97f8adf205396",
-        "size_bytes": 116041,
+        "sha256": "1b7abf82bf713abc5640208cc0606232b228f683473f603debcb8898954a1f26",
+        "size_bytes": 120398,
         "source_remap_granularity": "file",
         "source_remap_mapping_count": 1,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
@@ -14031,7 +14031,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits a 116,041-byte GLSL artifact" in readme
+    assert "current FFT source now also emits a 120,398-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
