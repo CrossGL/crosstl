@@ -1492,9 +1492,11 @@ def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
     # clang-format may wrap the long expressions when it is installed.
     compact = re.sub(r"\s+", "", generated)
 
+    # The signed accumulator addition wraps through uint, as in HLSL.
     assert (
-        "(int(acc)+int(dot(float4(as_type<char4>(uint(a[id.x]))),"
-        "float4(as_type<char4>(uint(b[id.x]))))))"
+        "as_type<int>(as_type<uint>(int(acc))+as_type<uint>(int(dot("
+        "float4(as_type<char4>(uint(a[id.x]))),"
+        "float4(as_type<char4>(uint(b[id.x])))))))"
     ) in compact
     assert (
         "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"

@@ -21674,10 +21674,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     # reinterpreted as a char4 or uchar4 (byte 0 lands in .x on the
     # little-endian Apple GPUs) and the lanes go through a float dot(). Every
     # lane product and their sum stay below 2^24 in magnitude, so the float
-    # dot product is exact.
+    # dot product is exact. HLSL wraps the accumulator addition, but signed
+    # overflow is undefined in MSL, so the signed sum is taken in uint.
     PACKED_DOT4ADD_LANES = {
-        "dot4add_i8packed": ("int", "char4"),
-        "dot4add_u8packed": ("uint", "uchar4"),
+        "dot4add_i8packed": (
+            "char4",
+            "as_type<int>(as_type<uint>(int({accumulator})) + "
+            "as_type<uint>(int({dot})))",
+        ),
+        "dot4add_u8packed": ("uchar4", "(uint({accumulator}) + uint({dot}))"),
     }
 
     def generate_packed_dot4add_call(self, func_name, args):
@@ -21689,13 +21694,15 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
                 f"Metal {func_name} alias requires 3 arguments; got {len(args)}"
             )
 
-        scalar_type, lane_type = lowering
+        lane_type, total = lowering
         left, right = (
             f"float4(as_type<{lane_type}>(uint({self.generate_expression(arg)})))"
             for arg in args[:2]
         )
-        accumulator = self.generate_expression(args[2])
-        return f"({scalar_type}({accumulator}) + {scalar_type}(dot({left}, {right})))"
+        return total.format(
+            accumulator=self.generate_expression(args[2]),
+            dot=f"dot({left}, {right})",
+        )
 
     def generate_function_call_arguments(self, func_name, call_args):
         call_args = list(call_args or [])
