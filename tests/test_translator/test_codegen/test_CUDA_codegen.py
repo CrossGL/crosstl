@@ -19941,6 +19941,24 @@ def test_vector_constructor_splats_a_scalar_cast(tmp_path):
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
 
+def test_half_vector_constructor_splats_a_half_cast(tmp_path):
+    source_code = """
+    shader Splat {
+        f16vec3 widen(float x) {
+            f16vec4 b = f16vec4(f16(x));
+            return f16vec3(half(x)) + f16vec3(b.x);
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "cgl_half4 b = cgl_cgl_half4_splat(__float2half(x));" in cuda_code
+    assert "cgl_cgl_half3_splat(__float2half(x))" in cuda_code
+    assert "cgl_make_half3(__float2half(x))" not in cuda_code
+    assert "cgl_make_half4(__float2half(x))" not in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
 def test_vector_constructor_keeps_user_function_named_like_a_cast():
     source_code = """
     shader UserCast {

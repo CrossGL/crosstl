@@ -14090,3 +14090,17 @@ def test_hip_vector_constructor_splats_a_scalar_cast():
     assert "float4 c = cgl_float4_splat(float(x));" in hip_code
     assert "make_int3(int(x))" not in hip_code
     assert "make_float4(float(x))" not in hip_code
+
+
+def test_hip_half_vector_constructor_splats_a_half_cast():
+    source_code = """
+    shader Splat {
+        f16vec3 widen(float x) {
+            return f16vec3(half(x));
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "return cgl_cgl_half3_splat(__float2half(x));" in hip_code
+    assert "cgl_make_half3(__float2half(x))" not in hip_code

@@ -410,7 +410,10 @@ class VectorArithmeticMixin:
             return None
         if self.vector_type_info(type_name) is not None:
             return None
-        if self.scalar_component_type(type_name) is None:
+        if (
+            self.scalar_component_type(type_name) is None
+            and self.map_vector_arithmetic_type(type_name) != "half"
+        ):
             return None
         return type_name
 
