@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..process import run
 from ..toolchains import tool
-from ..validators import dxil_is_signed
+from ..validators import dxil_is_signed, hlsl_arguments
 from .manifest import GLSLANG_STAGE, RAY_TRACING
 
 TIMEOUT = 120
@@ -140,11 +140,8 @@ def check_hlsl(path, scratch, stages):
     if missing:
         return missing
     text = Path(path).read_text(errors="replace")
-    extra = (
-        ["-enable-16bit-types"]
-        if re.search(r"\b(?:u?int16_t|float16_t)\b", text)
-        else []
-    )
+    # Native 16-bit scalars, vectors (float16_t3) and matrices need -enable-16bit-types.
+    extra = hlsl_arguments(path)
     entries = hlsl_entries(text, stages)
     jobs = [
         (
