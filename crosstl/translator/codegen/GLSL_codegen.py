@@ -19250,6 +19250,12 @@ class GLSLCodeGen(
             layout_name="max_primitives",
         )
 
+        declared = self.glsl_mesh_output_array_limits(func)
+        if max_vertices is None:
+            max_vertices = declared.get("vertices")
+        if max_primitives is None:
+            max_primitives = declared.get("primitives")
+
         layout_parts = []
         if output_primitive:
             layout_parts.append(output_primitive)
@@ -19261,6 +19267,24 @@ class GLSLCodeGen(
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_mesh_output_array_limits(self, func):
+        """The vertex and primitive limits that a mesh entry's output arrays declare.
+
+        GL_EXT_mesh_shader requires ``max_vertices`` and ``max_primitives`` in the output layout; without the
+        attributes, the ``@vertices``, ``@primitives`` and ``@indices`` array sizes give them, as they do in HLSL.
+        """
+        limits = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if not self.is_mesh_output_parameter(param):
+                continue
+            count = self.mesh_output_parameter_count_value(param)
+            if count is None:
+                continue
+            role = self.mesh_output_parameter_role(param)
+            key = "vertices" if role == "vertices" else "primitives"
+            limits[key] = max(count, limits.get(key, 0))
+        return limits
 
     def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
         return self.glsl_stage_consistent_layout_value(
@@ -19791,6 +19815,44 @@ class GLSLCodeGen(
 
             infos[param.name] = info
         return infos
+
+    def generate_glsl_mesh_payload_parameter_declaration(self, func):
+        """Declare a mesh entry's payload parameter as the ``taskPayloadSharedEXT`` block it reads.
+
+        GL_EXT_mesh_shader passes the task stage's ``EmitMeshTasksEXT`` payload to every mesh workgroup through a
+        ``taskPayloadSharedEXT`` variable; the entry body keeps reading it under the parameter's name.
+        """
+        payloads = [
+            param
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if self.is_glsl_mesh_payload_parameter(param)
+        ]
+        if not payloads:
+            return ""
+        if len(payloads) > 1:
+            raise ValueError(
+                "GLSL mesh entry declares more than one payload parameter: "
+                + ", ".join(param.name for param in payloads)
+            )
+        param = payloads[0]
+        param_type = self.map_type(
+            self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+        )
+        declaration = format_c_style_array_declaration(param_type, param.name)
+        return f"taskPayloadSharedEXT {declaration};\n"
+
+    def is_glsl_mesh_payload_parameter(self, param):
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(param, "attributes", []) or []
+        }
+        names.update(
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        )
+        return bool(names & {"mesh_payload", "meshpayload", "payload"})
 
     def generate_mesh_output_parameter_declarations(self, mesh_outputs):
         code = ""
@@ -21023,6 +21085,8 @@ class GLSLCodeGen(
             code += self.generate_mesh_output_parameter_declarations(
                 mesh_output_parameters
             )
+        if shader_type == "mesh":
+            code += self.generate_glsl_mesh_payload_parameter_declaration(func)
 
         stage_layout = self.generate_stage_layout(
             shader_type, func, stage_layout_qualifiers

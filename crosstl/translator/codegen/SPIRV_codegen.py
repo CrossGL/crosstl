@@ -3,7 +3,7 @@
 import re
 import struct
 from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
@@ -9265,8 +9265,21 @@ class VulkanSPIRVCodeGen(
                 )
             )
 
-        max_vertices = self.mesh_stage_limit(self.current_stage, "max_vertices")
-        max_primitives = self.mesh_stage_limit(self.current_stage, "max_primitives")
+        return self.mesh_stage_limits_with_observed_counts(
+            self.current_stage, observed_vertices, observed_primitives
+        )
+
+    def mesh_stage_limits_with_observed_counts(
+        self, stage, observed_vertices, observed_primitives
+    ) -> Tuple[int, int]:
+        """Mesh output limits from metadata, then output array sizes, raised to constant observed counts."""
+        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
+        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
+        declared = self.mesh_output_array_limits(stage)
+        if max_vertices is None:
+            max_vertices = declared.get("vertices")
+        if max_primitives is None:
+            max_primitives = declared.get("primitives")
         if observed_vertices is not None:
             max_vertices = max(observed_vertices, max_vertices or 0)
         if observed_primitives is not None:
@@ -14589,12 +14602,18 @@ class VulkanSPIRVCodeGen(
                     self.is_storage_resource_parameter(param)
                     or self.is_entry_point_descriptor_parameter(param)
                     or self.is_bound_uniform_value_parameter(param, execution_model)
+                    or self.is_mesh_payload_entry_parameter(param, execution_model)
                 )
             ],
             execution_model,
         )
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
+            if self.is_mesh_payload_entry_parameter(param, execution_model):
+                self.local_variables[param_name] = (
+                    self.process_mesh_payload_entry_parameter(param, param_value_type)
+                )
+                continue
             if self.is_storage_resource_parameter(param):
                 variable = self.process_entry_point_storage_buffer_parameter(param)
                 self.local_variables[param_name] = variable
@@ -21130,6 +21149,31 @@ class VulkanSPIRVCodeGen(
             for qualifier in getattr(node, "qualifiers", [])
         )
         return names
+
+    def is_mesh_payload_entry_parameter(
+        self, param, execution_model: Optional[str]
+    ) -> bool:
+        """Whether a mesh entry parameter is the task payload (HLSL ``in payload``, CrossGL ``@mesh_payload``)."""
+        if execution_model != "MeshEXT":
+            return False
+        return bool(
+            self.declaration_metadata_names(param)
+            & {"mesh_payload", "meshpayload", "payload"}
+        )
+
+    def process_mesh_payload_entry_parameter(self, param, value_type) -> SpirvId:
+        """Declare a mesh entry's payload parameter as the TaskPayloadWorkgroupEXT variable it reads.
+
+        The task stage's ``EmitMeshTasksEXT`` payload reaches each mesh workgroup through TaskPayloadWorkgroupEXT
+        storage (SPV_EXT_mesh_shader); a stage ``Input`` holds per-vertex data that no mesh entry receives.
+        """
+        variable = self.create_variable(
+            value_type, "TaskPayloadWorkgroupEXT", getattr(param, "name", "payload")
+        )
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.mark_function_interface_variable(variable)
+        return variable
 
     def is_task_payload_shared_node(self, node) -> bool:
         return bool(
@@ -31416,6 +31460,26 @@ class VulkanSPIRVCodeGen(
                 return max(0, limit)
         return None
 
+    def mesh_output_array_limits(self, stage) -> Dict[str, int]:
+        """The vertex and primitive limits that a mesh entry's output arrays declare.
+
+        ``SetMeshOutputCounts`` may take counts computed at run time, so its arguments bound
+        ``OutputVertices`` and ``OutputPrimitivesEXT`` only when they are constants; the ``@vertices``,
+        ``@primitives`` and ``@indices`` array sizes are the limits the entry declares, as HLSL's are.
+        """
+        limits: Dict[str, int] = {}
+        entry = getattr(stage, "entry_point", None)
+        for param in getattr(entry, "parameters", getattr(entry, "params", [])) or []:
+            info = self.mesh_output_parameter_info(param, "MeshEXT")
+            if info is None:
+                continue
+            count = info.get("count")
+            if not isinstance(count, int) or isinstance(count, bool):
+                continue
+            key = "vertices" if info.get("role") == "vertices" else "primitives"
+            limits[key] = max(count, limits.get(key, 0))
+        return limits
+
     def mesh_stage_topology_mode(self, stage) -> str:
         """Return the SPIR-V mesh output-topology execution mode."""
         topology = self.stage_attribute_value(stage, "outputtopology")
@@ -31680,13 +31744,9 @@ class VulkanSPIRVCodeGen(
         observed_vertices, observed_primitives = (
             self.mesh_output_counts_by_function.get(function_id.id, (None, None))
         )
-        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
-        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
-        if observed_vertices is not None:
-            max_vertices = max(observed_vertices, max_vertices or 0)
-        if observed_primitives is not None:
-            max_primitives = max(observed_primitives, max_primitives or 0)
-        return max(1, max_vertices or 1), max(1, max_primitives or 1)
+        return self.mesh_stage_limits_with_observed_counts(
+            stage, observed_vertices, observed_primitives
+        )
 
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None

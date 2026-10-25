@@ -60,6 +60,7 @@ from .external_functions import refuse_external_function_calls
 from .library_structs import declare_referenced_library_structs
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
+from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -1020,7 +1021,9 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
+class MetalToCrossGLConverter(
+    ImportRefusalMixin, MetalBufferLayoutImport, MetalMeshImport
+):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     IMPORT_REFUSAL_TYPE = MetalImportRefused
@@ -4010,6 +4013,19 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     specialization_key=specialization_key,
                 )
                 + "    }\n\n"
+            )
+        if qualifier == "mesh":
+            return self.generate_metal_mesh_stage(
+                function,
+                template_value_bindings=template_value_bindings,
+                template_type_bindings=template_type_bindings,
+                output_name=output_name,
+                specialization_key=specialization_key,
+            )
+        if qualifier == "object":
+            return self.refuse_import(
+                f"Metal object function '{function.name}': importing object-stage payloads and "
+                "mesh_grid_properties dispatch is not implemented"
             )
         if qualifier in self.rt_qualifiers:
             return f"    // {qualifier} function\n" + self.generate_function(
@@ -9562,6 +9578,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         )
 
     def format_parameter_decl(self, var, index, semantic_context=None):
+        mesh_declaration = self.metal_mesh_parameter_declaration(var)
+        if mesh_declaration is not None:
+            return mesh_declaration
         if getattr(var, "name", None):
             declaration = self.format_decl(
                 var,
@@ -9865,7 +9884,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             annotations = " ".join(
-                item for item in [fn_semantic, *linkage_annotations] if item
+                item
+                for item in [
+                    fn_semantic,
+                    *linkage_annotations,
+                    self.metal_mesh_function_annotation(func),
+                ]
+                if item
             )
             suffix = f" {annotations}" if annotations else ""
             function_name = self.sanitize_identifier(
@@ -9905,8 +9930,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     bound_value_names=active_value_bindings,
                 )
             )
-            body = value_param_decls + self.generate_function_body(
-                function_body, indent=indent + 1
+            body = (
+                value_param_decls
+                + self.metal_mesh_body_prologue(func, indent + 1)
+                + self.generate_function_body(function_body, indent=indent + 1)
+                + self.metal_mesh_body_epilogue(func, indent + 1)
             )
             for index, parameter in enumerate(func.params):
                 if (
@@ -10561,7 +10589,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 else:
                     code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, (MethodCallNode, CallNode)):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
+                lowered_mesh_call = self.generate_metal_mesh_statement(
+                    stmt, indent, is_main
+                )
+                if lowered_mesh_call is not None:
+                    code += lowered_mesh_call
+                else:
+                    code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, PostfixOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, ContinueNode):
