@@ -2931,7 +2931,7 @@ class GLSLCodeGen(
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
         self.current_glsl_ieee_operator_arithmetic = False
-        self.current_glsl_exactness_test_local_ids = frozenset()
+        self.current_glsl_exactness_test_local_ids = {}
         self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
@@ -8735,7 +8735,7 @@ class GLSLCodeGen(
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
         self.current_glsl_ieee_operator_arithmetic = False
-        self.current_glsl_exactness_test_local_ids = frozenset()
+        self.current_glsl_exactness_test_local_ids = {}
         self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
@@ -31083,7 +31083,12 @@ class GLSLCodeGen(
             parts.append("const")
         if (
             "precise" in qualifiers
-            or id(node) in getattr(self, "current_glsl_exactness_test_local_ids", ())
+            or (
+                id(node) in getattr(self, "current_glsl_exactness_test_local_ids", ())
+                and self.glsl_exactness_test_value_has_float_sum(
+                    self.current_glsl_exactness_test_local_ids[id(node)]
+                )
+            )
             or ("const" not in qualifiers and self.glsl_precise_function_local(node))
         ):
             parts.append("precise")
@@ -41660,10 +41665,14 @@ complex64_t crossgl_complex64_mod_assign(
         initializer, compares that sum itself; accumulators that are later
         reassigned, such as an attention kernel's running sum, stay as they
         are.
+
+        Returns a mapping from each local's id to its single value, so the
+        declaration can confirm, with the scope then in effect, that the sum
+        is a floating one (``glsl_exactness_test_value_has_float_sum``).
         """
         body = getattr(function, "body", None)
         if body is None:
-            return frozenset()
+            return {}
         declarations = {}
         compared = set()
         assignments = {}
@@ -41703,8 +41712,8 @@ complex64_t crossgl_complex64_mod_assign(
                     for value in (node.left, node.right)
                     if isinstance(value, IdentifierNode)
                 )
-        result = set()
-        for name in compared:
+        result = {}
+        for name in sorted(compared):
             found = declarations.get(name, ())
             values = assignments.get(name, ())
             if len(found) != 1 or len(values) != 1 or not has_sum(values[0]):
@@ -41717,8 +41726,26 @@ complex64_t crossgl_complex64_mod_assign(
                 and info["bits"] == 32
                 and self.glsl_narrow_float_width(declared) is None
             ):
-                result.add(id(found[0]))
-        return frozenset(result)
+                result[id(found[0])] = values[0]
+        return result
+
+    def glsl_exactness_test_value_has_float_sum(self, value):
+        """Whether ``value`` contains a ``+`` or ``-`` that is not integral.
+
+        An integer difference, such as ``float(n - 8)``, cannot be contracted
+        or reassociated by a floating optimization, so it needs no
+        ``precise``.  An operation whose type is unknown in the current scope
+        keeps the qualifier.
+        """
+        for node in self.walk_ast(value):
+            if not isinstance(node, BinaryOpNode) or self.map_operator(
+                getattr(node, "op", None)
+            ) not in {"+", "-"}:
+                continue
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(node))
+            if info is None or info["family"] == "float":
+                return True
+        return False
 
     def glsl_floating_remainder_helper(self, value_type):
         existing = self.glsl_floating_remainder_helper_names.get(value_type)
