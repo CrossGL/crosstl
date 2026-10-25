@@ -7831,7 +7831,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Return generic atomic mappings for RWStructuredBuffer element targets."""
         integer_kinds = {"int", "uint"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -7844,18 +7844,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "atomicExchange": ("atomicExch", 2, add_exchange_kinds, "int/uint/float"),
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
-            # System-scoped HIP forms take a pointer first argument like the defaults.
-            "atomicAdd_system": ("atomicAdd_system", 2, add_exchange_kinds, "int/uint/float"),
-            "atomicSub_system": ("atomicSub_system", 2, integer_kinds, "int/uint"),
-            "atomicMin_system": ("atomicMin_system", 2, integer_kinds, "int/uint"),
-            "atomicMax_system": ("atomicMax_system", 2, integer_kinds, "int/uint"),
-            "atomicAnd_system": ("atomicAnd_system", 2, integer_kinds, "int/uint"),
-            "atomicOr_system": ("atomicOr_system", 2, integer_kinds, "int/uint"),
-            "atomicXor_system": ("atomicXor_system", 2, integer_kinds, "int/uint"),
-            "atomicExchange_system": ("atomicExch_system", 2, add_exchange_kinds, "int/uint/float"),
-            "atomicCompareExchange_system": ("atomicCAS_system", 3, integer_kinds, "int/uint"),
-            "atomicCompSwap_system": ("atomicCAS_system", 3, integer_kinds, "int/uint"),
         }
+        # HIP's system-scoped atomics (atomicAdd_system, atomicCAS_system, ...)
+        # take the same operands as the device-wide intrinsic they are named
+        # after. HIP declares no atomicInc_system or atomicDec_system.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            if intrinsic in {"atomicInc", "atomicDec"}:
+                continue
+            operations.setdefault(
+                f"{intrinsic}_system",
+                (f"{intrinsic}_system", arg_count, kinds, kinds_label),
+            )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to HIP atomics."""

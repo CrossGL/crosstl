@@ -10082,7 +10082,9 @@ class TestHipCodeGen:
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
-    def test_system_scoped_structured_buffer_atomics_emit_hip_pointer_atomics(self):
+    def test_system_scoped_structured_buffer_atomics_emit_hip_pointer_atomics(
+        self, tmp_path
+    ):
         """HIP _system forms take a pointer first argument, like the unscoped ones."""
         source_code = """
         shader SystemScopedStructuredBufferAtomicsHIP {
@@ -10097,13 +10099,10 @@ class TestHipCodeGen:
                 uint oldAnd = atomicAnd_system(counters[index], value);
                 uint oldOr = atomicOr_system(counters[index], value);
                 uint oldXor = atomicXor_system(counters[index], value);
-                uint oldExchange = atomicExchange_system(counters[index], value);
-                uint oldCas = atomicCompareExchange_system(
-                    counters[index],
-                    oldAdd,
-                    value
-                );
+                uint oldExchange = atomicExch_system(counters[index], value);
+                uint oldCas = atomicCAS_system(counters[index], oldAdd, value);
                 int oldSigned = atomicAdd_system(signedCounters[index], signedValue);
+                uint badCas = atomicCAS_system(counters[index], oldAdd);
             }
 
             compute {
@@ -10118,17 +10117,20 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "unsigned int oldAdd = atomicAdd_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldSub = atomicSub_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldMin = atomicMin_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldMax = atomicMax_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldAnd = atomicAnd_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldOr = atomicOr_system(&counters[index], value);" in hip_code
-        assert "unsigned int oldXor = atomicXor_system(&counters[index], value);" in hip_code
-        assert (
-            "unsigned int oldExchange = atomicExch_system(&counters[index], value);"
-            in hip_code
-        )
+        for name, intrinsic in (
+            ("oldAdd", "atomicAdd_system"),
+            ("oldSub", "atomicSub_system"),
+            ("oldMin", "atomicMin_system"),
+            ("oldMax", "atomicMax_system"),
+            ("oldAnd", "atomicAnd_system"),
+            ("oldOr", "atomicOr_system"),
+            ("oldXor", "atomicXor_system"),
+            ("oldExchange", "atomicExch_system"),
+        ):
+            assert (
+                f"unsigned int {name} = {intrinsic}(&counters[index], value);"
+                in hip_code
+            )
         assert (
             "unsigned int oldCas = atomicCAS_system(&counters[index], oldAdd, value);"
             in hip_code
@@ -10137,9 +10139,74 @@ class TestHipCodeGen:
             "int oldSigned = atomicAdd_system(&signedCounters[index], signedValue);"
             in hip_code
         )
+        assert (
+            "unsigned int badCas = /* unsupported HIP structured buffer atomic: "
+            "atomicCAS_system on RWStructuredBuffer<uint> requires "
+            "3 argument(s) */ 0u;" in hip_code
+        )
         # Never the by-value form the bug produced.
-        assert "atomicAdd_system(counters[index]" not in hip_code
-        assert "atomicCAS_system(counters[index]" not in hip_code
+        assert "_system(counters[" not in hip_code
+        assert "_system(signedCounters[" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_system_scoped_atomics_emit_hip_pointer_atomics(self, tmp_path):
+        """System-scoped atomics on buffer pointers get the element's address."""
+        source_code = """
+        shader SystemScopedAtomicsHIP {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                buffer int* signedOut;
+                buffer float* floatOut;
+                void main() {
+                    shared uint2 vectorCounters[4];
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = atomicAdd(outp[i], 1u);
+                    uint b = atomicAdd_system(outp[i], 1u);
+                    uint c = atomicCAS_system(outp[i], a, b);
+                    int d = atomicMax_system(signedOut[i], -1);
+                    int e = atomicExch_system(signedOut[i], 2);
+                    float f = atomicAdd_system(floatOut[i], 1.0);
+                    float badAnd = atomicAnd_system(floatOut[i], 1.0);
+                    uint missing = atomicSub_system(outp[i]);
+                    uint2 badVector = atomicAdd_system(
+                        vectorCounters[i],
+                        uint2(1u, 2u)
+                    );
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int a = atomicAdd(&outp[i], 1u);" in hip_code
+        assert "unsigned int b = atomicAdd_system(&outp[i], 1u);" in hip_code
+        assert "unsigned int c = atomicCAS_system(&outp[i], a, b);" in hip_code
+        assert "int d = atomicMax_system(&signedOut[i], -1);" in hip_code
+        assert "int e = atomicExch_system(&signedOut[i], 2);" in hip_code
+        assert "float f = atomicAdd_system(&floatOut[i], 1.0);" in hip_code
+        assert (
+            "float badAnd = /* unsupported HIP atomic: atomicAnd_system on float "
+            "requires supported scalar int/uint target */ 0.0f;" in hip_code
+        )
+        assert (
+            "unsigned int missing = /* unsupported HIP atomic: atomicSub_system "
+            "requires 2 argument(s) */ 0u;" in hip_code
+        )
+        assert (
+            "uint2 badVector = /* unsupported HIP atomic: atomicAdd_system on "
+            "uint2 requires supported scalar int/uint/float target */ "
+            "make_uint2(0u, 0u);" in hip_code
+        )
+        assert "_system(outp[" not in hip_code
+        assert "_system(signedOut[" not in hip_code
+        assert "_system(floatOut[" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_float_structured_buffer_add_and_exchange_atomics_emit_hip_atomics(
         self, tmp_path
     ):
