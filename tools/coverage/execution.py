@@ -3,9 +3,10 @@
 A translation the reference tool accepts can still compute something else. Where Core's conformance harness
 (``tests/conformance``) has a runtime for a language, the native probe and CrossTL's translation run there on the
 same inputs, and a translation that writes other results, writes outside its output buffer, binds other resources
-than the native probe, or that the runtime rejects is wrong. The harness binds both probes the way it finds the native
-probe's buffers bound, so a translation that turns those buffers into something else, such as pointers in a uniform
-block, cannot run in the native probe's place.
+than the native probe, or that the runtime rejects is wrong. The diagnostic of a rejected translation quotes the first
+lines of the runtime's message. The harness binds both probes the way it finds the native probe's buffers bound, so a
+translation that turns those buffers into something else, such as pointers in a uniform block, cannot run in the native
+probe's place.
 
 HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
 reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
@@ -71,13 +72,17 @@ _ENVIRONMENTS = ((3, "vulkan1.1"), (5, "vulkan1.2"), (6, "vulkan1.3"))
 # structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
 # keep their validation result.
 _UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
+DIVERGED = "computes different results from the native probe"
+REBOUND = "binds other resources than the native probe"
+REJECTED = "is rejected by the runtime"
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
-    "driver-rejected": "is rejected by the runtime",
+    "driver-rejected": REJECTED,
 }
-DIVERGED = "computes different results from the native probe"
-REBOUND = "binds other resources than the native probe"
+# How much of the runtime's message for a rejected translation its diagnostic quotes, after the first line.
+_QUOTED_LINES = 6
+_QUOTED_CHARS = 600
 
 
 def found(detail: str) -> bool:
@@ -87,6 +92,16 @@ def found(detail: str) -> bool:
         f"the translation {text}" in first
         for text in (DIVERGED, REBOUND, *_BROKEN.values())
     )
+
+
+def _quoted(record: dict) -> str:
+    """The first lines of what the runtime said when it rejected the artifact of the harness ``record``."""
+    message = (record.get("execution") or {}).get("message") or ""
+    lines = [line.rstrip() for line in message.splitlines() if line.strip()]
+    text = "\n".join(lines[:_QUOTED_LINES])
+    if len(text) > _QUOTED_CHARS:
+        text = text[: _QUOTED_CHARS - 1].rstrip() + "…"
+    return text
 
 
 def executable(result: Result) -> bool:
@@ -371,6 +386,9 @@ def _judge(
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] in _BROKEN:
         detail = f"{where}, the translation {_BROKEN[translated['outcome']]}"
+        message = _quoted(translated)
+        if message:
+            detail += "\n" + message
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] != "preserved":
         return result
