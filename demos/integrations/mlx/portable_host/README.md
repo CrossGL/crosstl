@@ -648,7 +648,8 @@ output row or column to the translated `gemv` and `gemv_t` kernels of the
 unchanged `gemv.metal`, as matmul.cpp selects them: `check_transpose` on both
 operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
 `gemv_axbpy`'s kernel and tile shape. The host reports no Apple GPU generation,
-so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
+so it never selects `gemv_wide`, and `Matmul` never computes `axpby` (AddMM
+below does). The host
 copies the operands MLX would copy and, in addition, views with negative
 strides. Empty inputs produce zeros through the translated copy. Single dot
 products take the dot-product route below; matrix-matrix products take the
@@ -696,7 +697,8 @@ against the split-K case with its 1,024-tile threshold and otherwise selects
 with 2x2 simdgroups. The host names each entry by matmul.cpp's hash name, so
 the translation freezes the kernel's `has_batch` and `align_M`/`N`/`K`
 function constants; `Matmul` never reads `C`, so `use_out_source` and
-`do_axpby` stay false. Split-K products take the route in the next section.
+`do_axpby` stay false for it. Split-K products take the route in the next
+section.
 
 `gemm_layout.py` rejects a launch unless its entry, constants, `GEMMParams`,
 grid and workgroup are what matmul.cpp would bind for the sizes and strides,
@@ -725,6 +727,42 @@ cases of `verify_matmul.py` cover every transposition, element type and tile,
 aligned and unaligned `M x N` and `K`, 4 to 32 partitions, partitions without
 a whole `K` tile, a batch folded into `M` and a copied operand; the trace must
 show each accumulation reading exactly the partitions its product wrote.
+
+## Floating-Point AddMM
+
+`AddMM::eval_gpu` computes `alpha * (A @ B) + beta * C`, as `mx.addmm` and
+`nn.Linear` with a bias call it, through the same routes as matmul.cpp's
+`CHECK_AB` variants. An empty output is only allocated. With `K == 0` the host
+copies `C` when `beta == 1` and otherwise multiplies it by a broadcast `beta`
+through the translated elementwise kernel. Every other product collapses the
+batch axes of all three operands, folds a contiguous batch into `M` only when
+`C`'s batches follow it, and then takes one of three routes:
+
+- `gemv_axbpy` for one output row or column, with the `_axpby1` entry and the
+  bias, `alpha`, `beta` and bias strides unless `alpha == 1` and `beta == 0`;
+- `steel_gemm_fused` with `use_out_source` (unless `alpha == 0` and
+  `beta == 1`), `do_axpby` (unless both are 1), `C`, `GEMMAddMMParams` and
+  `C`'s batch strides after `A`'s and `B`'s;
+- split-K, ending with the `_axbpy` accumulation and `C`'s row and column
+  strides unless `alpha == 1` and `beta == 0`.
+
+`C` binds as MLX passes it, broadcast or transposed; the host copies it only
+when a stride is negative. `addmm_layout.py` mirrors the routing, and the gemv,
+steel GEMM and split-K layouts check the epilogue bindings and `C`'s extent
+for every batch. The `MLX quantized host` jobs translate the AddMM entries with
+the matmul ones (`--verification` includes them), then run `verify_addmm.py`
+through `mx.addmm`. Its 23 cases cover both gemv kernels with and without
+`axpby`, both batch variants, fused entries that add or scale `C` with and
+without `has_batch` and every alignment, the plain and `_axbpy` accumulations
+in every element type, broadcast, transposed and copied addends, the batch
+fold, `K == 0` and an empty output. Inputs lie on dyadic grids and `alpha` and
+`beta` are powers of two, so every output must match the exact float64
+reference bit for bit, and float32 outputs must also match MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_addmm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir addmm
+```
 
 ## Block Quantization
 

@@ -5,7 +5,9 @@ column as matmul.cpp does: ``check_transpose`` on both operands,
 ``collapse_batches``, the fold of a contiguous batch into ``M``, then
 ``gemv_axbpy``'s choice of ``gemv`` or ``gemv_t`` and its tile shape. MLX takes
 ``gemv_wide`` only from Apple GPU generation 15, which the portable host never
-reports, and ``Matmul`` never asks for ``axpby``. Single dot products take
+reports. ``Matmul`` never asks for ``axpby``; ``AddMM`` does unless
+``alpha == 1`` and ``beta == 0``, and then also binds the bias ``C``, ``alpha``,
+``beta`` and the bias strides (``addmm_layout``). Single dot products take
 ``dot_layout``'s route; ``gemm_layout`` describes the matrix-matrix route.
 """
 
@@ -26,7 +28,7 @@ MAX_BATCH_DIMENSIONS = 16
 DTYPES = ("float32", "float16", "bfloat16")
 PATTERN = re.compile(
     r"(gemv|gemv_t)_(float32|float16|bfloat16)_bm(\d+)_bn(\d+)_sm(\d+)_sn(\d+)"
-    r"_tm(\d+)_tn(\d+)_nc([01])_axpby0"
+    r"_tm(\d+)_tn(\d+)_nc([01])_axpby([01])"
 )
 ENTRY_PREFIXES = ("gemv_",)
 # gemv.metal's instantiated tiles (bm, bn, sm, sn, tm, tn).
@@ -79,14 +81,28 @@ HOST_PARAMETERS = (
     "vector_batch_stride",
     "matrix_batch_stride",
 )
-MATRIX_PARAMETERS = ("mat", "in_vec", "out_vec")
-SCALAR_PARAMETERS = ("in_vec_size", "out_vec_size", "marix_ld", "batch_ndim")
+# What gemv_axbpy binds in addition when it computes axpby.
+AXPBY_PARAMETERS = ("bias", "alpha", "beta", "bias_batch_stride", "bias_stride")
+MATRIX_PARAMETERS = ("mat", "in_vec", "bias", "out_vec")
+SCALAR_PARAMETERS = (
+    "in_vec_size",
+    "out_vec_size",
+    "marix_ld",
+    "batch_ndim",
+    "bias_stride",
+)
+FLOAT_PARAMETERS = ("alpha", "beta")
 VECTOR_TYPES = {
     "batch_shape": "int32",
     "vector_batch_stride": "int64",
     "matrix_batch_stride": "int64",
+    "bias_batch_stride": "int64",
 }
-INTEGER_TYPES = {"int32": ctypes.c_int32, "int64": ctypes.c_int64}
+INTEGER_TYPES = {
+    "int32": ctypes.c_int32,
+    "int64": ctypes.c_int64,
+    "float32": ctypes.c_float,
+}
 # Expressions OpenGL may evaluate in 32 bits: the row and column loads and
 # the batch offsets. Each names an element offset of a bound buffer.
 INDEX_RANGE_ASSERTIONS = {
@@ -115,7 +131,7 @@ def signature(entry):
     match = PATTERN.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError("Unsupported matrix-vector entry")
-    kind, dtype, *tile, nc = match.groups()
+    kind, dtype, *tile, nc, axpby = match.groups()
     block = tuple(int(value) for value in tile)
     if block not in BLOCKS[kind]:
         raise ValueError("Matrix-vector entry is not instantiated")
@@ -130,7 +146,17 @@ def signature(entry):
         "tm": tm,
         "tn": tn,
         "nc": nc == "1",
+        "axpby": axpby == "1",
     }
+
+
+def host_parameters(entry):
+    """The parameters gemv_axbpy binds for ``entry``, in index order."""
+    if not signature(entry)["axpby"]:
+        return HOST_PARAMETERS
+    return tuple(
+        name for name in PARAMETERS if name in HOST_PARAMETERS + AXPBY_PARAMETERS
+    )
 
 
 def workgroup_size(entry):
@@ -152,8 +178,8 @@ def index_assertions(entry):
     )
 
 
-def select(dtype, transpose_mat, in_size, out_size, batch_ndim):
-    """gemv_axbpy's kernel name for one product without axpby."""
+def select(dtype, transpose_mat, in_size, out_size, batch_ndim, axpby=False):
+    """gemv_axbpy's kernel name for one product."""
     if dtype not in DTYPES:
         raise ValueError("Matrix-vector products support float32, float16 and bfloat16")
     if transpose_mat:
@@ -171,7 +197,7 @@ def select(dtype, transpose_mat, in_size, out_size, batch_ndim):
         kind = "gemv"
     return (
         f"{kind}_{dtype}_bm{bm}_bn{bn}_sm{sm}_sn{sn}_tm{tm}_tn{tn}"
-        f"_nc{int(batch_ndim != 1)}_axpby0"
+        f"_nc{int(batch_ndim != 1)}_axpby{int(axpby)}"
     )
 
 
@@ -321,6 +347,8 @@ def parameter_type(entry, name):
         return signature(entry)["dtype"]
     if name in SCALAR_PARAMETERS:
         return "int32"
+    if name in FLOAT_PARAMETERS:
+        return "float32"
     return VECTOR_TYPES[name]
 
 
@@ -328,18 +356,18 @@ def read_storage(entry, buffers):
     """Check native buffer identity and read the integer parameters.
 
     Returns ``(counts, parameters)``: element counts of the matrix buffers and
-    the integer values of the scalar and vector parameters.
+    the values of the scalar and vector parameters.
     """
-    signature(entry)
-    if set(buffers) != set(HOST_PARAMETERS):
+    names = host_parameters(entry)
+    if set(buffers) != set(names):
         raise ValueError("Matrix-vector buffers do not match the entry")
     address_limit = 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
     counts, parameters, spans = {}, {}, {}
-    for name in HOST_PARAMETERS:
+    for name in names:
         buffer, dtype = buffers[name], parameter_type(entry, name)
         itemsize = ITEM_SIZES.get(dtype) or ctypes.sizeof(INTEGER_TYPES[dtype])
         count = buffer.count
-        scalar = name in SCALAR_PARAMETERS
+        scalar = name in SCALAR_PARAMETERS + FLOAT_PARAMETERS
         if (
             not buffer.data
             or buffer.data % itemsize
@@ -383,7 +411,8 @@ def plan(entry, counts, parameters, threads, execution):
     """Validate one launch against MLX's routing and return its metadata.
 
     The returned ``inert`` values fill the bindings gemv_axbpy leaves unbound
-    without axpby: the kernels never read them.
+    without axpby: the kernels never read them. With axpby the bias must hold
+    every element ``bias[loc(z) + i * bias_stride]`` the kernel adds.
     """
     info = signature(entry)
     k = parameters.get("in_vec_size")
@@ -424,7 +453,7 @@ def plan(entry, counts, parameters, threads, execution):
     ):
         raise ValueError("Matrix-vector launch does not match MLX's grid")
     transpose_mat = info["kind"] == "gemv_t"
-    if select(info["dtype"], transpose_mat, k, out, ndim) != entry:
+    if select(info["dtype"], transpose_mat, k, out, ndim, info["axpby"]) != entry:
         raise ValueError("Matrix-vector entry differs from MLX's routing")
     if threads != out * batches or counts["out_vec"] != threads:
         raise ValueError("Matrix-vector output extent differs")
@@ -435,16 +464,26 @@ def plan(entry, counts, parameters, threads, execution):
         "in_vec": k,
         "mat": (out - 1) * ld + k if not transpose_mat else (k - 1) * ld + out,
     }
-    for name, strides in (("in_vec", vector_strides), ("mat", matrix_strides)):
+    batch_strides = [("in_vec", vector_strides), ("mat", matrix_strides)]
+    if info["axpby"]:
+        axpby = _check_axpby(parameters, ndim)
+        extents["bias"] = (out - 1) * axpby["biasStride"] + 1
+        batch_strides.append(("bias", parameters["bias_batch_stride"]))
+    for name, strides in batch_strides:
         end = max(_location(z, shape, strides) for z in range(batches))
         if end + extents[name] > counts[name]:
             raise ValueError(f"Matrix-vector {name} batch exceeds its buffer")
-    return {
+    metadata = {
         "kind": info["kind"],
         "K": k,
         "outVecSize": out,
         "matrixLd": ld,
         "batches": batches,
+    }
+    if info["axpby"]:
+        return {**metadata, "axpby": axpby, "inert": {}}
+    return {
+        **metadata,
         "inert": {
             "alpha": 1.0,
             "beta": 0.0,
@@ -452,3 +491,22 @@ def plan(entry, counts, parameters, threads, execution):
             "bias_stride": 0,
         },
     }
+
+
+def _check_axpby(parameters, ndim):
+    """The epilogue AddMM binds: ``alpha * product + beta * bias``."""
+    alpha, beta = parameters.get("alpha"), parameters.get("beta")
+    stride = parameters.get("bias_stride")
+    strides = parameters.get("bias_batch_stride")
+    if (
+        any(type(value) is not float for value in (alpha, beta))
+        or type(stride) is not int
+        or not 0 <= stride <= MAX_ELEMENTS
+        or not isinstance(strides, list)
+        or len(strides) != ndim
+        or any(type(value) is not int or value < 0 for value in strides)
+    ):
+        raise ValueError("Matrix-vector axpby parameters are invalid")
+    if alpha == 1.0 and beta == 0.0:
+        raise ValueError("gemv_axbpy computes no axpby for alpha 1 and beta 0")
+    return {"alpha": alpha, "beta": beta, "biasStride": stride}

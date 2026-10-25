@@ -22,8 +22,9 @@ from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 # The bindings the translation must reflect: the kernels read nothing else
-# that is not a scalar.
+# that is not a scalar, and the bias only with axpby.
 REQUIRED = {"mat", "in_vec", "out_vec"}
+AXPBY_REQUIRED = REQUIRED | {"bias"}
 INERT_TYPES = {
     "alpha": "float32",
     "beta": "float32",
@@ -38,15 +39,21 @@ def _float_word(value):
 
 def _storage(entry, supplied, counts, parameters, metadata):
     """Every kernel parameter's words, with guards after the matrix buffers."""
-    dtype = gemv_layout.signature(entry)["dtype"]
+    info = gemv_layout.signature(entry)
+    dtype = info["dtype"]
     storage = {
         "out_vec": [GUARDS[dtype]] * (counts["out_vec"] + GUARD_COUNT),
+        # Without axpby the kernels never read the bias.
         "bias": [POISON[dtype]] * GUARD_COUNT,
     }
-    for name in ("mat", "in_vec"):
+    matrices = ("mat", "in_vec", "bias") if info["axpby"] else ("mat", "in_vec")
+    for name in matrices:
         storage[name] = _words(supplied[name], dtype) + [POISON[dtype]] * GUARD_COUNT
     for name, value in parameters.items():
-        storage[name] = [value] if isinstance(value, int) else list(value)
+        if name in gemv_layout.FLOAT_PARAMETERS:
+            storage[name] = [_float_word(value)]
+        else:
+            storage[name] = [value] if isinstance(value, int) else list(value)
     for name, value in metadata["inert"].items():
         values = value if isinstance(value, list) else [value]
         storage[name] = (
@@ -70,7 +77,7 @@ def _type(entry, name):
 def dispatch(host, entry, buffers, count, threads, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    names = gemv_layout.HOST_PARAMETERS
+    names = gemv_layout.host_parameters(entry)
     if host.gemvs is None or count != len(names) or not buffers or launch is None:
         raise ValueError(
             "Matrix-vector dispatch requires pinned packages, buffers and geometry"
@@ -89,6 +96,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     metadata = gemv_layout.plan(entry, counts, parameters, threads, execution)
     dtype = gemv_layout.signature(entry)["dtype"]
     storage = _storage(entry, supplied, counts, parameters, metadata)
+    matrices = ("mat", "in_vec", "bias") if "axpby" in metadata else ("mat", "in_vec")
     descriptor, directory = host.gemvs.get(entry)
     inputs, observed, output, bound = {}, [], None, set()
     for binding in descriptor["bindings"]:
@@ -115,7 +123,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
             output = binding["name"]
         else:
             observed.append(binding["name"])
-    if not REQUIRED <= bound or output is None:
+    required = AXPBY_REQUIRED if "axpby" in metadata else REQUIRED
+    if not required <= bound or output is None:
         raise ValueError("Matrix-vector reflection is incomplete")
     outputs = {output: inputs[output]}
     request = build_native_loader_dispatch_request(
@@ -165,7 +174,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in ("mat", "in_vec")
+            for name in matrices
         },
         "outputValues": words[:size] if size <= 4096 else None,
         "outputHash": hashlib.sha256(payload).hexdigest(),

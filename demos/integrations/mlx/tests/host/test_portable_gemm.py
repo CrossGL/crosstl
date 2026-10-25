@@ -32,11 +32,12 @@ BY_NAME = {record["name"]: record for record in RECORDS}
 FLAGS = ("has_batch", "align_M", "align_N", "align_K")
 
 
-def host_entry(transpose, dtype, flags):
+def host_entry(transpose, dtype, flags, epilogue="nn"):
     has_batch, align_m, align_n, align_k = ("t" if value else "n" for value in flags)
+    use_out_source, do_axpby = epilogue
     return (
         f"steel_gemm_fused_{transpose}_{dtype}_{dtype}_bm64_bn64_bk16_wm2_wn2"
-        f"_has_batch_{has_batch}_use_out_source_n_do_axpby_n"
+        f"_has_batch_{has_batch}_use_out_source_{use_out_source}_do_axpby_{do_axpby}"
         f"_align_M_{align_m}_align_N_{align_n}_align_K_{align_k}"
     )
 
@@ -92,27 +93,35 @@ def native_buffers(record, data=None):
 
 
 def test_signature_accepts_exactly_the_host_tile_entries():
+    # Matmul's entries without C, and AddMM's with C added or scaled.
     entries = {
-        host_entry(transpose, dtype, flags)
+        host_entry(transpose, dtype, flags, epilogue)
         for transpose in ("nn", "nt", "tn", "tt")
         for dtype in layout.DTYPES
         for flags in itertools.product((False, True), repeat=4)
+        for epilogue in ("nn", "tn", "tt")
     }
-    assert len(entries) == 192
+    assert len(entries) == 576
     for entry in entries:
         info = layout.signature(entry)
         assert info["source"] in model.BY_NAME
         assert model.BY_NAME[info["source"]].workgroup_size == (32, 2, 2)
         assert layout.workgroup_size(entry) == (32, 2, 2)
-        assert info["constants"]["use_out_source"] is False
+        use_out_source = "_use_out_source_t" in entry
+        assert info["constants"]["use_out_source"] is use_out_source
+        assert info["constants"]["do_axpby"] is ("_do_axpby_t" in entry)
         assert set(info["constants"]) == set(layout.CONSTANT_IDS)
+        assert set(layout.host_parameters(entry)) == set(
+            layout.HOST_PARAMETERS
+            + (layout.EPILOGUE_PARAMETERS if use_out_source else ())
+        )
     base = host_entry("nn", "float32", (False,) * 4)
     for entry in (
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm32_bn32_bk16_wm2_wn2"),
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm64_bn64_bk16_wm1_wn2"),
         base.replace("float32_float32", "complex64_complex64"),
         base.replace("float32_float32", "float32_float16"),
-        base.replace("use_out_source_n", "use_out_source_t"),
+        # steel_matmul_regular_axpby scales C only when it reads C.
         base.replace("do_axpby_n", "do_axpby_t"),
         base.replace("_has_batch_n", ""),
         "steel_gemm_fused_nn_float32_float32_bm64_bn64_bk16_wm2_wn2",
@@ -496,11 +505,17 @@ def test_package_configs_match_the_gemm_gate(tmp_path, record):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemm_packages.verification_entries()
-    assert entries == [record["entry"] for record in RECORDS]
-    assert len(set(entries)) == 9
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
+    assert entries == list(
+        dict.fromkeys(
+            [record["entry"] for record in RECORDS]
+            + [record["entry"] for record in addmm if record["family"] == "gemm"]
+        )
+    )
+    assert len(entries) == 16
     calls = []
 
     def build(root, directory, target, entry):
@@ -547,15 +562,17 @@ def test_backend_mirrors_steel_matmul():
     for text in (
         "void dispatch_steel_gemm(",
         "split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)",
-        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
+        "a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);",
         "constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;",
-        '"_use_out_source_n_do_axpby_n_align_M_"',
+        '"_use_out_source_" +',
+        "epilogue && (epilogue->alpha != 0.0f || epilogue->beta != 1.0f);",
+        "use_out_source && (epilogue->alpha != 1.0f || epilogue->beta != 1.0f);",
         "A_batch_stride.back(),",
         "{32, uint32_t(wn), uint32_t(wm)}",
         "{uint32_t(tiles_n), uint32_t(tiles_m), uint32_t(batch_size_out)}",
     ):
         assert text in backend, text
-    for name in layout.HOST_PARAMETERS:
+    for name in layout.HOST_PARAMETERS + layout.EPILOGUE_PARAMETERS:
         assert f'{{"{name}", ' in backend, name
 
 

@@ -70,6 +70,7 @@ def adapted_sources(original, primitives, events):
         "Quantize",
         "QuantizedMatmul",
         "Matmul",
+        "AddMM",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",

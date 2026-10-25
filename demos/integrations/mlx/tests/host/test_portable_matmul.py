@@ -99,18 +99,24 @@ def native_buffers(record, data=None):
 
 def test_signature_accepts_exactly_the_instantiated_matmul_entries():
     entries = {
-        f"{kind}_{dtype}_bm{bm}_bn{bn}_sm{sm}_sn{sn}_tm{tm}_tn{tn}_nc{nc}_axpby0"
+        f"{kind}_{dtype}_bm{bm}_bn{bn}_sm{sm}_sn{sn}_tm{tm}_tn{tn}_nc{nc}_axpby{axpby}"
         for kind, blocks in layout.BLOCKS.items()
         for dtype in layout.DTYPES
         for bm, bn, sm, sn, tm, tn in blocks
         for nc in (0, 1)
+        for axpby in (0, 1)
     }
-    assert len(entries) == 72
+    assert len(entries) == 144
     for entry in entries:
         info = layout.signature(entry)
         assert layout.workgroup_size(entry) == (32, info["bn"], info["bm"])
+        assert info["axpby"] == entry.endswith("axpby1")
+        expected = layout.HOST_PARAMETERS + (
+            layout.AXPBY_PARAMETERS if info["axpby"] else ()
+        )
+        assert set(layout.host_parameters(entry)) == set(expected)
     for entry in (
-        "gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby1",
+        "gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby2",
         "gemv_complex64_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
         "gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4",
         "gemv_t_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
@@ -494,10 +500,16 @@ def test_package_configs_scope_target_options_and_assertions(tmp_path):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemv_packages.verification_entries()
-    assert entries == [record["entry"] for record in RECORDS]
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
+    assert entries == list(
+        dict.fromkeys(
+            [record["entry"] for record in RECORDS]
+            + [record["entry"] for record in addmm if record["family"] == "gemv"]
+        )
+    )
     calls = []
 
     def build(root, directory, target, entry):
@@ -536,7 +548,9 @@ def test_runtime_routes_gemv_entries(monkeypatch):
     assert host._entry_available(entry.encode()) == 0
     host.gemvs = object()
     assert host._entry_available(entry.encode()) == 1
-    assert host._entry_available(entry.replace("axpby0", "axpby1").encode()) == 0
+    # AddMM's axpby entries take the same route.
+    assert host._entry_available(entry.replace("axpby0", "axpby1").encode()) == 1
+    assert host._entry_available(entry.replace("axpby0", "axpby2").encode()) == 0
     assert host._entry_available(b"gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4") == 0
     calls = []
     monkeypatch.setattr(
@@ -555,7 +569,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
 
     monkeypatch.setattr(prepare, "replace_once", record)
     prepare.adapted_sources("", "", "")
-    assert "NO_GPU(Matmul)" in replaced and "NO_GPU(AddMM)" not in replaced
+    assert "NO_GPU(Matmul)" in replaced and "NO_GPU(AddMM)" in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void Matmul::eval_gpu(" in backend
     for text in (
@@ -566,9 +580,9 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         "out_vector_len >= 2048 ? 16 : out_vector_len >= 512 ? 4 : 2",
         "bm = out_vector_len >= 4096 ? 8 : 4;",
         "} else if (K >= 16 * out_vector_len) {",
-        '(batch_shape.size() == 1 ? "0" : "1") + "_axpby0"',
+        '(batch_shape.size() == 1 ? "0" : "1") + "_axpby" + (do_axpby ? "1" : "0")',
         "{32, uint32_t(bn), uint32_t(bm)}",
-        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
+        "a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);",
         "dispatch_dot_product(a, b, out, K);",
     ):
         assert text in backend, text

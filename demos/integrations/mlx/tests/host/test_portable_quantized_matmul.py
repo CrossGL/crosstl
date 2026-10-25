@@ -919,10 +919,13 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         1200,
         1200,
         600,
-        600,
+        # On-demand reduction packages only record their configuration.
+        120,
         2400,
         1800,
         1200,
+        # AddMM verification.
+        600,
     ]
     # Split-K products sum their partitions with translated column kernels.
     sums = steps["Translate split-K partition sums"]

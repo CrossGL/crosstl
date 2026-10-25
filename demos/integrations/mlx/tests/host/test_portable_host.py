@@ -64,6 +64,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Quantize",
                     "QuantizedMatmul",
                     "Matmul",
+                    "AddMM",
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",

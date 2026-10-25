@@ -3335,7 +3335,8 @@ jobs:
           python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantized_matmul.py \
             demos/integrations/mlx/tests/host/test_portable_fp_quantized_matmul.py \
             demos/integrations/mlx/tests/host/test_portable_quantized_qmm.py \
-            demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py
+            demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py \
+            demos/integrations/mlx/tests/host/test_portable_addmm.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -3478,7 +3479,7 @@ jobs:
             python -m demos.integrations.mlx.portable_host.dot_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/dot-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX on-demand reduction packages" -- \
+          python tools/run_bounded_command.py --timeout-seconds 120 --label "MLX on-demand reduction packages" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family all --on-demand --output-dir .mlx-portable-quantized/all-reductions \
               2>&1 | tee .mlx-portable-quantized/all-reductions.log
@@ -3509,6 +3510,18 @@ jobs:
               --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/all-reductions \
               --output-dir .mlx-portable-quantized/matmul \
               2>&1 | tee .mlx-portable-quantized/matmul.log
+      - name: Execute AddMM products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX AddMM host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_addmm --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/addmm \
+              2>&1 | tee .mlx-portable-quantized/addmm.log
       - name: Retain quantized execution evidence
         if: always()
         uses: actions/upload-artifact@v7

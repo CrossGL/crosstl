@@ -3714,6 +3714,28 @@ std::tuple<bool, int64_t, array> gemv_operand(const array& in, bool is_vector) {
   return std::make_tuple(false, int64_t(in.shape(-1)), contiguous_copy(in));
 }
 
+// What AddMM adds to matmul.cpp's CHECK_AB routes: C, its collapsed batch
+// strides and alpha * (A @ B) + beta * C. Matmul passes none.
+struct AddmmEpilogue {
+  const array& c;
+  const Strides& batch_stride;
+  float alpha;
+  float beta;
+};
+
+// gemv_axbpy's and the split-K accumulation's do_axpby.
+bool epilogue_axpby(const AddmmEpilogue* epilogue) {
+  return epilogue && (epilogue->alpha != 1.0f || epilogue->beta != 0.0f);
+}
+
+int32_t epilogue_stride(const array& c, int axis) {
+  const int64_t stride = c.strides()[c.ndim() + axis];
+  if (stride < 0 || stride > int64_t(max_matmul_elements)) {
+    throw std::invalid_argument("CrossTL addmm addend exceeds its bounds.");
+  }
+  return int32_t(stride);
+}
+
 // Run one translated split-K kernel; ``threads`` is its output extent.
 void dispatch_splitk_kernel(
     const std::string& entry,
@@ -3730,11 +3752,12 @@ void dispatch_splitk_kernel(
   }
 }
 
-// matmul.cpp steel_gemm_splitk_axpby without C: gemm_splitk writes one float32
-// partial product per K partition into C_split and gemm_splitk_accum sums them
-// into the output. matmul.cpp launches the accumulation with dispatch_threads
-// over exactly N x M threads; the kernel reads only thread_position_in_grid,
-// so one-thread workgroups cover the same threads.
+// matmul.cpp steel_gemm_splitk_axpby: gemm_splitk writes one float32 partial
+// product per K partition into C_split and gemm_splitk_accum sums them into
+// the output, adding beta * C with AddMM's axpby. matmul.cpp launches the
+// accumulation with dispatch_threads over exactly N x M threads; the kernel
+// reads only thread_position_in_grid, so one-thread workgroups cover the same
+// threads.
 void dispatch_steel_gemm_splitk(
     const array& a,
     const array& b,
@@ -3745,7 +3768,8 @@ void dispatch_steel_gemm_splitk(
     int64_t lda,
     int64_t ldb,
     bool transpose_a,
-    bool transpose_b) {
+    bool transpose_b,
+    const AddmmEpilogue* epilogue) {
   const int _tm = (M + 32 - 1) / 32;
   const int _tn = (N + 32 - 1) / 32;
   const int _tk = K / 16;
@@ -3771,7 +3795,9 @@ void dispatch_steel_gemm_splitk(
       std::to_string(bn) + "_bk" + std::to_string(bk) + "_wm" + std::to_string(wm) + "_wn" +
       std::to_string(wn) + "_MN_" + (mn_aligned ? "t" : "n") + "aligned_K_" +
       (k_aligned ? "t" : "n") + "aligned";
-  const std::string accum = std::string("steel_gemm_splitk_accum_") + storage + "_float32";
+  const bool do_axpby = epilogue_axpby(epilogue);
+  const std::string accum = std::string("steel_gemm_splitk_accum_") + storage + "_float32" +
+      (do_axpby ? "_axbpy" : "");
   require_entry(entry);
   require_entry(accum);
   array C_split({split_k_partitions, M, N}, float32, nullptr, {});
@@ -3814,14 +3840,38 @@ void dispatch_steel_gemm_splitk(
       {"partition_stride", "int32", &partition_stride, 1, 0},
       {"ldd", "int32", &ldd, 1, 0},
   };
+  int32_t ldc = 0, fdc = 0;
+  float alpha = 1.0f, beta = 0.0f;
+  if (do_axpby) {
+    ldc = epilogue_stride(epilogue->c, -2);
+    fdc = epilogue_stride(epilogue->c, -1);
+    alpha = epilogue->alpha;
+    beta = epilogue->beta;
+    accum_buffers.push_back(
+        {"C", storage, data(epilogue->c), matmul_span(epilogue->c), 0});
+    accum_buffers.push_back({"ldc", "int32", &ldc, 1, 0});
+    accum_buffers.push_back({"fdc", "int32", &fdc, 1, 0});
+    accum_buffers.push_back({"alpha", "float32", &alpha, 1, 0});
+    accum_buffers.push_back({"beta", "float32", &beta, 1, 0});
+  }
   dispatch_splitk_kernel(
       accum, accum_buffers, out.size(),
       CrosstlMlxLaunch{{uint32_t(N), uint32_t(M), 1}, {1, 1, 1}});
 }
 
-// matmul.cpp steel_matmul_axpby without C. The host reports no Apple GPU
-// architecture and no NAX unit, so GEMM_TPARAM_MACRO takes its medium-device
-// tile and the split-K case uses the threshold of 1024 tiles.
+// params.h GEMMAddMMParams as matmul.cpp passes it with set_bytes.
+struct GemmAddmmParams {
+  int32_t ldc;
+  int32_t fdc;
+  int64_t batch_stride_c;
+  float alpha;
+  float beta;
+};
+static_assert(sizeof(GemmAddmmParams) == 24, "GEMMAddMMParams layout");
+
+// matmul.cpp steel_matmul_axpby. The host reports no Apple GPU architecture
+// and no NAX unit, so GEMM_TPARAM_MACRO takes its medium-device tile and the
+// split-K case uses the threshold of 1024 tiles.
 void dispatch_steel_gemm(
     const array& a,
     const array& b,
@@ -3836,23 +3886,29 @@ void dispatch_steel_gemm(
     bool transpose_b,
     Shape batch_shape,
     const Strides& A_batch_stride,
-    const Strides& B_batch_stride) {
+    const Strides& B_batch_stride,
+    const AddmmEpilogue* epilogue = nullptr) {
   const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
   if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
-    dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);
+    dispatch_steel_gemm_splitk(
+        a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);
     return;
   }
   constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;
   const bool has_batch = batch_shape.size() > 1;
+  const bool use_out_source =
+      epilogue && (epilogue->alpha != 0.0f || epilogue->beta != 1.0f);
+  const bool do_axpby =
+      use_out_source && (epilogue->alpha != 1.0f || epilogue->beta != 1.0f);
   auto flag = [](bool value) { return value ? "t" : "n"; };
   const char* storage = matmul_storage(out.dtype());
   // steel_matmul_regular_axpby's hash name: the kernel and its constants.
   const std::string entry = std::string("steel_gemm_fused_") + (transpose_a ? "t" : "n") +
       (transpose_b ? "t" : "n") + "_" + storage + "_" + storage + "_bm" + std::to_string(bm) +
       "_bn" + std::to_string(bn) + "_bk" + std::to_string(bk) + "_wm" + std::to_string(wm) +
-      "_wn" + std::to_string(wn) + "_has_batch_" + flag(has_batch) +
-      "_use_out_source_n_do_axpby_n_align_M_" + flag(M % bm == 0) + "_align_N_" +
-      flag(N % bn == 0) + "_align_K_" + flag(K % bk == 0);
+      "_wn" + std::to_string(wn) + "_has_batch_" + flag(has_batch) + "_use_out_source_" +
+      flag(use_out_source) + "_do_axpby_" + flag(do_axpby) + "_align_M_" + flag(M % bm == 0) +
+      "_align_N_" + flag(N % bn == 0) + "_align_K_" + flag(K % bk == 0);
   require_entry(entry);
   const uint64_t tiles_n = (uint64_t(N) + bn - 1) / bn;
   const uint64_t tiles_m = (uint64_t(M) + bm - 1) / bm;
@@ -3860,12 +3916,18 @@ void dispatch_steel_gemm(
       tiles_m > 65535 || lda < 0 || lda > int64_t(max_matmul_elements) || ldb < 0 ||
       ldb > int64_t(max_matmul_elements) || batch_shape.empty() || batch_shape.size() > 16 ||
       A_batch_stride.size() != batch_shape.size() ||
-      B_batch_stride.size() != batch_shape.size()) {
+      B_batch_stride.size() != batch_shape.size() ||
+      (epilogue && epilogue->batch_stride.size() != batch_shape.size())) {
     throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
   }
   out.set_data(allocator::malloc(out.nbytes()));
   Strides batch_strides = A_batch_stride;
   batch_strides.insert(batch_strides.end(), B_batch_stride.begin(), B_batch_stride.end());
+  // steel_matmul_axpby<true> appends C's batch strides.
+  if (epilogue) {
+    batch_strides.insert(
+        batch_strides.end(), epilogue->batch_stride.begin(), epilogue->batch_stride.end());
+  }
   // GEMMParams in params.h order, each widened to int64.
   std::vector<int64_t> params = {
       M,
@@ -3893,6 +3955,17 @@ void dispatch_steel_gemm(
       {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
       {"batch_strides", "int64", batch_strides.data(), batch_strides.size(), 0},
   };
+  GemmAddmmParams addmm_params{};
+  if (use_out_source) {
+    addmm_params = {
+        epilogue_stride(epilogue->c, -2),
+        epilogue_stride(epilogue->c, -1),
+        epilogue->batch_stride.back(),
+        epilogue->alpha,
+        epilogue->beta};
+    buffers.push_back({"C", storage, data(epilogue->c), matmul_span(epilogue->c), 0});
+    buffers.push_back({"addmm_params", "uint8", &addmm_params, sizeof(addmm_params), 0});
+  }
   const CrosstlMlxLaunch launch{
       {uint32_t(tiles_n), uint32_t(tiles_m), uint32_t(batch_size_out)},
       {32, uint32_t(wn), uint32_t(wm)}};
@@ -3953,6 +4026,116 @@ void dispatch_dot_product(const array& a, const array& b, array& out, int K) {
     dispatch_cast({total}, out);
   }
 }
+// matmul.cpp gemv_axbpy, with AddMM's axpby epilogue when it asks for one.
+void dispatch_gemv(
+    const array& a,
+    const array& b,
+    array& out,
+    int M,
+    int N,
+    int K,
+    size_t batch_size_out,
+    int64_t a_cols,
+    int64_t b_cols,
+    bool a_transposed,
+    bool b_transposed,
+    Shape batch_shape,
+    Strides& A_batch_stride,
+    Strides& B_batch_stride,
+    const AddmmEpilogue* epilogue = nullptr) {
+  const auto dtype = out.dtype();
+  const bool is_b_matrix = N != 1;
+  const array& mat = is_b_matrix ? b : a;
+  const array& vec = is_b_matrix ? a : b;
+  const bool transpose_mat = is_b_matrix ? !b_transposed : a_transposed;
+  const bool do_axpby = epilogue_axpby(epilogue);
+  const int out_vector_len = is_b_matrix ? N : M;
+  const int64_t mat_ld = is_b_matrix ? b_cols : a_cols;
+  auto& vector_batch_stride = is_b_matrix ? A_batch_stride : B_batch_stride;
+  auto& matrix_batch_stride = is_b_matrix ? B_batch_stride : A_batch_stride;
+  int tm = 4, tn = 4, sm = 1, sn = 32, bm = 1, bn = 1, n_out_per_tgp;
+  if (transpose_mat) {
+    if (K >= 8192 && out_vector_len >= 2048) {
+      sm = 4;
+      sn = 8;
+    } else {
+      sm = 8;
+      sn = 4;
+    }
+    bn = out_vector_len >= 2048 ? 16 : out_vector_len >= 512 ? 4 : 2;
+    tn = out_vector_len < tn ? 1 : tn;
+    n_out_per_tgp = bn * sn * tn;
+  } else {
+    bm = out_vector_len >= 4096 ? 8 : 4;
+    if (K <= 64) {
+      bm = 1;
+      sm = 8;
+      sn = 4;
+    } else if (K >= 16 * out_vector_len) {
+      bm = 1;
+      bn = 8;
+    }
+    tm = out_vector_len < tm ? 1 : tm;
+    n_out_per_tgp = bm * sm * tm;
+  }
+  const char* storage = matmul_storage(dtype);
+  const std::string entry = std::string(transpose_mat ? "gemv_t_" : "gemv_") + storage +
+      "_bm" + std::to_string(bm) + "_bn" + std::to_string(bn) + "_sm" + std::to_string(sm) +
+      "_sn" + std::to_string(sn) + "_tm" + std::to_string(tm) + "_tn" + std::to_string(tn) +
+      "_nc" + (batch_shape.size() == 1 ? "0" : "1") + "_axpby" + (do_axpby ? "1" : "0");
+  require_entry(entry);
+  const uint64_t n_tgp = (uint64_t(out_vector_len) + n_out_per_tgp - 1) / n_out_per_tgp;
+  if (out.size() > max_matmul_elements || batch_size_out > 65535 || n_tgp > 65535 ||
+      mat_ld < 0 || mat_ld > int64_t(max_matmul_elements) || batch_shape.size() > 16 ||
+      (do_axpby && epilogue->batch_stride.size() != batch_shape.size())) {
+    throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
+  }
+  out.set_data(allocator::malloc(out.nbytes()));
+  int32_t in_vec_size = K;
+  int32_t out_vec_size = out_vector_len;
+  int32_t marix_ld = int32_t(mat_ld);
+  int32_t batch_ndim = int32_t(batch_shape.size());
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"mat", storage, data(mat), matmul_span(mat), 0},
+      {"in_vec", storage, data(vec), matmul_span(vec), 0},
+      {"out_vec", storage, out.data<void>(), out.size(), 1},
+      {"in_vec_size", "int32", &in_vec_size, 1, 0},
+      {"out_vec_size", "int32", &out_vec_size, 1, 0},
+      {"marix_ld", "int32", &marix_ld, 1, 0},
+      {"batch_ndim", "int32", &batch_ndim, 1, 0},
+      {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
+      {"vector_batch_stride", "int64", vector_batch_stride.data(),
+       vector_batch_stride.size(), 0},
+      {"matrix_batch_stride", "int64", matrix_batch_stride.data(),
+       matrix_batch_stride.size(), 0},
+  };
+  float alpha = 1.0f, beta = 0.0f;
+  int32_t bias_stride = 0;
+  if (do_axpby) {
+    alpha = epilogue->alpha;
+    beta = epilogue->beta;
+    // gemv_axbpy binds C's last stride whichever operand is the matrix.
+    bias_stride = epilogue_stride(epilogue->c, -1);
+    buffers.push_back({"bias", storage, data(epilogue->c), matmul_span(epilogue->c), 0});
+    buffers.push_back({"alpha", "float32", &alpha, 1, 0});
+    buffers.push_back({"beta", "float32", &beta, 1, 0});
+    buffers.push_back(
+        {"bias_batch_stride", "int64", const_cast<int64_t*>(epilogue->batch_stride.data()),
+         epilogue->batch_stride.size(), 0});
+    buffers.push_back({"bias_stride", "int32", &bias_stride, 1, 0});
+  }
+  const CrosstlMlxLaunch launch{
+      {uint32_t(n_tgp), 1, uint32_t(batch_size_out)}, {32, uint32_t(bn), uint32_t(bm)}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()), out.size(),
+      &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
+  }
+}
 } // namespace
 
 void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -4010,81 +4193,78 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         batch_shape, A_batch_stride, B_batch_stride);
     return;
   }
-  // gemv_axbpy without axpby.
-  const bool is_b_matrix = N != 1;
-  const array& mat = is_b_matrix ? b : a;
-  const array& vec = is_b_matrix ? a : b;
-  const bool transpose_mat = is_b_matrix ? !b_transposed : a_transposed;
-  const int out_vector_len = is_b_matrix ? N : M;
-  const int64_t mat_ld = is_b_matrix ? b_cols : a_cols;
-  auto& vector_batch_stride = is_b_matrix ? A_batch_stride : B_batch_stride;
-  auto& matrix_batch_stride = is_b_matrix ? B_batch_stride : A_batch_stride;
-  int tm = 4, tn = 4, sm = 1, sn = 32, bm = 1, bn = 1, n_out_per_tgp;
-  if (transpose_mat) {
-    if (K >= 8192 && out_vector_len >= 2048) {
-      sm = 4;
-      sn = 8;
+  dispatch_gemv(
+      a, b, out, M, N, K, batch_size_out, a_cols, b_cols, a_transposed, b_transposed,
+      batch_shape, A_batch_stride, B_batch_stride);
+}
+
+// Ports matmul.cpp AddMM::eval_gpu. MLX takes gemv_wide only from Apple GPU
+// generation 15, which the host does not report.
+void AddMM::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  const auto dtype = out.dtype();
+  if (inputs.size() != 3 || (dtype != float32 && dtype != float16 && dtype != bfloat16) ||
+      inputs[0].dtype() != dtype || inputs[1].dtype() != dtype ||
+      inputs[2].dtype() != dtype) {
+    throw std::invalid_argument("CrossTL addmm supports float32, float16 and bfloat16 only.");
+  }
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(out.nbytes()));
+    return;
+  }
+  // matmul.cpp copies C, or multiplies it by beta, when K is 0.
+  if (inputs[0].shape(-1) == 0) {
+    const auto& c = inputs[2];
+    if (beta_ == 1.0f) {
+      dispatch_copy(c, out);
     } else {
-      sm = 8;
-      sn = 4;
+      array scalar(beta_, dtype);
+      array scale(out.shape(), dtype, nullptr, {});
+      const bool single = out.size() == 1;
+      scale.copy_shared_buffer(scalar, Strides(out.ndim(), 0), {single, single, single}, 1);
+      dispatch_binary({c, scale}, out, "Multiply");
     }
-    bn = out_vector_len >= 2048 ? 16 : out_vector_len >= 512 ? 4 : 2;
-    tn = out_vector_len < tn ? 1 : tn;
-    n_out_per_tgp = bn * sn * tn;
-  } else {
-    bm = out_vector_len >= 4096 ? 8 : 4;
-    if (K <= 64) {
-      bm = 1;
-      sm = 8;
-      sn = 4;
-    } else if (K >= 16 * out_vector_len) {
-      bm = 1;
-      bn = 8;
-    }
-    tm = out_vector_len < tm ? 1 : tm;
-    n_out_per_tgp = bm * sm * tm;
+    return;
   }
-  const char* storage = matmul_storage(dtype);
-  const std::string entry = std::string(transpose_mat ? "gemv_t_" : "gemv_") + storage +
-      "_bm" + std::to_string(bm) + "_bn" + std::to_string(bn) + "_sm" + std::to_string(sm) +
-      "_sn" + std::to_string(sn) + "_tm" + std::to_string(tm) + "_tn" + std::to_string(tn) +
-      "_nc" + (batch_shape.size() == 1 ? "0" : "1") + "_axpby0";
-  require_entry(entry);
-  const uint64_t n_tgp = (uint64_t(out_vector_len) + n_out_per_tgp - 1) / n_out_per_tgp;
-  if (out.size() > max_matmul_elements || batch_size_out > 65535 || n_tgp > 65535 ||
-      mat_ld < 0 || mat_ld > int64_t(max_matmul_elements) || batch_shape.size() > 16) {
-    throw std::invalid_argument("CrossTL matmul launch exceeds its bounds.");
+  const auto& a_pre = inputs[0];
+  const auto& b_pre = inputs[1];
+  const auto& c_pre = inputs[2];
+  if (a_pre.ndim() < 2 || a_pre.ndim() != b_pre.ndim() || c_pre.ndim() != a_pre.ndim() ||
+      out.ndim() != a_pre.ndim() || c_pre.shape() != out.shape()) {
+    throw std::invalid_argument("CrossTL addmm operand ranks are invalid.");
   }
-  out.set_data(allocator::malloc(out.nbytes()));
-  int32_t in_vec_size = K;
-  int32_t out_vec_size = out_vector_len;
-  int32_t marix_ld = int32_t(mat_ld);
-  int32_t batch_ndim = int32_t(batch_shape.size());
-  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
-  std::vector<CrosstlMlxBuffer> buffers = {
-      {"mat", storage, data(mat), matmul_span(mat), 0},
-      {"in_vec", storage, data(vec), matmul_span(vec), 0},
-      {"out_vec", storage, out.data<void>(), out.size(), 1},
-      {"in_vec_size", "int32", &in_vec_size, 1, 0},
-      {"out_vec_size", "int32", &out_vec_size, 1, 0},
-      {"marix_ld", "int32", &marix_ld, 1, 0},
-      {"batch_ndim", "int32", &batch_ndim, 1, 0},
-      {"batch_shape", "int32", batch_shape.data(), batch_shape.size(), 0},
-      {"vector_batch_stride", "int64", vector_batch_stride.data(),
-       vector_batch_stride.size(), 0},
-      {"matrix_batch_stride", "int64", matrix_batch_stride.data(),
-       matrix_batch_stride.size(), 0},
-  };
-  const CrosstlMlxLaunch launch{
-      {uint32_t(n_tgp), 1, uint32_t(batch_size_out)}, {32, uint32_t(bn), uint32_t(bm)}};
-  char error[2048] = {};
-  const int status = dispatch_callback.load()(
-      entry.c_str(), buffers.data(), static_cast<uint32_t>(buffers.size()), out.size(),
-      &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native matmul failed: ") + error);
+  int M = a_pre.shape(-2);
+  const int N = b_pre.shape(-1);
+  const int K = a_pre.shape(-1);
+  auto [transpose_a, a_cols, a] = gemv_operand(a_pre, M == 1);
+  auto [transpose_b, b_cols, b] = gemv_operand(b_pre, N == 1);
+  // The host copies an addend with a negative stride, which it never binds.
+  const bool c_nonnegative = std::all_of(
+      c_pre.strides().begin(), c_pre.strides().end(), [](int64_t stride) { return stride >= 0; });
+  const array c = c_nonnegative ? c_pre : contiguous_copy(c_pre);
+  auto [batch_shape, A_batch_stride, B_batch_stride, C_batch_stride] = collapse_batches(a, b, c);
+  auto batch_size_out = out.size() / (size_t(M) * size_t(N));
+  // Collapse batches into M as matmul.cpp does.
+  if (batch_size_out > 1 && !transpose_a && batch_shape.size() == 1 &&
+      a.strides()[a.ndim() - 2] == K && A_batch_stride.back() == M * K &&
+      C_batch_stride.back() == M * c.strides()[c.ndim() - 2] && B_batch_stride.back() == 0) {
+    M *= batch_shape.back();
+    batch_size_out = 1;
+    A_batch_stride = {0};
+    B_batch_stride = {0};
+    C_batch_stride = {0};
+    batch_shape = {1};
   }
+  const AddmmEpilogue epilogue{c, C_batch_stride, alpha_, beta_};
+  if (std::min(M, N) == 1) {
+    dispatch_gemv(
+        a, b, out, M, N, K, batch_size_out, a_cols, b_cols, transpose_a, transpose_b,
+        batch_shape, A_batch_stride, B_batch_stride, &epilogue);
+    return;
+  }
+  dispatch_steel_gemm(
+      a, b, out, M, N, K, batch_size_out, a_cols, b_cols, transpose_a, transpose_b,
+      batch_shape, A_batch_stride, B_batch_stride, &epilogue);
 }
 } // namespace mlx::core
 
