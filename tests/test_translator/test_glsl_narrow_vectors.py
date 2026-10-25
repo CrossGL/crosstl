@@ -1,8 +1,10 @@
-"""GLSL 8- and 16-bit integer vector arithmetic wraps at the narrow width.
+"""GLSL 8- and 16-bit integer arithmetic wraps at the narrow width.
 
-The GLSL emitters keep a ``u16vec2`` value in a 32-bit ``uvec2`` carrier and compute on promoted ``ivec2``
-operands. CrossGL promotes scalars only: vector arithmetic keeps its narrow type, so ``(n + m).x`` is reduced
-modulo 2^16. A 32-bit operand promotes the narrow vector first, and only an integer literal adopts the narrow type.
+The GLSL emitters keep 8- and 16-bit integer scalars and vectors in 32-bit carriers (``int``/``uint`` and
+``ivecN``/``uvecN``) and compute on promoted 32-bit operands. Same-type narrow binary operations keep their narrow
+width, so ``float(v * v)`` on ``int8_t v = 13`` wraps at 8 bits to ``-87.0`` and ``(n + m).x`` on ``u16vec2`` wraps
+modulo 2^16. A 32-bit operand promotes the narrow value first, and an integer literal adopts a narrow vector's type
+while promoting a narrow scalar to 32 bits.
 """
 
 import shutil
@@ -11,6 +13,7 @@ import subprocess
 
 import pytest
 
+import crosstl
 import crosstl.translator
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.glsl_narrow_vectors import (
@@ -23,6 +26,8 @@ from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 U16X2 = NarrowShape(False, 16, 2)
 I16X2 = NarrowShape(True, 16, 2)
 U16 = NarrowShape(False, 16, 1)
+I8 = NarrowShape(True, 8, 1)
+U8 = NarrowShape(False, 8, 1)
 U8X2 = NarrowShape(False, 8, 2)
 
 WRAP_PROBE = """
@@ -97,6 +102,66 @@ shader NarrowFragment {
 """
 
 
+SCALAR_WRAP_PROBE = """
+shader NarrowScalarWrap {
+    StructuredBuffer<int> iin;
+    RWStructuredBuffer<float> outp;
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int8_t b = int8_t(iin[0]);
+            uint8_t ub = uint8_t(iin[1]);
+            int16_t s = int16_t(iin[2]);
+            uint16_t us = uint16_t(iin[3]);
+            outp[0] = float(b * b);
+            outp[1] = float(ub * ub);
+            outp[2] = float(s * s);
+            outp[3] = float(us * us);
+            outp[4] = float((b * b) + b);
+            int8_t stored = b * b;
+            outp[5] = float(stored);
+            outp[6] = float(b + 100);
+        }
+    }
+}
+"""
+
+# iin = [13, 20, 200, 300]: 13*13 = 169 -> -87, 20*20 = 400 -> 144, 200*200 = 40000 -> -25536,
+# 300*300 = 90000 -> 24464, (-87) + 13 = -74, stored = -87, and int8_t(13) + 100 promotes to int (113).
+SCALAR_WRAP_EXPECTED = (
+    -87.0,
+    144.0,
+    -25536.0,
+    24464.0,
+    -74.0,
+    -87.0,
+    113.0,
+)
+
+SCALAR_FRAGMENT = """
+shader NarrowScalarFragment {
+    struct FragmentOutput {
+        vec4 color;
+    }
+
+    fragment {
+        uniform int8_t signedByte;
+        uniform uint8_t unsignedByte;
+
+        FragmentOutput main() {
+            FragmentOutput output;
+            int8_t stored = signedByte * signedByte;
+            float s = float(signedByte * signedByte);
+            float u = float(unsignedByte * unsignedByte);
+            output.color = vec4(float(stored), s, u, 1.0);
+            return output;
+        }
+    }
+}
+"""
+
+
 def _compact(code):
     return "".join(code.split())
 
@@ -110,6 +175,9 @@ def test_vector_operations_keep_their_narrow_type():
     assert rule("+", U16X2, U16X2, left_literal=False, right_literal=False) == U16X2
     assert rule("&", I16X2, I16X2, left_literal=False, right_literal=False) == I16X2
     assert rule("*", U16X2, U16, left_literal=False, right_literal=False) == U16X2
+    assert rule("+", U16, U16, left_literal=False, right_literal=False) == U16
+    assert rule("*", I8, I8, left_literal=False, right_literal=False) == I8
+    assert rule("*", U8, U8, left_literal=False, right_literal=False) == U8
     assert rule("+", U16X2, None, left_literal=False, right_literal=True) == U16X2
     assert rule("<<", U16X2, None, left_literal=False, right_literal=False) == U16X2
     assert narrow_vector_unary_result("~", U8X2) == U8X2
@@ -117,15 +185,24 @@ def test_vector_operations_keep_their_narrow_type():
 
 def test_promoting_operations_have_no_narrow_vector_type():
     rule = narrow_vector_binary_result
-    # A 32-bit operand that is not a literal promotes the narrow vector.
+    # A 32-bit operand that is not a literal promotes the narrow value, and a 32-bit literal promotes a narrow scalar.
     assert rule("+", U16X2, None, left_literal=False, right_literal=False) is None
-    # Scalars promote to int; signedness and width mismatches are not narrow either.
-    assert rule("+", U16, U16, left_literal=False, right_literal=False) is None
+    assert rule("+", U16, None, left_literal=False, right_literal=True) is None
+    assert rule("<<", U16, None, left_literal=False, right_literal=True) is None
+    # Signedness and width mismatches are not narrow either.
     assert rule("+", U16X2, I16X2, left_literal=False, right_literal=False) is None
     assert rule("+", U16X2, U8X2, left_literal=False, right_literal=False) is None
+    assert (
+        rule(
+            "+", U16, NarrowShape(True, 16, 1), left_literal=False, right_literal=False
+        )
+        is None
+    )
+    assert rule("+", U16, U8, left_literal=False, right_literal=False) is None
     # A shift takes the type of its left operand; comparisons are never narrow.
     assert rule(">>", None, U16X2, left_literal=False, right_literal=False) is None
     assert rule("<", U16X2, U16X2, left_literal=False, right_literal=False) is None
+    assert rule("<", I8, I8, left_literal=False, right_literal=False) is None
     assert narrow_vector_unary_result("~", U16) is None
     assert narrow_vector_unary_result("!", U16X2) is None
 
@@ -165,6 +242,54 @@ def test_narrow_vector_arithmetic_wraps_with_masks_in_webgl():
     assert "bitfieldExtract" not in code
 
 
+def test_narrow_scalar_arithmetic_wraps_in_glsl():
+    code = _compact(_generate(SCALAR_WRAP_PROBE))
+
+    assert "outp[0]=float(bitfieldExtract((b*b),0,8));" in code
+    assert "outp[1]=float(int(bitfieldExtract(uint((int(ub)*int(ub))),0,8)));" in code
+    assert "outp[2]=float(bitfieldExtract((s*s),0,16));" in code
+    assert "outp[3]=float(int(bitfieldExtract(uint((int(us)*int(us))),0,16)));" in code
+    assert "outp[4]=float(bitfieldExtract((bitfieldExtract((b*b),0,8)+b),0,8));" in code
+    assert "intstored=bitfieldExtract((b*b),0,8);" in code
+    assert "bitfieldExtract(int(bitfieldExtract(" not in code
+    assert "outp[6]=float((b+100));" in code
+
+
+def test_narrow_scalar_arithmetic_wraps_with_masks_in_webgl():
+    code = _compact(_generate(SCALAR_FRAGMENT, WebGLCodeGen))
+
+    assert "intstored=(((signedByte*signedByte)<<24)>>24);" in code
+    assert "floats=float((((signedByte*signedByte)<<24)>>24));" in code
+    assert (
+        "floatu=float(int((uint((int(unsignedByte)*int(unsignedByte)))&255u)));" in code
+    )
+    assert "bitfieldExtract" not in code
+
+
+def test_glsl_input_roundtrip_wraps_narrow_scalar_product(tmp_path):
+    shader = tmp_path / "probe.comp"
+    shader.write_text(
+        "#version 460\n"
+        "#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require\n"
+        "layout(local_size_x = 1) in;\n"
+        "layout(std430, binding = 0) buffer B0 { int iin[]; };\n"
+        "layout(std430, binding = 1) buffer B1 { float outp[]; };\n"
+        "void main() {\n"
+        "    uint i = gl_GlobalInvocationID.x;\n"
+        "    int8_t v = int8_t(iin[i]);\n"
+        "    outp[i] = float(v * v);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    cgl = crosstl.translate(str(shader), backend="cgl", format_output=False)
+    cgl_path = tmp_path / "probe.cgl"
+    cgl_path.write_text(cgl, encoding="utf-8")
+    translated = crosstl.translate(str(cgl_path), backend="opengl", format_output=False)
+
+    assert "float(bitfieldExtract((v * v), 0, 8))" in translated
+
+
 def _glslang():
     validator = shutil.which("glslangValidator")
     if validator is None:
@@ -176,10 +301,20 @@ def _glslang():
     ("source", "generator", "stage"),
     [
         (WRAP_PROBE, GLSLCodeGen, "comp"),
+        (SCALAR_WRAP_PROBE, GLSLCodeGen, "comp"),
         (FRAGMENT, GLSLCodeGen, "frag"),
         (FRAGMENT, WebGLCodeGen, "frag"),
+        (SCALAR_FRAGMENT, GLSLCodeGen, "frag"),
+        (SCALAR_FRAGMENT, WebGLCodeGen, "frag"),
     ],
-    ids=["glsl-compute", "glsl-fragment", "webgl-fragment"],
+    ids=[
+        "glsl-compute",
+        "glsl-scalar-compute",
+        "glsl-fragment",
+        "webgl-fragment",
+        "glsl-scalar-fragment",
+        "webgl-scalar-fragment",
+    ],
 )
 def test_narrow_vector_wrapping_compiles_with_glslang(
     tmp_path, source, generator, stage
@@ -266,3 +401,30 @@ def test_narrow_vector_arithmetic_wraps_on_the_gpu(tmp_path):
     inputs = [struct.pack("<4I", 65535, 300, 1, 300), struct.pack("<2i", 20000, 0)]
 
     assert _run_metal_kernel(metal, inputs, len(WRAP_EXPECTED)) == WRAP_EXPECTED
+
+
+def _opengl_context():
+    moderngl = pytest.importorskip("moderngl")
+    for kwargs in ({"require": 430, "backend": "egl"}, {"require": 430}):
+        try:
+            return moderngl.create_standalone_context(**kwargs)
+        except Exception:
+            continue
+    pytest.skip("no standalone OpenGL 4.3+ context")
+
+
+def test_narrow_scalar_arithmetic_wraps_on_opengl():
+    glsl = _generate(SCALAR_WRAP_PROBE)
+    context = _opengl_context()
+    try:
+        shader = context.compute_shader(glsl)
+        in_buffer = context.buffer(struct.pack("<4i", 13, 20, 200, 300))
+        out_buffer = context.buffer(reserve=4 * len(SCALAR_WRAP_EXPECTED))
+        in_buffer.bind_to_storage_buffer(0)
+        out_buffer.bind_to_storage_buffer(1)
+        shader.run(1, 1, 1)
+        actual = struct.unpack(f"<{len(SCALAR_WRAP_EXPECTED)}f", out_buffer.read())
+    finally:
+        context.release()
+
+    assert actual == SCALAR_WRAP_EXPECTED

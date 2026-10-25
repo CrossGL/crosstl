@@ -1,12 +1,12 @@
-"""GLSL arithmetic on 8- and 16-bit integer vectors.
+"""GLSL arithmetic on 8- and 16-bit integers.
 
-The GLSL emitters keep a CrossGL ``u16vec2`` value in a 32-bit carrier (``uvec2``) and compute arithmetic on the
-promoted 32-bit operands (``ivec2(n) + ivec2(m)``). CrossGL integer promotion applies to scalars only: vector
-arithmetic keeps its narrow type and wraps at that width (MSL section 2.2 and OpenCL C 6.3 do not promote vectors,
-and the explicit 16-bit types of GLSL, HLSL and SPIR-V do not promote at all; ``semantics/narrow.py`` legalizes the
-same rule for SPIR-V and WGSL). A 32-bit carrier does not wrap by itself, so ``(n + m).x`` could exceed 65535.
+The GLSL emitters keep CrossGL 8- and 16-bit integer scalars and vectors in 32-bit carriers (``int``/``uint`` and
+``ivecN``/``uvecN``) and compute arithmetic on promoted 32-bit operands. A 32-bit carrier does not wrap by itself,
+so a narrow binary result consumed without first being stored into a narrow variable (such as ``float(v * v)`` on
+``int8_t v = 13``, or ``(n + m).x`` on ``u16vec2``) would otherwise keep 32-bit precision instead of wrapping at
+8 or 16 bits.
 
-An operation whose CrossGL result is a narrow vector, and whose operator can leave the operand range, is reduced
+An operation whose result keeps a narrow integer type, and whose operator can leave the operand range, is reduced
 modulo 2^N with the emitter's narrow-integer contract (``bitfieldExtract`` or, for GLSL ES 3.00, masks and
 shifts). The reduced value keeps the 32-bit type the emitter already reports for the expression, so conversions
 around it are unchanged.
@@ -51,11 +51,12 @@ class NarrowShape:
 
 
 def narrow_vector_binary_result(operator, left, right, *, left_literal, right_literal):
-    """The narrow vector type of ``left operator right`` under CrossGL rules, else ``None``.
+    """The narrow integer type of ``left operator right`` in the GLSL emitters, else ``None``.
 
     ``left`` and ``right`` are the operands' :class:`NarrowShape` or ``None`` when they are not narrow integers.
-    Vectors keep their narrow type, scalars promote to ``int``, a shift has the type of its left operand, and only
-    an integer literal adopts the narrow type of the other operand.
+    Same-type narrow binary operations (scalar or vector) keep their narrow width, a vector shift keeps the type
+    of its left operand, and an integer literal adopts the narrow type of a vector operand while promoting a
+    narrow scalar to 32 bits.
     """
     if operator not in _TYPED_BINARY:
         return None
@@ -72,8 +73,7 @@ def narrow_vector_binary_result(operator, left, right, *, left_literal, right_li
         return None
     if left.lanes != right.lanes and 1 not in (left.lanes, right.lanes):
         return None
-    result = left if left.lanes >= right.lanes else right
-    return result if result.lanes > 1 else None
+    return left if left.lanes >= right.lanes else right
 
 
 def narrow_vector_unary_result(operator, operand):
