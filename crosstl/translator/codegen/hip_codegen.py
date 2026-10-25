@@ -7831,7 +7831,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Return generic atomic mappings for RWStructuredBuffer element targets."""
         integer_kinds = {"int", "uint"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -7845,6 +7845,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
+        # HIP's system-scoped atomics (atomicAdd_system, atomicCAS_system, ...)
+        # take the same operands as the device-wide intrinsic they are named
+        # after. HIP declares no atomicInc_system or atomicDec_system.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            if intrinsic in {"atomicInc", "atomicDec"}:
+                continue
+            operations.setdefault(
+                f"{intrinsic}_system",
+                (f"{intrinsic}_system", arg_count, kinds, kinds_label),
+            )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to HIP atomics."""

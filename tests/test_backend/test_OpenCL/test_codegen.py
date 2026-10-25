@@ -7,6 +7,7 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLAtomicOrderUnsupportedError,
     OpenCLFenceScopeUnsupportedError,
+    OpenCLImageWriteUnsupportedError,
     OpenCLToCrossGLConverter,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
@@ -567,6 +568,113 @@ def test_clspv_struct_return_and_local_elaborated_type_codegen_reparse():
     assert "T bar(ptr<i32> out)" in crossgl
     assert "var t: T;" in crossgl
     assert "var t: T = bar(out);" in crossgl
+
+
+def test_opencl_write_image_builtins_lower_to_image_store():
+    crossgl = generate_crossgl("""
+        kernel void k(global float4 *src, write_only image2d_t tex,
+                      write_only image2d_t itex, read_write image2d_t utex,
+                      write_only image1d_t line, write_only image1d_buffer_t buf,
+                      write_only image1d_array_t lines, write_only image3d_t vol,
+                      write_only image2d_array_t layers) {
+            int i = get_global_id(0);
+            write_imagef(tex, (int2)(i, 0), src[i]);
+            write_imagei(itex, (int2)(i, 1), (int4)(1, 2, 3, 4));
+            write_imageui(utex, (int2)(i, 2), (uint4)(1u, 2u, 3u, 4u));
+            write_imagef(line, i, src[i]);
+            write_imagef(buf, i, src[i]);
+            write_imagef(lines, (int2)(i, 1), src[i]);
+            write_imagef(vol, (int4)(i, 0, 0, 0), src[i]);
+            write_imagef(layers, (int4)(i, 0, 1, 0), src[i]);
+        }
+        """)
+
+    assert "write_image" not in crossgl
+    # The write function gives the image its element type.
+    assert " image2D tex," in crossgl
+    assert " iimage2D itex," in crossgl
+    assert " uimage2D utex," in crossgl
+    assert " imageBuffer buf," in crossgl
+    assert "imageStore(tex, vec2<i32>(i, 0), src[i]);" in crossgl
+    assert "imageStore(itex, vec2<i32>(i, 1), vec4<i32>(1, 2, 3, 4));" in crossgl
+    assert "imageStore(utex, vec2<i32>(i, 2), vec4<u32>(1u, 2u, 3u, 4u));" in crossgl
+    assert "imageStore(line, i, src[i]);" in crossgl
+    assert "imageStore(buf, i, src[i]);" in crossgl
+    assert "imageStore(lines, vec2<i32>(i, 1), src[i]);" in crossgl
+    # 3D images and 2D image arrays take an int4 coordinate in OpenCL.
+    assert "imageStore(vol, (vec4<i32>(i, 0, 0, 0)).xyz, src[i]);" in crossgl
+    assert "imageStore(layers, (vec4<i32>(i, 0, 1, 0)).xyz, src[i]);" in crossgl
+
+
+def test_opencl_write_image_translates_to_hlsl_texture_store(tmp_path):
+    source = """
+        kernel void k(global float *fin, write_only image2d_t dst,
+                      write_only image3d_t idst, write_only image1d_buffer_t udst) {
+            int i = get_global_id(0);
+            write_imagef(dst, (int2)(i, 0), (float4)(fin[i], 0.0f, 0.0f, 1.0f));
+            write_imagei(idst, (int4)(i, 0, 1, 0), (int4)(i));
+            write_imageui(udst, i, (uint4)(1u));
+        }
+        """
+    opencl_path = tmp_path / "write_image.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    hlsl = crosstl.translate(str(opencl_path), backend="directx", format_output=False)
+
+    assert "write_image" not in hlsl
+    assert "RWTexture2D<float4> dst;" in hlsl
+    assert "RWTexture3D<int" in hlsl
+    assert "RWBuffer<uint" in hlsl
+    assert "dst[int2(i, 0)] = float4(fin[i], 0.0, 0.0, 1.0);" in hlsl
+    assert "idst[int4(i, 0, 1, 0).xyz] = int4(i, i, i, i);" in hlsl
+    assert "udst[i] = uint4(1u, 1u, 1u, 1u);" in hlsl
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    "source, reason",
+    [
+        (
+            """
+            kernel void k(global float4 *v, write_only image2d_t tex) {
+                write_imagef(tex, (int2)(0, 0), 1, v[0]);
+            }
+            """,
+            "write_imagef with 4 arguments",
+        ),
+        (
+            """
+            kernel void k(global float *v, write_only image2d_depth_t tex) {
+                write_imagef(tex, (int2)(0, 0), v[0]);
+            }
+            """,
+            "writing to image2d_depth_t: CrossGL has no depth storage image",
+        ),
+        (
+            """
+            kernel void k(global float4 *v, write_only image2d_t tex) {
+                write_imagef(tex, (int2)(0, 0), v[0]);
+                write_imagei(tex, (int2)(0, 1), (int4)(1));
+            }
+            """,
+            "write_imagei on tex of type image2D",
+        ),
+        (
+            """
+            void put(write_only image2d_t t, int4 v) {
+                write_imagei(t, (int2)(0, 0), v);
+            }
+            kernel void k(global int4 *v, write_only image2d_t tex) {
+                put(tex, v[0]);
+            }
+            """,
+            "write_imagei on parameter t of helper function put",
+        ),
+    ],
+)
+def test_opencl_write_image_refuses_writes_imagestore_cannot_keep(source, reason):
+    with pytest.raises(OpenCLImageWriteUnsupportedError, match=reason):
+        generate_crossgl(source)
 
 
 def test_pocl_statement_expression_macro_block_codegen_reparse():

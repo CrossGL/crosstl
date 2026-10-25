@@ -71,6 +71,12 @@ class OpenCLFenceScopeUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-fence-scope-unsupported"
 
 
+class OpenCLImageWriteUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``write_image*`` call that no CrossGL ``imageStore`` keeps."""
+
+    code = CODE_PREFIX + "opencl-image-write-unsupported"
+
+
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
@@ -176,7 +182,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "clk_event_t": "u64",
         "image1d_t": "image1D",
         "image1d_array_t": "image1DArray",
-        "image1d_buffer_t": "image1D",
+        "image1d_buffer_t": "imageBuffer",
         "image2d_t": "image2D",
         "image2d_array_t": "image2DArray",
         "image2d_depth_t": "image2D",
@@ -836,6 +842,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            image_write = self.format_opencl_image_write(func_name, raw_args)
+            if image_write is not None:
+                return image_write
             if is_conversion_name(func_name) and len(raw_args) == 1:
                 return format_conversion(
                     func_name, self.visit(raw_args[0]), self.convert_hip_type_to_crossgl
@@ -886,6 +895,75 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                     f"{func_name} with {scope}: CrossGL has no {func_name} "
                     "lowering that orders memory at that scope"
                 )
+
+    # OpenCL images carry no element type; the write function names it, so an
+    # image written with write_imagei or write_imageui is an integer image.
+    OPENCL_IMAGE_WRITE_PREFIXES = {
+        "write_imagef": "image",
+        "write_imagei": "iimage",
+        "write_imageui": "uimage",
+    }
+    OPENCL_IMAGE_STORE_SHAPES = {"1D", "1DArray", "Buffer", "2D", "2DArray", "3D"}
+    # OpenCL addresses 3D images and 2D image arrays with an int4 coordinate;
+    # imageStore takes the three components the image has.
+    OPENCL_IMAGE_INT4_COORD_SHAPES = {"3D", "2DArray"}
+    OPENCL_DEPTH_IMAGE_TYPES = {"image2d_depth_t", "image2d_array_depth_t"}
+
+    def opencl_image_write_prefix(self, func_name):
+        if not isinstance(func_name, str) or self.is_user_defined_function(func_name):
+            return None
+        return self.OPENCL_IMAGE_WRITE_PREFIXES.get(func_name)
+
+    def get_resource_object_call_hint(self, function_name, args=None):
+        prefix = self.opencl_image_write_prefix(function_name)
+        if prefix is not None:
+            return 0, prefix
+        return super().get_resource_object_call_hint(function_name, args)
+
+    def convert_hip_resource_object_base_type(self, hip_type, hint):
+        if hint not in self.OPENCL_IMAGE_WRITE_PREFIXES.values():
+            return super().convert_hip_resource_object_base_type(hip_type, hint)
+        hip_type = self.strip_type_qualifiers(hip_type)
+        if hip_type in self.OPENCL_DEPTH_IMAGE_TYPES:
+            raise OpenCLImageWriteUnsupportedError(
+                f"writing to {hip_type}: CrossGL has no depth storage image"
+            )
+        image_type = self.OPENCL_SCALAR_TYPE_MAPPING.get(hip_type, "")
+        if not image_type.startswith("image"):
+            return None
+        return hint + image_type[len("image") :]
+
+    def format_opencl_image_write(self, func_name, args):
+        """Lower write_image{f,i,ui}(image, coord, color) to imageStore."""
+        prefix = self.opencl_image_write_prefix(func_name)
+        if prefix is None:
+            return None
+        if len(args) != 3:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} with {len(args)} arguments: only "
+                f"{func_name}(image, coord, color) has an imageStore lowering"
+            )
+        image, coord, color = args
+        image_name = image if isinstance(image, str) else getattr(image, "name", None)
+        image_type = (self.lookup_variable_type(image_name) if image_name else "") or ""
+        shape = image_type[len(prefix) :] if image_type.startswith(prefix) else None
+        if shape not in self.OPENCL_IMAGE_STORE_SHAPES:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} on {image_name or 'an image expression'} of type "
+                f"{image_type or 'unknown'}: {func_name} needs an {prefix}* image "
+                "(an image written with more than one of write_imagef, "
+                "write_imagei and write_imageui has no single type)"
+            )
+        if prefix != "image" and self.opencl_current_function_name is not None:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} on parameter {image_name} of helper function "
+                f"{self.opencl_current_function_name}: an integer image type is "
+                "inferred from the writes in the kernel that declares the image"
+            )
+        rendered_coord = self.visit(coord)
+        if shape in self.OPENCL_IMAGE_INT4_COORD_SHAPES:
+            rendered_coord = f"({rendered_coord}).xyz"
+        return f"imageStore({self.visit(image)}, {rendered_coord}, {self.visit(color)})"
 
     def emit_statement(self, stmt):
         if self.is_opencl_prefetch_call(stmt):

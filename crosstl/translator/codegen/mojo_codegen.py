@@ -1208,6 +1208,15 @@ MOJO_GPU_BUILTIN_PARAMETER_ORDER = (
     "block_dim_uint",
 )
 
+MOJO_VECTOR_COMPARISON_METHODS = {
+    "<": "lt",
+    "<=": "le",
+    ">": "gt",
+    ">=": "ge",
+    "==": "eq",
+    "!=": "ne",
+}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -8824,6 +8833,9 @@ class MojoCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
+            comparison = self.generate_vector_comparison(expr)
+            if comparison is not None:
+                return comparison
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
@@ -8946,6 +8958,10 @@ class MojoCodeGen:
                     self.mojo_identifier(func_name) if func_name is not None else callee
                 )
                 return f"{call_name}({args})"
+
+            reduction = self.generate_boolean_vector_reduction(func_name, expr.args)
+            if reduction is not None:
+                return reduction
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, expr.args
@@ -12548,6 +12564,54 @@ class MojoCodeGen:
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
 
+    def vector_comparison_info(self, op, left_type, right_type):
+        if self.map_operator(op) not in MOJO_VECTOR_COMPARISON_METHODS:
+            return None
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None and right_info is not None and left_info != right_info:
+            raise ValueError(
+                "Mojo vector comparison requires matching element types and widths"
+            )
+        return left_info or right_info
+
+    def generate_vector_comparison(self, expr):
+        info = self.vector_comparison_info(
+            expr.op,
+            self.expression_result_type(expr.left),
+            self.expression_result_type(expr.right),
+        )
+        if info is None:
+            return None
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left, info[0], "vector comparison"
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right, info[0], "vector comparison"
+        )
+        if self.vector_type_info(self.expression_result_type(expr.left)) is None:
+            left = f"SIMD[{info[0]}, {info[2]}]({left})"
+        method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
+        return f"({left}).{method}({right})"
+
+    def generate_boolean_vector_reduction(self, name, args):
+        if name not in {"any", "all"} or len(args) != 1:
+            return None
+        info = self.vector_type_info(self.expression_result_type(args[0]))
+        if info is None or info[0] != "DType.bool":
+            return None
+        mask = self.generate_expression(args[0])
+        if info[1] != info[2]:
+            # Three-lane vectors use four storage lanes. Ignore padding without
+            # evaluating a side-effecting argument more than once.
+            used, padding, op = (
+                ("True", "False", "&") if name == "any" else ("False", "True", "|")
+            )
+            lanes = ", ".join([used] * info[1] + [padding] * (info[2] - info[1]))
+            mask = f"({mask} {op} SIMD[DType.bool, {info[2]}]({lanes}))"
+        reduction = "reduce_or" if name == "any" else "reduce_and"
+        return f"({mask}).{reduction}()"
+
     def generate_vector_binary_op(self, expr):
         op = self.map_operator(expr.op)
         if op not in MOJO_VECTOR_ARITHMETIC_OPS:
@@ -14814,6 +14878,10 @@ class MojoCodeGen:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            if func_name in {"any", "all"} and not self.is_user_defined_function(
+                func_name
+            ):
+                return "bool"
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type is not None:
                 return numeric_result_type
@@ -15096,6 +15164,9 @@ class MojoCodeGen:
         return None
 
     def binary_expression_result_type(self, op, left_type, right_type):
+        comparison = self.vector_comparison_info(op, left_type, right_type)
+        if comparison is not None:
+            return self.vector_type_name_for_dtype_width("DType.bool", comparison[1])
         left_info = self.vector_type_info(left_type)
         right_info = self.vector_type_info(right_type)
         mapped_op = self.map_operator(op)

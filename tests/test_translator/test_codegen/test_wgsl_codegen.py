@@ -3340,3 +3340,55 @@ def test_two_argument_atan_lowers_to_atan2(tmp_path):
     assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
     assert "atan(a0, a0)" not in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_maps_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="wgsl",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "fwidthFine(input.uv) + fwidthCoarse(input.uv)" in generated
+    assert "fwidth_fine(" not in generated
+    assert "fwidth_coarse(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize("name", ["fwidth_fine", "ddx_fine", "dFdx"])
+def test_wgsl_user_function_with_derivative_name_is_not_mapped(tmp_path, name):
+    shader = f"""
+    shader DerivativeShadowing {{
+        float {name}(float value) {{
+            return value + 1.0;
+        }}
+
+        fragment {{
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {{
+                float shifted = {name}(value);
+                return vec4(shifted, 0.0, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"fn {name}(value: f32) -> f32" in generated
+    assert f"var shifted: f32 = {name}(value);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
