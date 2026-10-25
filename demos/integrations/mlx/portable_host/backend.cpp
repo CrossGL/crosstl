@@ -4376,5 +4376,7 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_gather_mm.inc"
 // So does the port of SegmentedMM, which shares its dispatch helper.
 #include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"
+// So does the port of BlockMaskedMM's masked products.
+#include "mlx/backend/no_gpu/crosstl_block_masked_mm.inc"
 // And the port of the general Scatter, which tiles and orders its launches.
 #include "mlx/backend/no_gpu/crosstl_scatter.inc"

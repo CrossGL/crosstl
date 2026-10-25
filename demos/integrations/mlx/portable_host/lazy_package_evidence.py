@@ -1,9 +1,9 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
 Scans, small row reductions, small column reductions, GEMV, dot-product,
-steel GEMM, split-K GEMM, GatherMM and SegmentedMM kernels are translated from
-the pinned sources on first use, so
-no static index lists their packages. Each dispatch is checked by deriving its
+steel GEMM, split-K GEMM, GatherMM, SegmentedMM and BlockMaskedMM kernels are
+translated from the pinned sources on first use, so no static index lists
+their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
 metadata, and by comparing the recorded artifact with the unchanged cached
 source. Scans and matrix kernels run through the source-specialized executor,
@@ -16,6 +16,7 @@ import hashlib
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    block_masked_mm_layout,
     column_small_layout,
     dot_layout,
     gather_mm_layout,
@@ -25,6 +26,12 @@ from demos.integrations.mlx.portable_host import (
     gemv_layout,
     scan_layout,
     segmented_mm_layout,
+)
+from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
+    MASKED_MM_CACHE,
+    MASKED_MV_CACHE,
+    MaskedMmPackageCache,
+    MaskedMvPackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -73,8 +80,10 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
 
 # Matrix kernels: one package per entry, launched by the source-specialized
 # executor like scans. The first matching prefix names the family, so the
-# gathered gemv prefixes precede GEMV's.
+# gathered and masked gemv prefixes precede GEMV's.
 MATRIX_FAMILIES = {
+    "masked-mv": block_masked_mm_layout.GEMV_PREFIXES,
+    "masked-mm": block_masked_mm_layout.GEMM_PREFIXES,
     "gather-mv": gather_mv_layout.ENTRY_PREFIXES,
     "gather-mm": gather_mm_layout.ENTRY_PREFIXES,
     "gather-mm-offsets": (gather_mm_layout.OFFSETS_ENTRY,),
@@ -125,6 +134,12 @@ class LazyPackages:
             ),
             "segmented-mm": SegmentedMmPackageCache(
                 mlx_root, packages / SEGMENTED_MM_CACHE, target
+            ),
+            "masked-mv": MaskedMvPackageCache(
+                mlx_root, packages / MASKED_MV_CACHE, target
+            ),
+            "masked-mm": MaskedMmPackageCache(
+                mlx_root, packages / MASKED_MM_CACHE, target
             ),
             "scan": ScanPackageCache(mlx_root, packages / "scans", target),
             "small-row": SmallRowPackageCache(

@@ -647,6 +647,8 @@ def test_runtime_and_host_adapter_route_normalization():
         '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"\n'
         "// So does the port of SegmentedMM, which shares its dispatch helper.\n"
         '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"\n'
+        "// So does the port of BlockMaskedMM's masked products.\n"
+        '#include "mlx/backend/no_gpu/crosstl_block_masked_mm.inc"\n'
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
         '#include "mlx/backend/no_gpu/crosstl_scatter.inc"'
     )

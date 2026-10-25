@@ -848,6 +848,50 @@ python -m demos.integrations.mlx.portable_host.verify_segmented_mm \
   --mlx-root mlx-upstream --packages host-packages --output-dir segmented-mm
 ```
 
+## Floating-Point BlockMaskedMM
+
+`BlockMaskedMM::eval_gpu`, which `mx.block_masked_mm` and its gradients
+reach, lives in `block_masked_mm.inc` and follows matmul.cpp: a product with
+one output row or column runs `gemv_masked` or `gemv_t_masked` from
+gemv_masked.metal, every other one the steel `block_masked_gemm` of
+steel_gemm_masked.metal with square `block_size` tiles, 16-element K steps
+and 2x2 simdgroups. Kernel names carry the mask types (`bool_`, the element
+type or `nomask`) as matmul.cpp builds them, so a mask of the element type
+also scales its blocks. matmul.cpp binds no buffer for an absent mask, and
+the dispatcher fills that binding with words the kernel never reads. Two
+layout choices differ from matmul.cpp without changing a value: operands and
+masks with negative strides are copied first, and the batch strides come
+from the arrays the launch binds. matmul.cpp takes them from the inputs
+before `check_transpose` copies an operand, which misreads a copied operand
+broadcast over an inner batch axis.
+
+gemv_masked.metal instantiates no `gemv_t` tile for fewer than four outputs
+at the two simdgroup columns matmul.cpp asks for, so MLX cannot run such a
+product; the host refuses it before any launch, naming the missing kernel.
+
+`block_masked_mm_layout.py` checks each launch against matmul.cpp's routing
+and proves that every operand element and every mask value the kernel can
+index lies inside its buffer, including `gemv_t_masked`'s output mask, which
+it reads by block index without the strides matmul.cpp binds. Entries
+translate into the `masked-mv` and `masked-mm` caches with the options of
+`test_current_gemv_masked` and `test_current_gemm_masked`.
+
+The `MLX quantized host` jobs translate the verification entries three at a
+time and then run `verify_block_masked_mm.py` through `mx.block_masked_mm`.
+Its 16 cases cover every element type, both block sizes, every steel
+transposition, alignment and mask pairing, `gemv` and `gemv_t` with and
+without a broadcast batch grid, copied operands, the uninstantiated `gemv_t`
+tile, an empty contraction and an empty output. Every output must match the
+exact float64 reference bit for bit, and float32 outputs must also equal
+MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.block_masked_mm_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_block_masked_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir block-masked-mm
+```
+
 ## Block Quantization
 
 The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization

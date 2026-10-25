@@ -177,6 +177,8 @@ def test_matrix_caches_are_derived_per_entry(tmp_path):
             get=lambda entry, name=name: requested.append((name, entry)) or ("d", "p")
         )
     entries = [
+        "gemv_t_outmask_bool__opmask_bool__float32_bm1_bn2_sm8_sn4_tm4_tn4_nc0",
+        "steel_gemm_block_outmask_nomask_opmask_bool__nn_float32_float32_bm32_bn32",
         "gemv_t_gather_float32_bm1_bn8_sm1_sn32_tm4_tn4",
         "steel_gather_mm_rhs_nt_float32_float32_bm16_bn64_bk16_wm1_wn2",
         "gather_mm_offsets",

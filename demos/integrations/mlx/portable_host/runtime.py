@@ -31,6 +31,8 @@ from demos.integrations.mlx.portable_host import (
     arg_reduce_dispatch,
     arg_reduce_layout,
     bfloat_storage,
+    block_masked_mm_dispatch,
+    block_masked_mm_layout,
     column_reduction_layout,
     column_small_layout,
     compiled_dispatch,
@@ -82,6 +84,12 @@ from demos.integrations.mlx.portable_host.arg_reduce_packages import (
 )
 from demos.integrations.mlx.portable_host.arg_reduce_packages import (
     ArgReducePackageCache,
+)
+from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
+    MASKED_MM_CACHE,
+    MASKED_MV_CACHE,
+    MaskedMmPackageCache,
+    MaskedMvPackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -578,6 +586,21 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # BlockMaskedMM's masked gemv and masked steel GEMM kernels.
+        self.masked_mvs = (
+            MaskedMvPackageCache(
+                mlx_root, self.directory / MASKED_MV_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.masked_mms = (
+            MaskedMmPackageCache(
+                mlx_root, self.directory / MASKED_MM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -791,6 +814,9 @@ class HostRuntime:
             ):
                 divmod_signature(name)
                 return 1
+            if name.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
+                kind = block_masked_mm_layout.kind_of(name)
+                return int(block_masked_mm_dispatch.cache_for(self, kind) is not None)
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
@@ -1006,6 +1032,10 @@ class HostRuntime:
                 count,
                 threads,
                 launch,
+            )
+        if entry.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
+            return block_masked_mm_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
             )
         if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
             return gather_mm_dispatch.dispatch(

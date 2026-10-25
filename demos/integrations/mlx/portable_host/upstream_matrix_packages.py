@@ -1,7 +1,7 @@
 """Translate the matrix kernels an upstream op group reaches ahead of its run.
 
 The upstream op host translates GEMV, dot-product, steel GEMM, split-K,
-GatherMM and SegmentedMM kernels on first use, one at a time. Each BLAS group
+GatherMM, SegmentedMM and BlockMaskedMM kernels on first use, one at a time. Each BLAS group
 reaches dozens of them, which would leave the native worker too little of its
 deadline to run the tests. Run as a module, this translates the entries a
 group's tests dispatch into the same caches the host and the audit derive
@@ -30,11 +30,13 @@ from demos.integrations.mlx.portable_host.matmul_packages import build_record
 ORDER = (
     "gemm",
     "gemm-splitk",
+    "masked-mm",
     "gather-mm",
     "segmented-mm",
     "gather-mm-offsets",
     "dot",
     "gemv",
+    "masked-mv",
     "gather-mv",
 )
 _CACHES = {}

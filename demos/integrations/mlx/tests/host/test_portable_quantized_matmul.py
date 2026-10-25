@@ -921,7 +921,8 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         600,
         # On-demand reduction packages only record their configuration.
         120,
-        2400,
+        # Steel GEMM translation; its slowest observed run took 212 s.
+        1200,
         1800,
         1200,
         # AddMM and GatherMM verification.
@@ -929,6 +930,9 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         600,
         # SegmentedMM translation and verification.
         600,
+        600,
+        # BlockMaskedMM translation and verification.
+        1200,
         600,
     ]
     # Split-K products sum their partitions with translated column kernels.
