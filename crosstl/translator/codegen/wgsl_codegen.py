@@ -4589,23 +4589,21 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def generate_constructor(self, node):
         if node.named_arguments:
-            constructor_type = self.type_name_string(node.constructor_type)
+            # Fields come from the source declaration: the emitted name of a
+            # structure such as ``filter`` is ``filter_``.
+            struct_name = self.struct_type_name(node.constructor_type)
+            struct = self._structs_by_name.get(struct_name)
             fields = [
-                (name, member_type)
-                for (
-                    struct_name,
-                    name,
-                ), member_type in self._struct_member_types.items()
-                if struct_name == constructor_type
+                (member.name, member.member_type)
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
             ]
-            arguments = named_struct_constructor_arguments(
-                constructor_type, node, fields
-            )
+            arguments = named_struct_constructor_arguments(struct_name, node, fields)
             args = ", ".join(
                 self.generate_expression_for_target(arg, field_type)
                 for arg, field_type in arguments
             )
-            return f"{constructor_type}({args})"
+            return f"{self.type_name_string(node.constructor_type)}({args})"
         if len(node.arguments) == 1:
             narrowed = self.generate_vector_narrowing_conversion(
                 node.constructor_type, node.arguments[0]

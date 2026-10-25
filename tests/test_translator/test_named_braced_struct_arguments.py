@@ -69,3 +69,19 @@ def test_named_initializer_keeps_dynamic_buffer_values(tmp_path, backend):
     )
     output = crosstl.translate(str(source), backend=backend, format_output=False)
     assert re.search(r"Pair\(1\.0, fin\[i\]\)", output), output
+
+
+@pytest.mark.parametrize(
+    "replace,expected",
+    [
+        # WGSL reserves ``filter``, so the structure is emitted as ``filter_``.
+        (("Pair", "filter"), "filter_(1.0, 2.0)"),
+        # A builtin Option specialization adds member types of its own.
+        (("Pair q =", "Option<int> m = Option::None; Pair q ="), "Pair(1.0, 2.0)"),
+    ],
+)
+def test_wgsl_named_initializer_reads_the_declared_fields(tmp_path, replace, expected):
+    source = tmp_path / "declared-fields.cgl"
+    source.write_text(SOURCE.replace(*replace).replace("FIELDS", "b: 2.0, a: 1.0"))
+    output = crosstl.translate(str(source), backend="wgsl", format_output=False)
+    assert expected in output, output
