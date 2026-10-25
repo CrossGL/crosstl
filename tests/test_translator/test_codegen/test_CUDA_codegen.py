@@ -25,6 +25,7 @@ from crosstl.translator.ast import (
     WaveOpNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -3964,6 +3965,133 @@ class TestCudaCodeGen:
         assert " rsqrt(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_64bit_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    double d = 1.0;
+                    int64_t l = 1;
+                    int64_t bits = doubleBitsToLong(d);
+                    double fromBits = longBitsToDouble(l);
+                    double roundTrip = longBitsToDouble(doubleBitsToLong(d));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "bits = __double_as_longlong(d);" in cuda_code
+        assert "fromBits = __longlong_as_double(l);" in cuda_code
+        round_trip = "roundTrip = __longlong_as_double(__double_as_longlong(d));"
+        assert round_trip in cuda_code
+        assert "doubleBitsToLong" not in cuda_code
+        assert "longBitsToDouble" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            (
+                "dvec2 v = dvec2(1.0, 2.0);",
+                "int64_t bits = doubleBitsToLong(v);",
+                "doubleBitsToLong of double2",
+            ),
+            (
+                "i64vec2 v = i64vec2(1, 2);",
+                "double value = longBitsToDouble(v);",
+                "longBitsToDouble of i64vec2",
+            ),
+        ],
+    )
+    def test_64bit_bitcast_of_a_vector_is_refused(self, declaration, call, reason):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    {call}
+                }}
+            }}
+        }}
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match=reason) as refusal:
+            CudaCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.cuda-lowering-unsupported"
+
+    @pytest.mark.parametrize(
+        "source_code",
+        [
+            """
+            shader TestShader {
+                compute {
+                    void main() {
+                        int mode = 1;
+                        dvec2 v = dvec2(1.0, 2.0);
+                        int64_t bits = 0;
+                        match mode {
+                            0 => {
+                                bits = doubleBitsToLong(v);
+                            }
+                            _ => {
+                                bits = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            """,
+            """
+            shader TestShader {
+                compute {
+                    void main() {
+                        int mode = 1;
+                        dvec2 v = dvec2(1.0, 2.0);
+                        int64_t bits = match mode {
+                            0 => doubleBitsToLong(v),
+                            _ => int64_t(1),
+                        };
+                    }
+                }
+            }
+            """,
+            """
+            shader TestShader {
+                int64_t pick(int mode, dvec2 v) {
+                    return match mode {
+                        0 => doubleBitsToLong(v),
+                        _ => int64_t(1),
+                    };
+                }
+
+                compute {
+                    void main() {
+                        int64_t bits = pick(1, dvec2(1.0, 2.0));
+                    }
+                }
+            }
+            """,
+        ],
+        ids=["statement", "expression", "return"],
+    )
+    def test_cuda_lowering_refusal_inside_a_match_arm_is_raised(self, source_code):
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(CudaLoweringRefused, match="doubleBitsToLong of double2"):
+            CudaCodeGen().generate(ast)
+
     def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
         source_code = """
         shader TestShader {
@@ -4225,6 +4353,10 @@ class TestCudaCodeGen:
                 return value + 14u;
             }
 
+            uint countLeadingZeros(uint value) {
+                return value + 15u;
+            }
+
             compute {
                 void main(uint3 tid @ gl_GlobalInvocationID) {
                     uint a = bitCount(tid.x);
@@ -4235,6 +4367,7 @@ class TestCudaCodeGen:
                     uint f = firstbitlow(tid.z);
                     uint g = findMSB(tid.x);
                     uint h = firstbithigh(tid.y);
+                    uint k = countLeadingZeros(tid.z);
                 }
             }
         }
@@ -4242,6 +4375,8 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+        assert "__device__ uint countLeadingZeros(uint value)" in cuda_code
+        assert "uint k = countLeadingZeros(" in cuda_code
         assert "__device__ uint bitCount(uint value)" in cuda_code
         assert "__device__ uint countbits(uint value)" in cuda_code
         assert "__device__ uint bitfieldReverse(uint value)" in cuda_code
@@ -4262,6 +4397,38 @@ class TestCudaCodeGen:
         assert "__brev(" not in cuda_code
         assert "__ffs(" not in cuda_code
         assert "__clz(" not in cuda_code
+
+    def test_count_leading_zeros_lowers_to_cuda_clz_intrinsics(self, tmp_path):
+        source_code = """
+        shader Clz {
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* uin;
+                buffer int* outp;
+
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    int a0 = int(uin[i]);
+                    uint64_t w = uint64_t(uin[i]);
+                    int r = countLeadingZeros(a0);
+                    int r64 = countLeadingZeros(w);
+                    int cast64 = countLeadingZeros(u64(i));
+                    ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                    outp[i] = r + r64 + cast64 + v.x;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int r = __clz(a0);" in cuda_code
+        assert "int r64 = __clzll(w);" in cuda_code
+        assert "int cast64 = __clzll(static_cast<unsigned long long>(i));" in cuda_code
+        assert "make_int2(__clz(value.x), __clz(value.y))" in cuda_code
+        assert "= countLeadingZeros(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
         source_code = """
@@ -4606,6 +4773,56 @@ class TestCudaCodeGen:
         assert "float3 lo = fminf(a, b);" not in cuda_code
         assert "float3 hi = fmaxf(a, b);" not in cuda_code
         assert "float3 capped = fminf(a, nextWeight());" not in cuda_code
+
+    def test_scalar_min_max_keeps_integer_and_double_operands(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint x = gl_GlobalInvocationID.x;
+                    int y = int(x);
+                    uint a = min(x, 32u);
+                    int b = max(y, 3);
+                    uint mixed = min(y, 32u);
+                    int64_t w = 7;
+                    uint64_t uw = 7u;
+                    double d = 1.5;
+                    double wide = max(d, 2.0);
+                    float f = 0.5;
+                    float narrow = min(f, 1.0);
+                    int64_t wide64 = max(w, 3);
+                    uint64_t big = min(uw, 3u);
+                    int64_t same64 = min(w, w);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint a = min(x, 32u);" in cuda_code
+        assert "int b = max(y, 3);" in cuda_code
+        assert "uint mixed = min(static_cast<unsigned int>(y), 32u);" in cuda_code
+        assert "double wide = fmax(d, 2.0);" in cuda_code
+        assert "float narrow = fminf(f, 1.0);" in cuda_code
+        # int64_t is long on LP64 Linux, so both operands are cast to one type.
+        assert (
+            "int64_t wide64 = max(static_cast<long long>(w), "
+            "static_cast<long long>(3));" in cuda_code
+        )
+        assert (
+            "uint64_t big = min(static_cast<unsigned long long>(uw), "
+            "static_cast<unsigned long long>(3u));" in cuda_code
+        )
+        assert "int64_t same64 = min(w, w);" in cuda_code
+        assert "fminf(x, 32u)" not in cuda_code
+        assert "fmaxf(y, 3)" not in cuda_code
+        assert "fminf(d, 2.0)" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_mix_builtin_lowers_vector_cases_to_cuda_helpers(self):
         source_code = """
@@ -6938,6 +7155,108 @@ class TestCudaCodeGen:
 
         if shutil.which("nvcc") is not None:
             compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_scoped_atomics_emit_cuda_pointer_atomics(self, tmp_path):
+        source_code = """
+        shader ScopedAtomicsCUDA {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                buffer int* signedOut;
+                buffer float* floatOut;
+                void main() {
+                    shared uint2 vectorCounters[4];
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = atomicInc_block(outp[i], 7u);
+                    uint b = atomicDec_system(outp[i], 7u);
+                    uint c = atomicAdd_block(outp[i], 1u);
+                    uint d = atomicCAS_system(outp[i], a, b);
+                    int e = atomicMax_block(signedOut[i], -1);
+                    int f = atomicExch_system(signedOut[i], 2);
+                    float g = atomicAdd_system(floatOut[i], 1.0);
+                    int signedInc = atomicInc_block(signedOut[i], 1);
+                    uint missing = atomicInc_block(outp[i]);
+                    uint2 badVector = atomicAdd_system(
+                        vectorCounters[i],
+                        uint2(1u, 2u)
+                    );
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint a = atomicInc_block(&outp[i], 7u);" in cuda_code
+        assert "uint b = atomicDec_system(&outp[i], 7u);" in cuda_code
+        assert "uint c = atomicAdd_block(&outp[i], 1u);" in cuda_code
+        assert "uint d = atomicCAS_system(&outp[i], a, b);" in cuda_code
+        assert "int e = atomicMax_block(&signedOut[i], -1);" in cuda_code
+        assert "int f = atomicExch_system(&signedOut[i], 2);" in cuda_code
+        assert "float g = atomicAdd_system(&floatOut[i], 1.0);" in cuda_code
+        assert (
+            "int signedInc = /* unsupported CUDA atomic call: atomicInc_block on "
+            "int requires supported scalar uint target */ 0;" in cuda_code
+        )
+        assert (
+            "uint missing = /* unsupported CUDA atomic call: atomicInc_block "
+            "requires 2 argument(s) */ 0u;" in cuda_code
+        )
+        assert (
+            "uint2 badVector = /* unsupported CUDA atomic call: atomicAdd_system on "
+            "uint2 requires supported scalar int/uint/u64/float target */ "
+            "make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "_block(outp[" not in cuda_code
+        assert "_system(outp[" not in cuda_code
+        assert "_block(signedOut[" not in cuda_code
+        assert "_system(signedOut[" not in cuda_code
+
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        "intrinsic",
+        [
+            f"atomic{operation}{scope}"
+            for operation in (
+                "Add",
+                "Sub",
+                "Min",
+                "Max",
+                "And",
+                "Or",
+                "Xor",
+                "Inc",
+                "Dec",
+                "Exch",
+                "CAS",
+            )
+            for scope in ("_block", "_system")
+        ],
+    )
+    def test_every_scoped_atomic_takes_the_target_address(self, intrinsic):
+        operands = "a, b" if intrinsic.startswith("atomicCAS") else "a"
+        source_code = f"""
+        shader EveryScopedAtomicCUDA {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                void main() {{
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = 1u;
+                    uint b = 2u;
+                    uint old = {intrinsic}(outp[i], {operands});
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert f"uint old = {intrinsic}(&outp[i], {operands});" in cuda_code
 
     def test_plain_pointer_reference_atomics_emit_cuda_diagnostics(self, tmp_path):
         source_code = """

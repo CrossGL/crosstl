@@ -685,7 +685,7 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 position @ Out_Position;" in generated_code
+    assert "vec4 position @ gl_Position;" in generated_code
     assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
@@ -1041,7 +1041,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
 
     assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
     assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
     cgl_translator.parse(generated_code)
 
@@ -1117,7 +1117,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ Out_Position)"
+        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
@@ -4016,6 +4016,48 @@ def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests()
     assert "fwidth_fine" not in generated_code
     assert "fwidth_coarse" not in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_bit_manipulation_intrinsics_lower_to_crossgl_builtins_and_round_trip():
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint2> outp;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID)
+    {
+        uint i = id.x;
+        int2 a0 = int2(iin[i], iin[i + 1u]);
+        uint2 c = countbits(a0);
+        uint2 hi = firstbithigh(a0);
+        uint2 lo = firstbitlow(a0);
+        int2 rev = reversebits(a0);
+        uint qualified = hlsl::countbits(i) + hlsl::firstbithigh(i) + hlsl::firstbitlow(i) + hlsl::reversebits(i);
+        outp[i] = c + hi + lo + uint2(rev) + uint2(qualified, qualified);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uvec2 c = bitCount(a0);" in generated_code
+    assert "uvec2 hi = findMSB(a0);" in generated_code
+    assert "uvec2 lo = findLSB(a0);" in generated_code
+    assert "ivec2 rev = bitfieldReverse(a0);" in generated_code
+    assert (
+        "bitCount(i) + findMSB(i) + findLSB(i) + bitfieldReverse(i)" in generated_code
+    )
+    for slang_name in ("countbits(", "firstbithigh(", "firstbitlow(", "reversebits("):
+        assert slang_name not in generated_code
+
+    ast = cgl_translator.parse(generated_code)
+    from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+
+    round_tripped = SlangCodeGen().generate(ast)
+    assert "countbits(a0)" in round_tripped
+    assert "firstbithigh(a0)" in round_tripped
+    assert "firstbitlow(a0)" in round_tripped
+    assert "reversebits(a0)" in round_tripped
 
 
 def test_standalone_function_call_statement_codegen():

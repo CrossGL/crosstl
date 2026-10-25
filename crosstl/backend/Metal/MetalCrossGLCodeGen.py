@@ -12368,6 +12368,9 @@ class MetalToCrossGLConverter(
                         right = f"int({right})"
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            filled_matrix = self.generate_metal_make_filled_matrix(expr, is_main)
+            if filled_matrix is not None:
+                return filled_matrix
             profiled_constructor = self.generate_metal_half_widening_constructor(
                 expr.name, expr.args, is_main
             )
@@ -22807,6 +22810,10 @@ float {scalar}(float value) {{
             target_match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", expr.name)
             if target_match is not None:
                 return self.resolve_type_alias(target_match.group(1).strip())
+            filled_matrix_parts = self.metal_make_filled_matrix_parts(expr)
+            if filled_matrix_parts is not None:
+                element_type, columns, rows = filled_matrix_parts
+                return f"{element_type}{columns}x{rows}"
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
@@ -22906,6 +22913,76 @@ float {scalar}(float value) {{
         if width == 1:
             return element_type
         return self.metal_vector_type_from_element(element_type, width)
+
+    def metal_make_filled_matrix_template(self, expr):
+        """The template arguments of a call to the MSL ``make_filled_matrix``, else ``None``.
+
+        A user function of the same name keeps its own meaning.
+        """
+        if not isinstance(expr, FunctionCallNode) or len(expr.args) != 1:
+            return None
+        match = re.fullmatch(
+            r"(?:metal::)?make_filled_matrix<(.*)>", str(expr.name).lstrip(":").strip()
+        )
+        if match is None:
+            return None
+        bare_name = str(expr.name).split("<", 1)[0].strip()
+        if self.metal_user_function_overloads(bare_name):
+            return None
+        return match.group(1)
+
+    def metal_make_filled_matrix_parts(self, expr):
+        """``(T, Cols, Rows)`` of a ``make_filled_matrix<T, Cols[, Rows]>(value)`` call, else ``None``.
+
+        MSL 4.1 section 6.7 declares ``template <typename T, int Cols, int Rows = Cols, typename U>
+        matrix<T, Cols, Rows> make_filled_matrix(U value)``, which sets every element to ``T(value)``.
+        Only the matrices CrossGL can spell (``float`` or ``half`` elements, 2 to 4 literal columns and rows)
+        have parts.
+        """
+        template = self.metal_make_filled_matrix_template(expr)
+        if template is None:
+            return None
+        match = re.fullmatch(r"\s*([^,<>]+?)\s*,\s*(\d+)\s*(?:,\s*(\d+)\s*)?", template)
+        if match is None:
+            return None
+        element_type = self.normalized_metal_type(
+            self.resolve_type_alias(match.group(1).strip())
+        )
+        if element_type not in {"float", "half"}:
+            return None
+        columns = int(match.group(2))
+        rows = int(match.group(3)) if match.group(3) is not None else columns
+        if not (2 <= columns <= 4 and 2 <= rows <= 4):
+            return None
+        return element_type, columns, rows
+
+    def generate_metal_make_filled_matrix(self, expr, is_main=False):
+        """Lower ``make_filled_matrix<T, Cols, Rows>(value)`` to a CrossGL matrix with every element ``T(value)``.
+
+        CrossGL has no such function, and a one-argument matrix constructor sets only the diagonal, so each column
+        is the ``vec<T, Rows>`` splat of the value. A value that might have side effects is evaluated once, by
+        scaling a matrix of ones, instead of once per column. A matrix CrossGL cannot spell is refused.
+        """
+        template = self.metal_make_filled_matrix_template(expr)
+        if template is None:
+            return None
+        parts = self.metal_make_filled_matrix_parts(expr)
+        if parts is None:
+            return self.refuse_import(
+                f"Metal make_filled_matrix<{template.strip()}>: CrossGL matrices have float or half elements "
+                "and 2 to 4 columns and rows given as integer literals",
+                "0.0",
+            )
+        element_type, columns, rows = parts
+        matrix_type = self.map_type(f"{element_type}{columns}x{rows}")
+        column_type = self.map_type(f"{element_type}{rows}")
+        value = self.generate_expression(expr.args[0], is_main)
+        if self.discarded_expression_is_proven_side_effect_free(expr.args[0]):
+            column = f"{column_type}({value})"
+            return f"{matrix_type}({', '.join([column] * columns)})"
+        ones = ", ".join([f"{column_type}(1.0)"] * columns)
+        scalar_type = self.map_type(element_type)
+        return f"({matrix_type}({ones}) * {scalar_type}({value}))"
 
     def metal_constructor_result_type(self, name):
         type_name = self.normalized_metal_type(self.resolve_type_alias(str(name)))

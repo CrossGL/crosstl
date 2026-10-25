@@ -242,7 +242,7 @@ from .glsl_interface_block_io import (
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
-from .glsl_narrow_vectors import GLSLNarrowVectorMixin
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
@@ -8469,6 +8469,7 @@ class GLSLCodeGen(
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_divergent_barriers(

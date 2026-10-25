@@ -14,6 +14,7 @@ from crosstl.backend.import_refusals import (
     DirectXImportRefused,
     ImportRefused,
     MetalImportRefused,
+    SlangImportRefused,
 )
 from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -80,6 +81,11 @@ def test_import_refusals_are_typed_translation_diagnostics():
     for error_type, code, capability in (
         (DirectXImportRefused, DIRECTX_IMPORT_REFUSAL_CODE, "directx.import"),
         (MetalImportRefused, METAL_IMPORT_REFUSAL_CODE, "metal.import"),
+        (
+            SlangImportRefused,
+            "project.translate.slang-import-unsupported",
+            "slang.import",
+        ),
     ):
         error = error_type(["first reason", "second reason"])
         assert isinstance(error, ImportRefused)

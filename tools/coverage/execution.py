@@ -21,11 +21,11 @@ GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arit
 probe, or a translation that it compiles at a lower version than the translation declares, both probes run again as
 the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
 
-The harness binds one input buffer at slot 0 and one output buffer at slot 1, so only compute probes that declare one
-input buffer run; a probe whose call takes no argument declares one it never reads. When the native probe also declares
-one uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
-declare that block too. The other probes keep their validation result, and so does one that reads a clock or queries a
-ray query, because two runs of it need not agree.
+The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
+A probe whose call takes no argument declares one input it never reads. When the native probe also declares one
+uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
+declare that block too. Probes with different ordered inputs keep their validation result, and so does one that
+reads a clock or queries a ray query, because two runs of it need not agree.
 Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
 defines.
 """
@@ -110,12 +110,17 @@ def _quoted(record: dict) -> str:
     return text
 
 
+def input_buffers(source: str) -> tuple[str, ...]:
+    """Probe input names in declaration order, before their uses in the entry point."""
+    return tuple(dict.fromkeys(_INPUT.findall(source)))
+
+
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation declare one input buffer."""
+    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered inputs."""
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
-    buffers = [set(_INPUT.findall(source)) for source in result.sources]
-    return len(buffers[0]) == 1 and buffers[0] == buffers[1]
+    buffers = [input_buffers(source) for source in result.sources]
+    return bool(buffers[0]) and buffers[0] == buffers[1]
 
 
 def runnable(language: str, source: str) -> str:
@@ -271,27 +276,35 @@ def _case(identity: str, path: Path, language: str, data, constants, capture):
     )
 
 
-def declares_constants(runs_as: str, path: Path) -> bool:
+def declares_constants(runs_as: str, path: Path, *, input_count: int = 1) -> bool:
     """Whether the probe at ``path`` declares the one constants block the harness can bind, besides its buffers."""
     from tests.conformance.interface import InterfaceChanged, interface
 
     try:
-        interface(path, runs_as, 1, True)
+        interface(path, runs_as, 1, True, input_count=input_count)
     except InterfaceChanged:
         return False
     return True
 
 
-def rebinding(runs_as: str, native: Path, translated: Path, constants: bool) -> str:
+def rebinding(
+    runs_as: str,
+    native: Path,
+    translated: Path,
+    constants: bool,
+    *,
+    input_count: int = 1,
+) -> str:
     """Why the harness cannot bind the ``translated`` probe the way it binds the ``native`` one, or an empty string
     when it can, or when it cannot bind the native probe either. ``constants`` says whether both get a constants
-    block."""
+    block. ``input_count`` is the number of storage inputs the host supplies to both probes.
+    """
     from tests.conformance.interface import InterfaceChanged, interface
 
     objections = []
     for path in (native, translated):
         try:
-            interface(path, runs_as, 1, constants)
+            interface(path, runs_as, 1, constants, input_count=input_count)
             objections.append("")
         except InterfaceChanged as error:
             objections.append(str(error))
@@ -318,8 +331,7 @@ def _execute(
     rebound = {}
     assemblies = []
     for index, result in chunk:
-        [buffer] = set(_INPUT.findall(result.sources[0]))
-        data = inputs(buffer)
+        data = tuple(inputs(buffer) for buffer in input_buffers(result.sources[0]))
         if via_spirv:
             texts = [as_spirv(language, text) for text in result.sources]
             if not all(texts):
@@ -340,13 +352,13 @@ def _execute(
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
             paths.append(path)
-        block = declares_constants(runs_as, paths[0])
+        block = declares_constants(runs_as, paths[0], input_count=len(data))
         constants = CONSTANTS if block else None
         for role, path in zip(("native", "translated"), paths):
             cases.append(
                 _case(f"{index:05d}-{role}", path, runs_as, data, constants, outputs)
             )
-        rebound[index] = rebinding(runs_as, *paths, block)
+        rebound[index] = rebinding(runs_as, *paths, block, input_count=len(data))
     if not cases:
         return {}
     # SPIR-V that a compiler wrote is assembled for the oldest environment that takes its version; a SPIR-V probe,
