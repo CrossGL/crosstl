@@ -3209,6 +3209,14 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
+        if (
+            function_name == "mix"
+            and len(node.arguments) == 3
+            and not self.is_user_function_name(function_name)
+        ):
+            boolean_mix = self.generate_boolean_mix_call(node)
+            if boolean_mix is not None:
+                return boolean_mix
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)
@@ -3615,6 +3623,71 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
         upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
         return f"clamp({value_expr}, {lower}, {upper})"
+
+    def generate_boolean_mix_call(self, node):
+        """``mix(x, y, a)`` with a ``bool`` or ``bvecN`` selector as ``select(x, y, a)``.
+
+        With a boolean selector, CrossGL's ``mix`` selects (GLSL 4.60 section 8.3): each
+        component is ``y`` where ``a`` is true and ``x`` where it is false. WGSL's ``mix``
+        takes only a floating-point selector; ``select(f, t, cond)`` (WGSL section 17.3)
+        is the selecting builtin, with the same argument order and a scalar ``cond``
+        allowed for vector values. Returns ``None`` for a non-boolean selector.
+        """
+        selector_width = self.boolean_expression_width(node.arguments[2])
+        if selector_width is None:
+            return None
+        value_width = max(
+            self.vector_component_count(self.expression_type(arg)) or 1
+            for arg in node.arguments[:2]
+        )
+        if selector_width not in (1, value_width):
+            raise ValueError(
+                "WGSL target does not support mix with a "
+                f"{selector_width}-component selector and "
+                f"{value_width}-component values"
+            )
+        x, y, a = (self.generate_expression(arg) for arg in node.arguments)
+        return f"select({x}, {y}, {a})"
+
+    BOOLEAN_COMPARISON_OPERATORS = {"<", ">", "<=", ">=", "==", "!="}
+    BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS = {
+        "lessThan",
+        "lessThanEqual",
+        "greaterThan",
+        "greaterThanEqual",
+        "equal",
+        "notEqual",
+        "not",
+    }
+
+    def boolean_expression_width(self, expr):
+        """Component count of a ``bool`` or ``vecN<bool>`` expression, else ``None``."""
+        expr_type = self.expression_type(expr)
+        if self.is_bool_type(expr_type):
+            return 1
+        shape = self.vector_shape(expr_type)
+        if shape is not None:
+            return shape[1] if shape[0] == "bool" else None
+        if isinstance(expr, BinaryOpNode):
+            if expr.operator in {"&&", "||"}:
+                return 1
+            if expr.operator in self.BOOLEAN_COMPARISON_OPERATORS:
+                operand_type = self.expression_type(expr.left) or (
+                    self.expression_type(expr.right)
+                )
+                return self.vector_component_count(operand_type) or 1
+            return None
+        if isinstance(expr, UnaryOpNode) and expr.operator == "!":
+            return 1
+        if (
+            isinstance(expr, FunctionCallNode)
+            and isinstance(expr.function, IdentifierNode)
+            and expr.function.name in self.BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS
+            and expr.arguments
+            and not self.is_user_function_name(expr.function.name)
+        ):
+            return self.vector_component_count(self.expression_type(expr.arguments[0]))
+        return None
 
     def generate_clamp_bound(self, bound, vector_type_name):
         rendered = self.generate_expression(bound)
