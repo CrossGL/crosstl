@@ -813,6 +813,7 @@ from .math import (
     floor,
     frexp,
     gcd,
+    mulwide,
     rsqrt,
     sqrt,
 )
@@ -864,6 +865,14 @@ def frexp[
 
 def gcd(m: Int, n: Int, /) -> Int:
     return m
+
+
+def mulwide(a: UInt32, b: UInt32) -> UInt64:
+    return UInt64(a) * UInt64(b)
+
+
+def mulwide(a: Int32, b: Int32) -> Int64:
+    return Int64(a) * Int64(b)
 """
 
 MOJO_NUMERICS = """
@@ -913,6 +922,7 @@ def test_mojo_reads_the_functions_the_packages_export():
         "frexp",
         "gcd",
         "isnan",
+        "mulwide",
         "nan",
         "pop_count",
         "rotate_bits_left",
@@ -932,6 +942,10 @@ def test_mojo_reads_the_functions_the_packages_export():
     assert features["pop_count"].crossgl == "bitCount"
     assert features["gcd"].signature == Signature(
         Type("int64"), (Param(Type("int64")), Param(Type("int64")))
+    )
+    # UInt64 is the unsigned 64-bit scalar, and the first of the two definitions is probed.
+    assert features["mulwide"].signature == Signature(
+        Type("uint64"), (Param(Type("uint")), Param(Type("uint")))
     )
     # frexp returns a pair the probe reads the first value of, and CrossGL writes it the way GLSL does.
     assert features["frexp"].signature.result == Type.other("StaticTuple[Float32, 2]")

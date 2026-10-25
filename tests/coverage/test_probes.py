@@ -959,6 +959,7 @@ MOJO_SIGNATURES = [
     feature(
         "divmod", Type.other("Tuple[Float32, Float32]"), Type("float"), Type("float")
     ),
+    feature("mulwide", Type("uint64"), Type("uint"), Type("uint")),
 ]
 
 
@@ -968,6 +969,8 @@ def test_mojo_probe_spells_the_word_sized_int_and_reads_the_first_of_a_pair():
     assert "    var r: Int = gcd(a0, a1)\n    outp[i] = Int32(r)\n" in source
     source = probes.build(MOJO_SIGNATURES[5], "mojo").source
     assert "    var r: Float32 = frexp(a0)[0]\n    outp[i] = r\n" in source
+    source = probes.build(MOJO_SIGNATURES[7], "mojo").source
+    assert "    var r: UInt64 = mulwide(a0, a1)\n    outp[i] = UInt32(r)\n" in source
     # Only Mojo reads a pair.
     with pytest.raises(probes.ProbeError, match="Tuple"):
         probes.build(MOJO_SIGNATURES[6], "cuda")
