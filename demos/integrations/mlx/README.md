@@ -3814,9 +3814,9 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 120,044-byte GLSL artifact with
+The current FFT source now also emits a 124,401-byte GLSL artifact with
 SHA-256
-`ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c`.
+`ce27978c20089f86b6b00955503b1aede87d1ae6f7400e1adfe88961e3be77ef`.
 Resource-aggregate lowering currently retains one file-level source mapping,
 not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
 the original source path but do not yet identify individual rewritten lines.
