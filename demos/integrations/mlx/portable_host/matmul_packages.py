@@ -120,6 +120,10 @@ class TranslatedEntryCache:
         """The source entry point an entry translates; entries may add constants."""
         return entry
 
+    def source_path(self, entry):
+        """The pinned source an entry translates from."""
+        return self.SOURCE
+
     def translated_workgroup_size(self, entry, artifact):
         """The workgroup size the entry's template materialization recorded."""
         (execution,) = artifact["execution"]["entryPoints"]
@@ -146,13 +150,12 @@ class TranslatedEntryCache:
             )
 
     def _identity(self, entry):
+        source = self.source_path(entry)
         return {
             "schemaVersion": 1,
             "revision": COMMIT,
-            "source": self.SOURCE,
-            "sourceHash": (
-                hashlib.sha256((self.root / self.SOURCE).read_bytes()).hexdigest()
-            ),
+            "source": source,
+            "sourceHash": hashlib.sha256((self.root / source).read_bytes()).hexdigest(),
             "target": self.target,
             "entry": entry,
             "maximumElements": MAX_ELEMENTS,

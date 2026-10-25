@@ -4,9 +4,10 @@ Every case runs one ``mx.conv_general`` call, which ``Convolution::eval_gpu``
 routes as conv.cpp does: explicit GEMM convolutions unfold the input with
 ``naive_unfold_nd`` or ``naive_unfold_transpose_nd`` in row tiles and multiply
 each tile with the steel GEMM or its split-K kernels, fully separable 1-D
-convolutions run ``depthwise_conv_1d``, and an empty output launches nothing.
-Two cases reach routes the host does not port yet, which it refuses by name
-before any launch.
+convolutions run ``depthwise_conv_1d``, implicit GEMM convolutions run one
+``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d`` launch, and an empty
+output launches nothing. Three cases reach routes the host does not port yet,
+which it refuses by name before any launch.
 
 Inputs are nonzero quarters and weights nonzero halves, so every product and
 sum is exact in float32 and rounds once to the output type. Every output bit
@@ -153,13 +154,114 @@ CASES = (
         "dense",
         None,
     ),
-    # Routes the host does not port yet.
+    # Sixteen channels and outputs: the small-filter general-channel loader
+    # with eight-column tiles.
     (
-        "refused-implicit-2d",
+        "implicit-2d-small-filter",
         "float32",
         (1, 8, 8, 16),
         (16, 3, 3, 16),
+        dict(padding=((1, 1), (1, 1))),
+        "dense",
+        None,
+    ),
+    # Three channels, strided with uneven padding, from a copied view.
+    (
+        "implicit-2d-channels-3",
+        "float16",
+        (2, 9, 7, 3),
+        (8, 3, 3, 3),
+        dict(stride=2, padding=((1, 0), (1, 2))),
+        "moved",
+        None,
+    ),
+    # One channel with kernel dilation and flip.
+    (
+        "implicit-2d-channel-1-flipped",
+        "bfloat16",
+        (1, 10, 10, 1),
+        (5, 3, 3, 1),
+        dict(kernel_dilation=2, flip=True, padding=((2, 2), (2, 2))),
+        "dense",
+        None,
+    ),
+    # 48 outputs per group: the second 32-column tile of the last group reads
+    # sixteen weight rows past the weights.
+    (
+        "implicit-2d-grouped-partial",
+        "float32",
+        (1, 5, 6, 32),
+        (96, 3, 3, 16),
+        dict(groups=2, padding=((1, 1), (1, 1))),
+        "dense",
+        None,
+    ),
+    # conv_1D_gpu's direct implicit GEMM: one-wide 2-D parameters.
+    (
+        "implicit-1d-strided",
+        "float16",
+        (2, 30, 16),
+        (16, 5, 16),
+        dict(stride=2),
+        "dense",
+        None,
+    ),
+    # Seventeen taps: the large-filter loader.
+    (
+        "implicit-1d-large-filter",
+        "bfloat16",
+        (1, 40, 16),
+        (8, 17, 16),
         {},
+        "dense",
+        None,
+    ),
+    # 8192 rows of 64 channels: 64 x 64 tiles.
+    (
+        "implicit-2d-wide-tiles",
+        "float32",
+        (2, 64, 64, 64),
+        (64, 1, 1, 64),
+        {},
+        "dense",
+        None,
+    ),
+    (
+        "implicit-3d",
+        "float16",
+        (2, 3, 4, 5, 16),
+        (16, 2, 3, 3, 16),
+        dict(padding=((0, 1, 1), (1, 1, 1))),
+        "dense",
+        None,
+    ),
+    # 48 outputs (conv_general groups only 1-D and 2-D convolutions): the
+    # second 32-column tile reads sixteen weight rows past the weights.
+    (
+        "implicit-3d-partial",
+        "bfloat16",
+        (1, 3, 4, 5, 32),
+        (48, 2, 3, 3, 32),
+        dict(stride=(1, 2, 1), padding=((1, 1, 1), (0, 1, 1))),
+        "dense",
+        None,
+    ),
+    # Routes the host does not port yet.
+    (
+        "refused-general-2d",
+        "float32",
+        (1, 40, 40, 8),
+        (8, 3, 3, 8),
+        dict(stride=2),
+        "dense",
+        None,
+    ),
+    (
+        "refused-pad-in-channels",
+        "float16",
+        (1, 20, 20, 8),
+        (8, 3, 3, 8),
+        dict(padding=((1, 1), (1, 1))),
         "dense",
         None,
     ),
@@ -176,7 +278,6 @@ CASES = (
     ("empty-batch", "float32", (0, 9, 5), (7, 3, 5), {}, "dense", None),
 )
 UNPORTED = {
-    "implicit_gemm_conv_2D_gpu",
     "implicit_gemm_conv_2D_general_gpu",
     "depthwise_conv_2D_gpu",
     "winograd_conv_2D_gpu",
@@ -184,8 +285,8 @@ UNPORTED = {
     "pad_and_slice_conv_3D_gpu",
     "stride_two_conv_transpose_3D_gpu",
     "small_kd_conv_3D_gpu",
-    "implicit_gemm_conv_3D_gpu",
 }
+IMPLICIT_ROUTES = {"implicit_gemm_conv_2D_gpu", "implicit_gemm_conv_3D_gpu"}
 
 
 def _vector(value, spatial, default):
@@ -287,6 +388,12 @@ def case_record(case):
         return {**record, "copies": 0}
     if route == "depthwise_conv_1D_gpu":
         entry = layout.dw1_entry(dtype)
+        return {**record, "convEntries": [entry], "launches": [entry]}
+    if route in IMPLICIT_ROUTES:
+        # conv_1D_gpu dispatches its implicit GEMM with 2-D parameters.
+        entry = layout.implicit_entry(
+            layout.as_2d(params) if len(in_shape) == 3 else params, dtype
+        )
         return {**record, "convEntries": [entry], "launches": [entry]}
     groups, total = params["groups"], math.prod(shape) // params["O"]
     k = math.prod(wt_shape) // params["O"]
@@ -480,7 +587,7 @@ def _covered(records):
     ]
     return (
         set(layout.PORTED_ROUTES) <= routes
-        and len(routes & UNPORTED) >= 2
+        and len(routes & UNPORTED) >= 3
         and "none" in routes
         and {info["dtype"] for info in infos} == set(layout.DTYPES)
         and {info["spatial"] for info in infos if info["kind"] == "unfold"}
@@ -519,7 +626,9 @@ def validate_trace(trace, records, target):
             grouped = event.get("gemmMetadata", {}).get("groups")
             if grouped is not None and grouped != record["options"]["groups"]:
                 raise RuntimeError(f"Convolution groups differ: {record['name']}")
-    if not _covered(records):
+    if not _covered(records) or not any(
+        event.get("convMetadata", {}).get("weightSlack", 0) > 0 for event in trace
+    ):
         raise RuntimeError("Convolution cases do not cover every route")
 
 

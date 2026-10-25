@@ -5,15 +5,22 @@ mlx/backend/metal/conv.cpp does. Its explicit GEMM routes unfold the input
 with ``naive_unfold_nd`` (``groups == 1``) or ``naive_unfold_transpose_nd``
 and multiply the unfolded rows with the steel GEMM, whose launches
 ``gemm_layout`` checks; fully separable 1-D convolutions run
-``depthwise_conv_1d``. ``route`` mirrors conv.cpp's routing, and ``plan``
-checks every unfold and depthwise launch against it and proves each read and
-write in bounds before a translated kernel runs.
+``depthwise_conv_1d``; and the implicit GEMM routes run steel_conv's
+``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d``. ``route`` mirrors
+conv.cpp's routing, and ``plan`` checks every launch against it and proves
+each read and write in bounds before a translated kernel runs.
 
-Both kernels read only ``thread_position_in_grid`` and ``threads_per_grid``,
-so the host runs them as one-thread workgroups over conv.cpp's exact thread
-grid: Direct3D and OpenGL cannot clip the partial workgroups conv.cpp's
-``dispatch_threads`` leaves. ``depthwise_conv_1d_*_large`` serves inputs of
-more than 2^31 - 1 elements, which every host launch's bound excludes.
+The unfold and depthwise kernels read only ``thread_position_in_grid`` and
+``threads_per_grid``, so the host runs them as one-thread workgroups over
+conv.cpp's exact thread grid: Direct3D and OpenGL cannot clip the partial
+workgroups conv.cpp's ``dispatch_threads`` leaves.
+``depthwise_conv_1d_*_large`` serves inputs of more than 2^31 - 1 elements,
+which every host launch's bound excludes. The implicit GEMM kernels run with
+conv.cpp's threadgroups; their weight loaders read whole ``BN``-row tiles,
+so the last tile of the last group reads rows past the weights, which only
+feed output columns the kernel never stores. The host binds those rows as
+poisoned storage after the weights, so the translated read stays inside its
+binding.
 """
 
 import ctypes
@@ -23,6 +30,7 @@ import struct
 
 from demos.integrations.mlx.portable_host import gemv_layout
 from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
+from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 
 SOURCE = "mlx/backend/metal/kernels/conv.metal"
 MAX_ELEMENTS = gemv_layout.MAX_ELEMENTS
@@ -35,16 +43,60 @@ UNFOLD_PATTERN = re.compile(
     r"(?P<dtype>float32|float16|bfloat16)_(?P<spatial>[123])"
 )
 DW1_PATTERN = re.compile(r"depthwise_conv_1d_(?P<dtype>float32|float16|bfloat16)")
-ENTRY_PREFIXES = ("naive_unfold_", "depthwise_conv_1d_")
+ENTRY_PREFIXES = (
+    "naive_unfold_",
+    "depthwise_conv_1d_",
+    "implicit_gemm_conv_2d_",
+    "implicit_gemm_conv_3d_",
+)
 WORKGROUP = (1, 1, 1)
 # conv.metal's [[buffer(i)]] parameters, in index order.
 PARAMETERS = {
     "unfold": ("in", "out", "params", "row_offset"),
     "dw1": ("in", "w", "out", "strides", "kernel_size"),
+    # steel_conv's A, B, C, params and gemm_params.
+    "implicit": ("A", "B", "C", "params", "gemm_params"),
 }
-OUTPUT = "out"
-ARRAYS = {"unfold": ("in", "out"), "dw1": ("in", "w", "out")}
-SCALAR_TYPES = {"row_offset": "int32", "strides": "int32", "kernel_size": "int32"}
+OUTPUTS = {"unfold": "out", "dw1": "out", "implicit": "C"}
+ARRAYS = {
+    "unfold": ("in", "out"),
+    "dw1": ("in", "w", "out"),
+    "implicit": ("A", "B", "C"),
+}
+SCALAR_TYPES = {
+    "row_offset": "int32",
+    "strides": "int32",
+    "kernel_size": "int32",
+    "gemm_params": "int32",
+}
+# ImplicitGemmConv{2,3}DParams' int fields, in declaration order.
+GEMM_FIELDS = {
+    2: (
+        "M",
+        "N",
+        "K",
+        "gemm_k_iterations",
+        "inp_jump_w",
+        "inp_jump_h",
+        "inp_jump_c",
+        "tiles_n",
+        "tiles_m",
+        "swizzle_log",
+    ),
+    3: (
+        "M",
+        "N",
+        "K",
+        "gemm_k_iterations",
+        "inp_jump_w",
+        "inp_jump_h",
+        "inp_jump_d",
+        "inp_jump_c",
+        "tiles_n",
+        "tiles_m",
+        "swizzle_log",
+    ),
+}
 # sizeof(MLXConvParams<N>) in Metal's natural C layout.
 PARAMS_SIZES = {1: 120, 2: 176, 3: 224}
 # test_current_conv's OpenGL index range assertions: host preconditions that
@@ -64,11 +116,13 @@ OPENGL_INDEX_RANGE_ASSERTIONS = {
     ),
     "dw1": (),
 }
-# The routes conv.cpp's eval_gpu takes; the host runs the first three.
+# The routes of conv.cpp's eval_gpu the host runs.
 PORTED_ROUTES = (
     "explicit_gemm_conv_ND_gpu",
     "explicit_gemm_conv_group_ND_gpu",
     "depthwise_conv_1D_gpu",
+    "implicit_gemm_conv_2D_gpu",
+    "implicit_gemm_conv_3D_gpu",
 )
 
 
@@ -86,7 +140,32 @@ def signature(entry):
         match = DW1_PATTERN.fullmatch(entry)
         if match:
             return {"kind": "dw1", "transpose": False, "dtype": match["dtype"]}
+        model = steel.BY_NAME.get(entry)
+        if model is not None:
+            return {
+                "kind": "implicit",
+                "transpose": False,
+                "dtype": model.dtype,
+                "spatial": model.rank,
+                "model": model,
+            }
     raise ValueError("Unsupported convolution entry")
+
+
+def source(entry):
+    """The pinned source that instantiates ``entry``."""
+    info = signature(entry)
+    return info["model"].source if info["kind"] == "implicit" else SOURCE
+
+
+def workgroup_size(entry):
+    """The workgroup size the host launches ``entry`` with."""
+    info = signature(entry)
+    return info["model"].workgroup_size if info["kind"] == "implicit" else WORKGROUP
+
+
+def output(entry):
+    return OUTPUTS[signature(entry)["kind"]]
 
 
 def assertion_kind(entry):
@@ -295,6 +374,7 @@ def read_storage(entry, buffers):
     """
     info = signature(entry)
     names = PARAMETERS[info["kind"]]
+    out_name = OUTPUTS[info["kind"]]
     if set(buffers) != set(names):
         raise ValueError("Convolution buffers do not match the entry")
     address_limit = 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
@@ -304,6 +384,7 @@ def read_storage(entry, buffers):
         itemsize = 1 if dtype == "uint8" else ITEM_SIZES.get(dtype, 4)
         limit = {
             "params": PARAMS_SIZES.get(info.get("spatial")),
+            "gemm_params": len(GEMM_FIELDS.get(info.get("spatial"), ())),
             "row_offset": 1,
             "strides": 3,
             "kernel_size": 1,
@@ -313,7 +394,7 @@ def read_storage(entry, buffers):
             not buffer.data
             or buffer.data % itemsize
             or buffer.dtype != dtype.encode("ascii")
-            or buffer.output != int(name == OUTPUT)
+            or buffer.output != int(name == out_name)
             or type(count) is not int
             or not 1 <= count <= limit
             or buffer.data + count * itemsize > address_limit
@@ -328,12 +409,17 @@ def read_storage(entry, buffers):
             )
         else:
             values = list((ctypes.c_int32 * count).from_address(buffer.data))
-            parameters[name] = values if name == "strides" else values[0]
+            if name == "gemm_params":
+                if count != limit:
+                    raise ValueError("Convolution GEMM parameters differ in size")
+                parameters[name] = dict(zip(GEMM_FIELDS[info["spatial"]], values))
+            else:
+                parameters[name] = values if name == "strides" else values[0]
     if "strides" in parameters and len(parameters["strides"]) != 3:
         raise ValueError("depthwise_conv_1d reads three input strides")
-    low, high = spans[OUTPUT]
+    low, high = spans[out_name]
     if any(
-        other != OUTPUT and max(low, start) < min(high, end)
+        other != out_name and max(low, start) < min(high, end)
         for other, (start, end) in spans.items()
     ):
         raise ValueError("Convolution output overlaps another buffer")
@@ -409,7 +495,7 @@ def _plan_unfold(info, counts, parameters, threads, execution):
         not 0 <= row_offset < rows_total
         or row_offset + rows > rows_total
         or threads != rows * filter_size
-        or counts[OUTPUT] != threads
+        or counts["out"] != threads
     ):
         raise ValueError("Convolution unfold tile differs from conv.cpp's")
     # The largest valid read is the last input element; invalid taps write 0.
@@ -441,7 +527,7 @@ def _plan_dw1(counts, parameters, threads, execution):
         taps < 1
         or length != steps + taps - 1
         or threads != channels * steps * batches
-        or counts[OUTPUT] != threads
+        or counts["out"] != threads
     ):
         raise ValueError("depthwise_conv_1d launch differs from conv.cpp's")
     # Thread (x, y, z) reads in[z * s0 + (y + i) * s1 + x] and w[x * K + i].
@@ -457,9 +543,172 @@ def _plan_dw1(counts, parameters, threads, execution):
     }
 
 
+def implicit_entry(p, dtype):
+    """The steel_conv entry implicit_gemm_conv_{2,3}D_gpu selects for ``p``."""
+    rank = len(p["iS"])
+    c_group, o_group = p["C"] // p["groups"], p["O"] // p["groups"]
+    implicit_m = p["N"] * math.prod(p["oS"])
+    wm, wn = 2, 2
+    bm = 64 if implicit_m >= 8192 and c_group >= 64 else 32
+    bn = 64 if bm == 64 or o_group >= 64 else 32
+    if o_group <= 16:
+        bn, wm, wn = 8, 4, 1
+    channels = c_group if rank == 2 and c_group <= 4 else 0
+    small = not channels and max(p["wS"]) <= steel.SMALL_FILTER_TAPS
+    channel = "" if rank == 3 else f"_channel_{channels or 'l'}"
+    return (
+        f"implicit_gemm_conv_{rank}d_{dtype}_bm{bm}_bn{bn}_bk16_wm{wm}_wn{wn}"
+        f"{channel}_filter_{'s' if small else 'l'}"
+    )
+
+
+def implicit_gemm_params(p, model):
+    """ImplicitGemmConv{2,3}DParams as implicit_gemm_conv_{2,3}D_gpu fills them.
+
+    Each jump moves the input pointer from the last tap along one axis to the
+    first tap along the next, and ``inp_jump_c`` to the next channel block.
+    """
+    rank = model.rank
+    c_group = p["C"] // p["groups"]
+    taps = math.prod(p["wS"])
+    implicit_m = p["N"] * math.prod(p["oS"])
+    implicit_n = p["O"] // p["groups"]
+    implicit_k = taps * c_group
+    bk = model.bk
+    k_iterations = taps * -(-c_group // bk)
+    if rank == 2 and c_group <= 2:
+        k_iterations = -(-implicit_k // bk)
+    elif rank == 2 and c_group <= 4:
+        k_iterations = -(-(taps * 4) // bk)
+    sign = -1 if p["flip"] else 1
+    # The input step of one tap along each spatial axis, outermost first.
+    steps = [p["in_strides"][axis + 1] * p["kdil"][axis] for axis in range(rank)]
+    jumps = {}
+    for depth, name in enumerate(("inp_jump_w", "inp_jump_h", "inp_jump_d")[:rank]):
+        axis = rank - 1 - depth
+        inner = sum((p["wS"][a] - 1) * steps[a] for a in range(axis + 1, rank))
+        jumps[name] = sign * (steps[axis] - inner)
+    jumps["inp_jump_c"] = bk - sign * sum(
+        (p["wS"][a] - 1) * steps[a] for a in range(rank)
+    )
+    return dict(
+        M=implicit_m,
+        N=implicit_n,
+        K=implicit_k,
+        gemm_k_iterations=k_iterations,
+        **jumps,
+        tiles_n=-(-implicit_n // model.bn),
+        tiles_m=-(-implicit_m // model.bm),
+        swizzle_log=0,
+    )
+
+
+def _implicit_strides(p, shape, name):
+    """conv.cpp's contiguous strides, or conv_1D_gpu's with a zero width step."""
+    strides = contiguous(shape)
+    if p[name] == strides:
+        return True
+    rank = len(p["iS"])
+    unit = rank == 2 and p["iS"][1] == p["wS"][1] == p["oS"][1] == 1
+    return unit and p[name] == [*strides[:2], 0, strides[3]]
+
+
+def _check_implicit_params(info, p):
+    rank = info["spatial"]
+    scalars = ("N", "C", "O", "groups")
+    vectors = ("iS", "wS", "oS", "str", "pad", "kdil", "idil")
+    if (
+        any(type(p[name]) is not int for name in scalars)
+        or any(len(p[name]) != rank for name in vectors)
+        or min(p["N"], p["C"], p["O"], p["groups"]) < 1
+        or p["C"] % p["groups"]
+        or p["O"] % p["groups"]
+        or any(min(p[name]) < 1 for name in ("iS", "wS", "oS", "str", "kdil"))
+        or p["idil"] != [1] * rank
+        or min(p["pad"]) < 0
+    ):
+        raise ValueError("Convolution parameters are invalid")
+    in_shape = [p["N"], *p["iS"], p["C"]]
+    wt_shape = [p["O"], *p["wS"], p["C"] // p["groups"]]
+    out_shape = [p["N"], *p["oS"], p["O"]]
+    if not all(
+        _implicit_strides(p, shape, name)
+        for shape, name in (
+            (in_shape, "in_strides"),
+            (wt_shape, "wt_strides"),
+            (out_shape, "out_strides"),
+        )
+    ):
+        raise ValueError("Convolution strides differ from conv.cpp's contiguous arrays")
+    # The loaders form input coordinates in int.
+    for i in range(rank):
+        reach = p["oS"][i] * p["str"][i] + p["pad"][i] + p["wS"][i] * p["kdil"][i]
+        if reach > SIGNED_MAX or p["iS"][i] > SIGNED_MAX:
+            raise ValueError("Convolution coordinates exceed signed range")
+    for shape in (in_shape, wt_shape, out_shape):
+        if math.prod(shape) > MAX_ELEMENTS:
+            raise ValueError("Convolution arrays exceed their bounds")
+    return in_shape, wt_shape, out_shape
+
+
+def _plan_implicit(entry, info, counts, parameters, threads, execution):
+    p, model = parameters["params"], info["model"]
+    in_shape, wt_shape, out_shape = _check_implicit_params(info, p)
+    expected = f"implicit_gemm_conv_{model.rank}D_gpu"
+    routed = _route_2d(p) if model.rank == 2 else _route_3d(p)
+    if routed != expected:
+        raise ValueError("Convolution implicit GEMM differs from conv.cpp's routing")
+    if implicit_entry(p, info["dtype"]) != entry:
+        raise ValueError("Convolution implicit GEMM entry differs from conv.cpp's")
+    c_group = p["C"] // p["groups"]
+    if (c_group != model.channels) if model.channels else (c_group % model.bk):
+        raise ValueError("Convolution channels differ from the entry's loaders")
+    gemm = implicit_gemm_params(p, model)
+    if any(abs(value) > SIGNED_MAX for value in gemm.values()):
+        raise ValueError("Convolution GEMM parameters exceed signed range")
+    if parameters["gemm_params"] != gemm:
+        raise ValueError("Convolution GEMM parameters differ from conv.cpp's")
+    grid = [gemm["tiles_n"], gemm["tiles_m"], p["groups"]]
+    if (
+        not isinstance(execution, dict)
+        or set(execution) != {"workgroupCount", "workgroupSize"}
+        or list(execution["workgroupSize"]) != list(model.workgroup_size)
+        or list(execution["workgroupCount"]) != grid
+        or not all(1 <= value <= MAX_GROUPS for value in grid)
+    ):
+        raise ValueError("Convolution launch differs from conv.cpp's threadgroups")
+    total = math.prod(out_shape)
+    if threads != total or counts["C"] != total:
+        raise ValueError("Convolution output differs from conv.cpp's")
+    # Every input read is bounds checked. The weight loaders read K elements
+    # of each row of their group's BN-row tiles; eight-row tiles skip the rows
+    # from O on, counted from the group's first row.
+    weights = math.prod(wt_shape)
+    rows = gemm["tiles_n"] * model.bn
+    if model.bn == 8:
+        rows = min(rows, p["O"])
+    reach = ((p["groups"] - 1) * gemm["N"] + rows) * gemm["K"]
+    if (
+        counts["A"] < math.prod(in_shape)
+        or counts["B"] < weights
+        or reach > MAX_ELEMENTS
+    ):
+        raise ValueError("Convolution implicit GEMM operand exceeds its buffer")
+    return {
+        "kind": "implicit",
+        "route": expected,
+        "spatial": model.rank,
+        "groups": p["groups"],
+        "gemm": gemm,
+        "weightSlack": max(0, reach - counts["B"]),
+    }
+
+
 def plan(entry, counts, parameters, threads, execution):
     """Validate one launch against conv.cpp's routing and return its metadata."""
     info = signature(entry)
     if info["kind"] == "unfold":
         return _plan_unfold(info, counts, parameters, threads, execution)
+    if info["kind"] == "implicit":
+        return _plan_implicit(entry, info, counts, parameters, threads, execution)
     return _plan_dw1(counts, parameters, threads, execution)

@@ -1,4 +1,4 @@
-"""Convolution host routing, unfold and depthwise launch contracts and their cases."""
+"""Convolution host routing, unfold, depthwise and implicit GEMM launch contracts."""
 
 import copy
 import ctypes
@@ -19,6 +19,7 @@ from demos.integrations.mlx.portable_host import (
     upstream_matrix_packages,
 )
 from demos.integrations.mlx.portable_host import verify_conv as verify
+from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 from demos.integrations.mlx.tests.kernels import test_current_conv as gate
 
 layout = conv_layout
@@ -39,7 +40,17 @@ ROUTES = {
     "depthwise-1d": "depthwise_conv_1D_gpu",
     "depthwise-1d-pointwise-copied": "depthwise_conv_1D_gpu",
     "depthwise-1d-long": "depthwise_conv_1D_gpu",
-    "refused-implicit-2d": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-small-filter": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-channels-3": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-channel-1-flipped": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-grouped-partial": "implicit_gemm_conv_2D_gpu",
+    "implicit-1d-strided": "implicit_gemm_conv_2D_gpu",
+    "implicit-1d-large-filter": "implicit_gemm_conv_2D_gpu",
+    "implicit-2d-wide-tiles": "implicit_gemm_conv_2D_gpu",
+    "implicit-3d": "implicit_gemm_conv_3D_gpu",
+    "implicit-3d-partial": "implicit_gemm_conv_3D_gpu",
+    "refused-general-2d": "implicit_gemm_conv_2D_general_gpu",
+    "refused-pad-in-channels": "pad_in_channels_conv_2D_gpu",
     "refused-depthwise-2d": "depthwise_conv_2D_gpu",
     "empty-batch": "none",
 }
@@ -71,6 +82,8 @@ def launches(record):
     if not record["convEntries"]:
         return []
     (entry,) = record["convEntries"]
+    if record["route"] in verify.IMPLICIT_ROUTES:
+        return [implicit_launch(record)]
     points = math.prod(p["wS"])
     total = p["N"] * math.prod(p["oS"])
     rows = verify._unfold_rows(
@@ -88,6 +101,27 @@ def launches(record):
         }
         result.append((entry, counts, parameters, threads, execution))
     return result
+
+
+def implicit_launch(record):
+    """The implicit GEMM launch conv.inc makes for ``record``."""
+    (entry,) = record["convEntries"]
+    p = copy.deepcopy(record["params"])
+    if len(p["iS"]) == 1:
+        p = layout.as_2d(p)
+    model = steel.BY_NAME[entry]
+    gemm = layout.implicit_gemm_params(p, model)
+    counts = {
+        "A": math.prod(record["inShape"]),
+        "B": math.prod(record["wtShape"]),
+        "C": math.prod(record["outShape"]),
+    }
+    execution = {
+        "workgroupCount": [gemm["tiles_n"], gemm["tiles_m"], p["groups"]],
+        "workgroupSize": list(model.workgroup_size),
+    }
+    parameters = {"params": p, "gemm_params": gemm}
+    return entry, counts, parameters, counts["C"], execution
 
 
 def test_signature_names_every_ported_entry():
@@ -123,10 +157,48 @@ def test_signature_names_every_ported_entry():
         "naive_unfold_nd_float32_4",
         "naive_unfold_nd_int32_1",
         "depthwise_conv_2d_float32",
+        "implicit_gemm_conv_2d_general_float32_bm32_bn32_bk16_wm2_wn2",
+        "implicit_gemm_conv_3d_float32_bm32_bn8_bk16_wm4_wn1_channel_1_filter_l",
         None,
     ):
         with pytest.raises(ValueError, match="Unsupported"):
             layout.signature(entry)
+
+
+def test_signature_names_every_steel_conv_entry():
+    assert len(steel.BY_NAME) == 3 * 6 * (6 + 2)
+    for name, model in steel.BY_NAME.items():
+        info = layout.signature(name)
+        assert info["kind"] == "implicit" and info["model"] is model
+        assert info["dtype"] == model.dtype and info["spatial"] == model.rank
+        assert layout.source(name) == model.source
+        assert layout.workgroup_size(name) == model.workgroup_size
+        assert layout.output(name) == "C"
+        assert layout.host_parameters(name) == ("A", "B", "C", "params", "gemm_params")
+        assert layout.parameter_type(name, "gemm_params") == "int32"
+    entry = layout.unfold_entry(False, "float32", 2)
+    assert layout.source(entry) == layout.SOURCE and layout.output(entry) == "out"
+    assert layout.workgroup_size(entry) == layout.WORKGROUP
+
+
+def test_implicit_selection_matches_the_steel_conv_model():
+    """implicit_entry names what the gate's Conv.host_entry selects."""
+    convs = (
+        steel.Conv(1, (5, 6), (3, 3), 16, 8, padding=(1, 1)),
+        steel.Conv(3, (9, 8), (2, 3), 32, 48, stride=(2, 1), dilation=(1, 2)),
+        steel.Conv(1, (4, 5), (5, 4), 4, 10, groups=2, padding=(2, 1)),
+        steel.Conv(2, (64, 64), (1, 1), 64, 64),
+        steel.Conv(1, (3, 20), (1, 17), 16, 64, padding=(0, 1)),
+        steel.Conv(2, (3, 5, 4), (2, 2, 3), 32, 80, flip=True),
+        steel.Conv(1, (2, 2, 18), (1, 1, 17), 16, 8),
+    )
+    for conv in convs:
+        for dtype in layout.DTYPES:
+            model = conv.host_entry(dtype)
+            assert layout.implicit_entry(conv.params(), dtype) == model.name
+            assert layout.implicit_gemm_params(conv.params(), model) == (
+                conv.gemm_params(model)
+            )
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
@@ -301,6 +373,8 @@ def native_buffers(entry, counts, parameters):
             memory[name] = (CTYPES[dtype] * count)()
         else:
             value = parameters[name]
+            if isinstance(value, dict):
+                value = list(value.values())
             values = value if isinstance(value, list) else [value]
             memory[name] = (ctypes.c_int32 * len(values))(*values)
             count = len(values)
@@ -309,13 +383,20 @@ def native_buffers(entry, counts, parameters):
             dtype.encode(),
             ctypes.addressof(memory[name]),
             count,
-            int(name == layout.OUTPUT),
+            int(name == layout.output(entry)),
         )
     return buffers, memory
 
 
 @pytest.mark.parametrize(
-    "name", ("explicit-3d-transpose", "group-1d-unaligned", "depthwise-1d-long")
+    "name",
+    (
+        "explicit-3d-transpose",
+        "group-1d-unaligned",
+        "depthwise-1d-long",
+        "implicit-1d-strided",
+        "implicit-3d-partial",
+    ),
 )
 def test_storage_reads_every_bound_parameter(name):
     entry, counts, parameters, threads, execution = launches(BY_NAME[name])[-1]
@@ -323,20 +404,34 @@ def test_storage_reads_every_bound_parameter(name):
     read_counts, values = layout.read_storage(entry, supplied)
     assert read_counts == counts and values == parameters
     layout.plan(entry, read_counts, values, threads, execution)
+    source, output = next(iter(counts)), layout.output(entry)
     broken = dict(supplied)
-    broken.pop("in")
+    broken.pop(source)
     with pytest.raises(ValueError, match="do not match"):
         layout.read_storage(entry, broken)
     retyped = dict(supplied)
-    retyped["in"] = runtime.Buffer(b"in", b"int32", supplied["in"].data, 1, 0)
+    retyped[source] = runtime.Buffer(
+        source.encode(), b"int32", supplied[source].data, 1, 0
+    )
     with pytest.raises(ValueError, match="storage"):
         layout.read_storage(entry, retyped)
     overlapping = dict(supplied)
-    overlapping["out"] = runtime.Buffer(
-        b"out", supplied["out"].dtype, supplied["in"].data, counts["out"], 1
+    overlapping[output] = runtime.Buffer(
+        output.encode(),
+        supplied[output].dtype,
+        supplied[source].data,
+        counts[output],
+        1,
     )
     with pytest.raises(ValueError, match="overlaps"):
         layout.read_storage(entry, overlapping)
+    if "gemm_params" in supplied:
+        short = dict(supplied)
+        short["gemm_params"] = runtime.Buffer(
+            b"gemm_params", b"int32", supplied["gemm_params"].data, 9, 0
+        )
+        with pytest.raises(ValueError, match="differ in size"):
+            layout.read_storage(entry, short)
     del memory
 
 
@@ -374,6 +469,13 @@ def _descriptor(entry, target):
                 "elementType": "record",
                 "elementStrideBytes": layout.PARAMS_SIZES[info["spatial"]],
             }
+        elif name == "gemm_params":
+            fields = layout.GEMM_FIELDS[info["spatial"]]
+            scalar = {
+                "elementType": "int32",
+                "elementStrideBytes": 4 * len(fields),
+                "structMembers": [{"name": field} for field in fields],
+            }
         elif name in layout.ARRAYS[info["kind"]]:
             scalar = {"elementType": "float32", "elementStrideBytes": 4}
         else:
@@ -382,7 +484,7 @@ def _descriptor(entry, target):
             {
                 "name": f"{name}_binding",
                 "kind": "buffer",
-                "access": "read_write" if name == layout.OUTPUT else "read",
+                "access": "read_write" if name == layout.output(entry) else "read",
                 "provenance": {"sourceResource": {"parameter": name}},
                 "scalarLayout": scalar,
             }
@@ -402,7 +504,7 @@ def _descriptor(entry, target):
 def test_dispatch_binds_every_reflected_parameter(monkeypatch, target):
     entry, counts, parameters, threads, execution = launches(BY_NAME["depthwise-1d"])[0]
     supplied, memory = native_buffers(entry, counts, parameters)
-    storage = conv_dispatch._storage(entry, supplied, counts, parameters)
+    storage = conv_dispatch._storage(entry, supplied, counts, parameters, {})
     assert len(storage["out"]) == counts["out"] + conv_dispatch.GUARD_COUNT
     monkeypatch.setattr(
         conv_dispatch,
@@ -431,20 +533,83 @@ def test_dispatch_packs_the_parameter_record():
     entry, counts, parameters, threads, execution = _unfold("explicit-3d-transpose")
     binding = _descriptor(entry, "metal")["bindings"][2]
     with pytest.raises(ValueError, match="record differs"):
-        conv_dispatch._params(
+        conv_dispatch._record(
             {
                 **binding,
                 "scalarLayout": {"elementType": "record", "elementStrideBytes": 8},
             },
+            "params",
             parameters["params"],
             3,
         )
+    # MLXConvParams holds 64-bit strides, so it is never reflected as int words.
+    with pytest.raises(ValueError, match="record differs"):
+        conv_dispatch._record(
+            {
+                **binding,
+                "scalarLayout": {
+                    "elementType": "int32",
+                    "elementStrideBytes": layout.PARAMS_SIZES[3],
+                },
+            },
+            "params",
+            parameters["params"],
+            3,
+        )
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_dispatch_binds_the_implicit_gemm_parameters(monkeypatch, target):
+    record = BY_NAME["implicit-2d-grouped-partial"]
+    entry, counts, parameters, threads, execution = launches(record)[0]
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    supplied, memory = native_buffers(entry, counts, parameters)
+    storage = conv_dispatch._storage(entry, supplied, counts, parameters, metadata)
+    guard, poison = conv_dispatch.GUARD_COUNT, conv_dispatch.POISON["float32"]
+    # The poisoned weight rows past the weights, then the guards.
+    slack = metadata["weightSlack"]
+    assert slack == 16 * 144
+    assert storage["B"][counts["B"] :] == [poison] * (slack + guard)
+    assert storage["A"][counts["A"] :] == [poison] * guard
+    assert len(storage["C"]) == counts["C"] + guard
+    assert "params" not in storage and "gemm_params" not in storage
+    monkeypatch.setattr(
+        conv_dispatch,
+        "encode_binding",
+        lambda dtype, words, *_: {"dtype": dtype, "values": list(words)},
+    )
+    packed = []
+    monkeypatch.setattr(
+        conv_dispatch,
+        "pack_storage_records",
+        lambda scalar, records: packed.append(records) or [7, 8],
+    )
+    descriptor = _descriptor(entry, target)
+    inputs, observed, output, bound = conv_dispatch._inputs(
+        _Host(target), entry, descriptor, storage, parameters
+    )
+    assert packed == [[parameters["params"]]]
+    assert bound == set(layout.host_parameters(entry)) and output == "C_binding"
+    assert inputs["gemm_params_binding"] == {
+        "dtype": "int32",
+        "shape": [10],
+        "values": list(parameters["gemm_params"].values()),
+    }
+    assert inputs["params_binding"]["dtype"] == "uint32"
+    reordered = copy.deepcopy(descriptor)
+    members = reordered["bindings"][4]["scalarLayout"]["structMembers"]
+    members[0], members[1] = members[1], members[0]
+    with pytest.raises(ValueError, match="record differs"):
+        conv_dispatch._inputs(_Host(target), entry, reordered, storage, parameters)
+    del memory
 
 
 def test_packages_follow_the_conv_gate(tmp_path):
     root = Path("/pinned")
     entries = {entry for record in RECORDS for entry in record["convEntries"]}
     for entry in sorted(entries):
+        if layout.signature(entry)["kind"] == "implicit":
+            continue
         for target in ("metal", "directx", "opengl"):
             config = conv_packages.ConvPackageCache(root, tmp_path, target)
             built = config.project_config("out", entry)
@@ -480,6 +645,120 @@ def test_packages_follow_the_conv_gate(tmp_path):
     assert set(conv_packages.product_entries()) == {
         entry for record in RECORDS for entry in record["productEntries"]
     }
+
+
+def test_implicit_packages_follow_the_steel_conv_gate(tmp_path):
+    from demos.integrations.mlx.tests.kernels import (
+        test_current_steel_conv as steel_gate,
+    )
+
+    root = Path("/pinned")
+    entries = sorted(
+        entry
+        for record in RECORDS
+        for entry in record["convEntries"]
+        if layout.signature(entry)["kind"] == "implicit"
+    )
+    assert {layout.signature(entry)["spatial"] for entry in entries} == {2, 3}
+    for entry in entries:
+        model = steel.BY_NAME[entry]
+        for target in ("metal", "directx", "opengl"):
+            cache = conv_packages.ConvPackageCache(root, tmp_path, target)
+            assert cache.source_path(entry) == model.source
+            assert cache.workgroup_size(entry) == model.workgroup_size
+            built = cache.project_config("out", entry)
+            gate_config = steel_gate._config(root, "out", target, model)
+            assert built.entry_points == gate_config.entry_points
+            assert built.include_patterns == gate_config.include_patterns
+            assert built.source_options == gate_config.source_options
+            assert [item.to_json() for item in built.index_range_assertions] == [
+                item.to_json() for item in gate_config.index_range_assertions
+            ]
+            assert {
+                source: {name: tuple(map(int, size)) for name, size in rules.items()}
+                for source, rules in built.entry_workgroup_size_rules.items()
+            } == {model.source: {entry: model.workgroup_size}}
+
+
+def _implicit(name="implicit-2d-grouped-partial"):
+    return copy.deepcopy(launches(BY_NAME[name])[0])
+
+
+@pytest.mark.parametrize(
+    "fault, message",
+    (
+        (lambda c, p, e: p["params"].update(idil=[2, 1]), "invalid"),
+        (
+            lambda c, p, e: p["params"].update(
+                O=80, out_strides=layout.contiguous([1, 5, 6, 80])
+            ),
+            "routing",
+        ),
+        (lambda c, p, e: p["params"]["in_strides"].__setitem__(2, 0), "strides"),
+        (lambda c, p, e: p["params"]["wt_strides"].__setitem__(0, 1), "strides"),
+        (lambda c, p, e: p["params"].update(flip=True), "GEMM parameters"),
+        (lambda c, p, e: p["gemm_params"].update(swizzle_log=1), "GEMM parameters"),
+        (lambda c, p, e: p["gemm_params"].update(tiles_m=2), "GEMM parameters"),
+        (lambda c, p, e: e.update(workgroupSize=[32, 4, 1]), "threadgroups"),
+        (lambda c, p, e: e["workgroupCount"].__setitem__(2, 1), "threadgroups"),
+        (lambda c, p, e: e.update(threadGridSize=[1, 1, 1]), "threadgroups"),
+        (lambda c, p, e: c.update(A=c["A"] - 1), "exceeds its buffer"),
+        (lambda c, p, e: c.update(B=c["B"] - 1), "exceeds its buffer"),
+        (lambda c, p, e: c.update(C=c["C"] + 1), "output differs"),
+        (lambda c, p, e: p["params"]["str"].__setitem__(0, 2**30), "signed range"),
+    ),
+)
+def test_implicit_plan_rejects_launches_that_differ_from_conv_cpp(fault, message):
+    entry, counts, parameters, threads, execution = _implicit()
+    fault(counts, parameters, execution)
+    with pytest.raises(ValueError, match=message):
+        layout.plan(entry, counts, parameters, threads, execution)
+
+
+def test_implicit_plan_requires_the_entry_conv_cpp_names():
+    entry, counts, parameters, threads, execution = _implicit("implicit-2d-channels-3")
+    for other in (
+        entry.replace("_channel_3_", "_channel_4_"),
+        entry.replace("bm32", "bm64"),
+        entry.replace("bn8_bk16_wm4_wn1", "bn32_bk16_wm2_wn2"),
+    ):
+        with pytest.raises(ValueError, match="entry differs|channels"):
+            layout.plan(other, counts, parameters, threads, execution)
+    # conv.cpp sends a 3-D convolution of one batch with a short depth kernel
+    # to small_kd_conv_3D_gpu.
+    entry, counts, parameters, threads, execution = _implicit("implicit-3d")
+    params = copy.deepcopy(parameters["params"])
+    params["N"] = 1
+    params["in_strides"] = layout.contiguous([1, *params["iS"], params["C"]])
+    params["out_strides"] = layout.contiguous([1, *params["oS"], params["O"]])
+    with pytest.raises(ValueError, match="routing"):
+        layout.plan(entry, counts, {**parameters, "params": params}, threads, execution)
+
+
+def test_implicit_plan_bounds_the_weight_tiles():
+    slack = {}
+    for record in RECORDS:
+        if record["route"] in verify.IMPLICIT_ROUTES:
+            entry, counts, parameters, threads, execution = launches(record)[0]
+            metadata = layout.plan(entry, counts, parameters, threads, execution)
+            assert metadata["gemm"] == parameters["gemm_params"]
+            slack[record["name"]] = metadata["weightSlack"]
+    # Eight-column tiles stop at O; wider tiles read whole tiles of each group.
+    assert slack == {
+        "implicit-2d-small-filter": 0,
+        "implicit-2d-channels-3": 0,
+        "implicit-2d-channel-1-flipped": 0,
+        "implicit-2d-grouped-partial": 16 * 3 * 3 * 16,
+        "implicit-1d-strided": 0,
+        "implicit-1d-large-filter": 0,
+        "implicit-2d-wide-tiles": 0,
+        "implicit-3d": 0,
+        "implicit-3d-partial": 16 * 2 * 3 * 3 * 32,
+    }
+    # The 1-D route's width stride is conv_1D_gpu's zero.
+    _, _, parameters, _, _ = launches(BY_NAME["implicit-1d-strided"])[0]
+    assert parameters["params"]["in_strides"][2] == 0
+    assert parameters["gemm_params"]["inp_jump_w"] == 0
 
 
 def _grouped_product(name="group-2d-unaligned"):
@@ -709,8 +988,27 @@ def test_backend_ports_convolution_eval_gpu():
     )
     for route in verify.UNPORTED:
         assert f'conv_unported("{route}");' in port, route
-    for name in (*layout.PARAMETERS["unfold"], *layout.PARAMETERS["dw1"]):
+    for name in (
+        *layout.PARAMETERS["unfold"],
+        *layout.PARAMETERS["dw1"],
+        *layout.PARAMETERS["implicit"],
+    ):
         assert f'{{"{name}", ' in port, name
+    two = port[port.index("void conv_dispatch_2d(") :]
+    two = two[: two.index("\n}\n")]
+    assert two.count("return conv_implicit_gemm(in, wt, out, conv_params);") == 2
+    three = port[port.index("void conv_dispatch_3d(") :]
+    three = three[: three.index("\n}\n")]
+    assert three.index('conv_unported("small_kd_conv_3D_gpu")') < three.index(
+        "return conv_implicit_gemm(in, wt, out, p);"
+    )
+    for text in (
+        "{conv_groups(tn), conv_groups(tm), conv_groups(groups)},",
+        "{32, uint32_t(wn), uint32_t(wm)}};",
+        "int bm = implicit_M >= 8192 && C_per_group >= 64 ? 64 : 32;",
+        "int bn = (bm == 64 || implicit_N >= 64) ? 64 : 32;",
+    ):
+        assert text in port, text
     for text in (
         '"naive_unfold_nd_", in, in_tile, conv_params, row_offset, tile_rows);',
         '"naive_unfold_transpose_nd_", in, in_tile, conv_params, row_offset, tile_rows);',

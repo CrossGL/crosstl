@@ -1,10 +1,11 @@
 """Execute translated MLX convolution packages and commit guarded MLX outputs.
 
-One dispatcher serves the unfold kernels and the separable depthwise kernel.
-Each launch is checked against ``conv_layout``'s plan, run through its
-translated package with guarded outputs, and recorded in the trace before
-the MLX output changes. The steel GEMM launches of the explicit routes take
-``gemm_dispatch`` and ``gemm_splitk_dispatch``.
+One dispatcher serves the unfold kernels, the separable depthwise kernel and
+steel_conv's implicit GEMM kernels. Each launch is checked against
+``conv_layout``'s plan, run through its translated package with guarded
+outputs, and recorded in the trace before the MLX output changes. The steel
+GEMM launches of the explicit routes take ``gemm_dispatch`` and
+``gemm_splitk_dispatch``.
 """
 
 import ctypes
@@ -40,31 +41,56 @@ def is_entry(entry):
     return True
 
 
-def _storage(entry, supplied, counts, parameters):
-    """Every bound parameter's words, with guards after the array buffers."""
+def _storage(entry, supplied, counts, parameters, metadata):
+    """Every bound parameter's words, with guards after the array buffers.
+
+    The implicit GEMM weights are followed by the poisoned rows the last
+    weight tile reads past them.
+    """
     dtype = layout.signature(entry)["dtype"]
-    storage = {layout.OUTPUT: [GUARDS[dtype]] * (counts[layout.OUTPUT] + GUARD_COUNT)}
+    output = layout.output(entry)
+    storage = {output: [GUARDS[dtype]] * (counts[output] + GUARD_COUNT)}
     for name, buffer in supplied.items():
-        if name == layout.OUTPUT:
+        if name == output:
             continue
         if name in counts:
-            storage[name] = _words(buffer, dtype) + [POISON[dtype]] * GUARD_COUNT
-        elif name != "params":
+            slack = metadata.get("weightSlack", 0) if name == "B" else 0
+            storage[name] = _words(buffer, dtype) + [POISON[dtype]] * (
+                slack + GUARD_COUNT
+            )
+        elif name not in RECORDS:
             value = parameters[name]
             storage[name] = list(value) if isinstance(value, list) else [value]
     return storage
 
 
-def _params(binding, params, spatial):
-    """MLXConvParams<N> as one reflected storage record."""
+# Parameters bound as one C struct, with their sizes in bytes by rank.
+RECORDS = {
+    "params": layout.PARAMS_SIZES,
+    "gemm_params": {
+        rank: 4 * len(fields) for rank, fields in layout.GEMM_FIELDS.items()
+    },
+}
+
+
+def _record(binding, name, record, spatial):
+    """One C struct parameter as its reflected storage record or int words."""
     scalar = binding["scalarLayout"]
+    if scalar.get("elementStrideBytes") != RECORDS[name][spatial]:
+        raise ValueError(f"{LABEL} reflected parameter record differs")
+    if scalar.get("elementType") == "record":
+        words = pack_storage_records(scalar, [dict(record)])
+        return {"dtype": "uint32", "shape": [len(words)], "values": words}
+    # A record of int fields alone is reflected as its int words.
+    members = [member.get("name") for member in scalar.get("structMembers", ())]
     if (
-        scalar.get("elementType") != "record"
-        or scalar.get("elementStrideBytes") != layout.PARAMS_SIZES[spatial]
+        name != "gemm_params"
+        or scalar.get("elementType") != "int32"
+        or members != list(record)
     ):
         raise ValueError(f"{LABEL} reflected parameter record differs")
-    words = pack_storage_records(scalar, [dict(params)])
-    return {"dtype": "uint32", "shape": [len(words)], "values": words}
+    words = [record[member] for member in members]
+    return {"dtype": "int32", "shape": [len(words)], "values": words}
 
 
 def _inputs(host, entry, descriptor, storage, parameters):
@@ -86,9 +112,9 @@ def _inputs(host, entry, descriptor, storage, parameters):
         ):
             raise ValueError(f"Reflected {LABEL} binding differs from its source")
         bound.add(name)
-        if name == "params":
-            inputs[binding["name"]] = _params(
-                binding, parameters["params"], info["spatial"]
+        if name in RECORDS:
+            inputs[binding["name"]] = _record(
+                binding, name, parameters[name], info["spatial"]
             )
         else:
             inputs[binding["name"]] = encode_binding(
@@ -98,7 +124,7 @@ def _inputs(host, entry, descriptor, storage, parameters):
                 binding["scalarLayout"],
                 binding.get("kind", ""),
             )
-        if name == layout.OUTPUT:
+        if name == layout.output(entry):
             if binding.get("access") != "read_write":
                 raise ValueError(f"{LABEL} output is not writable")
             output = binding["name"]
@@ -134,7 +160,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     counts, parameters = layout.read_storage(entry, supplied)
     execution = launch.execution()
     metadata = layout.plan(entry, counts, parameters, threads, execution)
-    storage = _storage(entry, supplied, counts, parameters)
+    storage = _storage(entry, supplied, counts, parameters, metadata)
     descriptor, directory = host.convs.get(entry)
     inputs, observed, output, bound = _inputs(
         host, entry, descriptor, storage, parameters
@@ -157,14 +183,15 @@ def dispatch(host, entry, buffers, count, threads, launch):
         key: item for key, item in initial.items() if key != "values"
     }:
         raise RuntimeError(f"Native {LABEL} output layout differs")
-    size = counts[layout.OUTPUT]
+    output_name = layout.output(entry)
+    size = counts[output_name]
     words = decode(value, dtype, initial["dtype"])
     guard = GUARDS[dtype]
     if len(words) != size + GUARD_COUNT or words[size:] != [guard] * GUARD_COUNT:
         raise RuntimeError(f"Native {LABEL} output guard differs")
     itemsize = ITEM_SIZES[dtype]
     payload = struct.pack("<" + str(size) + WORD_FORMATS[itemsize], *words[:size])
-    arrays = sorted(name for name in counts if name != layout.OUTPUT)
+    arrays = sorted(name for name in counts if name != output_name)
     event = {
         "entry": entry,
         "target": host.target,
@@ -192,5 +219,5 @@ def dispatch(host, entry, buffers, count, threads, launch):
     }
     # Validate the result and persist evidence before changing the MLX output.
     write_trace(host, event)
-    ctypes.memmove(supplied[layout.OUTPUT].data, payload, len(payload))
+    ctypes.memmove(supplied[output_name].data, payload, len(payload))
     host.dispatch_count += 1

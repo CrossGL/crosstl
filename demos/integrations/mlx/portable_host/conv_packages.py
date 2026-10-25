@@ -1,10 +1,13 @@
-"""Cache translated MLX convolution entries: the unfold and separable kernels.
+"""Cache translated MLX convolution entries: unfold, separable and implicit GEMM.
 
 ``naive_unfold_nd``, ``naive_unfold_transpose_nd`` and ``depthwise_conv_1d``
 come from the pinned conv.metal with the options of its current-tree kernel
 gate (``test_current_conv``), at the one-thread workgroups conv_layout
-launches. Run as a module, it translates entries into a host package
-directory's cache ahead of execution, several processes at a time.
+launches. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
+steel_conv.metal and steel_conv_3d.metal with the options of
+``test_current_steel_conv``. Run as a module, it translates entries into a
+host package directory's cache ahead of execution, several processes at a
+time.
 """
 
 import hashlib
@@ -19,6 +22,7 @@ from demos.integrations.mlx.portable_host.matmul_packages import (
     cli,
     run_builds,
 )
+from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 
 # The directory under a host package root that HostRuntime caches entries in.
 CACHE_DIRECTORY = "conv"
@@ -28,9 +32,30 @@ CACHE_DIRECTORY = "conv"
 ADDITIVE_PROFILE = "rne-flush"
 
 
+def implicit_project_config(root, output_dir, target, entry):
+    """One steel_conv entry with the current-tree steel_conv gate's options."""
+    model = layout.signature(entry)["model"]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(model.source,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={model.source: (entry,)},
+        entry_workgroup_size_rules={model.source: {entry: model.workgroup_size}},
+        index_range_assertions=(
+            steel.index_assertions(model) if target == "opengl" else ()
+        ),
+        source_options={"metal": steel.metal_source_options()},
+    )
+
+
 def project_config(root, output_dir, target, entry):
     """One conv.metal entry with the current-tree conv gate's options."""
     info = layout.signature(entry)
+    if info["kind"] == "implicit":
+        return implicit_project_config(root, output_dir, target, entry)
     target_options = {}
     if info["kind"] == "dw1" and target in {"opengl", "directx"}:
         target_options[target] = {"binary32_additive_profile": ADDITIVE_PROFILE}
@@ -86,9 +111,11 @@ class ConvPackageCache(TranslatedEntryCache):
     def signature(self, entry):
         return layout.signature(entry)
 
+    def source_path(self, entry):
+        return layout.source(entry)
+
     def workgroup_size(self, entry):
-        layout.signature(entry)
-        return layout.WORKGROUP
+        return layout.workgroup_size(entry)
 
     def project_config(self, output_dir, entry):
         return project_config(self.root, output_dir, self.target, entry)

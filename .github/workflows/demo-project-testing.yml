@@ -4275,7 +4275,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX convolution translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX convolution translation" -- \
             python -m demos.integrations.mlx.portable_host.conv_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-conv/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-conv/conv-translation.log

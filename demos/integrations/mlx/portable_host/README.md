@@ -902,10 +902,14 @@ input with `naive_unfold_nd` in row tiles and multiplies each tile with the
 steel GEMM (or its split-K kernels, as `steel_matmul` chooses), the grouped
 `explicit_gemm_conv_group_ND_gpu` copies the weights into per-group rows,
 unfolds with `naive_unfold_transpose_nd` and multiplies all groups in one
-batched `steel_matmul_regular` launch, and `depthwise_conv_1D_gpu` runs
-`depthwise_conv_1d`. The implicit GEMM, winograd, depthwise 2-D, padded-channel
-and 3-D special routes are refused by name before any launch, and an empty
-output launches nothing.
+batched `steel_matmul_regular` launch, `depthwise_conv_1D_gpu` runs
+`depthwise_conv_1d`, and `implicit_gemm_conv_2D_gpu` and
+`implicit_gemm_conv_3D_gpu` run one steel_conv `implicit_gemm_conv_2d` or
+`implicit_gemm_conv_3d` launch with conv.cpp's tiles, loaders and helper
+parameters, including the 2-D implicit GEMM that conv_1D_gpu reaches. The
+general implicit GEMM, winograd, depthwise 2-D, padded-channel and 3-D
+special routes are refused by name before any launch, and an empty output
+launches nothing.
 
 Two launch choices differ from conv.cpp without changing a value. The unfold
 and depthwise kernels read only `thread_position_in_grid` and
@@ -916,20 +920,31 @@ tile holds at most the elements every translated launch is bounded by and at
 most 65535 rows; `MLX_CONV_UNFOLD_TILE_ROWS` still caps it as in conv.cpp.
 The host also reports no working-set size, so it refuses every product
 conv.cpp would send to winograd once `winograd_batch_step` allowed it.
+steel_conv's weight loaders read whole tiles of `BN` rows of each group, so
+when the output channels per group do not fill the last tile the last group
+reads rows past the weights; on Metal those reads land past the buffer. They
+feed only output columns the kernel never stores, and the host binds them as
+poisoned storage after the weights, so the translated reads stay inside
+their binding and no poison can reach a stored output.
 
-`conv_layout.py` mirrors conv.cpp's routing, checks each unfold and depthwise
-launch against it and proves every read and write in bounds; `gemm_layout`
-accepts the grouped product's batch strides and row pitch exactly as conv.cpp
-passes them. Entries translate into the `conv` cache with the options of
-`test_current_conv`.
+`conv_layout.py` mirrors conv.cpp's routing, checks each unfold, depthwise and
+implicit GEMM launch against it, recomputes the entry, threadgroups and
+`ImplicitGemmConv{2,3}DParams` conv.cpp chooses, and proves every read and
+write in bounds; `gemm_layout` accepts the grouped product's batch strides
+and row pitch exactly as conv.cpp passes them. Entries translate into the
+`conv` cache with the options of `test_current_conv` and, for steel_conv,
+`test_current_steel_conv`.
 
 The `MLX quantized host` jobs translate the verification entries and the GEMM
 entries they reach, then run `verify_conv.py` through `mx.conv_general`. Its
-16 cases cover every element type, every unfold rank, both explicit routes
+26 cases cover every element type, every unfold rank, both explicit routes
 with input and kernel dilation, flips, uneven padding, row tiles with a
 partial last tile, a split-K product, copied inputs, the separable kernel,
-two refused routes and an empty output. Every output must match the exact
-float64 reference bit for bit, and float32 outputs must also equal MLX's CPU
+the 1-D, 2-D and 3-D implicit GEMM routes with the general, small-filter,
+large-filter and one- and three-channel loaders, 64 x 64 tiles, partial 2-D
+grouped and 3-D tiles that read past the weights, three refused routes and an
+empty output. Every output must match the exact float64 reference bit for
+bit, and float32 outputs must also equal MLX's CPU
 backend.
 
 ```sh

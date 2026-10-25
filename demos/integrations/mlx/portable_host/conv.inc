@@ -1,13 +1,15 @@
 // Ports mlx/backend/metal/conv.cpp: Convolution::eval_gpu routes every
 // convolution as conv.cpp does. It runs the explicit GEMM routes, which unfold
 // the input with naive_unfold_nd (groups == 1) or naive_unfold_transpose_nd
-// and multiply the unfolded rows with the steel GEMM, and the separable
-// depthwise_conv_1d kernel. Every other route conv.cpp takes is refused by
-// name before any launch. Each launch binds the buffers and values conv.cpp
-// binds; conv_layout checks the unfold and depthwise launches against the
-// same routing and gemm_layout the products. crosstl_backend.cpp includes this
-// file after the matrix ports, so it shares that translation unit's steel GEMM
-// and copy helpers.
+// and multiply the unfolded rows with the steel GEMM, the separable
+// depthwise_conv_1d kernel and the implicit GEMM routes, which run
+// steel_conv's implicit_gemm_conv_2d and implicit_gemm_conv_3d. Every other
+// route conv.cpp takes is refused by name before any launch. Each launch binds
+// the buffers and values conv.cpp binds; conv_layout checks the unfold,
+// depthwise and implicit GEMM launches against the same routing and
+// gemm_layout the products. crosstl_backend.cpp includes this file after the
+// matrix ports, so it shares that translation unit's steel GEMM and copy
+// helpers.
 //
 // Two launch choices differ from conv.cpp without changing a value. The unfold
 // and depthwise kernels read only thread_position_in_grid and
@@ -16,7 +18,8 @@
 // conv.cpp's dispatch_threads leaves. The host has no maxBufferLength, so an
 // unfold tile holds at most the elements every translated launch is bounded
 // by and at most 65535 rows, the Z workgroups of one launch; conv.cpp's
-// MLX_CONV_UNFOLD_TILE_ROWS still caps it further.
+// MLX_CONV_UNFOLD_TILE_ROWS still caps it further. The implicit GEMM kernels
+// run with conv.cpp's threadgroups and parameters.
 
 #include "mlx/backend/metal/kernels/steel/conv/params.h"
 
@@ -245,6 +248,135 @@ void dispatch_depthwise_conv_1d(const array& in, const array& wt, array& out) {
   conv_launch(entry, buffers, out.size(), launch);
 }
 
+// conv.cpp's int helper parameters, refused outside int range.
+int conv_signed(int64_t value) {
+  if (value < -int64_t(INT32_MAX) || value > int64_t(INT32_MAX)) {
+    throw std::invalid_argument("CrossTL convolution exceeds its bounds.");
+  }
+  return int(value);
+}
+
+// implicit_gemm_conv_2D_gpu's ImplicitGemmConv2DParams helper values.
+steel::ImplicitGemmConv2DParams conv_implicit_params(
+    const MLXConvParams<2>& p, int M, int N, int K, int k_iters, int tn, int tm, int bk) {
+  const int64_t sign = p.flip ? -1 : 1;
+  const int64_t ijw = conv_signed(p.in_strides[2] * p.kdil[1]);
+  const int64_t ijh = conv_signed(p.in_strides[1] * p.kdil[0]);
+  return steel::ImplicitGemmConv2DParams{
+      M,
+      N,
+      K,
+      k_iters,
+      conv_signed(sign * ijw),
+      conv_signed(sign * (ijh - (p.wS[1] - 1) * ijw)),
+      conv_signed(bk - sign * (p.wS[0] - 1) * ijh - sign * (p.wS[1] - 1) * ijw),
+      tn,
+      tm,
+      0};
+}
+
+// implicit_gemm_conv_3D_gpu's ImplicitGemmConv3DParams helper values.
+steel::ImplicitGemmConv3DParams conv_implicit_params(
+    const MLXConvParams<3>& p, int M, int N, int K, int k_iters, int tn, int tm, int bk) {
+  const int64_t sign = p.flip ? -1 : 1;
+  const int64_t ijw = conv_signed(p.in_strides[3] * p.kdil[2]);
+  const int64_t ijh = conv_signed(p.in_strides[2] * p.kdil[1]);
+  const int64_t ijd = conv_signed(p.in_strides[1] * p.kdil[0]);
+  return steel::ImplicitGemmConv3DParams{
+      M,
+      N,
+      K,
+      k_iters,
+      conv_signed(sign * ijw),
+      conv_signed(sign * (ijh - (p.wS[2] - 1) * ijw)),
+      conv_signed(sign * (ijd - (p.wS[1] - 1) * ijh - (p.wS[2] - 1) * ijw)),
+      conv_signed(
+          bk - sign * (p.wS[0] - 1) * ijd - sign * (p.wS[1] - 1) * ijh -
+          sign * (p.wS[2] - 1) * ijw),
+      tn,
+      tm,
+      0};
+}
+
+// conv.cpp implicit_gemm_conv_2D_gpu and implicit_gemm_conv_3D_gpu: one
+// steel_conv launch of conv.cpp's tiles, with swizzle_log 0. The last weight
+// tile of the last group reads rows past wt, which feed only output columns
+// the kernel never stores; conv_layout binds them as poisoned storage.
+template <int N>
+void conv_implicit_gemm(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<N>& conv_params) {
+  static_assert(N == 2 || N == 3, "steel_conv instantiates 2-D and 3-D kernels");
+  const int groups = conv_params.groups;
+  const int C_per_group = conv_params.C / groups;
+  const int O_per_group = conv_params.O / groups;
+  int64_t rows = conv_params.N;
+  int64_t taps = 1;
+  for (int i = 0; i < N; ++i) {
+    rows *= conv_params.oS[i];
+    taps *= conv_params.wS[i];
+  }
+  const int implicit_M = conv_int(rows);
+  const int implicit_N = O_per_group;
+  const int implicit_K = conv_int(taps * C_per_group);
+
+  int wm = 2, wn = 2;
+  int bm = implicit_M >= 8192 && C_per_group >= 64 ? 64 : 32;
+  int bn = (bm == 64 || implicit_N >= 64) ? 64 : 32;
+  const int bk = 16;
+  if (implicit_N <= 16) {
+    bn = 8;
+    wm = 4;
+    wn = 1;
+  }
+  const int tn = (implicit_N + bn - 1) / bn;
+  const int tm = (implicit_M + bm - 1) / bm;
+
+  // steel_conv.metal's small-channel loaders serve 2-D convolutions only.
+  int n_channel_specialization = 0;
+  int gemm_k_iters = conv_int(taps * ((C_per_group + bk - 1) / bk));
+  if (N == 2 && C_per_group <= 2) {
+    gemm_k_iters = (implicit_K + bk - 1) / bk;
+    n_channel_specialization = C_per_group;
+  } else if (N == 2 && C_per_group <= 4) {
+    gemm_k_iters = conv_int((taps * 4 + bk - 1) / bk);
+    n_channel_specialization = C_per_group;
+  }
+  bool small_filter = !n_channel_specialization;
+  for (int i = 0; i < N; ++i) {
+    small_filter = small_filter && conv_params.wS[i] <= 16;
+  }
+  auto gemm_params = conv_implicit_params(
+      conv_params, implicit_M, implicit_N, implicit_K, gemm_k_iters, tn, tm, bk);
+
+  const char* storage = matmul_storage(out.dtype());
+  std::string entry = std::string("implicit_gemm_conv_") + std::to_string(N) + "d_" +
+      storage + "_bm" + std::to_string(bm) + "_bn" + std::to_string(bn) + "_bk" +
+      std::to_string(bk) + "_wm" + std::to_string(wm) + "_wn" + std::to_string(wn);
+  if (N == 2) {
+    entry += std::string("_channel_") +
+        (n_channel_specialization ? std::to_string(n_channel_specialization) : "l");
+  }
+  entry += small_filter ? "_filter_s" : "_filter_l";
+  require_entry(entry);
+
+  MLXConvParams<N> params = conv_params;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"A", storage, data(in), matmul_span(in), 0},
+      {"B", storage, data(wt), matmul_span(wt), 0},
+      {"C", storage, out.data<void>(), out.size(), 1},
+      {"params", "uint8", &params, sizeof(params), 0},
+      {"gemm_params", "int32", &gemm_params, sizeof(gemm_params) / sizeof(int32_t), 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {conv_groups(tn), conv_groups(tm), conv_groups(groups)},
+      {32, uint32_t(wn), uint32_t(wm)}};
+  conv_launch(entry, buffers, out.size(), launch);
+}
+
 // conv.cpp dispatch_conv_2D_gpu. The host has no recommendedMaxWorkingSetSize
 // for winograd_batch_step, so it refuses every product conv.cpp would send to
 // winograd once the working set allowed.
@@ -270,7 +402,7 @@ void conv_dispatch_2d(
     }
     if ((C_per_group <= 4 || C_per_group % 16 == 0) &&
         (O_per_group <= 16 || O_per_group % 16 == 0)) {
-      conv_unported("implicit_gemm_conv_2D_gpu");
+      return conv_implicit_gemm(in, wt, out, conv_params);
     }
     return conv_explicit_gemm_group(in, wt, out, conv_params);
   }
@@ -292,7 +424,7 @@ void conv_dispatch_2d(
     conv_unported("pad_in_channels_conv_2D_gpu");
   }
   if (is_idil_one && specialized_channels) {
-    conv_unported("implicit_gemm_conv_2D_gpu");
+    return conv_implicit_gemm(in, wt, out, conv_params);
   }
   if ((conv_params.C % 16 == 0 && conv_params.O % 16 == 0) || out_large) {
     conv_unported("implicit_gemm_conv_2D_general_gpu");
@@ -332,7 +464,7 @@ void conv_dispatch_3d(
     conv_unported("small_kd_conv_3D_gpu");
   }
   if (is_idil_one && mod16_channels) {
-    conv_unported("implicit_gemm_conv_3D_gpu");
+    return conv_implicit_gemm(in, wt, out, p);
   }
   conv_explicit(in, wt, out, p);
 }
