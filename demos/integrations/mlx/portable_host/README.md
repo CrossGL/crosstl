@@ -2286,6 +2286,14 @@ the class indices; the host refuses a launch with an index outside
 `[-n, n)` rather than read past its row. Every dispatch must name its cached
 package, upload its retained operands and keep its output guard; launches over
 more than 65,536 logits keep their extents and digests.
+The `conv` group runs six unchanged `test_conv` tests (`CONV_TESTS`):
+`test_conv2d_large_filter_small_channels`, `test_conv_1d_groups_flipped`,
+`test_conv_1d_with_2d`, `test_conv_general_flip_grad`, `test_conv_groups_grad`
+and `test_repeated_conv`. They reach the unfold and steel GEMM, depthwise and
+implicit GEMM routes of the convolution port (see "Convolution") and its
+gradients, and translate their kernels on demand. The other `test_conv` and
+`test_conv_transpose` tests need PyTorch, the padded-channel or small-depth
+3-D routes, or padding of more than 65,535 elements.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch, except `test_layer_norm_dim_check`, which rejects its

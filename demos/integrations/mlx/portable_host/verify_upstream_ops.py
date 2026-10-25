@@ -233,6 +233,22 @@ MODULE_TESTS = tuple(
     for name in names
 )
 
+# Convolution tests whose every route the host ports: conv1d as conv2d over
+# expand_dims views, large filters over few channels, flipped and grouped 1-D
+# convolutions, repeated convolutions and the flipped and grouped gradients,
+# which reach the unfold, depthwise and implicit GEMM routes of conv.cpp.
+CONV_TESTS = tuple(
+    "test_conv.TestConv.test_" + name
+    for name in (
+        "conv2d_large_filter_small_channels",
+        "conv_1d_groups_flipped",
+        "conv_1d_with_2d",
+        "conv_general_flip_grad",
+        "conv_groups_grad",
+        "repeated_conv",
+    )
+)
+
 UPSTREAM_TESTS = (
     tuple(
         "test_ops.TestOps." + name
@@ -454,7 +470,7 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS
+    ) + MODULE_TESTS + CONV_TESTS
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -562,6 +578,9 @@ GROUP_TESTS = {
     "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
     # The module tests run in one job; the norm sweep is the longest of them.
     "modules": MODULE_TESTS,
+    # The convolution tests translate their conv.metal, steel_conv and GEMM
+    # kernels on demand, so they run in a job of their own.
+    "conv": CONV_TESTS,
 }
 
 

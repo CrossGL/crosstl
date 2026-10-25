@@ -65,7 +65,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 207
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 213
     assert all(
         name.startswith(
             (
@@ -80,11 +80,14 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_linalg.TestLinalg.test_",
                 "test_tree.TestTreeUtils.test_",
                 "test_fft.TestFFT.test_",
+                "test_conv.TestConv.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
     )
-    assert ops.UPSTREAM_TESTS[-len(ops.MODULE_TESTS) :] == ops.MODULE_TESTS
+    assert ops.UPSTREAM_TESTS[-len(ops.MODULE_TESTS) - len(ops.CONV_TESTS) :] == (
+        ops.MODULE_TESTS + ops.CONV_TESTS
+    )
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
         | set(verify_random.UPSTREAM_TESTS)
@@ -108,7 +111,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 202 and not set(opengl) & set(excluded)
+    assert len(opengl) == 208 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -130,6 +133,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "blas-gather-blocks",
         "blas-masked",
         "modules",
+        "conv",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -182,6 +186,8 @@ def test_upstream_op_groups_partition_the_inventory():
         "test_fast.TestFast.test_cross_entropy",
     ]
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
+    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 6
+    assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     for target in ("metal", "directx", "opengl"):
         grouped = [
             name for group in ops.GROUPS for name in ops.upstream_tests(target, group)
