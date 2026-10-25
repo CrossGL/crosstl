@@ -4876,6 +4876,15 @@ class HLSLCodeGen(HlslGlslBlockRegisters, LoweringRefusalMixin, HLSLBfloat16Vect
                     node.initial_value, node.var_type
                 )
                 declaration += f" = {initializer}"
+            elif (
+                qualifier.startswith("static")
+                and getattr(node, "initial_value", None) is not None
+            ):
+                # A static global starts from its initializer, not from zero.
+                initializer = self.generate_expression_with_expected(
+                    node.initial_value, node.var_type
+                )
+                declaration += f" = {initializer}"
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
