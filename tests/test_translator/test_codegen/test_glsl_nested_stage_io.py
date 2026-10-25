@@ -79,6 +79,7 @@ def test_structure_varyings_follow_their_structure_and_link(tmp_path):
         capture_output=True,
         text=True,
         check=False,
+        cwd=tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

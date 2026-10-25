@@ -101,5 +101,6 @@ def test_mesh_pipeline_locations_compile_and_link_with_glslang(tmp_path):
         capture_output=True,
         text=True,
         check=False,
+        cwd=tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr

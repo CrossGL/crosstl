@@ -323,5 +323,11 @@ def test_imported_triangle_mesh_and_fragment_link_as_glsl(tmp_path):
         path = tmp_path / f"pipeline.{extension}"
         path.write_text(code, encoding="utf-8")
         files.append(str(path))
-    result = _run([glslang, "--target-env", "vulkan1.3", "-l", *files])
+    result = subprocess.run(
+        [glslang, "--target-env", "vulkan1.3", "-l", *files],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
