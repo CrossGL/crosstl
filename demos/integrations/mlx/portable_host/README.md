@@ -87,7 +87,7 @@ independent batches of at most 65,535 elements. Both source pointers and the
 destination pointer advance by their own storage widths, including Boolean
 comparison outputs. Shift counts are checked across the complete input before
 the first binary dispatch. Input materialization still inherits the copy limits.
-Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
+Concatenate supports every GPU dtype through destination-strided copies.
 Optional selection packages support `where` with Boolean conditions and
 float32, int32, uint32 or bool values; with the pinned source, the other GPU
 dtypes' selections translate on first use. Optional absolute-value packages extend
@@ -1049,7 +1049,16 @@ The source is copied by a translated GPU kernel before updates, preserving
 source views and updates that alias them. Index arrays may use signed or unsigned
 32-bit or 64-bit storage. One through ten index arrays, scalar indices,
 noncontiguous and broadcast updates, negative indices and repeated destinations
-are supported within the existing 65,535-element storage and rank-64 bounds.
+are supported within the general gather's storage bound of 2^28 - 33 elements
+and rank 64. The update slice runs along the launch's x axis and keeps the
+65,535-workgroup limit. Index rows beyond one launch split into rectangular
+slabs that rebase the index and update views, each with MLX's work-per-thread
+choice for its own rows. Native atomics apply contending updates in an
+unspecified order, so a float32 sum that some order would round, which the host
+checks with the same power-of-two step test as the axis-scatter audit, launches
+runs of rows that never share a destination. Every destination then receives its
+updates in index order, as the audit's replay applies them.
+`scatter.inc` holds this port.
 Negative storage strides are materialized by translated copies. Output slice
 bounds, index values, buffer spans and contiguity are checked before translation
 or native submission. The host supplies the unchanged fifteen metadata/data
@@ -2645,10 +2654,11 @@ and its base have different dtypes; it does not perform arithmetic on the CPU.
 ## Concatenation
 
 Concatenation reuses the unchanged word-copy and Boolean-copy entries in the
-93-entry base package. Source inputs retain the 65,535-element logical and physical
-span bounds. Destinations use checked signed 32-bit indices and can exceed that
-input bound. The maintained large cases and unchanged upstream test each produce
-65,536-element outputs. This does not establish arbitrary-size backend support.
+93-entry base package. Sources and destinations use the copy path's checked
+signed 32-bit indices, which split each copy into launch regions within the
+per-axis workgroup limit. The maintained large cases and unchanged upstream test
+each produce 65,536-element outputs, and the wide cases copy a 69,632-element
+input. This does not establish arbitrary-size backend support.
 
 Destination offsets, strides, allocation bounds and nonoverlapping element
 addresses are checked before submission. Overlapping source/destination spans are
@@ -2656,15 +2666,16 @@ rejected. After execution, every untouched destination element and the trailing
 guard must match the uploaded values before any host output is modified.
 Both the destination contents and copy metadata are retained in the trace.
 
-The proof runs 72 raw-payload cases across float32, int32, uint32 and bool.
+The proof runs 76 raw-payload cases across float32, int32, uint32 and bool.
 It covers both matrix axes, flattening, transposes, negative strides, broadcasts,
 empty inputs, three-input sequences and larger outputs. Float32 inputs include
 signed zero, subnormal values, infinities and NaN payloads; these are copied as
 storage words, not recomputed as floating-point values. Each native run requires
-128 workload dispatches plus the unchanged upstream
+136 workload dispatches plus the unchanged upstream
 `test_ops.TestOps.test_concatenate`, which exercises all axes and permutations.
-Four rejection controls cover missing packages, unsupported int64/uint8 storage
-and an input exceeding the per-copy bound.
+A rejection control covers a missing copy package. Every other GPU dtype,
+int64 and uint8 among them, concatenates through the lazy copies that the
+upstream op tests exercise.
 
 The upstream test's array-equality assertion requires one Boolean reduction:
 

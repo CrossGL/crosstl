@@ -516,8 +516,11 @@ def test_backend_ports_segmented_mm_eval_gpu():
         backend.rindex('#include "mlx/backend/no_gpu/crosstl_compiled.inc"') :
     ]
     assert tail.index("crosstl_gather_mm.inc") < tail.index("crosstl_segmented_mm.inc")
+    # Only the general Scatter's port follows it.
     assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"\n'
+        "// And the port of the general Scatter, which tiles and orders its launches.\n"
+        '#include "mlx/backend/no_gpu/crosstl_scatter.inc"'
     )
     start = port.index("void SegmentedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]

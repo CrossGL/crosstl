@@ -183,10 +183,11 @@ class GatherPackageCache:
 
     def get(self, entry, maximum_index):
         signature(entry)
+        # Axis scatters keep their 65535-element contract.
         capacity = (
-            gather_layout.MAX_STORAGE_ELEMENTS
-            if entry.startswith("gather")
-            else MAX_ELEMENTS
+            MAX_ELEMENTS
+            if entry.startswith("scatter_axis")
+            else gather_layout.MAX_STORAGE_ELEMENTS
         )
         if type(maximum_index) is not int or not 0 <= maximum_index < capacity:
             raise ValueError("Gather index bound exceeds the validated host contract")

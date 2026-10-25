@@ -156,6 +156,7 @@ else()
         "crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),
         "crosstl_gather_mm.inc": (HERE / "gather_mm.inc").read_bytes(),
         "crosstl_segmented_mm.inc": (HERE / "segmented_mm.inc").read_bytes(),
+        "crosstl_scatter.inc": (HERE / "scatter.inc").read_bytes(),
     }
 
 
