@@ -6,6 +6,7 @@ import pytest
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
 from tools.coverage import (
+    causes,
     execution,
     issues,
     probes,
@@ -77,11 +78,17 @@ def test_results_match_word_for_word_and_nan_matches_nan():
 
 
 def _fake_harness(
-    monkeypatch, translated_outcome, written, runtime="metal-apple", environments=None
+    monkeypatch,
+    translated_outcome,
+    written,
+    runtime="metal-apple",
+    environments=None,
+    message="",
 ):
     """Make run_suite report the native probe as run and the translation as ``translated_outcome``.
 
-    ``environments``, when given, collects the Vulkan environment of each run.
+    ``environments``, when given, collects the Vulkan environment of each run. ``message`` is what the runtime says
+    about the translation.
     """
 
     class Provided:
@@ -110,7 +117,10 @@ def _fake_harness(
                 words[:] = written
             if outcome in ("preserved", "memory-corruption"):
                 case.check(case.inputs, words)
-            records.append({"case": case.id, "runtime": runtime.id, "outcome": outcome})
+            record = {"case": case.id, "runtime": runtime.id, "outcome": outcome}
+            if role == "translated" and message:
+                record["execution"] = {"status": outcome, "message": message}
+            records.append(record)
         return records
 
     monkeypatch.setattr(harness, "run_suite", run_suite)
@@ -151,6 +161,32 @@ def test_a_translation_that_computes_otherwise_is_wrong(
     ran = outcome in ("preserved", "memory-corruption", "driver-rejected")
     assert result.runtime == ("metal-apple" if ran else "")
     assert execution.found(result.detail) == (expected == "wrong")
+
+
+def test_a_rejected_translation_quotes_the_runtime(monkeypatch):
+    errors = "".join(
+        f"0:{line}(1): error: '{line}' : syntax error\n" for line in range(2, 12)
+    )
+    message = "GLSL Compiler failed\n\ncompute_shader\n==============\n" + errors
+    _fake_harness(monkeypatch, "driver-rejected", 0, message=message)
+    [result], _ = execution.run([supported()])
+    first, _, quoted = result.detail.partition("\n")
+    assert first == f"on metal-apple, the translation {execution.REJECTED}"
+    assert quoted.splitlines() == [
+        "GLSL Compiler failed",
+        "compute_shader",
+        "==============",
+        "0:2(1): error: '2' : syntax error",
+        "0:3(1): error: '3' : syntax error",
+        "0:4(1): error: '4' : syntax error",
+    ]
+    # The quote follows the first line, so it does not change the result's cause or its issue.
+    feature = {"name": "sin", "outcome": "wrong", "detail": result.detail}
+    assert causes.diagnostic(feature) == first
+    _fake_harness(monkeypatch, "driver-rejected", 0, message="x" * 2000)
+    [result], _ = execution.run([supported()])
+    quoted = result.detail.partition("\n")[2]
+    assert len(quoted) == 600 and quoted.endswith("…")
 
 
 # The native Metal probe with its buffers moved from slots 0 and 1, as a host binding the native probe's buffers
@@ -583,4 +619,8 @@ def test_an_execution_bug_is_reproduced_with_execute():
     body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
     assert "--feature sin --execute" in body
     assert "does not bind the buffers the native Metal probe binds" in body
+    feature["detail"] = f"on metal-apple, the translation {execution.REJECTED}\nerror"
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "but the runtime that runs the native Metal probe rejects it." in body
     assert not execution.found("probe.metal:3:1: error: no matching function")
