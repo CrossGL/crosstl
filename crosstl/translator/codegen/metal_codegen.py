@@ -10504,6 +10504,11 @@ class MetalCodeGen(
             if integer_bit_result_type is not None:
                 return integer_bit_result_type
             if (
+                func_name in self.PACKED_BYTE_INTRINSICS
+                and func_name not in self.user_function_names
+            ):
+                return self.PACKED_BYTE_INTRINSICS[func_name][0]
+            if (
                 func_name in self.METAL_ANGLE_CONVERSION_FACTORS
                 and len(args or []) == 1
                 and func_name not in self.user_function_names
@@ -11603,6 +11608,44 @@ class MetalCodeGen(
             return self.strip_unused_metal_declaration_attribute(initializer)
         return self.generate_discarded_expression(init).strip().rstrip(";")
 
+    # HLSL pack_u8/pack_s8 keep the low byte of each lane, pack_clamp_u8 and
+    # pack_clamp_s8 saturate each lane to [0, 255] or [-128, 127], and all four
+    # put lane x in the least significant byte. Metal narrows each lane to
+    # uchar4 (unsigned narrowing keeps the low byte) or to char4 after the
+    # clamp, then reinterprets the four bytes as a uint, which puts lane x in
+    # the least significant byte on the little-endian Apple GPUs.
+    # unpack_u8u32/unpack_s8s32 (and the 16-bit forms) reinterpret the uint as
+    # uchar4 or char4 and widen each lane, sign-extending the signed lanes.
+    # Each entry is (result type, template); expression_result_type reports the
+    # result type so HLSL's implicit conversions of the result get a constructor.
+    PACKED_BYTE_INTRINSICS = {
+        "pack_u8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
+        "pack_s8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
+        "pack_clamp_u8": (
+            "uint",
+            "as_type<uint>(uchar4(clamp(int4({value}), int4(0), int4(255))))",
+        ),
+        "pack_clamp_s8": (
+            "uint",
+            "as_type<uint>(char4(clamp(int4({value}), int4(-128), int4(127))))",
+        ),
+        "unpack_u8u32": ("uint4", "uint4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s32": ("int4", "int4(as_type<char4>(uint({value})))"),
+        "unpack_u8u16": ("ushort4", "ushort4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s16": ("short4", "short4(as_type<char4>(uint({value})))"),
+    }
+
+    def generate_packed_byte_call(self, func_name, args):
+        entry = self.PACKED_BYTE_INTRINSICS.get(func_name)
+        if entry is None or func_name in self.user_function_names:
+            return None
+        template = entry[1]
+        if len(args) != 1:
+            raise ValueError(
+                f"Metal {func_name} alias requires 1 argument; got {len(args)}"
+            )
+        return template.format(value=self.generate_expression(args[0]))
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
@@ -11987,6 +12030,9 @@ class MetalCodeGen(
             )
             if extended_arithmetic is not None:
                 return extended_arithmetic
+            packed_bytes = self.generate_packed_byte_call(func_name, expr.args)
+            if packed_bytes is not None:
+                return packed_bytes
 
             vector_set = re.fullmatch(
                 r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
