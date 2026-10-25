@@ -32,7 +32,7 @@ def declaration_macro(name):
     """The no_gpu/primitives.cpp macro that declares ``name``."""
     if name in prepare.FALLBACK_PRIMITIVES:
         return "NO_GPU_USE_FALLBACK"
-    multi = {"DivMod", "Quantize", *prepare.FAST_PRIMITIVES}
+    multi = {"Compiled", "DivMod", "Quantize", *prepare.FAST_PRIMITIVES}
     return (
         "NO_GPU_MULTI"
         if name in prepare.MULTI_OUTPUT_VIEWS or name in multi
@@ -74,6 +74,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "ScatterAxis",
                     "Scatter",
                     "DivMod",
+                    "Compiled",
                     "Power",
                     "ArcTan2",
                     "Convolution",
@@ -119,13 +120,19 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 6
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 7
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
         assert declared in (backend / "primitives.cpp").read_text()
     assert (backend / "crosstl_normalization.inc").read_bytes() == (
         Path(prepare.__file__).with_name("normalization.inc").read_bytes()
+    )
+    assert (backend / "crosstl_compiled.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("compiled.inc").read_bytes()
+    )
+    assert (
+        "NO_GPU_MULTI(Compiled)" not in (backend / "crosstl_primitives.cpp").read_text()
     )
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()

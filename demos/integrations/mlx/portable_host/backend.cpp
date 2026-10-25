@@ -4198,3 +4198,5 @@ void Quantize::eval_gpu(
 
 // The normalization ports use this translation unit's dispatch helpers.
 #include "mlx/backend/no_gpu/crosstl_normalization.inc"
+// So does the port of the compiled elementwise kernels.
+#include "mlx/backend/no_gpu/crosstl_compiled.inc"

@@ -33,6 +33,8 @@ from demos.integrations.mlx.portable_host import (
     bfloat_storage,
     column_reduction_layout,
     column_small_layout,
+    compiled_dispatch,
+    compiled_layout,
     copy_dispatch,
     copy_layout,
     divmod_dispatch,
@@ -86,6 +88,10 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
 )
+from demos.integrations.mlx.portable_host.compiled_packages import (
+    CACHE_DIRECTORY as COMPILED_CACHE,
+)
+from demos.integrations.mlx.portable_host.compiled_packages import CompiledPackageCache
 from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
 from demos.integrations.mlx.portable_host.copy_packages import (
     ENTRIES as LAZY_COPY_ENTRIES,
@@ -511,6 +517,12 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # Kernels MLX generates for fused tapes translate on first use.
+        self.compiled = (
+            CompiledPackageCache(mlx_root, self.directory / COMPILED_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.gemms = (
             GemmPackageCache(mlx_root, self.directory / GEMM_CACHE, self.target)
             if mlx_root is not None
@@ -769,6 +781,12 @@ class HostRuntime:
             if name.startswith(dot_layout.ENTRY_PREFIXES) and self.dots is not None:
                 dot_layout.signature(name)
                 return 1
+            if (
+                name.startswith(compiled_layout.ENTRY_PREFIX)
+                and self.compiled is not None
+            ):
+                compiled_layout.variant(name)
+                return 1
             if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
                 gemm_layout.signature(name)
                 return 1
@@ -858,6 +876,10 @@ class HostRuntime:
         )
 
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry.startswith(compiled_layout.ENTRY_PREFIX):
+            return compiled_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if self.lazy_wide_reduction(entry):
             return wide_reduction_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

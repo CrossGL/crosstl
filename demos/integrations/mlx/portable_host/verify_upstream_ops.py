@@ -17,7 +17,9 @@ other real dtypes (the 16-bit floats, the narrow integers, Boolean arithmetic
 and the 64-bit bitwise operations) translate from ``unary.metal`` and
 ``binary.metal`` the same way; each must name its cached package and native
 modules, and integer and Boolean ones are recomputed from their operands.
-Scans and small row and column
+The elementwise kernels MLX generates for fused tapes translate per generated
+source; each dispatch must name the package of its traced source and its
+native modules. Scans and small row and column
 reductions are also translated on first use; each of their dispatches must
 name the package its cache derives again from the event. Arg reductions are
 translated per threadgroup width on first use and every index is recomputed
@@ -49,6 +51,7 @@ from demos.integrations.mlx.portable_host import (
     arange_packages,
     arg_reduce_evidence,
     arg_reduce_layout,
+    compiled_evidence,
     copy_evidence,
     divmod_evidence,
     elementwise_evidence,
@@ -269,6 +272,8 @@ UPSTREAM_TESTS = (
         # sum over 8,192 rows.
         "test_reduce.TestReduce.test_nan_propagation_complex64",
         "test_reduce.TestReduce.test_long_column",
+        # This reaches Boolean all and any reductions of signed zeros.
+        "test_reduce.TestReduce.test_and_or_negative_zero",
     ) + (
         # These reach lazily translated block and looped softmax and logsumexp
         # rows, precise 16-bit softmax, and transposed and broadcast inputs.
@@ -284,6 +289,10 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_argpartition",
         "test_ops.TestOps.test_sort_nan",
         "test_ops.TestOps.test_argsort_nan",
+        # These reach the same sorts through medians of float16, bfloat16
+        # and float32 arrays over several axes, with NaN in any position.
+        "test_ops.TestOps.test_median",
+        "test_ops.TestOps.test_median_nan",
     ) + (
         # This reaches lazily translated binary searches of contiguous,
         # strided, reversed and empty sequences, and of transposed, sliced
@@ -291,6 +300,9 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_searchsorted",
         # This reaches concatenations of int64 arrays through lazy copies.
         "test_ops.TestOps.test_unstack",
+        # This reaches the kernels MLX generates for the fused tapes of
+        # mx.unique's compiled helpers, with sorts and scans.
+        "test_ops.TestOps.test_unique",
     ) + (
         # These reach lazily translated contiguous and strided, forward and
         # reverse, inclusive and exclusive scans of float32, int32, int64 and
@@ -762,6 +774,15 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         # Derives the package again and checks scans' retained native modules.
         if lazy_package_evidence.audit_event(event, lazy, modules):
             executed.add(i)
+        owners[i] += 1
+    compiled = compiled_evidence.cache(args.mlx_root, args.packages, target)
+    for i, event in enumerate(trace):
+        if not compiled_evidence.is_compiled(event):
+            continue
+        # Finds the package of the traced source again and checks the
+        # retained native modules; the upstream tests compare the values.
+        compiled_evidence.audit_event(event, compiled)
+        executed.add(i)
         owners[i] += 1
     verify_native_identity(
         [

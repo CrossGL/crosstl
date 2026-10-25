@@ -639,7 +639,9 @@ def test_runtime_and_host_adapter_route_normalization():
     assert body.rstrip().endswith("Reduce(s, Reduce::Sum, {0}).eval_gpu({view}, out);")
     backend = (here / "backend.cpp").read_text(encoding="utf-8")
     assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_normalization.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_normalization.inc"\n'
+        "// So does the port of the compiled elementwise kernels.\n"
+        '#include "mlx/backend/no_gpu/crosstl_compiled.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

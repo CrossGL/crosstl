@@ -80,6 +80,7 @@ def adapted_sources(original, primitives, events):
         "ScatterAxis",
         "Scatter",
         "DivMod",
+        "Compiled",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,
@@ -100,7 +101,7 @@ def adapted_sources(original, primitives, events):
             else (
                 "NO_GPU_MULTI"
                 if primitive in MULTI_OUTPUT_VIEWS
-                or primitive in {"DivMod", "Quantize", *FAST_PRIMITIVES}
+                or primitive in {"Compiled", "DivMod", "Quantize", *FAST_PRIMITIVES}
                 else "NO_GPU"
             )
         )
@@ -149,6 +150,7 @@ else()
         "crosstl_backend.cpp": (HERE / "backend.cpp").read_bytes(),
         "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
         "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
+        "crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),
     }
 
 
