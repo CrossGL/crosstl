@@ -1843,7 +1843,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "struct Vertex {",
             "vec3 position @ in_Position;",
-            "vec4 svPosition @ Out_Position;",
+            "vec4 svPosition @ gl_Position;",
             "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",
         ],

@@ -1,8 +1,8 @@
-"""Native compute adapters for the harness's explicit two-buffer ABI.
+"""Native compute adapters for the harness's ordered storage-buffer ABI.
 
-Each adapter binds ``input.bin`` at the input slot and ``output.bin`` at the output slot of the job directory,
-dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes both buffers back so the runner can
-check the output and confirm that the input buffer and the output guard words were not overwritten. When the job
+Each adapter binds the input files at slots 0 through n-1 and ``output.bin`` at slot n of the job directory,
+dispatches ``ceil(threads / group)`` one-dimensional workgroups, and writes every buffer back so the runner can
+check the output and confirm that every input buffer and the output guard words were not overwritten. When the job
 has a constants block, ``constants.bin`` is bound read-only as that API's uniform or constant buffer at the slot
 discovered in the artifact, or pushed as push constants. Every adapter reports the identity of the device that ran
 the job; the runner rejects a result from an unexpected driver.
@@ -25,6 +25,17 @@ class DriverRejected(RuntimeError):
 
 class ExecutionTimeout(RuntimeError):
     """The dispatch did not complete in time, for example because a translated loop no longer terminates."""
+
+
+def buffer_files(input_count):
+    """Storage files in binding order, retaining the existing single-input filenames."""
+    if input_count < 1:
+        raise ValueError("At least one input buffer is required")
+    return (
+        "input.bin",
+        *(f"input{slot}.bin" for slot in range(1, input_count)),
+        "output.bin",
+    )
 
 
 def _groups(job):
@@ -80,7 +91,9 @@ def execute_metal(job):
             f"Metal pipeline allows {pipeline.maxTotalThreadsPerThreadgroup()} threads per group"
         )
     buffers = []
-    for binding, filename in zip(job["bindings"], FILES):
+    for binding, filename in zip(
+        job["bindings"], buffer_files(len(job["bindings"]) - 1)
+    ):
         data = (Path(job["directory"]) / filename).read_bytes()
         buffer = device.newBufferWithBytes_length_options_(
             data, len(data), Metal.MTLResourceStorageModeShared
@@ -134,7 +147,9 @@ def execute_opengl(job):
             shader = context.compute_shader(Path(job["artifact"]).read_text())
         except moderngl.Error as error:
             raise DriverRejected(str(error)) from error
-        for binding, filename in zip(job["bindings"], FILES):
+        for binding, filename in zip(
+            job["bindings"], buffer_files(len(job["bindings"]) - 1)
+        ):
             buffer = context.buffer((Path(job["directory"]) / filename).read_bytes())
             buffers.append((buffer, filename))
             buffer.bind_to_storage_buffer(binding)
@@ -161,7 +176,9 @@ def execute_vulkan(job):
     executable = os.environ.get("CROSSTL_CONFORMANCE_VKRUN", "vkrun")
     directory = Path(job["directory"])
     args = [executable, job["binary"], job["entry"], _groups(job), 1, 1]
-    for binding, filename in zip(job["bindings"], FILES):
+    for binding, filename in zip(
+        job["bindings"], buffer_files(len(job["bindings"]) - 1)
+    ):
         args.append(f"{binding}:inout:{directory / filename}")
     block, _ = _constants(job, "uniform", "push")
     if block is not None and block["kind"] == "push":

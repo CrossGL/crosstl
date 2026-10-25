@@ -1470,6 +1470,57 @@ def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
     assert "lerp(" not in generated_code
 
 
+def test_translate_hlsl_packed_dot4add_to_metal_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    # The signed accumulator addition wraps through uint, as in HLSL.
+    assert (
+        "as_type<int>(as_type<uint>(int(acc))+as_type<uint>(int(dot("
+        "float4(as_type<char4>(uint(a[id.x]))),"
+        "float4(as_type<char4>(uint(b[id.x])))))))"
+    ) in compact
+    assert (
+        "(uint(0u)+uint(dot(float4(as_type<uchar4>(uint(a[id.x]))),"
+        "float4(as_type<uchar4>(uint(b[id.x]))))))"
+    ) in compact
+    assert "dot4add_" not in generated
+
+
+def test_metal_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint a = tid.x;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
 def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
     shader = """
     shader MetalLerpAliasLocalMixShadow {
@@ -2329,6 +2380,99 @@ def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
     assert "ddy(" not in generated_code
     assert "dFdx(" not in generated_code
     assert "dFdy(" not in generated_code
+
+
+def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
+    shader = """
+    shader MetalFineCoarseDerivatives {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 fx = dFdxFine(uv);
+                vec2 cx = dFdxCoarse(uv);
+                float fy = dFdyFine(uv.x);
+                float cy = dFdyCoarse(uv.y);
+                vec2 fw = fwidthFine(uv);
+                vec2 cw = fwidthCoarse(uv * 2.0);
+                return vec4(fx + cx + fw + cw, fy, cy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 fx = dfdx(uv);" in generated_code
+    assert "float2 cx = dfdx(uv);" in generated_code
+    assert "float fy = dfdy(uv.x);" in generated_code
+    assert "float cy = dfdy(uv.y);" in generated_code
+    assert "float2 fw = fwidth(uv);" in generated_code
+    assert "float2 cw = fwidth(uv * float2(2.0));" in generated_code
+    for name in (
+        "dFdxFine(",
+        "dFdxCoarse(",
+        "dFdyFine(",
+        "dFdyCoarse(",
+        "fwidthFine(",
+        "fwidthCoarse(",
+    ):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
+    # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 x = dFdxFine(uv) + dFdxCoarse(uv);
+        vec2 y = dFdyFine(uv) + dFdyCoarse(uv);
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(x + y, w);
+    }
+    """
+    shader_path = tmp_path / "derivatives.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "dfdx(input.uv) + dfdx(input.uv)" in generated_code
+    assert "dfdy(input.uv) + dfdy(input.uv)" in generated_code
+    assert "fwidth(input.uv) + fwidth(input.uv)" in generated_code
+    for name in ("_fine(", "_coarse("):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
+    shader = """
+    shader MetalFineFwidthShadow {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float fwidth = uv.x;
+                vec2 w = fwidthFine(uv);
+                return vec4(w, fwidth, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 w = metal::fwidth(uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
@@ -34221,6 +34365,75 @@ def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
     assert error.missing_capabilities == (
         "metal.cooperative-matrix-operation-lowering",
     )
+
+
+def test_translate_hlsl_packed_byte_intrinsics_to_metal_byte_vectors(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="metal")
+    # clang-format may wrap the long expressions when it is installed.
+    compact = re.sub(r"\s+", "", generated)
+
+    assert "uintr0=as_type<uint>(uchar4(uint4(a)));" in compact
+    assert "uintr1=as_type<uint>(uchar4(uint4(b)));" in compact
+    assert (
+        "uintr2=as_type<uint>(char4(clamp(int4(a),int4(-128),int4(127))));" in compact
+    )
+    assert "uintr3=as_type<uint>(uchar4(clamp(int4(a),int4(0),int4(255))));" in compact
+    assert "int4u0=int4(as_type<char4>(uint(r0)));" in compact
+    assert "uint4u1=uint4(as_type<uchar4>(uint(r1)));" in compact
+    for name in ("pack_s8", "pack_u8", "pack_clamp", "unpack_s8s32", "unpack_u8u32"):
+        assert f"{name}(" not in generated
+
+
+def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
+    tmp_path,
+):
+    # MSL has no implicit conversion between vector types, so the HLSL implicit
+    # conversions of the unpacked lanes need an explicit constructor.
+    source_path = tmp_path / "unpack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<uint> iin;
+        RWStructuredBuffer<int> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int4 v = unpack_u8u32(iin[0]);
+            uint4 w = unpack_s8s32(iin[1]);
+            float4 f = unpack_s8s32(iin[2]);
+            int4 s = unpack_u8u16(iin[3]);
+            outp[0] = v.x + int(w.y) + int(f.z) + s.w;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "int4v=int4(uint4(as_type<uchar4>(uint(iin[0]))));" in compact
+    assert "uint4w=uint4(int4(as_type<char4>(uint(iin[1]))));" in compact
+    assert "float4f=float4(int4(as_type<char4>(uint(iin[2]))));" in compact
+    assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
 
 
 if __name__ == "__main__":

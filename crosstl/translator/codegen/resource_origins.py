@@ -94,6 +94,8 @@ class ResourceOriginAnalysis:
         return cell
 
     def bind_value(self, type_, value, destination, types, slots):
+        if isinstance(value, IdentifierNode) and value.name == "nullptr":
+            return
         if self.pointer(type_):
             self.edge(destination, self.origin(value, types, slots))
             return
@@ -211,7 +213,7 @@ class ResourceOriginAnalysis:
 
     def analyze(self):
         for identity, (parameter, pointer, _root) in enumerate(self.lowering.resources):
-            if pointer.space != "threadgroup":
+            if pointer.space not in {"threadgroup", "thread"}:
                 self.values[("value", id(parameter))].add(identity)
         for overloads in self.lowering.functions.values():
             for function in overloads:
