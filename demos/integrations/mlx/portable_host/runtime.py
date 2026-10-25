@@ -236,6 +236,10 @@ from demos.integrations.mlx.portable_host.searchsorted_packages import (
 from demos.integrations.mlx.portable_host.searchsorted_packages import (
     SearchSortedPackageCache,
 )
+from demos.integrations.mlx.portable_host.segmented_mm_packages import (
+    SEGMENTED_MM_CACHE,
+    SegmentedMmPackageCache,
+)
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
@@ -562,6 +566,14 @@ class HostRuntime:
         self.gather_offsets = (
             GatherOffsetsPackageCache(
                 mlx_root, self.directory / GATHER_OFFSETS_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # SegmentedMM's segmented steel GEMM kernels.
+        self.segmented_mms = (
+            SegmentedMmPackageCache(
+                mlx_root, self.directory / SEGMENTED_MM_CACHE, self.target
             )
             if mlx_root is not None
             else None

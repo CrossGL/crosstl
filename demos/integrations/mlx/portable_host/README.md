@@ -808,6 +808,46 @@ python -m demos.integrations.mlx.portable_host.verify_gather_mm \
   --mlx-root mlx-upstream --packages host-packages --output-dir gather-mm
 ```
 
+## Floating-Point SegmentedMM
+
+`SegmentedMM::eval_gpu`, which `mx.segmented_mm` and the sorted GatherMM
+gradient reach, lives in `segmented_mm.inc` and follows matmul.cpp's
+`segmented_mm` on a device without NAX: every nonempty product runs
+`steel_segmented_mm` with the medium-device 64x64x16 tile, the operands
+transposed or copied as `check_transpose` decides, and `segments_contiguous`
+and the alignment constants in its hash name. Output batch `z` multiplies
+`A[:, s:e]` by `B[s:e]` over the inner range the segments give it. Dense
+segments bind one `(s, e)` pair per batch; a view whose two trailing strides
+are both one binds batch boundaries, which batch `z` reads at words `z` and
+`z + 1`. MLX accepts such a view after comparing each batch stride with the
+next stride times the axis's own extent; the host also requires the strides
+a boundary walk takes and copies every other view, so it never binds segments
+whose batches the kernel would misread. An empty contraction fills the output
+with zeros once every segment is empty, and an empty output launches nothing.
+
+`segmented_mm_layout.py` reads every segment word the kernel will read,
+replays the kernel's uint32 K loop and 16-bit tail for each batch, and
+requires every word and every inner index read to stay inside the
+contraction. Entries translate into the `segmented-mm` cache with the options
+of `test_current_gemm_segmented`, including the immutable segments that let
+the subgroup proofs treat the K loop as uniform.
+
+The `MLX quantized host` jobs translate the verification entries three at a
+time and then run `verify_segmented_mm.py` through `mx.segmented_mm`. Its 8
+cases cover every element type and transposition, both segment layouts, a
+two-axis segment batch, copied operands and segments, aligned and unaligned
+tiles, whole K tiles with and without a tail, a tail alone, empty and
+inverted segments, an empty contraction and an empty output. Every output
+must match the exact float64 reference bit for bit, and float32 outputs must
+also match MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.segmented_mm_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_segmented_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir segmented-mm
+```
+
 ## Block Quantization
 
 The host adapter routes MXFP4, MXFP8 and NVFP4 quantization and dequantization

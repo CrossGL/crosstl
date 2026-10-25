@@ -644,7 +644,9 @@ def test_runtime_and_host_adapter_route_normalization():
         "// So does the port of the compiled elementwise kernels.\n"
         '#include "mlx/backend/no_gpu/crosstl_compiled.inc"\n'
         "// So does the port of GatherMM's gathered products.\n"
-        '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"\n'
+        "// And the port of SegmentedMM, which shares its dispatch helper.\n"
+        '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

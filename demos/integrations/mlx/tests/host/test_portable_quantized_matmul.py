@@ -911,11 +911,11 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
     ]
     assert deadlines == [
         1800,
-        3600,
+        2400,
         1800,
         900,
         900,
-        1800,
+        1200,
         1200,
         1200,
         600,
@@ -925,6 +925,9 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         1800,
         1200,
         # AddMM and GatherMM verification.
+        600,
+        600,
+        # SegmentedMM translation and verification.
         600,
         600,
     ]

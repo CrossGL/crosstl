@@ -4382,3 +4382,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_compiled.inc"
 // So does the port of GatherMM's gathered products.
 #include "mlx/backend/no_gpu/crosstl_gather_mm.inc"
+// And the port of SegmentedMM, which shares its dispatch helper.
+#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"

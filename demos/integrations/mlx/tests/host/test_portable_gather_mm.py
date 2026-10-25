@@ -711,9 +711,8 @@ def test_trace_validation_requires_the_routed_gathers(target):
 def test_backend_ports_gather_mm_eval_gpu():
     port = (HOST / "gather_mm.inc").read_text(encoding="utf-8")
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"'
-    )
+    tail = backend[backend.rindex("} // namespace mlx::core::fast") :]
+    assert '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"\n' in tail
     start = port.index("void GatherMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
     order = [

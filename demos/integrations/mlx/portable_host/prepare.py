@@ -72,6 +72,7 @@ def adapted_sources(original, primitives, events):
         "Matmul",
         "AddMM",
         "GatherMM",
+        "SegmentedMM",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -154,6 +155,7 @@ else()
         "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
         "crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),
         "crosstl_gather_mm.inc": (HERE / "gather_mm.inc").read_bytes(),
+        "crosstl_segmented_mm.inc": (HERE / "segmented_mm.inc").read_bytes(),
     }
 
 
