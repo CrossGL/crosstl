@@ -101,6 +101,38 @@ def test_vector_scalar_comparison_preserves_mask_shape(tmp_path, scalar_left):
         assert "SIMD[DType.float32, 2](a)" in output
 
 
+def test_issue_kernel_declares_boolean_mask(tmp_path):
+    # The kernel from #3071: a bvec2 local initialized from a comparison.
+    output = translate(
+        tmp_path,
+        """
+shader Probe {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            vec2 a = vec2(fin[i], 1.0);
+            bvec2 lt = a < vec2(0.0, 2.0);
+            outp[i] = any(lt) ? 1.0 : 0.0;
+        }
+    }
+}
+""",
+    )
+    assert "var lt: SIMD[DType.bool, 2] = (a).lt(" in output
+    assert "(lt).reduce_or()" in output
+
+
+def test_mismatched_vector_comparison_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="matching element types and widths"):
+        translate(
+            tmp_path,
+            "shader Probe { bvec2 compare(ivec2 a, vec2 b) { return a < b; } }",
+        )
+
+
 def test_user_defined_any_is_not_replaced(tmp_path):
     output = translate(
         tmp_path,

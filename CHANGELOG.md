@@ -49,8 +49,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- Mojo vector comparisons produce boolean masks with element-wise comparison methods. Boolean vector reductions preserve only the logical lanes of padded three-component vectors.
-
+- Mojo output of a component-wise vector comparison such as `a < b` on `vec2` operands is a `SIMD[DType.bool, 2]` mask written with `a.lt(b)`, and `any` and `all` of a boolean vector become `reduce_or()` and `reduce_and()`, ignoring the padding lane of three-component vectors. A `bvec2` initialized from a comparison used to be refused.
 - WGSL output gives resources without an explicit binding the lowest free slots in their bind group, as GLSL and HLSL output do. Explicit bindings in any group used to push them higher: next to `cbuffer Params @binding(3)`, two storage buffers without a binding took slots 4 and 5 instead of 0 and 1.
 - Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
