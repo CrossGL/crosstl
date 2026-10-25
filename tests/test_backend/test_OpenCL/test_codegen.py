@@ -4,7 +4,10 @@ import crosstl
 from crosstl.backend.common_ast import UnaryOpNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLAtomicOrderUnsupportedError,
+    OpenCLToCrossGLConverter,
+)
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
 from crosstl.backend.OpenCL.target_lowering import (
@@ -58,6 +61,74 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var gid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
+
+
+def test_opencl_explicit_atomics_drop_memory_order_and_scope():
+    crossgl = generate_crossgl("""
+        kernel void probe(global int *iin, global atomic_int *outp) {
+            uint i = get_global_id(0);
+            atomic_fetch_sub_explicit(&outp[i], iin[i], memory_order_relaxed);
+            atomic_fetch_add_explicit(
+                &outp[i], iin[i], memory_order_relaxed, memory_scope_device);
+            atomic_exchange_explicit(&outp[i], iin[i], memory_order_relaxed);
+            atomic_fetch_or_explicit(
+                &outp[i], iin[i], memory_order_relaxed, memory_scope_work_group);
+        }
+        """)
+
+    assert "memory_order" not in crossgl
+    assert "memory_scope" not in crossgl
+    assert "atomicSub(outp[i], iin[i]);" in crossgl
+    assert "atomicAdd(outp[i], iin[i]);" in crossgl
+    assert "atomicExchange(outp[i], iin[i]);" in crossgl
+    assert "atomicOr(outp[i], iin[i]);" in crossgl
+
+
+@pytest.mark.parametrize(
+    ("call", "reason"),
+    [
+        (
+            "atomic_fetch_add_explicit(&outp[i], 1, memory_order_seq_cst)",
+            "memory_order_seq_cst: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_exchange_explicit(&outp[i], 1, memory_order_acq_rel)",
+            "memory_order_acq_rel: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_fetch_or_explicit(&outp[i], 1, order)",
+            "with order: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_compare_exchange_strong_explicit(&outp[i], &expected, 1, "
+            "memory_order_relaxed, memory_order_acquire)",
+            "memory_order_acquire: CrossGL atomics are relaxed",
+        ),
+        (
+            "atomic_fetch_max_explicit(&outp[i], 1, memory_order_relaxed, "
+            "memory_scope_all_svm_devices)",
+            "memory_scope_all_svm_devices: CrossGL atomics are atomic at device scope",
+        ),
+        (
+            "atomic_fetch_min_explicit(&outp[i], 1)",
+            "takes 3 or 4 arguments, got 2",
+        ),
+    ],
+)
+def test_opencl_explicit_atomics_refuse_orders_and_scopes_crossgl_cannot_keep(
+    call, reason
+):
+    source = f"""
+        kernel void probe(global atomic_int *outp, memory_order order) {{
+            uint i = get_global_id(0);
+            int expected = 0;
+            {call};
+        }}
+        """
+
+    with pytest.raises(OpenCLAtomicOrderUnsupportedError, match=reason) as raised:
+        generate_crossgl(source)
+    assert raised.value.code == "project.translate.opencl-atomic-order-unsupported"
 
 
 def test_opencl_get_local_linear_id_lowers_to_local_invocation_index(tmp_path):
