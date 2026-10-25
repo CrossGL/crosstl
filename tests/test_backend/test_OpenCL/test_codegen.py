@@ -14,14 +14,9 @@ from crosstl.backend.OpenCL.target_lowering import (
     OpenCLTargetUnsupportedError,
     validate_opencl_intermediate_for_target,
 )
+from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
-from crosstl.translator.semantics.fixed_samplers import (
-    FixedSamplerCoordinatesUnsupportedError,
-)
-from crosstl.translator.semantics.sampler_states import (
-    FixedSamplerStateUnsupportedError,
-)
 
 
 def parse_crossgl_from_opencl(source):
@@ -508,23 +503,20 @@ def test_opencl_unnormalized_sampler_keeps_pixel_coordinates_for_metal(tmp_path)
     assert "tex.sample(smp, float2(fin[i], 0.5), level(0.0))" in metal
 
 
-@pytest.mark.parametrize(
-    ("backend", "error"),
-    [
-        ("directx", FixedSamplerCoordinatesUnsupportedError),
-        ("vulkan", FixedSamplerCoordinatesUnsupportedError),
-        ("opengl", FixedSamplerStateUnsupportedError),
-        ("wgsl", FixedSamplerStateUnsupportedError),
-    ],
-)
+@pytest.mark.parametrize("backend", ["directx", "vulkan", "opengl", "wgsl"])
 def test_opencl_unnormalized_sampler_is_refused_where_targets_cannot_fix_it(
-    tmp_path, backend, error
+    tmp_path, backend
 ):
     opencl_path = tmp_path / "pixel.cl"
     opencl_path.write_text(PIXEL_SAMPLER_SOURCE, encoding="utf-8")
 
-    with pytest.raises(error):
+    with pytest.raises(TranslationDiagnostic) as raised:
         crosstl.translate(str(opencl_path), backend=backend)
+
+    # The target refuses pixel coordinates, or fixed sampler state at all.
+    code = raised.value.project_diagnostic_code
+    assert code.startswith(f"project.translate.{backend}-")
+    assert "sampler" in code
 
 
 @pytest.mark.parametrize(
