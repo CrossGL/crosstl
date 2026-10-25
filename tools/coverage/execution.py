@@ -3,14 +3,17 @@
 A translation the reference tool accepts can still compute something else. Where Core's conformance harness
 (``tests/conformance``) has a runtime for a language, the native probe and CrossTL's translation run there on the
 same inputs, and a translation that writes other results, writes outside its output buffer, binds other resources
-than the native probe, or that the runtime rejects is wrong. The harness binds both probes the way it finds the native
-probe's buffers bound, so a translation that turns those buffers into something else, such as pointers in a uniform
-block, cannot run in the native probe's place.
+than the native probe, or that the runtime rejects is wrong. The diagnostic of a rejected translation quotes the first
+lines of the runtime's message. The harness binds both probes the way it finds the native probe's buffers bound, so a
+translation that turns those buffers into something else, such as pointers in a uniform block, cannot run in the native
+probe's place.
 
 HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
 reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
 same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
 validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
+DXC declares a counter buffer for each RWStructuredBuffer a function takes as a parameter; the source declares no such
+buffer, so one that nothing uses is left out of the SPIR-V instead of asking the host for a binding.
 The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
 one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not accept.
 
@@ -69,13 +72,17 @@ _ENVIRONMENTS = ((3, "vulkan1.1"), (5, "vulkan1.2"), (6, "vulkan1.3"))
 # structure, so the query is never initialized and SPV_KHR_ray_query leaves what it returns undefined. Such probes
 # keep their validation result.
 _UNREPEATABLE = re.compile(r"\b(OpReadClockKHR|OpTypeRayQueryKHR)\b")
+DIVERGED = "computes different results from the native probe"
+REBOUND = "binds other resources than the native probe"
+REJECTED = "is rejected by the runtime"
 # Harness outcomes of a translation that ran, or failed to, where its native probe ran.
 _BROKEN = {
     "memory-corruption": "writes outside its output buffer or into its input buffer",
-    "driver-rejected": "is rejected by the runtime",
+    "driver-rejected": REJECTED,
 }
-DIVERGED = "computes different results from the native probe"
-REBOUND = "binds other resources than the native probe"
+# How much of the runtime's message for a rejected translation its diagnostic quotes, after the first line.
+_QUOTED_LINES = 6
+_QUOTED_CHARS = 600
 
 
 def found(detail: str) -> bool:
@@ -85,6 +92,16 @@ def found(detail: str) -> bool:
         f"the translation {text}" in first
         for text in (DIVERGED, REBOUND, *_BROKEN.values())
     )
+
+
+def _quoted(record: dict) -> str:
+    """The first lines of what the runtime said when it rejected the artifact of the harness ``record``."""
+    message = (record.get("execution") or {}).get("message") or ""
+    lines = [line.rstrip() for line in message.splitlines() if line.strip()]
+    text = "\n".join(lines[:_QUOTED_LINES])
+    if len(text) > _QUOTED_CHARS:
+        text = text[: _QUOTED_CHARS - 1].rstrip() + "…"
+    return text
 
 
 def executable(result: Result) -> bool:
@@ -122,7 +139,59 @@ def as_spirv(language: str, source: str) -> str:
     # naga takes no entry point; HLSL and Slang name theirs after [numthreads(...)].
     entry = "main" if language == "wgsl" else validators.hlsl_entry(source, "compute")
     assembly, _ = validators.lower(language, source, entry, keep_bindings=True)
-    return assembly
+    return without_unused_counters(assembly) if language == "hlsl" else assembly
+
+
+# DXC declares a counter buffer, of this type, for every RWStructuredBuffer a function takes as a parameter, and
+# -fspv-preserve-bindings keeps it, with a binding of its own, when nothing uses it.
+_COUNTER = re.compile(r'^\s*OpName (%\S+) "type\.ACSBuffer\.counter"$', re.M)
+_DEFINITION = re.compile(r"^\s*(%\S+) = (Op\w+)((?: \S+)*)\s*$")
+# Instructions that name or decorate an id without using it.
+_ANNOTATIONS = frozenset({"OpName", "OpDecorate"})
+
+
+def without_unused_counters(assembly: str) -> str:
+    """``assembly`` without the counter buffers DXC declares that nothing uses.
+
+    The source declares no such buffer and the shader never reads it, so it is no resource the host binds.
+    """
+    types = set(_COUNTER.findall(assembly))
+    if not types:
+        return assembly
+    lines = assembly.splitlines(keepends=True)
+    defined = [_DEFINITION.match(line) for line in lines]
+    pointers = {
+        found[1]
+        for found in defined
+        if found and found[2] == "OpTypePointer" and found[3].split()[-1] in types
+    }
+    counters = {
+        found[1]
+        for found in defined
+        if found and found[2] == "OpVariable" and found[3].split()[0] in pointers
+    }
+    used = set()
+    for line, found in zip(lines, defined):
+        words = line.split()
+        if (found and found[1] in counters) or words[:1] == ["OpEntryPoint"]:
+            continue
+        used |= counters.intersection(words[2:] if _annotates(words) else words)
+    unused = counters - used
+    kept = []
+    for line, found in zip(lines, defined):
+        words = line.split()
+        if (found and found[1] in unused) or (_annotates(words) and words[1] in unused):
+            continue
+        if words[:1] == ["OpEntryPoint"]:
+            line = re.sub(
+                r"[ \t]+(%\S+)", lambda m: "" if m[1] in unused else m[0], line
+            )
+        kept.append(line)
+    return "".join(kept)
+
+
+def _annotates(words: list[str]) -> bool:
+    return bool(words) and words[0] in _ANNOTATIONS
 
 
 def environment(assemblies: list[str]) -> str:
@@ -317,6 +386,9 @@ def _judge(
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] in _BROKEN:
         detail = f"{where}, the translation {_BROKEN[translated['outcome']]}"
+        message = _quoted(translated)
+        if message:
+            detail += "\n" + message
         return replace(result, outcome="wrong", detail=detail, runtime=runtime)
     if translated["outcome"] != "preserved":
         return result

@@ -6,6 +6,7 @@ import pytest
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
 from tools.coverage import (
+    causes,
     execution,
     issues,
     probes,
@@ -77,11 +78,17 @@ def test_results_match_word_for_word_and_nan_matches_nan():
 
 
 def _fake_harness(
-    monkeypatch, translated_outcome, written, runtime="metal-apple", environments=None
+    monkeypatch,
+    translated_outcome,
+    written,
+    runtime="metal-apple",
+    environments=None,
+    message="",
 ):
     """Make run_suite report the native probe as run and the translation as ``translated_outcome``.
 
-    ``environments``, when given, collects the Vulkan environment of each run.
+    ``environments``, when given, collects the Vulkan environment of each run. ``message`` is what the runtime says
+    about the translation.
     """
 
     class Provided:
@@ -110,7 +117,10 @@ def _fake_harness(
                 words[:] = written
             if outcome in ("preserved", "memory-corruption"):
                 case.check(case.inputs, words)
-            records.append({"case": case.id, "runtime": runtime.id, "outcome": outcome})
+            record = {"case": case.id, "runtime": runtime.id, "outcome": outcome}
+            if role == "translated" and message:
+                record["execution"] = {"status": outcome, "message": message}
+            records.append(record)
         return records
 
     monkeypatch.setattr(harness, "run_suite", run_suite)
@@ -151,6 +161,32 @@ def test_a_translation_that_computes_otherwise_is_wrong(
     ran = outcome in ("preserved", "memory-corruption", "driver-rejected")
     assert result.runtime == ("metal-apple" if ran else "")
     assert execution.found(result.detail) == (expected == "wrong")
+
+
+def test_a_rejected_translation_quotes_the_runtime(monkeypatch):
+    errors = "".join(
+        f"0:{line}(1): error: '{line}' : syntax error\n" for line in range(2, 12)
+    )
+    message = "GLSL Compiler failed\n\ncompute_shader\n==============\n" + errors
+    _fake_harness(monkeypatch, "driver-rejected", 0, message=message)
+    [result], _ = execution.run([supported()])
+    first, _, quoted = result.detail.partition("\n")
+    assert first == f"on metal-apple, the translation {execution.REJECTED}"
+    assert quoted.splitlines() == [
+        "GLSL Compiler failed",
+        "compute_shader",
+        "==============",
+        "0:2(1): error: '2' : syntax error",
+        "0:3(1): error: '3' : syntax error",
+        "0:4(1): error: '4' : syntax error",
+    ]
+    # The quote follows the first line, so it does not change the result's cause or its issue.
+    feature = {"name": "sin", "outcome": "wrong", "detail": result.detail}
+    assert causes.diagnostic(feature) == first
+    _fake_harness(monkeypatch, "driver-rejected", 0, message="x" * 2000)
+    [result], _ = execution.run([supported()])
+    quoted = result.detail.partition("\n")[2]
+    assert len(quoted) == 600 and quoted.endswith("…")
 
 
 # The native Metal probe with its buffers moved from slots 0 and 1, as a host binding the native probe's buffers
@@ -488,6 +524,59 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
     assert execution.as_spirv(language, "not a shader") == ""
 
 
+COUNTED = """\
+               OpEntryPoint GLCompute %main "main" %id %counter_var_outp
+               OpName %type_ACSBuffer_counter "type.ACSBuffer.counter"
+               OpName %counter_var_outp "counter.var.outp"
+               OpDecorate %outp Binding 1
+               OpDecorate %counter_var_outp DescriptorSet 0
+               OpDecorate %counter_var_outp Binding 2
+%type_ACSBuffer_counter = OpTypeStruct %int
+%_ptr_Uniform_type_ACSBuffer_counter = OpTypePointer Uniform %type_ACSBuffer_counter
+%counter_var_outp = OpVariable %_ptr_Uniform_type_ACSBuffer_counter Uniform
+       %outp = OpVariable %_ptr_Uniform_float Uniform
+"""
+
+
+def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
+    # DXC declares one for a RWStructuredBuffer a function takes; the host binds no such buffer.
+    kept = execution.without_unused_counters(COUNTED)
+    assert "counter_var_outp" not in kept
+    assert '"main" %id\n' in kept and "%outp Binding 1" in kept
+    assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
+    used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
+    assert execution.without_unused_counters(used) == used
+    plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
+    assert execution.without_unused_counters(plain) == plain
+
+
+HELPER = """\
+RWStructuredBuffer<float> fin : register(u0);
+RWStructuredBuffer<float> outp : register(u1);
+void store(RWStructuredBuffer<float> buffer, uint index, float value) {
+    buffer[index] = value;%s
+}
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    store(outp, id.x, fin[id.x]);
+}
+"""
+
+
+def test_a_buffer_passed_to_a_function_keeps_the_hlsl_interface(tmp_path):
+    if not validators.can_lower("hlsl"):
+        pytest.skip(f"{validators.TOOLS['hlsl']} or spirv-dis is not installed")
+    from tests.conformance import interface
+
+    path = tmp_path / "probe.spvasm"
+    path.write_text(execution.as_spirv("hlsl", HELPER % ""))
+    assert interface.interface(path, "spirv", 1)["bindings"] == (0, 1)
+    # A translation that uses the counter needs a buffer the native probe does not bind.
+    path.write_text(execution.as_spirv("hlsl", HELPER % " buffer.IncrementCounter();"))
+    with pytest.raises(interface.InterfaceChanged, match=r"\[0, 1, 2\]"):
+        interface.interface(path, "spirv", 1)
+
+
 def test_nothing_runs_without_a_runtime(monkeypatch):
     monkeypatch.setattr(
         harness, "select_runtimes", lambda spec, targets: {t: [] for t in targets}
@@ -583,4 +672,8 @@ def test_an_execution_bug_is_reproduced_with_execute():
     body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
     assert "--feature sin --execute" in body
     assert "does not bind the buffers the native Metal probe binds" in body
+    feature["detail"] = f"on metal-apple, the translation {execution.REJECTED}\nerror"
+    body = issues.bug_body(row, "cause", [feature], "CrossGL/crosstl")
+    assert "--feature sin --execute" in body
+    assert "but the runtime that runs the native Metal probe rejects it." in body
     assert not execution.found("probe.metal:3:1: error: no matching function")
