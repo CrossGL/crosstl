@@ -42,3 +42,23 @@ def test_zero_initialized_globals_construct_every_element(tmp_path):
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_an_array_of_unknown_size_has_no_zero_value():
+    import pytest
+
+    from crosstl.translator import ast as A
+    from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+    from crosstl.translator.codegen.glsl_zero_values import OpenGLZeroValueError
+
+    codegen = GLSLCodeGen()
+    sized = A.ArrayType(
+        A.PrimitiveType("int"), A.LiteralNode(2, A.PrimitiveType("int"))
+    )
+    assert codegen.zero_value_expression(sized) == "int[2](0, 0)"
+    unknown = A.ArrayType(A.PrimitiveType("float"), A.IdentifierNode("COUNT"))
+    with pytest.raises(OpenGLZeroValueError) as raised:
+        codegen.zero_value_expression(unknown)
+    assert raised.value.project_diagnostic_code == (
+        "project.translate.opengl-zero-value-unsupported"
+    )

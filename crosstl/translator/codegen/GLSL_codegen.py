@@ -283,6 +283,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
+from .glsl_zero_values import zero_array_value
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -55186,7 +55187,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def zero_value_expression(self, vtype):
         if isinstance(vtype, ArrayType):
-            return self.zero_array_expression(vtype)
+            return zero_array_value(self, vtype, self.map_type(vtype))
         mapped_type = self.map_type(vtype)
         if mapped_type == "void":
             return ""
@@ -55206,10 +55207,9 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{mapped_type}(0)"
         if mapped_type.startswith(("vec", "dvec", "mat", "dmat")):
             return f"{mapped_type}(0.0)"
-        array = re.fullmatch(r"(.+)\[(\d+)\]", mapped_type)
-        if array is not None and int(array.group(2)) > 0:
-            element = self.zero_value_expression(array.group(1))
-            return f"{mapped_type}({', '.join([element] * int(array.group(2)))})"
+        array = zero_array_value(self, None, mapped_type)
+        if array is not None:
+            return array
         struct = self.glsl_struct_node(mapped_type)
         if struct is not None:
             member_values = []
@@ -55220,17 +55220,6 @@ complex64_t crossgl_complex64_mod_assign(
                 member_values.append(self.zero_value_expression(member_type))
             return f"{mapped_type}({', '.join(member_values)})"
         return f"{mapped_type}(0)"
-
-    def zero_array_expression(self, vtype):
-        """``T[N](z, ..., z)``: a GLSL array constructor takes one argument per element (GLSL 4.60 section 5.4.4)."""
-        count = self.positive_int_value(getattr(vtype, "size", None))
-        if count is None:
-            raise ValueError(
-                f"OpenGL cannot zero-initialize the array type {self.map_type(vtype)}: its size is not a "
-                "constant the translator can evaluate, and a GLSL array constructor takes one argument per element"
-            )
-        element = self.zero_value_expression(vtype.element_type)
-        return f"{self.map_type(vtype)}({', '.join([element] * count)})"
 
     def positive_int_value(self, value):
         literal = self.literal_int_value(value, self.literal_int_constants)
