@@ -37,6 +37,10 @@ from .dxr_ray_interfaces import (
 )
 from .enum_values import lower_enum_values
 from .fixed_samplers import bind_fixed_samplers
+from .fragment_colour_outputs import (
+    FragmentColourOutputUnsupportedError,
+    name_fragment_colour_outputs,
+)
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .half import HalfFloatUnsupportedError, legalize_half_floats
@@ -131,6 +135,7 @@ __all__ = [
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
+    "FragmentColourOutputUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
@@ -202,8 +207,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). A position built-in on a vertex input names the ``Position``
-    vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
+    attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
+    names the ``Position`` vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
     target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
@@ -282,6 +288,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     pass_builtin_inputs(program, report.target)
+    name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)

@@ -424,6 +424,7 @@ from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import collect_resource_array_size_hints
 from .sampler_pairs import canonicalize_separate_textures
 from .sizeof_calls import sizeof_call_bytes
+from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -1488,32 +1489,11 @@ class MetalCodeGen(
             "SV_PrimitiveId": "primitive_id",
             "sv_primitive_id": "primitive_id",
             "sv_primitiveid": "primitive_id",
-            "Position": "attribute(0)",
-            "POSITION": "attribute(0)",
-            "Normal": "attribute(1)",
-            "NORMAL": "attribute(1)",
-            "Tangent": "attribute(2)",
-            "TANGENT": "attribute(2)",
-            "Binormal": "attribute(3)",
-            "BINORMAL": "attribute(3)",
-            "TexCoord": "attribute(4)",
-            "TEXCOORD": "attribute(4)",
-            "TexCoord0": "attribute(5)",
-            "TEXCOORD0": "attribute(5)",
-            "TexCoord1": "attribute(6)",
-            "TEXCOORD1": "attribute(6)",
-            "TexCoord2": "attribute(7)",
-            "TEXCOORD2": "attribute(7)",
-            "TexCoord3": "attribute(8)",
-            "TEXCOORD3": "attribute(8)",
-            "TexCoord4": "attribute(9)",
-            "TEXCOORD4": "attribute(9)",
-            "TexCoord5": "attribute(10)",
-            "TEXCOORD5": "attribute(10)",
-            "TexCoord6": "attribute(11)",
-            "TEXCOORD6": "attribute(11)",
-            "TexCoord7": "attribute(12)",
-            "TEXCOORD7": "attribute(12)",
+            # The classic vertex semantics keep the location every target gives them.
+            **{
+                semantic: f"attribute({location})"
+                for semantic, location in SEMANTIC_LOCATIONS.items()
+            },
             # Vertex outputs
             "gl_Position": "position",
             "SV_POSITION": "position",
@@ -27962,10 +27942,13 @@ class MetalCodeGen(
             hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
             if hlsl_attribute is not None:
                 return f" [[{hlsl_attribute}]]"
+            mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
+            if mapped_semantic.startswith("attribute("):
+                # A classic vertex semantic keeps the location every target gives it.
+                return f" [[{mapped_semantic}]]"
             hlsl_color = self.metal_hlsl_color_semantic(semantic)
             if hlsl_color is not None:
                 return f" [[user({hlsl_color})]]"
-            mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
             if (
                 self.is_metal_tessellation_helper_semantic(semantic)
                 and mapped_semantic != "primitive_id"
