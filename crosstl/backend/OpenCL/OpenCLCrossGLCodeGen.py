@@ -5,13 +5,16 @@ import re
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     BinaryOpNode,
+    CastNode,
     DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
     FunctionNode,
     KernelNode,
+    MemberAccessNode,
     ReturnNode,
     StructNode,
+    TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
@@ -24,6 +27,21 @@ from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
+_OPENCL_WORK_ITEM_QUERIES = frozenset(
+    {
+        "get_enqueued_local_size",
+        "get_global_id",
+        "get_global_linear_id",
+        "get_global_offset",
+        "get_global_size",
+        "get_group_id",
+        "get_local_id",
+        "get_local_linear_id",
+        "get_local_size",
+        "get_num_groups",
+        "get_work_dim",
+    }
+)
 
 
 class OpenCLRecordSemanticError(ValueError):
@@ -870,6 +888,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 )
 
     def emit_statement(self, stmt):
+        if self.is_opencl_prefetch_call(stmt):
+            for arg in stmt.args:
+                self.emit_opencl_discarded_expression_effects(arg)
+            return
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
         if (
             can_lower_event_local
@@ -885,6 +907,74 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 if self.emit_opencl_async_work_group_copy(stmt):
                     return
         return super().emit_statement(stmt)
+
+    def is_opencl_prefetch_call(self, stmt):
+        # prefetch(p, n) only hints that the global range [p, p + n) will be
+        # read soon and has no observable effect. Copying it into CrossGL
+        # leaves a call, and usually a pointer cast, that no target declares,
+        # so drop the call and keep only the argument side effects.
+        return (
+            isinstance(stmt, FunctionCallNode)
+            and stmt.name == "prefetch"
+            and len(getattr(stmt, "args", []) or []) == 2
+        )
+
+    def emit_opencl_discarded_expression_effects(self, expression):
+        # The value is unused, so only its side effects are kept: each
+        # assignment, ++/-- or possibly side-effecting call becomes its own
+        # statement, without the casts, arithmetic and subscripts around it.
+        if self.opencl_expression_is_side_effect_free(expression):
+            return
+        operands = self.opencl_always_evaluated_operands(expression)
+        if operands is None:
+            self.emit_statement(expression)
+            return
+        for operand in operands:
+            self.emit_opencl_discarded_expression_effects(operand)
+
+    def opencl_expression_is_side_effect_free(self, expression):
+        if expression is None or isinstance(expression, (str, int, float, bool)):
+            return True
+        if isinstance(expression, TernaryOpNode):
+            operands = [
+                expression.condition,
+                expression.true_expr,
+                expression.false_expr,
+            ]
+        elif isinstance(expression, BinaryOpNode) and expression.op in ("&&", "||"):
+            operands = [expression.left, expression.right]
+        else:
+            operands = self.opencl_always_evaluated_operands(expression)
+            if operands is None:
+                return False
+        return all(
+            self.opencl_expression_is_side_effect_free(operand) for operand in operands
+        )
+
+    def opencl_always_evaluated_operands(self, expression):
+        """The operands evaluated whenever ``expression`` is, or ``None`` when
+        it may have a side effect itself or evaluates an operand conditionally."""
+        if isinstance(expression, FunctionCallNode):
+            if expression.name == "sizeof":
+                return []  # sizeof does not evaluate its operand
+            if expression.name in _OPENCL_WORK_ITEM_QUERIES:
+                return list(getattr(expression, "args", []) or [])
+            return None
+        if isinstance(expression, UnaryOpNode):
+            if "++" in str(expression.op) or "--" in str(expression.op):
+                return None
+            return [expression.operand]
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in ("&&", "||"):
+                return None
+            return [expression.left, expression.right]
+        if isinstance(expression, CastNode):
+            return [getattr(expression, "expression", None)]
+        if isinstance(expression, ArrayAccessNode):
+            return [expression.array, expression.index]
+        if isinstance(expression, MemberAccessNode):
+            return [expression.object]
+        return None
 
     def can_lower_opencl_event_local_memory(self):
         return self.opencl_sdk_reduce_materialize_op
