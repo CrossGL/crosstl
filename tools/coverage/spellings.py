@@ -49,11 +49,11 @@ RENAMES = {
         "WaveActiveAnyTrue": "anyInvocation",
         "WaveActiveAllEqual": "allInvocationsEqual",
     },
-    # CUDA after :mod:`.features.cuda` drops the single-precision suffix: ``fabsf`` arrives here as ``fabs``.
+    # CUDA after :mod:`.features.cuda` drops the single-precision suffix: ``fabsf`` arrives here as ``fabs``. CrossGL's
+    # fmin and fmax return the operand that is not NaN, as C's, MSL's and SPIR-V's NMin and NMax do, and its min and
+    # max need not, so CUDA's and Metal's fmin and fmax keep their names.
     "cuda": {
         "fabs": "abs",
-        "fmin": "min",
-        "fmax": "max",
         "rsqrt": "inversesqrt",
         "atan2": "atan",
         "rint": "roundEven",
@@ -108,8 +108,6 @@ RENAMES = {
     "metal": {
         "atan2": "atan",
         "fabs": "abs",
-        "fmax": "max",
-        "fmin": "min",
         "rsqrt": "inversesqrt",
         "rint": "roundEven",
         "select": "mix",

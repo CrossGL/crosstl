@@ -211,6 +211,35 @@ def _glsl_command(path, stage, scratch):
     ]
 
 
+# A specialization constant without a default reads its source-path value from a macro that the host defines after
+# #version (crosstl/translator/codegen/glsl_specialization_macros.py), as an MSL host passes MTLFunctionConstantValues.
+# The check defines each macro with the value the artifact's SPIR-V path encodes, as spirv-val checks a SPIR-V module
+# under its default specialization.
+SPECIALIZATION_MACRO = re.compile(
+    r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)"
+)
+GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+
+
+def glsl_specialized_source(path, text, scratch):
+    """``path``, or a copy in ``scratch`` that defines the artifact's specialization macros after ``#version``."""
+    macros = {
+        match.group(2): match.group(1) for match in SPECIALIZATION_MACRO.finditer(text)
+    }
+    version = GLSL_VERSION_LINE.search(text)
+    if not macros or version is None:
+        return path
+    following_line = text.count("\n", 0, version.end()) + 1
+    defines = "".join(
+        f"#define {name} {value}\n" for name, value in sorted(macros.items())
+    )
+    copy = Path(scratch) / Path(path).name
+    copy.write_text(
+        f"{text[: version.end()]}{defines}#line {following_line}\n{text[version.end() :]}"
+    )
+    return str(copy)
+
+
 def check_glsl(path, stages):
     """glslang with the rules of the API the stages exist in (:func:`glsl_environment`)."""
     missing = _missing("glslangValidator")
@@ -225,8 +254,9 @@ def check_glsl(path, stages):
     selected = guarded or list(stages)
     results = []
     with tempfile.TemporaryDirectory(prefix="crosstl-glslang-") as scratch:
+        source = glsl_specialized_source(path, text, scratch)
         for stage in selected:
-            result = run(_glsl_command(path, stage, scratch), timeout=TIMEOUT)
+            result = run(_glsl_command(source, stage, scratch), timeout=TIMEOUT)
             results.append(result)
             if result.status != "accepted":
                 break

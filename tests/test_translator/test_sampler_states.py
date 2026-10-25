@@ -152,13 +152,10 @@ def test_metal_round_trip_compiles(tmp_path):
     assert compiled.returncode == 0, compiled.stderr
 
 
-# Direct3D and Vulkan bind fixed state as host samplers instead (test_fixed_sampler_bindings.py).
+# Direct3D, Vulkan and OpenGL bind fixed state as host samplers instead (test_fixed_sampler_bindings.py).
 @pytest.mark.parametrize(
     ("backend", "code", "cites"),
-    [
-        ("opengl", "opengl", "GLSL 4.60 section 4.1.7"),
-        ("webgl", "webgl", "GLSL 4.60 section 4.1.7"),
-    ],
+    [("webgl", "webgl", "GLSL 4.60 section 4.1.7")],
 )
 def test_targets_without_shader_declared_sampler_state_refuse_it(
     tmp_path, backend, code, cites

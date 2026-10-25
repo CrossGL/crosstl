@@ -31,7 +31,7 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`; the core grammar's shader subset follows |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
 | GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
@@ -45,8 +45,8 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
-control flow, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the sources at
-their pinned commits, checks their digests and caches them. No feature list is written by hand.
+control flow, operators, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the
+sources at their pinned commits, checks their digests and caches them. No feature list is written by hand.
 
 ### 3. Each feature is checked by the target's reference validator
 
