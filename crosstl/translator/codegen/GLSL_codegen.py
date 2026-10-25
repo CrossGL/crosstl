@@ -220,12 +220,11 @@ from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
     wrap_glsl_helper_stage_guard,
 )
-from .glsl_specialization_macros import glsl_specialization_macro_name
-from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
 from .glsl_hlsl_matrix import GLSLEmulatedMatrices, emulated_matrix_shape
 from .glsl_hlsl_precise import GLSLHlslPreciseMixin
@@ -258,6 +257,7 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_stage_distances import (
     distance_input_alias,
     distance_output_epilogue,
