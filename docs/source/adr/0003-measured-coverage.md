@@ -31,7 +31,7 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`; the core grammar's shader subset follows |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
 | GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |
@@ -45,8 +45,8 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 Apple publishes the Metal specification only as a PDF, so Metal is the one list kept in the repository; it changes
 only when the script is rerun for a newer toolchain. Language-level categories are added on top of built-ins: types,
-control flow, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the sources at
-their pinned commits, checks their digests and caches them. No feature list is written by hand.
+control flow, operators, resources, compute (shared memory, barriers, atomics, subgroups) and stages. CI fetches the
+sources at their pinned commits, checks their digests and caches them. No feature list is written by hand.
 
 ### 3. Each feature is checked by the target's reference validator
 
@@ -60,14 +60,17 @@ compiling to SPIR-V, or to HLSL that DXC checks for a function SPIR-V lacks or s
 backend (Rust) or clang for its SPIR target (OpenCL C); none of them needs a GPU to compile. Input probes are
 validated by emitting the imported CrossGL back to the source language. CrossTL has no OpenCL C generator, so an
 OpenCL C probe is emitted as HLSL, the target whose output row covers the most built-ins, and checked by DXC.
-Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one input
-buffer also runs: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs
-through the harness's `run_suite`, and a translation that writes other results is `wrong`. The runtime harness is
-not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V by the
-language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or whose
-SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. CI executes the
-Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the
-Linux job.
+Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
+translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
+at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
+harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. The runtime
+harness is not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V
+by the language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or
+whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. llvmpipe's
+OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a native GLSL probe, or a 4.60
+translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for them on lavapipe. CI executes the
+Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the Linux
+job.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score

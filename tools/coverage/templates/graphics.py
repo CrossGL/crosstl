@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
+from . import composites, operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -149,6 +150,8 @@ HLSL = {
         "float2x2 m = float2x2(fin[i], 2.0, 1.0, 3.0);\nfloat2 v = mul(m, float2(1.0, fin[i]));\n"
         "outp[i] = v.y;"
     ),
+    **operators.HLSL,
+    **composites.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -172,9 +175,10 @@ HLSL = {
     ),
     # HLSL has no system value for the number of groups; applications pass it in a constant buffer.
     "num-workgroups": ABSENT,
+    # Slot 3, as in the other languages: the SPIR-V that DXC and slangc write puts register b0 at the binding of u0.
     "uniform-buffer": Template(
         "outp[i] = fin[i] * scale;",
-        "cbuffer Params : register(b0) {\n    float scale;\n};",
+        "cbuffer Params : register(b3) {\n    float scale;\n};",
     ),
     "read-only-buffer": Template(
         "outp[i] = rin[i];", "StructuredBuffer<float> rin : register(t0);"
@@ -470,6 +474,8 @@ WGSL = {
     "matrix-vector-product": Template(
         "let m = mat2x2<f32>(fin[i], 1.0, 2.0, 3.0);\nlet v = m * vec2<f32>(1.0, fin[i]);\noutp[i] = v.y;"
     ),
+    **operators.WGSL,
+    **composites.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

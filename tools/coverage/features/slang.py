@@ -317,8 +317,12 @@ def _closing(text: str, start: int, pair: str = "()") -> int:
 def _declarations(meta: _Meta, raw: str) -> list[Declaration]:
     raw = " ".join(raw.split())
     head, attributes, generics = _strip_leading(raw)
-    # An ``internal`` function is not part of the public module, whichever section declares it.
-    if re.search(r"\binternal\b", raw[: len(raw) - len(head)]):
+    # An ``internal`` function is not part of the public module, whichever section declares it. A function
+    # extension, such as ``fwd_diff(CoopVec<T, N>::__subscript::get)``, gives an existing function a derivative and
+    # declares no function of its own.
+    if re.search(r"\binternal\b", raw[: len(raw) - len(head)]) or head.startswith(
+        "__func_extension"
+    ):
         return []
     requires = " ".join(a for a in attributes if a.startswith("require"))
     # Splices may appear in the name, the types and the constraints, so the three are expanded together.
@@ -439,6 +443,9 @@ def _parameter(text: str, generics: dict[str, str]) -> Param:
     if direction == "const" and words[-2:] == ["int", "k"]:
         # The column count of a packed cooperative-vector multiply.
         return Param(COOP_COLUMNS, direction)
+    if direction == "const" and words[-2:] == ["bool", "condition"]:
+        # What static_assert checks while compiling.
+        return Param(Type("bool"), "condition")
     if spelling in _STRINGS:
         return Param(STRING, "const")
     if spelling.endswith("*") and spelling.count("*") == 1:
@@ -603,6 +610,26 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
     return ""
 
 
+def unprobed_generic(declaration: Declaration) -> str:
+    """Why no probe can call a function with a type generic parameter that neither its parameters nor its result
+    mention and whose constraint has no probe type, such as ``usesNativeSpirvDescriptorHandle<T :
+    IOpaqueDescriptor>()``: slangc cannot infer the argument, and the probe has no type to spell for it. An empty
+    string when there is no such parameter.
+    """
+    match = _HEAD.fullmatch(declaration.head)
+    if not match:
+        return ""
+    mentioned = (
+        f"{match.group('params')} {match.group('arrow') or match.group('result')}"
+    )
+    for name, bound in _generics(declaration.generics).items():
+        if bound.startswith("?") and not re.search(
+            rf"\b{re.escape(name)}\b", mentioned
+        ):
+            return f"no probe type for the generic parameter {name} : {bound[1:]}"
+    return ""
+
+
 def parse(
     core: str, hlsl: str, glsl_names: set[str] | frozenset[str] = frozenset()
 ) -> list[Feature]:
@@ -624,6 +651,8 @@ def parse(
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))
         source = next((d for s, d in candidates if s == chosen), declared[0][1])
+        if chosen and (unprobed := unprobed_generic(source)):
+            chosen, note = None, unprobed
         spelled = explicit(source, chosen) if chosen else ""
         crossgl = spellings.spelling("slang", name, glsl_names)
         features.append(

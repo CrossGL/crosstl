@@ -23,6 +23,14 @@ from ..common_ast import (
 from .subpass_inputs import subpass_input_crossgl_type
 
 
+def _combined_component_width(widths):
+    """Width of a componentwise HLSL operation: scalars splat, and DXC truncates wider vectors to the narrowest."""
+    if None in widths:
+        return None
+    vectors = [width for width in widths if width > 1]
+    return min(vectors) if vectors else 1
+
+
 class HLSLValueShapeMixin:
     """HLSL value-shape and constant-expression members of ``HLSLToCrossGLConverter``."""
 
@@ -319,7 +327,7 @@ class HLSLValueShapeMixin:
         if isinstance(expr, BinaryOpNode):
             widths = [self.hlsl_component_width(expr.left)]
             widths.append(self.hlsl_component_width(expr.right))
-            return None if None in widths else max(widths)
+            return _combined_component_width(widths)
         if isinstance(expr, TernaryOpNode):
             widths = [
                 self.hlsl_component_width(expr.true_expr),
@@ -345,7 +353,7 @@ class HLSLValueShapeMixin:
                 return 3
             if callee in self.HLSL_COMPONENTWISE_INTRINSICS and expr.args:
                 widths = [self.hlsl_component_width(arg) for arg in expr.args]
-                return None if None in widths else max(widths)
+                return _combined_component_width(widths)
         return None
 
     def is_swizzle_object(self, expr):

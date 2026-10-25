@@ -10,7 +10,7 @@ nearest filtering, no mipmapping, no comparison). :func:`decode_sampler_state` t
 :class:`SamplerState`, refusing any argument outside the vocabulary with :class:`SamplerStateArgumentError`.
 
 Only Metal declares such state in shader source. The other targets fix sampler state outside the shader. For
-Direct3D and Vulkan, whose hosts fix it in the sampler a binding names, :mod:`.fixed_samplers` first turns every
+Direct3D, Vulkan and OpenGL, whose hosts fix it in the sampler a binding names, :mod:`.fixed_samplers` first turns every
 fixed sampler into such a binding and records its state for the host. For the remaining targets,
 :func:`legalize_sampler_states` refuses the state with :class:`FixedSamplerStateUnsupportedError` rather than
 sampling with whatever sampler the host happens to bind:

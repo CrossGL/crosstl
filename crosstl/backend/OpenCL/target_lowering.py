@@ -48,6 +48,17 @@ _EVENT_LOCAL_MEMORY_BUILTINS = {
     "async_work_group_copy",
     "wait_group_events",
 }
+# OpenCL C 2.0 device-side enqueue event functions.
+# They create and signal clk_event_t objects that only an OpenCL device queue
+# understands, and no target has an equivalent.
+_DEVICE_ENQUEUE_EVENT_BUILTINS = {
+    "capture_event_profiling_info",
+    "create_user_event",
+    "is_valid_event",
+    "release_event",
+    "retain_event",
+    "set_user_event_status",
+}
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _SYNTHETIC_BUILTIN_ALIASES = {
     "thread_id": "gl_GlobalInvocationID",
@@ -271,6 +282,32 @@ def _opencl_target_contracts(cgl_ast):
             )
         )
 
+    # Before OpenCL C 2.0 these names are not reserved, so a call to a helper the
+    # program defines under one of them is an ordinary call.
+    defined_names = {
+        function.name for function in functions if _function_statements(function)
+    }
+    for builtin_name in sorted(
+        called_names.intersection(_DEVICE_ENQUEUE_EVENT_BUILTINS) - defined_names
+    ):
+        contracts.append(
+            OpenCLTargetUnsupportedContract(
+                code=OPENCL_TARGET_BUILTIN_CODE,
+                kind="device-enqueue-event-builtin",
+                name=builtin_name,
+                signature=f"{builtin_name}(...)",
+                reason=(
+                    "device-side enqueue event builtins operate on OpenCL "
+                    "clk_event_t objects that no target can represent"
+                ),
+                action=(
+                    "move event creation and signalling to the host, or keep the "
+                    "source on an OpenCL path"
+                ),
+                missing_capabilities=("opencl.device-enqueue-event",),
+            )
+        )
+
     return tuple(contracts)
 
 
@@ -313,6 +350,17 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
         unsupported.append(
             "OpenCL event/local-memory builtins require semantics not preserved by "
             f"target lowering: {_format_list(event_local_calls)}"
+        )
+
+    device_event_calls = [
+        contract.name
+        for contract in contracts
+        if contract.kind == "device-enqueue-event-builtin"
+    ]
+    if device_event_calls:
+        unsupported.append(
+            "OpenCL device-side enqueue event builtins have no target "
+            f"equivalent: {_format_list(device_event_calls)}"
         )
 
     target = _target_backend_label(target_backend)
@@ -490,7 +538,7 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
     )
 
 
-_OPAQUE_RESOURCE_TYPE_PREFIXES = ("texture", "image", "sampler")
+_OPAQUE_RESOURCE_TYPE_PREFIXES = ("texture", "image", "iimage", "uimage", "sampler")
 
 
 def _is_opaque_resource_parameter(parameter):

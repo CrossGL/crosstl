@@ -5,6 +5,7 @@ import re
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     BinaryOpNode,
+    CastNode,
     DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
@@ -13,6 +14,7 @@ from crosstl.backend.HIP.HipAst import (
     MemberAccessNode,
     ReturnNode,
     StructNode,
+    TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
@@ -25,6 +27,21 @@ from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
+_OPENCL_WORK_ITEM_QUERIES = frozenset(
+    {
+        "get_enqueued_local_size",
+        "get_global_id",
+        "get_global_linear_id",
+        "get_global_offset",
+        "get_global_size",
+        "get_group_id",
+        "get_local_id",
+        "get_local_linear_id",
+        "get_local_size",
+        "get_num_groups",
+        "get_work_dim",
+    }
+)
 
 
 class OpenCLRecordSemanticError(ValueError):
@@ -40,6 +57,24 @@ class OpenCLRecordSemanticError(ValueError):
         super().__init__(
             f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
         )
+
+
+class OpenCLAtomicOrderUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``*_explicit`` atomic whose memory order or scope CrossGL atomics cannot keep."""
+
+    code = CODE_PREFIX + "opencl-atomic-order-unsupported"
+
+
+class OpenCLFenceScopeUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C fence or sub-group barrier whose memory scope no CrossGL fence covers."""
+
+    code = CODE_PREFIX + "opencl-fence-scope-unsupported"
+
+
+class OpenCLImageWriteUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``write_image*`` call that no CrossGL ``imageStore`` keeps."""
+
+    code = CODE_PREFIX + "opencl-image-write-unsupported"
 
 
 class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
@@ -153,7 +188,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "clk_event_t": "u64",
         "image1d_t": "image1D",
         "image1d_array_t": "image1DArray",
-        "image1d_buffer_t": "image1D",
+        "image1d_buffer_t": "imageBuffer",
         "image2d_t": "image2D",
         "image2d_array_t": "image2DArray",
         "image2d_depth_t": "image2D",
@@ -191,6 +226,29 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "get_local_size": "gl_WorkGroupSize",
         "get_num_groups": "gl_NumWorkGroups",
     }
+    # OpenCL 2.0 defines get_local_linear_id() as
+    # (lid.z * lsize.y + lid.y) * lsize.x + lid.x, which is the local
+    # invocation index every compute target already exposes.
+    OPENCL_LINEAR_ID_MAP = {
+        "get_local_linear_id": "gl_LocalInvocationIndex",
+    }
+    # OpenCL fence flags name the address spaces a fence orders; each maps to
+    # the CrossGL fence over the same memory. More than one flag, or a flag
+    # that is not a literal, needs the fence over all memory.
+    OPENCL_MEM_FENCE_FLAG_BARRIERS = {
+        "CLK_LOCAL_MEM_FENCE": "memoryBarrierShared",
+        "CLK_GLOBAL_MEM_FENCE": "memoryBarrierBuffer",
+        "CLK_IMAGE_MEM_FENCE": "memoryBarrierImage",
+    }
+    OPENCL_MEM_FENCE_FUNCTIONS = frozenset(
+        {"mem_fence", "read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
+    )
+    # The CrossGL fences order memory at device scope at most, the scopes in
+    # OPENCL_ATOMIC_DEVICE_SCOPES, and subgroupBarrier() orders it for the
+    # sub-group only.
+    OPENCL_SUB_GROUP_FENCE_SCOPES = frozenset(
+        {"memory_scope_work_item", "memory_scope_sub_group"}
+    )
     OPENCL_ATOMIC_MAP = {
         "atomic_add": "atomicAdd",
         "atomic_fetch_add": "atomicAdd",
@@ -701,9 +759,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
             self.emit("workgroupBarrier();")
-        elif node.sync_type == "mem_fence":
-            args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// OpenCL mem_fence({args})")
+        elif node.sync_type == "mem_fence" and node.args:
+            # mem_fence(flags) orders loads and stores over the flagged memory,
+            # as read_mem_fence and write_mem_fence do for one of them.
+            self.emit(f"{self.format_opencl_fence_call('mem_fence', node.args)};")
         else:
             super().visit_SyncNode(node)
 
@@ -811,6 +870,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            image_write = self.format_opencl_image_write(func_name, raw_args)
+            if image_write is not None:
+                return image_write
             image_read = self.format_opencl_image_read(func_name, raw_args)
             if image_read is not None:
                 return image_read
@@ -826,7 +888,113 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            fence = self.format_opencl_fence_call(func_name, raw_args)
+            if fence is not None:
+                return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_fence_call(self, func_name, args):
+        if func_name == "sub_group_barrier" and args:
+            # sub_group_barrier(flags[, scope]) synchronizes the sub-group and
+            # orders the flagged memory, which subgroupBarrier() does for the
+            # default sub-group scope.
+            self.require_opencl_fence_scope(
+                func_name, args[1:], self.OPENCL_SUB_GROUP_FENCE_SCOPES
+            )
+            return "subgroupBarrier()"
+        if func_name not in self.OPENCL_MEM_FENCE_FUNCTIONS or not args:
+            return None
+        if func_name == "atomic_work_item_fence":
+            # The memory order is dropped: the CrossGL fences are acquire-release
+            # fences and no target has a stronger one, so seq_cst lowers the same.
+            self.require_opencl_fence_scope(
+                func_name, args[2:], self.OPENCL_ATOMIC_DEVICE_SCOPES
+            )
+        flags = set(re.findall(r"\bCLK_\w+\b", self.visit(args[0])))
+        if len(flags) == 1:
+            barrier = self.OPENCL_MEM_FENCE_FLAG_BARRIERS.get(flags.pop())
+            if barrier is not None:
+                return f"{barrier}()"
+        return "memoryBarrier()"
+
+    def require_opencl_fence_scope(self, func_name, scope_args, scopes):
+        """Refuse a fence whose memory_scope argument is wider than ``scopes``."""
+        for arg in scope_args:
+            scope = self.visit(arg).strip()
+            if scope not in scopes:
+                raise OpenCLFenceScopeUnsupportedError(
+                    f"{func_name} with {scope}: CrossGL has no {func_name} "
+                    "lowering that orders memory at that scope"
+                )
+
+    # OpenCL images carry no element type; the write function names it, so an
+    # image written with write_imagei or write_imageui is an integer image.
+    OPENCL_IMAGE_WRITE_PREFIXES = {
+        "write_imagef": "image",
+        "write_imagei": "iimage",
+        "write_imageui": "uimage",
+    }
+    OPENCL_IMAGE_STORE_SHAPES = {"1D", "1DArray", "Buffer", "2D", "2DArray", "3D"}
+    # OpenCL addresses 3D images and 2D image arrays with a four-component
+    # coordinate; imageStore and the reads take the three the image has.
+    OPENCL_IMAGE_INT4_COORD_SHAPES = {"3D", "2DArray"}
+    OPENCL_DEPTH_IMAGE_TYPES = {"image2d_depth_t", "image2d_array_depth_t"}
+
+    def opencl_image_write_prefix(self, func_name):
+        if not isinstance(func_name, str) or self.is_user_defined_function(func_name):
+            return None
+        return self.OPENCL_IMAGE_WRITE_PREFIXES.get(func_name)
+
+    def get_resource_object_call_hint(self, function_name, args=None):
+        prefix = self.opencl_image_write_prefix(function_name)
+        if prefix is not None:
+            return 0, prefix
+        return super().get_resource_object_call_hint(function_name, args)
+
+    def convert_hip_resource_object_base_type(self, hip_type, hint):
+        if hint not in self.OPENCL_IMAGE_WRITE_PREFIXES.values():
+            return super().convert_hip_resource_object_base_type(hip_type, hint)
+        hip_type = self.strip_type_qualifiers(hip_type)
+        if hip_type in self.OPENCL_DEPTH_IMAGE_TYPES:
+            raise OpenCLImageWriteUnsupportedError(
+                f"writing to {hip_type}: CrossGL has no depth storage image"
+            )
+        image_type = self.OPENCL_SCALAR_TYPE_MAPPING.get(hip_type, "")
+        if not image_type.startswith("image"):
+            return None
+        return hint + image_type[len("image") :]
+
+    def format_opencl_image_write(self, func_name, args):
+        """Lower write_image{f,i,ui}(image, coord, color) to imageStore."""
+        prefix = self.opencl_image_write_prefix(func_name)
+        if prefix is None:
+            return None
+        if len(args) != 3:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} with {len(args)} arguments: only "
+                f"{func_name}(image, coord, color) has an imageStore lowering"
+            )
+        image, coord, color = args
+        image_name = image if isinstance(image, str) else getattr(image, "name", None)
+        image_type = (self.lookup_variable_type(image_name) if image_name else "") or ""
+        shape = image_type[len(prefix) :] if image_type.startswith(prefix) else None
+        if shape not in self.OPENCL_IMAGE_STORE_SHAPES:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} on {image_name or 'an image expression'} of type "
+                f"{image_type or 'unknown'}: {func_name} needs an {prefix}* image "
+                "(an image written with more than one of write_imagef, "
+                "write_imagei and write_imageui has no single type)"
+            )
+        if prefix != "image" and self.opencl_current_function_name is not None:
+            raise OpenCLImageWriteUnsupportedError(
+                f"{func_name} on parameter {image_name} of helper function "
+                f"{self.opencl_current_function_name}: an integer image type is "
+                "inferred from the writes in the kernel that declares the image"
+            )
+        rendered_coord = self.visit(coord)
+        if shape in self.OPENCL_IMAGE_INT4_COORD_SHAPES:
+            rendered_coord = f"({rendered_coord}).xyz"
+        return f"imageStore({self.visit(image)}, {rendered_coord}, {self.visit(color)})"
 
     # A read_only image (the OpenCL default access) is read through a sampler
     # or a texel fetch, so it is a sampled texture rather than a storage image.
@@ -838,9 +1006,6 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "image2d_array_t": "texture2DArray",
         "image3d_t": "texture3D",
     }
-    # OpenCL addresses 3D images and 2D image arrays with a four-component
-    # coordinate; CrossGL takes the three the image has.
-    OPENCL_IMAGE_INT4_COORD_SHAPES = {"3D", "2DArray"}
     # The CrossGL sampler state each OpenCL C sampler flag selects. A field no
     # flag names is zero: unnormalized coordinates and CLK_ADDRESS_NONE.
     # CLK_ADDRESS_NONE leaves out-of-range reads undefined, so clamp_to_edge
@@ -946,6 +1111,11 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 f"{image_type} has no CrossGL read (a depth image read returns "
                 "one float, and a buffer image is not a texture)"
             )
+        if crossgl_type.startswith(("iimage", "uimage")):
+            raise refuse(
+                "write_imagei or write_imageui makes it an integer image, and "
+                "read_imagef reads only float images"
+            )
         if not sampled and access != "read_write":
             raise refuse(
                 f"{access or 'an unknown'} {image_type or crossgl_type or 'image'} "
@@ -1028,6 +1198,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         return None
 
     def emit_statement(self, stmt):
+        if self.is_opencl_prefetch_call(stmt):
+            for arg in stmt.args:
+                self.emit_opencl_discarded_expression_effects(arg)
+            return
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
         if (
             can_lower_event_local
@@ -1043,6 +1217,74 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 if self.emit_opencl_async_work_group_copy(stmt):
                     return
         return super().emit_statement(stmt)
+
+    def is_opencl_prefetch_call(self, stmt):
+        # prefetch(p, n) only hints that the global range [p, p + n) will be
+        # read soon and has no observable effect. Copying it into CrossGL
+        # leaves a call, and usually a pointer cast, that no target declares,
+        # so drop the call and keep only the argument side effects.
+        return (
+            isinstance(stmt, FunctionCallNode)
+            and stmt.name == "prefetch"
+            and len(getattr(stmt, "args", []) or []) == 2
+        )
+
+    def emit_opencl_discarded_expression_effects(self, expression):
+        # The value is unused, so only its side effects are kept: each
+        # assignment, ++/-- or possibly side-effecting call becomes its own
+        # statement, without the casts, arithmetic and subscripts around it.
+        if self.opencl_expression_is_side_effect_free(expression):
+            return
+        operands = self.opencl_always_evaluated_operands(expression)
+        if operands is None:
+            self.emit_statement(expression)
+            return
+        for operand in operands:
+            self.emit_opencl_discarded_expression_effects(operand)
+
+    def opencl_expression_is_side_effect_free(self, expression):
+        if expression is None or isinstance(expression, (str, int, float, bool)):
+            return True
+        if isinstance(expression, TernaryOpNode):
+            operands = [
+                expression.condition,
+                expression.true_expr,
+                expression.false_expr,
+            ]
+        elif isinstance(expression, BinaryOpNode) and expression.op in ("&&", "||"):
+            operands = [expression.left, expression.right]
+        else:
+            operands = self.opencl_always_evaluated_operands(expression)
+            if operands is None:
+                return False
+        return all(
+            self.opencl_expression_is_side_effect_free(operand) for operand in operands
+        )
+
+    def opencl_always_evaluated_operands(self, expression):
+        """The operands evaluated whenever ``expression`` is, or ``None`` when
+        it may have a side effect itself or evaluates an operand conditionally."""
+        if isinstance(expression, FunctionCallNode):
+            if expression.name == "sizeof":
+                return []  # sizeof does not evaluate its operand
+            if expression.name in _OPENCL_WORK_ITEM_QUERIES:
+                return list(getattr(expression, "args", []) or [])
+            return None
+        if isinstance(expression, UnaryOpNode):
+            if "++" in str(expression.op) or "--" in str(expression.op):
+                return None
+            return [expression.operand]
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in ("&&", "||"):
+                return None
+            return [expression.left, expression.right]
+        if isinstance(expression, CastNode):
+            return [getattr(expression, "expression", None)]
+        if isinstance(expression, ArrayAccessNode):
+            return [expression.array, expression.index]
+        if isinstance(expression, MemberAccessNode):
+            return [expression.object]
+        return None
 
     def can_lower_opencl_event_local_memory(self):
         return self.opencl_sdk_reduce_materialize_op
@@ -1280,8 +1522,23 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return len(elements)
         return None
 
+    # CrossGL atomics are relaxed and atomic at device scope (work-group scope on
+    # local memory), so an *_explicit atomic can drop its memory_order and
+    # memory_scope arguments only when it asks for no more than that.
+    OPENCL_ATOMIC_DEVICE_SCOPES = frozenset(
+        {
+            "memory_scope_work_item",
+            "memory_scope_sub_group",
+            "memory_scope_work_group",
+            "memory_scope_device",
+        }
+    )
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
+        node_args = list(node.args)
+        if node.operation.endswith("_explicit"):
+            node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node_args)]
         operation = self.OPENCL_ATOMIC_MAP.get(node.operation, node.operation)
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
@@ -1289,11 +1546,36 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             args.append("1")
         return f"{operation}({', '.join(args)})"
 
+    def opencl_relaxed_atomic_arguments(self, operation, args):
+        """The plain-form arguments of an ``*_explicit`` atomic, refusing an order or scope CrossGL cannot keep."""
+        arity, orders = (3, 2) if "compare_exchange" in operation else (2, 1)
+        if len(args) not in (arity + orders, arity + orders + 1):
+            raise OpenCLAtomicOrderUnsupportedError(
+                f"{operation} takes {arity + orders} or {arity + orders + 1} "
+                f"arguments, got {len(args)}"
+            )
+        names = [self.visit(arg).strip() for arg in args[arity:]]
+        for order in names[:orders]:
+            if order != "memory_order_relaxed":
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {order}: CrossGL atomics are relaxed, so "
+                    "only memory_order_relaxed keeps its ordering"
+                )
+        for scope in names[orders:]:
+            if scope not in self.OPENCL_ATOMIC_DEVICE_SCOPES:
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {scope}: CrossGL atomics are atomic at "
+                    "device scope at most"
+                )
+        return args[:arity]
+
     def format_opencl_builtin_call(self, func_name, args):
         if func_name == "get_global_size" and len(args) == 1:
             component = self.opencl_dimension_component(args[0])
             if component is not None:
                 return f"(gl_NumWorkGroups.{component} * gl_WorkGroupSize.{component})"
+        if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
+            return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
         if base is None or len(args) != 1:
             return None

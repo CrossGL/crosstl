@@ -1537,9 +1537,10 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
         "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
-    assert "float4 ucol[arraySize]: TEXCOORD0;" in generated
-    assert "float4 dupUcol[dupArraySize]: TEXCOORD5;" in generated
-    assert "float4 dupUcol[dupArraySize]: TEXCOORD1;" not in generated
+    # The project gives the specialization constants their default values, which size the input members.
+    assert "float4 ucol[5]: TEXCOORD0;" in generated
+    assert "float4 dupUcol[12]: TEXCOORD5;" in generated
+    assert "float4 dupUcol[12]: TEXCOORD1;" not in generated
     assert_directx_vertex_validates_if_available(generated, tmp_path)
 
 
@@ -7705,7 +7706,7 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
 
     assert "struct VSMain_Input" in metal
     assert "float4 position [[attribute(0)]];" in metal
-    assert "float2 uv [[attribute(4)]];" in metal
+    assert "float2 uv [[attribute(5)]];" in metal
     assert "VSMain_Input _crossglInput [[stage_in]]" in metal
     assert "float4 position = _crossglInput.position;" in metal
     assert "float2 uv = _crossglInput.uv;" in metal
@@ -7715,8 +7716,8 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "[[TexCoord]]" not in metal
     assert "fragment void fragment_main" not in metal
 
-    assert "layout(location = 4) out vec2 out_uv;" in opengl
-    assert "layout(location = 4) in vec2 out_uv;" in opengl
+    assert "layout(location = 5) out vec2 out_uv;" in opengl
+    assert "layout(location = 5) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
     assert "fragColor = texture(g_texture, out_uv);" in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
@@ -7876,7 +7877,9 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", vertex_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
-    assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
+    assert (
+        vertex_glsl.splitlines().count("layout(location = 1) in vec4 VSIn_Color;") == 1
+    )
     # COLOR0 links by its GLSL location on both sides of the interface.
     assert (
         vertex_glsl.splitlines().count("layout(location = 13) out vec4 PSIn_Color;")
@@ -56106,13 +56109,11 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
-    # Neither target writes output. The Mojo importer turns
-    # `comptime float_dtype = DType.float32` into an untyped CrossGL global,
-    # which Metal refuses before the generated-output scan for leaked Mojo host
-    # constructs can run (#2808). The SPIR-V emitter refuses the unresolved
-    # host call itself.
+    # Metal output is scanned for leaked Mojo host constructs (the comptime
+    # DType alias is not lowered to a CrossGL global, #2808); the SPIR-V
+    # emitter refuses the unresolved host call itself, before any output exists.
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.metal-lowering-unsupported": 1,
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1,
         "project.translate.vulkan-builtin-unsupported": 1,
     }
 
@@ -56127,7 +56128,7 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         artifact["target"]: artifact for artifact in payload["artifacts"]
     }
     assert (
-        "the type of 'float_dtype' is not written" in artifacts_by_target["metal"][
+        "unresolved Mojo host/runtime constructs" in artifacts_by_target["metal"][
             "error"
         ]
     )
@@ -56144,10 +56145,16 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["sourceBackend"] == "mojo"
 
     metal = diagnostics_by_target["metal"]
-    assert metal["code"] == "project.translate.metal-lowering-unsupported"
-    assert "the type of 'float_dtype' is not written" in metal["message"]
-    assert metal["location"]["file"] == "vector_addition.mojo"
-    assert metal["missingCapabilities"] == ["metal.lowering"]
+    assert (
+        metal["code"]
+        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+    )
+    assert metal["location"]["file"].startswith("out/metal/")
+    assert metal["originalLocation"]["file"] == "vector_addition.mojo"
+    assert metal["checkKind"] == "artifact"
+    assert metal["missingCapabilities"] == [
+        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
+    ]
 
     vulkan = diagnostics_by_target["vulkan"]
     assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"

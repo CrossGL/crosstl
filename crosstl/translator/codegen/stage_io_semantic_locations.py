@@ -1,28 +1,35 @@
-"""The locations CrossTL gives user varyings that carry an HLSL-style semantic but no explicit location.
+"""The locations CrossTL gives user varyings and vertex inputs that carry no explicit location.
 
-GLSL and SPIR-V link stage outputs to the next stage's inputs by location, so every generator that declares one side
-of a stage interface must give a semantic the location the other side uses.
+GLSL, SPIR-V and WGSL link stage outputs to the next stage's inputs by location, and the host binds vertex inputs by
+location (Metal by ``[[attribute(n)]]``, which CrossTL keeps equal to the location). Every generator therefore gives a
+stage-interface value the same location, so one host binding fits every target:
 
-* GLSL places the classic vertex semantics at fixed locations: ``POSITION`` 0, ``NORMAL`` 1, ``TANGENT`` 2,
-  ``BINORMAL`` 3, ``TEXCOORD`` 4, ``TEXCOORD0``..``TEXCOORD7`` 5..12 and ``COLOR``/``COLOR0``..``COLOR7`` 13..20, in
+* An explicit ``location`` wins.
+* The classic semantics take fixed locations (:func:`semantic_location`): ``POSITION`` 0, ``NORMAL`` 1, ``TANGENT`` 2,
+  ``BINORMAL`` 3, ``TEXCOORD0``..``TEXCOORD7`` 5..12 and ``COLOR``/``COLOR0``..``COLOR7`` 13..20, in
   both the HLSL spelling and the CrossGL one the HLSL importer writes (``Normal``, ``TexCoord0``, ``Color0``). A
-  varying with another semantic has no location and links by name.
-* SPIR-V places the upper-case spellings at the same fixed locations, any ``TEXCOORDn`` at ``5 + n`` and any
-  ``COLORn`` at ``13 + n``; a structure member with another semantic takes its running position in the structure.
+  semantic without an index is index 0, as in HLSL: ``TEXCOORD`` is ``TEXCOORD0`` and ``COLOR`` is ``COLOR0``.
+* Any other user value of an interface (another semantic, or none) takes, in declaration order, the first run of
+  free locations at or after the end of the previous one, skipping every fixed location of the interface
+  (:func:`allocate_locations`). Built-in values take no location.
+
+A fragment output's ``COLORn`` names colour attachment ``n`` instead, as ``SV_Targetn`` does.
+
+GLSL links a varying whose semantic has no fixed location by name, so its generator leaves such a varying unlocated.
 """
 
 from __future__ import annotations
 
-import re
+from typing import Iterable, Sequence
 
 __all__ = [
-    "GLSL_SEMANTIC_LOCATIONS",
-    "glsl_semantic_location",
-    "spirv_semantic_location",
+    "SEMANTIC_LOCATIONS",
+    "allocate_locations",
+    "semantic_location",
 ]
 
 
-def _glsl_table():
+def _table():
     table = {
         "Position": 0,
         "POSITION": 0,
@@ -32,11 +39,15 @@ def _glsl_table():
         "TANGENT": 2,
         "Binormal": 3,
         "BINORMAL": 3,
-        "TexCoord": 4,
-        "TEXCOORD": 4,
+        # HLSL reads a semantic without an index as index 0.
+        "TexCoord": 5,
+        "TEXCOORD": 5,
         "Color": 13,
         "COLOR": 13,
     }
+    for spelling in list(table):
+        if spelling not in ("TexCoord", "TEXCOORD", "Color", "COLOR"):
+            table[f"{spelling}0"] = table[spelling]
     for index in range(8):
         table[f"TexCoord{index}"] = 5 + index
         table[f"TEXCOORD{index}"] = 5 + index
@@ -45,36 +56,38 @@ def _glsl_table():
     return table
 
 
-GLSL_SEMANTIC_LOCATIONS = _glsl_table()
-
-_SPIRV_FIXED_LOCATIONS = {
-    "POSITION": 0,
-    "NORMAL": 1,
-    "TANGENT": 2,
-    "BINORMAL": 3,
-    "TEXCOORD": 4,
-    "COLOR": 13,
-}
+SEMANTIC_LOCATIONS = _table()
 
 
-def glsl_semantic_location(semantic) -> int | None:
-    """The GLSL location of a user varying with ``semantic``, or ``None`` when it links by name."""
+def semantic_location(semantic) -> int | None:
+    """The fixed location of a user value with ``semantic``, or ``None`` when its interface allocates one."""
     if semantic is None:
         return None
-    return GLSL_SEMANTIC_LOCATIONS.get(str(semantic))
+    return SEMANTIC_LOCATIONS.get(str(semantic))
 
 
-def spirv_semantic_location(semantic) -> int | None:
-    """The fixed SPIR-V location of ``semantic``, or ``None`` when the member's position decides it."""
-    if semantic is None:
-        return None
-    text = str(semantic)
-    if text in _SPIRV_FIXED_LOCATIONS:
-        return _SPIRV_FIXED_LOCATIONS[text]
-    match = re.fullmatch(r"TEXCOORD(\d+)", text)
-    if match:
-        return 5 + int(match.group(1))
-    match = re.fullmatch(r"COLOR(\d+)", text)
-    if match:
-        return 13 + int(match.group(1))
-    return None
+def allocate_locations(
+    entries: Sequence[tuple[int | None, int]], occupied: Iterable[int] = ()
+) -> list[int]:
+    """The locations of an interface's user values, given as ``(fixed location or None, span)`` in declaration order.
+
+    A value with a fixed location keeps it. The others take, in order, the first ``span`` consecutive locations at or
+    after the end of the previous allocated value that neither a fixed value nor ``occupied`` covers.
+    """
+    used = set(occupied)
+    for fixed, span in entries:
+        if fixed is not None:
+            used.update(range(fixed, fixed + max(span, 1)))
+    locations = []
+    next_location = 0
+    for fixed, span in entries:
+        if fixed is not None:
+            locations.append(fixed)
+            continue
+        span = max(span, 1)
+        while any(slot in used for slot in range(next_location, next_location + span)):
+            next_location += 1
+        locations.append(next_location)
+        used.update(range(next_location, next_location + span))
+        next_location += span
+    return locations

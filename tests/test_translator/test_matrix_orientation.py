@@ -121,6 +121,49 @@ def test_hlsl_refuses_reordering_two_side_effecting_subscripts():
         HLSLCodeGen().generate(parse(source))
 
 
+COMPONENTWISE_SHADER = """
+shader MatrixColumns {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            mat2 m = mat2(fin[i], 2.0, 3.0, 4.0);
+            mat2 n = mat2(1.0, 2.0, 3.0, fin[i]);
+            vec2 v = vec2(fin[i], 1.0);
+            vec3 w = vec3(1.0, 2.0, fin[i]);
+            mat2x3 p = mat2x3(1.0, 2.0, 3.0, 4.0, 5.0, fin[i]);
+            vec2 a = (m / 2.0)[1];
+            vec2 b = (m + 1.0)[1];
+            vec2 c = (1.0 - m)[1];
+            vec2 d = matrixCompMult(m, n)[1];
+            vec2 e = outerProduct(v, v)[1];
+            vec2 g = (m - n)[i];
+            vec2 h = outerProduct(v, w)[2];
+            vec3 j = matrixCompMult(p, p)[1];
+            outp[i] = a.x + b.x + c.x + d.x + e.x + g.x + h.x + j.x;
+        }
+    }
+}
+"""
+
+
+def test_hlsl_subscripts_componentwise_matrix_results_by_column():
+    hlsl = HLSLCodeGen().generate(parse(COMPONENTWISE_SHADER))
+
+    assert "float2 a = ((m / 2.0))._m01_m11;" in hlsl
+    assert "float2 b = ((m + 1.0))._m01_m11;" in hlsl
+    assert "float2 c = ((1.0 - m))._m01_m11;" in hlsl
+    assert "float2 d = ((m * n))._m01_m11;" in hlsl
+    assert "float2 e = (mul(float2x1(v), float1x2(v)))._m01_m11;" in hlsl
+    assert "float2 g = transpose(((m - n)))[i];" in hlsl
+    # outerProduct(vec2, vec3) is mat3x2: three columns of two rows.
+    assert "float2 h = (mul(float2x1(v), float1x3(w)))._m02_m12;" in hlsl
+    # mat2x3 is float3x2 in HLSL: column 1 is three rows of HLSL column 1.
+    assert "float3 j = ((p * p))._m01_m11_m21;" in hlsl
+
+
 def test_oriented_hlsl_compiles_with_dxc(tmp_path):
     dxc = shutil.which("dxc")
     if dxc is None:
