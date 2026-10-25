@@ -1,8 +1,9 @@
 import json
 
 from tools.coverage import __main__ as cli
+from tools.coverage import compare as compare_module
 from tools.coverage import ir
-from tools.coverage.compare import checked, compare
+from tools.coverage.compare import Baseline, baseline, checked, compare
 from tools.coverage.publish import DETAIL_LIMIT
 
 
@@ -216,3 +217,121 @@ def test_malformed_rows_and_features_are_left_out():
         ],
     }
     assert checked({"backends": "none"}) == {"schema": None, "backends": []}
+
+
+PUBLISHED, BASE, HEAD, MERGE = (c * 40 for c in "abcd")
+
+
+def _commit(sha, subject):
+    return {"sha": sha, "commit": {"message": subject + "\n\nbody (#1)"}}
+
+
+def _api(ahead=(), behind=(), parents=(BASE, HEAD), fail=None):
+    """A gh api stand-in for a main where the published coverage is ``ahead`` and ``behind`` commits away."""
+    calls = []
+
+    def api(path):
+        calls.append(path)
+        if fail:
+            raise fail
+        if path == f"repos/o/r/commits/{MERGE}":
+            return {"sha": MERGE, "parents": [{"sha": sha} for sha in parents]}
+        if path == f"repos/o/r/compare/{PUBLISHED}...{BASE}":
+            return {"behind_by": len(behind), "commits": list(ahead)}
+        if path == f"repos/o/r/compare/{BASE}...{PUBLISHED}":
+            return {"behind_by": len(ahead), "commits": list(behind)}
+        raise LookupError(path)
+
+    api.calls = calls
+    return api
+
+
+def test_baseline_names_the_pull_requests_main_has_beyond_the_published_coverage():
+    api = _api(
+        ahead=[_commit("1" * 40, "Slang (#2967)"), _commit("2" * 40, "Mojo (#2971)")]
+    )
+    lag = baseline("o/r", PUBLISHED, MERGE, HEAD, api=api)
+    assert lag == Baseline(ahead=("#2967", "#2971"))
+    assert len(api.calls) == 2
+    report = _report(_row("glsl", "output", {"sin": "supported"}))
+    assert compare(report, report, baseline=lag).splitlines()[2] == (
+        "The published coverage is 2 commits behind the `main` this change was measured on, so this comparison "
+        "includes the changes of #2967 and #2971."
+    )
+
+
+def test_baseline_of_a_main_older_than_the_published_coverage():
+    behind = [_commit(f"{n}" * 40, f"Change {n} (#{2930 + n})") for n in range(3)]
+    lag = baseline("o/r", PUBLISHED, MERGE, HEAD, api=_api(behind=behind))
+    assert lag == Baseline(behind=("#2930", "#2931", "#2932"))
+    published = _report(_row("glsl", "output", {"sin": "supported"}))
+    current = _report(_row("glsl", "output", {"sin": "refused"}))
+    lines = compare(published, current, baseline=lag).splitlines()
+    assert lines[
+        lines.index("1 feature change outcome, 1 of them for the worse:") - 2
+    ] == (
+        "This change was measured on a `main` 3 commits behind the published coverage, so this comparison shows "
+        "the changes of #2930, #2931 and #2932 reversed."
+    )
+
+
+def test_baseline_spells_commits_without_a_pull_request_by_hash_and_counts_the_rest():
+    ahead = [_commit("e" * 40, "Direct commit")] + [
+        _commit(f"{n % 10}" * 40, f"PR (#{n})") for n in range(11)
+    ]
+    lag = baseline("o/r", PUBLISHED, MERGE, HEAD, api=_api(ahead=ahead))
+    assert lag.ahead[0] == "`eeeeeeeeeeee`"
+    report = _report(_row("glsl", "output", {"sin": "supported"}))
+    assert (
+        compare(report, report, baseline=lag)
+        .splitlines()[2]
+        .endswith(
+            "includes the changes of `eeeeeeeeeeee`, #0, #1, #2, #3, #4, #5, #6, #7, #8 and 2 more."
+        )
+    )
+
+
+def test_baseline_of_the_published_main_adds_nothing():
+    lag = baseline("o/r", BASE, MERGE, HEAD, api=_api())
+    assert lag == Baseline()
+    report = _report(_row("glsl", "output", {"sin": "supported"}))
+    assert compare(report, report, baseline=lag) == compare(report, report)
+
+
+def test_baseline_needs_a_merge_of_the_head(capsys):
+    for parents in ((BASE,), (BASE, "e" * 40), (BASE, HEAD, "e" * 40)):
+        assert (
+            baseline("o/r", PUBLISHED, MERGE, HEAD, api=_api(parents=parents)) is None
+        )
+    api = _api()
+    for repository, measured in (
+        ("o/r/x", MERGE),
+        ("o/r", "c"),
+        ("o/r", MERGE.upper()),
+    ):
+        assert baseline(repository, PUBLISHED, measured, HEAD, api=api) is None
+    assert api.calls == []
+    assert (
+        baseline("o/r", PUBLISHED, MERGE, HEAD, api=_api(fail=LookupError("HTTP 404")))
+        is None
+    )
+    assert "warning: no baseline for dddddddddddd: HTTP 404" in capsys.readouterr().err
+
+
+def test_command_names_the_pull_requests_in_between(tmp_path, capsys, monkeypatch):
+    published = _report(_row("glsl", "output", {"sin": "supported"}), commit=PUBLISHED)
+    current = _report(_row("glsl", "output", {"sin": "supported"}), commit=MERGE)
+    paths = []
+    for name, data in (("published.json", published), ("coverage.json", current)):
+        path = tmp_path / name
+        path.write_text(json.dumps(data))
+        paths.append(str(path))
+    api = _api(ahead=[_commit("1" * 40, "Slang (#2967)")])
+    monkeypatch.setattr(compare_module, "_gh", api)
+    assert cli.main(["compare", *paths]) == 0
+    assert "#2967" not in capsys.readouterr().out
+    assert cli.main(["compare", *paths, "--repository", "o/r", "--head", HEAD]) == 0
+    assert (
+        "1 commit behind the `main` this change was measured on"
+        in capsys.readouterr().out
+    )

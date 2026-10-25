@@ -37,6 +37,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -1072,6 +1073,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("#include <cuda_fp16.h>")
+        # CrossGL's fixed-width integers lower to uint8_t, int64_t and friends, which none of the
+        # CUDA headers above declares.
+        self.emit("#include <cstdint>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
@@ -2933,7 +2937,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_literal(node.value, literal_type)
 
     def visit_AssignmentNode(self, node):
-        return self.format_assignment_expression(node)
+        return assignment_value_expression(self.format_assignment_expression(node))
 
     def format_assignment_expression(self, node):
         operator = getattr(node, "operator", "=")
@@ -3577,6 +3581,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -3585,6 +3590,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -3616,6 +3629,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         operation = self.normalize_cuda_integer_bit_function(func_name)
         source_type = self.expression_result_type(raw_args[0])
+        if source_type is None and operation == "countLeadingZeros":
+            # A sized cast such as u64(x) has no inferred type; read its width from the cast so that
+            # __clz does not truncate a 64-bit value.
+            source_type = self.cuda_integer_cast_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
         if source_info is not None:
@@ -3642,6 +3659,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             source_type,
             result_type,
         )
+
+    def cuda_integer_cast_type(self, node):
+        """The target type of a scalar integer cast such as ``u64(x)``, or None."""
+        if not isinstance(node, FunctionCallNode):
+            return None
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.scalar_component_type(type_name) in {"int", "uint"}:
+            return type_name
+        return None
 
     def require_cuda_integer_bit_vector_helper(
         self,
@@ -3699,6 +3728,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            intrinsic_name = "__clzll" if bit_width == 64 else "__clz"
+            return f"{intrinsic_name}({value})"
         if operation == "findLSB":
             return f"(__ffs({value}) - 1)"
         if operation == "findMSB":

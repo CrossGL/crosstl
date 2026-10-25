@@ -1,8 +1,8 @@
 """HLSL entry-point parameters for the system values DXIL delivers only as ``uint``.
 
 CrossGL types the vertex, instance, primitive and sample indices ``int``, as GLSL's ``gl_VertexID``,
-``gl_InstanceID``, ``gl_PrimitiveID`` and ``gl_SampleID`` are, and the Metal import reads MSL's ``uint``
-``[[vertex_id]]`` the same way. DXIL requires ``SV_VertexID``, ``SV_InstanceID``, ``SV_PrimitiveID`` and
+``gl_InstanceID``, ``gl_PrimitiveID`` and ``gl_SampleID`` are, though a parameter carrying one may be ``uint`` (MSL's
+``[[vertex_id]]`` imports as ``uint``). DXIL requires ``SV_VertexID``, ``SV_InstanceID``, ``SV_PrimitiveID`` and
 ``SV_SampleIndex`` to be ``uint``, and DXC's validator rejects an ``int`` entry-point parameter carrying one ("SV_VertexID
 must be uint").
 

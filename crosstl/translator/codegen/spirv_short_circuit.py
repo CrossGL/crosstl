@@ -251,6 +251,28 @@ def lower_short_circuit_logical(codegen, expr) -> Optional[object]:
     return _emit_phi(codegen, bool_type, incoming)
 
 
+def lower_logical_intrinsic(codegen, function_name: str, args: List) -> object:
+    """HLSL ``and(a, b)``/``or(a, b)``: component-wise, and both operands are evaluated (never short-circuit).
+
+    Non-boolean operands are compared with zero first, as HLSL converts them; a scalar operand applies to every
+    component of a vector one.
+    """
+    bool_type = codegen.register_primitive_type("bool")
+    operands = []
+    for value in args:
+        shape = codegen.vector_component_type_and_count(value.type.base_type)
+        if shape is None:
+            operands.append(codegen.ensure_bool_value(value))
+        elif shape[0] != "bool":
+            vector_type = codegen.register_vector_type(bool_type, shape[1])
+            operands.append(codegen.convert_value_to_type(value, vector_type))
+        else:
+            operands.append(value)
+    result_type, left, right = codegen.logical_result_type_and_operands(*operands)
+    operator = "&&" if function_name == "and" else "||"
+    return codegen.binary_operation(operator, result_type, left, right)
+
+
 def _ternary_arms_need_guard(expr) -> bool:
     return not (
         expression_is_trivial(expr.true_expr) and expression_is_trivial(expr.false_expr)

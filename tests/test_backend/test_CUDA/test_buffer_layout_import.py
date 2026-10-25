@@ -266,7 +266,11 @@ def _run(command):
         ("vec4<u32>", "uvec4"),
         ("vec3<f64>", "dvec3"),
         ("vec2<bool>", "bvec2"),
-        ("vec3<f16>", "vec3<f16>"),
+        ("vec3<f16>", "f16vec3"),
+        ("vec2<u16>", "u16vec2"),
+        ("vec4<i8>", "i8vec4"),
+        ("vec2<i64>", "i64vec2"),
+        ("vec2<Pair>", "vec2<Pair>"),
         ("max", "max"),
     ],
 )
