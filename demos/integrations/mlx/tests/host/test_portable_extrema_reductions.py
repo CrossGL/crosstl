@@ -356,3 +356,35 @@ def test_ci_requires_native_16_bit_reductions_on_existing_platform_jobs():
             "run"
         ]
     )
+
+
+@pytest.mark.parametrize("dtype", ("float16", "bfloat16"))
+def test_inputs_hold_the_reference_words(dtype):
+    """MLX's software float16 conversion stores NaN as 0x7D00; the workers
+    build float16 inputs from the reference bits instead."""
+    import numpy as np
+
+    fmt = proof.FORMATS[dtype]
+    calls = []
+
+    class Array:
+        def __init__(self, values, dtype=None):
+            calls.append((values, dtype))
+
+        def reshape(self, shape):
+            calls.append(shape)
+            return self
+
+    mx = type("mx", (), {"array": Array, "bfloat16": "mx.bfloat16"})
+    case = {"operation": "min", "shape": [509], "profile": "nan-first"}
+    source, _ = proof.reference(case, fmt)
+    assert source[0] == fmt.nan
+    proof.source_array(mx, source, [509], fmt)
+    (values, kind), shape = calls
+    assert shape == [509]
+    if dtype == "float16":
+        assert kind is None and values.dtype == np.float16
+        assert values.view(np.uint16).tolist() == source
+    else:
+        assert kind == "mx.bfloat16"
+        assert list(map(fmt.word, values)) == proof.canonical(source, fmt)

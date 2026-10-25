@@ -158,6 +158,24 @@ def canonical(words, fmt=BFLOAT):
     ]
 
 
+def source_array(mx, words, shape, fmt):
+    """An MLX array that holds exactly ``words``.
+
+    Off Apple silicon MLX converts a Python float to float16 in software, which
+    stores a NaN as 0x7D00, so the input storage would not be the reference's.
+    A numpy binary16 buffer carries the reference bits unchanged. MLX stores
+    the bfloat16 quiet NaN 0x7FC0 on every platform.
+    """
+    if fmt.dtype == "float16":
+        import numpy as np
+
+        bits = np.array(words, dtype=np.uint16)
+        return mx.array(bits.view(np.float16)).reshape(shape)
+    return mx.array(list(map(fmt.number, words)), dtype=getattr(mx, fmt.dtype)).reshape(
+        shape
+    )
+
+
 def worker(args):
     import mlx.core as mx
 
@@ -180,9 +198,7 @@ def worker(args):
     records = []
     for case in cases(fmt):
         source, expected = reference(case, fmt)
-        value = mx.array(
-            list(map(fmt.number, source)), dtype=getattr(mx, fmt.dtype)
-        ).reshape(case["shape"])
+        value = source_array(mx, source, case["shape"], fmt)
         axes = (
             None
             if len(case["shape"]) == 1
