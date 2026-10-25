@@ -19,6 +19,7 @@ __all__ = [
     "ImportRefusalMixin",
     "ImportRefused",
     "MetalImportRefused",
+    "SlangImportRefused",
 ]
 
 
@@ -59,6 +60,14 @@ class MetalImportRefused(ImportRefused):
     source_name = "metal"
     label = "Metal"
     code = f"{CODE_PREFIX}metal-import-unsupported"
+
+
+class SlangImportRefused(ImportRefused):
+    """One or more Slang constructs have no faithful CrossGL representation."""
+
+    source_name = "slang"
+    label = "Slang"
+    code = f"{CODE_PREFIX}slang-import-unsupported"
 
 
 class ImportRefusalMixin:

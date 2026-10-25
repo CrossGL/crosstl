@@ -5,6 +5,7 @@ import re
 from enum import Enum, auto
 from typing import Iterator, List, Optional, Tuple
 
+from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import HLSLPreprocessor, Macro
 
 # using sets for faster lookup
@@ -590,7 +591,8 @@ class HLSLLexer:
     ):
         code = code.lstrip("\ufeff")
         code = self._extract_shaderlab_program_blocks(code)
-        self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self._token_dispatch = ordered_pattern_dispatch(TOKENS)
+        self._token_patterns = self._token_dispatch.patterns
         self.file_path = file_path
         self.include_paths = include_paths or []
         if preprocess:
@@ -712,7 +714,9 @@ class HLSLLexer:
 
     def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
         """Match the next token at ``pos`` and return its end offset."""
-        for token_type, pattern in self._token_patterns:
+        # Only patterns that can begin with this character are tried, in table
+        # order, so the first matching pattern is the one the full table picks.
+        for token_type, pattern in self._token_dispatch.candidates(self.code[pos]):
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)

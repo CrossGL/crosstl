@@ -17,6 +17,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
@@ -38,6 +39,18 @@ class OpenCLRecordSemanticError(ValueError):
         super().__init__(
             f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
         )
+
+
+class OpenCLAtomicOrderUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``*_explicit`` atomic whose memory order or scope CrossGL atomics cannot keep."""
+
+    code = CODE_PREFIX + "opencl-atomic-order-unsupported"
+
+
+class OpenCLFenceScopeUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C fence or sub-group barrier whose memory scope no CrossGL fence covers."""
+
+    code = CODE_PREFIX + "opencl-fence-scope-unsupported"
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -183,6 +196,29 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "get_local_size": "gl_WorkGroupSize",
         "get_num_groups": "gl_NumWorkGroups",
     }
+    # OpenCL 2.0 defines get_local_linear_id() as
+    # (lid.z * lsize.y + lid.y) * lsize.x + lid.x, which is the local
+    # invocation index every compute target already exposes.
+    OPENCL_LINEAR_ID_MAP = {
+        "get_local_linear_id": "gl_LocalInvocationIndex",
+    }
+    # OpenCL fence flags name the address spaces a fence orders; each maps to
+    # the CrossGL fence over the same memory. More than one flag, or a flag
+    # that is not a literal, needs the fence over all memory.
+    OPENCL_MEM_FENCE_FLAG_BARRIERS = {
+        "CLK_LOCAL_MEM_FENCE": "memoryBarrierShared",
+        "CLK_GLOBAL_MEM_FENCE": "memoryBarrierBuffer",
+        "CLK_IMAGE_MEM_FENCE": "memoryBarrierImage",
+    }
+    OPENCL_MEM_FENCE_FUNCTIONS = frozenset(
+        {"mem_fence", "read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
+    )
+    # The CrossGL fences order memory at device scope at most, the scopes in
+    # OPENCL_ATOMIC_DEVICE_SCOPES, and subgroupBarrier() orders it for the
+    # sub-group only.
+    OPENCL_SUB_GROUP_FENCE_SCOPES = frozenset(
+        {"memory_scope_work_item", "memory_scope_sub_group"}
+    )
     OPENCL_ATOMIC_MAP = {
         "atomic_add": "atomicAdd",
         "atomic_fetch_add": "atomicAdd",
@@ -687,9 +723,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
             self.emit("workgroupBarrier();")
-        elif node.sync_type == "mem_fence":
-            args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// OpenCL mem_fence({args})")
+        elif node.sync_type == "mem_fence" and node.args:
+            # mem_fence(flags) orders loads and stores over the flagged memory,
+            # as read_mem_fence and write_mem_fence do for one of them.
+            self.emit(f"{self.format_opencl_fence_call('mem_fence', node.args)};")
         else:
             super().visit_SyncNode(node)
 
@@ -793,7 +830,44 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            fence = self.format_opencl_fence_call(func_name, raw_args)
+            if fence is not None:
+                return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_fence_call(self, func_name, args):
+        if func_name == "sub_group_barrier" and args:
+            # sub_group_barrier(flags[, scope]) synchronizes the sub-group and
+            # orders the flagged memory, which subgroupBarrier() does for the
+            # default sub-group scope.
+            self.require_opencl_fence_scope(
+                func_name, args[1:], self.OPENCL_SUB_GROUP_FENCE_SCOPES
+            )
+            return "subgroupBarrier()"
+        if func_name not in self.OPENCL_MEM_FENCE_FUNCTIONS or not args:
+            return None
+        if func_name == "atomic_work_item_fence":
+            # The memory order is dropped: the CrossGL fences are acquire-release
+            # fences and no target has a stronger one, so seq_cst lowers the same.
+            self.require_opencl_fence_scope(
+                func_name, args[2:], self.OPENCL_ATOMIC_DEVICE_SCOPES
+            )
+        flags = set(re.findall(r"\bCLK_\w+\b", self.visit(args[0])))
+        if len(flags) == 1:
+            barrier = self.OPENCL_MEM_FENCE_FLAG_BARRIERS.get(flags.pop())
+            if barrier is not None:
+                return f"{barrier}()"
+        return "memoryBarrier()"
+
+    def require_opencl_fence_scope(self, func_name, scope_args, scopes):
+        """Refuse a fence whose memory_scope argument is wider than ``scopes``."""
+        for arg in scope_args:
+            scope = self.visit(arg).strip()
+            if scope not in scopes:
+                raise OpenCLFenceScopeUnsupportedError(
+                    f"{func_name} with {scope}: CrossGL has no {func_name} "
+                    "lowering that orders memory at that scope"
+                )
 
     def emit_statement(self, stmt):
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
@@ -1048,8 +1122,23 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return len(elements)
         return None
 
+    # CrossGL atomics are relaxed and atomic at device scope (work-group scope on
+    # local memory), so an *_explicit atomic can drop its memory_order and
+    # memory_scope arguments only when it asks for no more than that.
+    OPENCL_ATOMIC_DEVICE_SCOPES = frozenset(
+        {
+            "memory_scope_work_item",
+            "memory_scope_sub_group",
+            "memory_scope_work_group",
+            "memory_scope_device",
+        }
+    )
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
+        node_args = list(node.args)
+        if node.operation.endswith("_explicit"):
+            node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node_args)]
         operation = self.OPENCL_ATOMIC_MAP.get(node.operation, node.operation)
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
@@ -1057,11 +1146,36 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             args.append("1")
         return f"{operation}({', '.join(args)})"
 
+    def opencl_relaxed_atomic_arguments(self, operation, args):
+        """The plain-form arguments of an ``*_explicit`` atomic, refusing an order or scope CrossGL cannot keep."""
+        arity, orders = (3, 2) if "compare_exchange" in operation else (2, 1)
+        if len(args) not in (arity + orders, arity + orders + 1):
+            raise OpenCLAtomicOrderUnsupportedError(
+                f"{operation} takes {arity + orders} or {arity + orders + 1} "
+                f"arguments, got {len(args)}"
+            )
+        names = [self.visit(arg).strip() for arg in args[arity:]]
+        for order in names[:orders]:
+            if order != "memory_order_relaxed":
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {order}: CrossGL atomics are relaxed, so "
+                    "only memory_order_relaxed keeps its ordering"
+                )
+        for scope in names[orders:]:
+            if scope not in self.OPENCL_ATOMIC_DEVICE_SCOPES:
+                raise OpenCLAtomicOrderUnsupportedError(
+                    f"{operation} with {scope}: CrossGL atomics are atomic at "
+                    "device scope at most"
+                )
+        return args[:arity]
+
     def format_opencl_builtin_call(self, func_name, args):
         if func_name == "get_global_size" and len(args) == 1:
             component = self.opencl_dimension_component(args[0])
             if component is not None:
                 return f"(gl_NumWorkGroups.{component} * gl_WorkGroupSize.{component})"
+        if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
+            return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
         if base is None or len(args) != 1:
             return None

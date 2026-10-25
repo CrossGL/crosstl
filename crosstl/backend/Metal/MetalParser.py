@@ -3,10 +3,13 @@
 import re
 import sys
 
+from ..switch_clauses import record_default_position
 from .floating_point import reject_contraction_tokens
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+from .signed_type_spellings import fold_signed_type_spellings
+from .simd_aliases import SIMD_TYPE_ALIASES
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -418,29 +421,15 @@ class MetalParser:
             "packed_uint2",
             "packed_uint3",
             "packed_uint4",
-            "simd_float2",
-            "simd_float3",
-            "simd_float4",
-            "simd_float2x2",
-            "simd_float3x3",
-            "simd_float4x4",
-            "simd_int2",
-            "simd_int3",
-            "simd_int4",
-            "simd_uint2",
-            "simd_uint3",
-            "simd_uint4",
-            "vector_float2",
-            "vector_float3",
-            "vector_float4",
-            "matrix_float3x3",
-            "matrix_float4x4",
+            *SIMD_TYPE_ALIASES,
         }
         self.local_variable_scopes = []
         self.local_type_scopes = []
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
         self.known_function_templates = set()
+        # Names of the function prototypes the parser drops (see external_functions).
+        self.function_prototypes = {}
         self.known_value_template_parameters = set()
         self.declaration_context_stack = []
         self.namespace_aliases = {}
@@ -752,6 +741,7 @@ class MetalParser:
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
         shader.namespace_aliases = dict(self.namespace_aliases)
+        shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
         return shader
 
@@ -2592,7 +2582,7 @@ class MetalParser:
         previous = ""
         compact_before = {">", ",", "]", ")", "*", "&", "::"}
         compact_after = {"<", ",", "[", "(", "::"}
-        for token in tokens:
+        for token in fold_signed_type_spellings(tokens):
             token = str(token)
             if (
                 text
@@ -3701,6 +3691,7 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             if not preserve_declaration:
+                self.function_prototypes.setdefault(name, len(self.function_prototypes))
                 self.pop_declaration_context()
                 return None
             body = None
@@ -5596,6 +5587,7 @@ class MetalParser:
 
         cases = []
         default = None
+        default_index = None
         try:
             while self.current_token[0] not in ["RBRACE", "EOF"]:
                 if self.current_token[0] == "CASE":
@@ -5604,17 +5596,15 @@ class MetalParser:
                     self.eat("DEFAULT")
                     self.eat("COLON")
                     default_statements = []
+                    default_index = len(cases)
 
+                    # A clause keeps its own jumps: one without a break falls through.
                     while self.current_token[0] not in [
                         "CASE",
                         "DEFAULT",
                         "RBRACE",
                         "EOF",
                     ]:
-                        if self.current_token[0] == "BREAK":
-                            self.eat("BREAK")
-                            self.eat("SEMICOLON")
-                            break
                         statement = self.parse_statement()
                         if isinstance(statement, list):
                             default_statements.extend(statement)
@@ -5629,7 +5619,9 @@ class MetalParser:
                     )
 
             self.eat("RBRACE")
-            return SwitchNode(expression, cases, default)
+            return record_default_position(
+                SwitchNode(expression, cases, default), default_index
+            )
         finally:
             self.known_types.difference_update(self.local_type_scopes.pop())
 
@@ -5641,15 +5633,10 @@ class MetalParser:
         statements = []
 
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
-            if self.current_token[0] == "BREAK":
-                self.eat("BREAK")
-                self.eat("SEMICOLON")
-                break
-            else:
-                statement = self.parse_statement()
-                if isinstance(statement, list):
-                    statements.extend(statement)
-                elif statement is not None:
-                    statements.append(statement)
+            statement = self.parse_statement()
+            if isinstance(statement, list):
+                statements.extend(statement)
+            elif statement is not None:
+                statements.append(statement)
 
         return CaseNode(value, statements)

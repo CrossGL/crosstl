@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import compare, features, issues, publish, report, runner, validators
+from . import compare, execution, features, issues, publish, report, runner, validators
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -38,15 +38,28 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--output", type=Path, default=Path("coverage.json"))
     run.add_argument(
+        "--keep",
+        type=Path,
+        metavar="DIR",
+        help="write each probe and CrossTL's translations of it to DIR/<language>-<direction>/<feature>/",
+    )
+    run.add_argument(
         "--jobs", type=int, default=0, help="worker processes; default: up to 8"
     )
     run.add_argument(
         "--offline", action="store_true", help="use cached upstream sources only"
     )
     run.add_argument(
+        "--execute",
+        action="store_true",
+        help="also run supported compute probes on the conformance harness's runtimes and compare them with the "
+        "native probe",
+    )
+    run.add_argument(
         "--strict",
         action="store_true",
-        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested",
+        help="fail when a requested backend's validator is missing, instead of reporting its probes as untested, "
+        "and with --execute when none of a language's executable probes runs",
     )
     merging = commands.add_parser(
         "merge",
@@ -84,6 +97,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     comparing.add_argument("published", type=Path)
     comparing.add_argument("report", type=Path)
+    comparing.add_argument(
+        "--repository",
+        help="owner/name; with --head, also name the pull requests between the published coverage and the main "
+        "the report was measured on, read through gh api",
+    )
+    comparing.add_argument(
+        "--head", help="the head commit of the pull request the report measured"
+    )
     commands.add_parser(
         "tools", help="list each language's reference tool and the version found"
     )
@@ -128,10 +149,23 @@ def _run(args: argparse.Namespace) -> int:
         if args.feature:
             feature_list = [f for f in feature_list if f.name in args.feature]
         for direction in directions:
-            if direction == "input" and language not in runner.INPUT_BACKENDS:
+            backends = (
+                runner.INPUT_BACKENDS
+                if direction == "input"
+                else runner.OUTPUT_BACKENDS
+            )
+            if language not in backends:
                 continue
             jobs += [(feature, direction, language) for feature in feature_list]
-    results = runner.run(jobs, args.jobs or None)
+    results = runner.run(jobs, args.jobs or None, keep=args.keep)
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results)
+        if args.strict and idle:
+            print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
+            return 2
     data = report.build(results, languages, directions)
     report.write(data, args.output)
     print(report.summary(data))
@@ -142,6 +176,8 @@ def _run(args: argparse.Namespace) -> int:
                 f"{result.feature.language} {result.direction} {result.feature.name} {result.outcome}{detail}"
             )
     print(f"wrote {args.output}")
+    if args.keep:
+        print(f"kept the probes and their translations in {args.keep}")
     return 0
 
 
@@ -196,7 +232,14 @@ def _tools() -> int:
     rows = [("language", "directions", "tool", "found")]
     for language in LANGUAGES:
         tool = validators.TOOLS[language]
-        directions = "output, input" if language in runner.INPUT_BACKENDS else "output"
+        directions = ", ".join(
+            direction
+            for direction, backends in (
+                ("output", runner.OUTPUT_BACKENDS),
+                ("input", runner.INPUT_BACKENDS),
+            )
+            if language in backends
+        )
         if validators.available(language):
             found = validators.version(tool) or "yes, no version reported"
         else:
@@ -237,7 +280,15 @@ def main(argv: list[str] | None = None) -> int:
             published, current = (
                 report.load(path) for path in (args.published, args.report)
             )
-            print(compare.compare(published, current), end="")
+            lag = None
+            if args.repository and args.head:
+                lag = compare.baseline(
+                    args.repository,
+                    str(published.get("commit", "")),
+                    str(current.get("commit", "")),
+                    args.head,
+                )
+            print(compare.compare(published, current, baseline=lag), end="")
             return 0
         for feature in features.load(args.backend, offline=args.offline):
             print(f"{feature.group:<44} {feature.name}")

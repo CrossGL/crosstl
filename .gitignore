@@ -11,6 +11,7 @@ dist/
 docs/_build/
 examples/output/
 /coverage.json
+/probes/
 
 # Editors, operating systems and local worktrees
 .vs/

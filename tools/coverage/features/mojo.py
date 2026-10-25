@@ -33,6 +33,7 @@ _NAMED = {
     "Float64": "double",
     "Int32": "int",
     "UInt32": "uint",
+    "UInt64": "uint64",
     "Bool": "bool",
     "Int": "int64",
 }

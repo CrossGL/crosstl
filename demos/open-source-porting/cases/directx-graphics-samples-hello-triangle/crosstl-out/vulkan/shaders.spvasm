@@ -23,12 +23,12 @@ OpName %38 "gl_FragCoord"
 OpName %40 "CrossGL_fragment_input_input_color"
 OpName %43 "input"
 OpDecorate %14 BuiltIn Position
-OpDecorate %15 Location 1
+OpDecorate %15 Location 13
 OpDecorate %17 Location 0
-OpDecorate %21 Location 1
+OpDecorate %21 Location 13
 OpDecorate %37 Location 0
 OpDecorate %38 BuiltIn FragCoord
-OpDecorate %40 Location 1
+OpDecorate %40 Location 13
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

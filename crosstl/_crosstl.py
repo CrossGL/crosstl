@@ -822,7 +822,7 @@ def _format_toolchain_doctor_text(payload):
         lines.append(
             f"- {row.get('target')}: {row.get('status')}; {', '.join(tool_bits)}{version_suffix}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def _run_doctor(args):
