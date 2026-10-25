@@ -77,8 +77,9 @@ class Dialect:
     pointer_sized = False
     # The spelling of a constant string argument (model.STRING), empty where the language has no strings.
     string = ""
-    # How the dialect spells an unsigned one, for ``constant``.
+    # How the dialect spells an unsigned one, for ``constant``, and true, for a ``condition``.
     one = "1u"
+    true = "true"
 
     def type(self, kind: Type) -> str:
         if kind.count:

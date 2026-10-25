@@ -6776,6 +6776,8 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "fwidth",
         "fwidthFine",
         "fwidthCoarse",
+        "fwidth_fine",
+        "fwidth_coarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
@@ -7185,8 +7187,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
@@ -23705,10 +23710,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {
@@ -51922,3 +51929,31 @@ def test_hlsl_hip_unsafe_record_layouts_fail_closed(
             format_output=False,
             source_backend="hip",
         )
+
+
+def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "(abs(ddx_fine(input.uv)) + abs(ddy_fine(input.uv)))" in generated_code
+    assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
+    assert "fwidth_fine(" not in generated_code
+    assert "fwidth_coarse(" not in generated_code

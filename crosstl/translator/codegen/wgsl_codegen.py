@@ -52,20 +52,36 @@ from ..host_workgroup_size import (
 )
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
+from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
     sanitize_type_name,
 )
+from .fragment_output_targets import frag_data_attribute_index
+from .generic_struct_utils import named_struct_constructor_arguments
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
 )
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_entry_outputs import (
+    EntryOutputLoweringError,
+    entry_output_parameters,
+    lower_entry_output_parameters,
+)
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_integer_builtins import lower_integer_builtin_inputs
+from .wgsl_integer_operands import (
+    BITWISE_OPERATORS,
+    SHIFT_OPERATORS,
+    wgsl_bitwise_operands,
+    wgsl_shift_amount,
+)
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -80,9 +96,11 @@ from .wgsl_stage_io import (
     refuse_unmapped_system_semantic,
     with_flat_integer_interpolation,
 )
+from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
+from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
-class WGSLCodeGen(WGSLParameterLoweringMixin):
+class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
     SUPPORTED_STAGE_NAMES = {"vertex", "fragment", "compute"}
@@ -238,6 +256,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "dfdycoarse": "dpdyCoarse",
         "ddycoarse": "dpdyCoarse",
         "ddy_coarse": "dpdyCoarse",
+        # The GLSL importer writes fwidthFine and fwidthCoarse with underscores.
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
@@ -453,6 +474,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         "texturequerylod",
         "texturesize",
         "texelfetch",
+        "texelfetchoffset",
         "imagesize",
     }
     BARRIER_FUNCTION_NAMES = {
@@ -664,7 +686,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._current_stage_name = None
         self._current_workgroup_size = None
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._cbuffer_member_accesses = {}
         self._function_texture_parameters = {}
         self._function_pointer_parameters = {}
@@ -713,6 +735,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
         self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
@@ -728,10 +751,13 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
+        lower_integer_builtin_inputs(
+            ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
+        )
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -777,6 +803,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
         self._stage_interface_struct_names = set()
+        self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
         self._entry_parameter_locations = {}
         self._stage_interface_builtin_members = {}
@@ -1115,9 +1142,31 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             if getattr(struct, "name", "")
         }
         lowerings = {}
+        used_type_names = used_struct_names | self.module_declaration_names(ast)
+        structs_by_name = {
+            getattr(struct, "name", ""): struct
+            for struct in existing_structs
+            if getattr(struct, "name", "")
+        }
         for stage_node in self._stage_nodes(ast, target_stage):
             output_variable = self.vertex_position_output_variable(stage_node)
             entry_point = getattr(stage_node, "entry_point", None)
+            stage_name = normalize_stage_name(getattr(stage_node, "stage", None))
+            if entry_output_parameters(entry_point, stage_name):
+                if output_variable is not None:
+                    raise EntryOutputLoweringError(
+                        f"WGSL target cannot combine the output parameters of "
+                        f"entry point {entry_point.name} with the stage output "
+                        f"variable {output_variable.name}"
+                    )
+                struct_node, lowered = lower_entry_output_parameters(
+                    self, entry_point, stage_name, structs_by_name, used_type_names
+                )
+                lowerings[id(stage_node)] = {
+                    "struct": struct_node,
+                    "entry_point": lowered,
+                }
+                continue
             if output_variable is None or entry_point is None:
                 continue
             if not self.is_void_type(getattr(entry_point, "return_type", None)):
@@ -1145,6 +1194,32 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 "struct": struct_node,
             }
         return lowerings
+
+    def module_declaration_names(self, ast):
+        """Names declared at module scope in any stage, which a generated structure must not reuse."""
+        names = set()
+        containers = [ast, *(getattr(ast, "stages", None) or {}).values()]
+        fields = (
+            "structs",
+            "functions",
+            "global_variables",
+            "constants",
+            "cbuffers",
+            "local_variables",
+            "local_functions",
+            "local_structs",
+            "local_cbuffers",
+        )
+        for container in containers:
+            for field in fields:
+                for node in getattr(container, field, None) or []:
+                    name = getattr(node, "name", None)
+                    if isinstance(name, str):
+                        names.add(name)
+            entry_point = getattr(container, "entry_point", None)
+            if isinstance(getattr(entry_point, "name", None), str):
+                names.add(entry_point.name)
+        return names
 
     def unique_stage_output_struct_name(self, preferred, used_names):
         if preferred not in used_names:
@@ -1186,6 +1261,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             for struct in structs
             if getattr(struct, "name", "")
         }
+        self._fragment_output_struct_names = set()
         interface_struct_names = self.stage_interface_struct_names(
             ast, target_stage, structs_by_name
         )
@@ -1201,7 +1277,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             for member in getattr(struct, "members", []) or []:
                 if (struct_name, member.name) in self._stage_interface_builtin_members:
                     continue
-                binding_kind, location = self.member_stage_binding(member)
+                binding_kind, location = self.member_stage_binding(
+                    member, self.struct_member_direction(struct_name)
+                )
                 slot_count = self.stage_interface_location_slot_count(
                     getattr(member, "member_type", None)
                 )
@@ -1296,6 +1374,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             )
             if struct_name:
                 names.add(struct_name)
+                if stage_name == "fragment":
+                    self._fragment_output_struct_names.add(struct_name)
         return names
 
     def stage_interface_struct_type_name(self, type_node, structs_by_name):
@@ -1304,7 +1384,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return struct_name
         return None
 
-    def member_stage_binding(self, member):
+    def member_stage_binding(self, member, direction="generic"):
         for attr in getattr(member, "attributes", []) or []:
             semantic = str(getattr(attr, "name", attr))
             key = self.semantic_key(semantic)
@@ -1314,10 +1394,24 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 return "location", self.attribute_integer_argument(attr)
             if self.BUILTIN_SEMANTICS.get(key):
                 return "builtin", None
-            location = self.semantic_location(semantic, direction="generic")
+            location = self.attribute_location(attr, semantic, direction)
             if location is not None:
                 return "location", location
         return None, None
+
+    def struct_member_direction(self, struct_name):
+        """``"target"`` for the members of a structure a fragment entry point returns, else ``"generic"``."""
+        if struct_name in self._fragment_output_struct_names:
+            return "target"
+        return "generic"
+
+    def attribute_location(self, attr, semantic, direction):
+        if self.semantic_key(semantic) == "gl_fragdata":
+            # gl_FragData[n] names colour attachment n.
+            attachment = frag_data_attribute_index(attr)
+            if attachment is not None:
+                return attachment
+        return self.semantic_location(semantic, direction)
 
     def attribute_integer_argument(self, attr):
         arguments = getattr(attr, "arguments", []) or []
@@ -1369,6 +1463,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         lowering = self._stage_output_lowerings.get(id(stage_node))
         if lowering is None:
             return entry_point
+        if "entry_point" in lowering:
+            return lowering["entry_point"]
         lowered = copy.copy(entry_point)
         lowered.return_type = NamedType(lowering["struct_name"])
         lowered.body = self.rewrite_stage_output_body(entry_point.body, lowering)
@@ -1814,8 +1910,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                     "declare textures, samplers, and storage resources as "
                     "module-scope bindings instead of user-struct fields"
                 )
-            attributes = self.wgsl_attributes(member.attributes, direction="generic")
-            binding_kind, explicit_location = self.member_stage_binding(member)
+            direction = self.struct_member_direction(node.name)
+            attributes = self.wgsl_attributes(member.attributes, direction=direction)
+            binding_kind, explicit_location = self.member_stage_binding(
+                member, direction
+            )
             builtin = self._stage_interface_builtin_members.get(
                 (node.name, member.name)
             )
@@ -2417,21 +2516,28 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         root_name = self.module_identifier_name(node.name)
         bindings = []
         declarations = []
+        next_texture_binding = None
         for index in range(array_size):
             texture_name = self.safe_wgsl_identifier(f"{root_name}_{index}")
             texture_attributes = (
                 self.explicit_binding_attributes(node)
                 if index == 0
                 else self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             )
             if not texture_attributes:
                 texture_attributes = self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             sampler_attributes = self.sampler_binding_attributes_for_texture(
                 texture_attributes
+            )
+            # Expanded elements follow their preceding sampler, even when the first binding is explicit.
+            next_texture_binding = (
+                int(re.search(r"@binding\((\d+)\)", sampler_attributes).group(1)) + 1
             )
             sampler_name = self.texture_sampler_name(texture_name)
             bindings.append(
@@ -2564,6 +2670,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
 
     def generate_statement(self, stmt, indent=0):
         pad = "    " * indent
+        lowered = self.lower_value_side_effects(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         if isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
@@ -2588,7 +2699,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if isinstance(stmt, ExpressionStatementNode):
             if isinstance(stmt.expression, AssignmentNode):
                 return self.generate_assignment_statement(stmt.expression, indent)
-            expression = self.generate_expression(stmt.expression)
+            if is_discard_statement(stmt):
+                return f"{pad}discard;"
+            expression = self.generate_statement_expression(stmt.expression)
             if self.is_multi_barrier_memory_lowering(stmt.expression):
                 return "\n".join(f"{pad}{call};" for call in expression.split("; "))
             return f"{pad}{expression};"
@@ -2660,7 +2773,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             condition = (
                 self.generate_expression(node.condition) if node.condition else ""
             )
-            update = self.generate_expression(node.update) if node.update else ""
+            update = (
+                self.generate_statement_expression(node.update) if node.update else ""
+            )
             return (
                 f"{pad}for ({init}; {condition}; {update}) "
                 f"{self.generate_block(node.body, indent)}"
@@ -2689,32 +2804,36 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 init.name, var_type, initializer=init.initial_value
             )
             return line
-        if isinstance(init, AssignmentNode):
-            return self.generate_assignment(init)
         if isinstance(init, ExpressionStatementNode):
-            return self.generate_expression(init.expression)
-        return self.generate_expression(init)
+            return self.generate_statement_expression(init.expression)
+        return self.generate_statement_expression(init)
+
+    def generate_statement_expression(self, expr):
+        """An expression in statement position, where WGSL allows updates."""
+        if isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        if is_increment(expr):
+            operator = "+=" if expr.operator == "++" else "-="
+            return f"{self.generate_expression(expr.operand)} {operator} 1"
+        return self.generate_expression(expr)
 
     def generate_switch(self, node, indent):
         pad = "    " * indent
         lines = [f"{pad}switch ({self.generate_expression(node.expression)}) {{"]
-        for case in node.cases:
-            label = (
-                "default"
-                if case.value is None
-                else f"case {self.generate_expression(case.value)}"
+        for clause in wgsl_switch_clauses(node):
+            selectors = ", ".join(
+                "default" if value is None else self.generate_expression(value)
+                for value in clause.selectors
             )
+            label = "default" if selectors == "default" else f"case {selectors}"
             lines.append(f"{pad}    {label}: {{")
-            for stmt in case.statements:
-                lines.append(self.generate_statement(stmt, indent + 2))
-            lines.append(f"{pad}    }}")
-        if node.default_case is not None:
-            lines.append(
-                f"{pad}    default: {self.generate_block(node.default_case, indent + 1)}"
-            )
-        else:
-            lines.append(f"{pad}    default: {{")
-            lines.append(f"{pad}        break;")
+            # Each WGSL clause is its own compound statement.
+            self.push_identifier_scope()
+            try:
+                for stmt in clause.statements:
+                    lines.append(self.generate_statement(stmt, indent + 2))
+            finally:
+                self.pop_identifier_scope()
             lines.append(f"{pad}    }}")
         lines.append(f"{pad}}}")
         return "\n".join(lines)
@@ -2722,10 +2841,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
         target_type = self.expression_type(node.target)
-        return (
-            f"{self.generate_expression(node.target)} {node.operator} "
-            f"{self.generate_expression_for_target(node.value, target_type)}"
-        )
+        if node.operator[:-1] in SHIFT_OPERATORS:
+            value = wgsl_shift_amount(self, node.value, target_type)
+        else:
+            value = self.generate_expression_for_target(node.value, target_type)
+        return f"{self.generate_expression(node.target)} {node.operator} {value}"
 
     def generate_assignment_statement(self, node, indent):
         stage_array_assignment = (
@@ -2809,7 +2929,10 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
 
         pad = "    " * indent
         target_type = self.expression_type(target)
-        value = self.generate_expression_for_target(node.value, target_type)
+        # A compound assignment applies a scalar value to each component in turn, so it stays a scalar.
+        value = self.generate_expression_for_target(
+            node.value, target_type, splat_scalars=node.operator == "="
+        )
         value_type = self.expression_type(node.value)
 
         if node.operator != "=":
@@ -2881,7 +3004,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             self._identifier_scopes[-1].add(emitted_name)
         return emitted_name
 
-    def generate_expression_for_target(self, expr, target_type):
+    def generate_expression_for_target(self, expr, target_type, splat_scalars=True):
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
@@ -2904,6 +3027,10 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         narrowed = self.vector_narrowing_expression(rendered, target_type, source_type)
         if narrowed is not None:
             return narrowed
+        if splat_scalars:
+            splat = self.vector_splat_expression(rendered, target_type, source_type)
+            if splat is not None:
+                return splat
         target_scalar = self.scalar_type_name(target_type)
         source_scalar = self.scalar_type_name(source_type)
         if target_scalar == "i32" and source_scalar == "u32":
@@ -2951,6 +3078,24 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         return self.vector_narrowing_expression(
             self.generate_expression(expr), target_type, self.expression_type(expr)
         )
+
+    def vector_splat_expression(self, rendered, target_type, source_type):
+        """A scalar stored to a vector, which HLSL, GLSL, MSL and CrossGL replicate into every component.
+
+        WGSL has no implicit scalar-to-vector conversion, so the value becomes ``vecN<T>(T(value))``.
+        """
+        target_shape = self.vector_shape(target_type)
+        if target_shape is None or source_type is None:
+            return None
+        try:
+            source_scalar = self.type_name_string(source_type)
+        except ValueError:
+            return None
+        if source_scalar not in {"bool", "f16", "f32", "i32", "u32"}:
+            return None
+        element = target_shape[0]
+        value = rendered if source_scalar == element else f"{element}({rendered})"
+        return f"{self.type_name_string(target_type)}({value})"
 
     def vector_narrowing_expression(self, rendered, target_type, source_type):
         target_shape = self.vector_shape(target_type)
@@ -3000,33 +3145,39 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             matrix_scalar = self.generate_matrix_scalar_binary(expr)
             if matrix_scalar is not None:
                 return matrix_scalar
+            if expr.operator in SHIFT_OPERATORS:
+                left = self.generate_expression(expr.left)
+                amount = wgsl_shift_amount(
+                    self, expr.right, self.expression_type(expr.left)
+                )
+                return f"({left} {expr.operator} {amount})"
+            if expr.operator in BITWISE_OPERATORS:
+                left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
+                return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
                 f"{self.generate_expression(expr.right)})"
             )
         if isinstance(expr, UnaryOpNode):
+            if is_increment(expr):
+                self.reject_unordered_side_effect(expr)
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
-                if expr.operator == "++":
-                    return f"{operand} += 1"
-                if expr.operator == "--":
-                    return f"{operand} -= 1"
                 return f"{operand}{expr.operator}"
-            if expr.operator == "++":
-                return f"{operand} += 1"
-            if expr.operator == "--":
-                return f"{operand} -= 1"
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
                     operand_type = self.type_name_string(operand_type)
-                operand = wgsl_logical_not_operand(operand, operand_type)
+                converted = wgsl_logical_not_operand(operand, operand_type)
+                if converted != operand:
+                    # A bool conversion is a constructor call, a primary.
+                    return f"!{converted}"
             if expr.operator == "-" and self.matrix_shape(
                 self.expression_type(expr.operand)
             ):
                 # WGSL has no unary minus on matrices; multiplying by -1 is exact.
                 return f"({operand} * -1.0)"
-            return f"{expr.operator}{operand}"
+            return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
@@ -3099,7 +3250,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if isinstance(expr, RangeNode):
             raise ValueError("WGSL target does not support range expressions")
         if isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr)
+            self.reject_unordered_side_effect(expr)
         raise ValueError(
             f"WGSL target does not support expression {type(expr).__name__}"
         )
@@ -3205,10 +3356,23 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
-        if derivative_name is not None:
+        if derivative_name is not None and not self.is_user_function_name(
+            function_name
+        ):
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
+        packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
+        if packed_8bit is not None and not self.is_user_function_name(function_name):
+            return self.generate_packed_8bit_call(node, function_name, packed_8bit)
+        if (
+            function_name == "mix"
+            and len(node.arguments) == 3
+            and not self.is_user_function_name(function_name)
+        ):
+            boolean_mix = self.generate_boolean_mix_call(node)
+            if boolean_mix is not None:
+                return boolean_mix
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)
@@ -3251,6 +3415,15 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             function_name, node.arguments, function=resolved_function
         )
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
+        if (
+            function_name == "atan"
+            and len(node.arguments) == 2
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
+            # argument and spells the two-argument form atan2(y, x).
+            return f"atan2({args})"
         if mapped_name == function_name and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
@@ -3261,6 +3434,46 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    # HLSL 8-bit pack intrinsics and their WGSL builtins (WGSL sections
+    # 17.9.3 and 17.9.8): the WGSL argument type each takes, the builtin, and
+    # its result type. pack_clamp_u8 takes signed components, while
+    # pack4xU8Clamp takes unsigned ones, so negative components are clamped
+    # to zero first.
+    PACKED_8BIT_FUNCTIONS = {
+        "pack_s8": ("vec4<i32>", "pack4xI8", "u32"),
+        "pack_u8": ("vec4<u32>", "pack4xU8", "u32"),
+        "pack_clamp_s8": ("vec4<i32>", "pack4xI8Clamp", "u32"),
+        "pack_clamp_u8": ("vec4<u32>", "pack4xU8Clamp", "u32"),
+        "unpack_s8s32": ("u32", "unpack4xI8", "vec4<i32>"),
+        "unpack_u8u32": ("u32", "unpack4xU8", "vec4<u32>"),
+    }
+
+    def generate_packed_8bit_call(self, node, function_name, mapping):
+        """HLSL ``pack_*8``/``unpack_*8*32`` as the WGSL 4x8-bit pack builtins."""
+        argument_type, mapped_name, _result_type = mapping
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        argument_expr = self.generate_expression(argument)
+        if argument_type == "u32":
+            # HLSL converts an int to the packed type bit for bit, as u32() does.
+            if self.integer_scalar_type(self.expression_type(argument)) == "i32":
+                argument_expr = f"u32({argument_expr})"
+            return f"{mapped_name}({argument_expr})"
+        component = self.vector_component_type(self.expression_type(argument))
+        if component is not None:
+            component = self.map_type_name(component)
+        if mapped_name == "pack4xU8Clamp" and component != "u32":
+            if component != "i32":
+                argument_expr = f"vec4<i32>({argument_expr})"
+            argument_expr = f"vec4<u32>(max({argument_expr}, vec4<i32>(0)))"
+        elif component != argument_type[len("vec4<") : -1]:
+            argument_expr = f"{argument_type}({argument_expr})"
+        return f"{mapped_name}({argument_expr})"
 
     def generate_workgroup_uniform_load_call(self, node):
         """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
@@ -3616,6 +3829,77 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
         return f"clamp({value_expr}, {lower}, {upper})"
 
+    def generate_boolean_mix_call(self, node):
+        """``mix(x, y, a)`` with a ``bool`` or ``bvecN`` selector as ``select(x, y, a)``.
+
+        With a boolean selector, CrossGL's ``mix`` selects (GLSL 4.60 section 8.3): each
+        component is ``y`` where ``a`` is true and ``x`` where it is false. WGSL's ``mix``
+        takes only a floating-point selector; ``select(f, t, cond)`` (WGSL section 17.3)
+        is the selecting builtin, with the same argument order and a scalar ``cond``
+        allowed for vector values. Returns ``None`` for a non-boolean selector.
+        """
+        selector_width = self.boolean_expression_width(node.arguments[2])
+        if selector_width is None:
+            return None
+        # Only values whose type is known can disagree with the selector; a value with no
+        # recorded type, such as a built-in call, is not taken to be a scalar.
+        value_width = max(
+            (
+                self.vector_component_count(value_type) or 1
+                for value_type in map(self.expression_type, node.arguments[:2])
+                if value_type is not None
+            ),
+            default=selector_width,
+        )
+        if selector_width not in (1, value_width):
+            raise ValueError(
+                "WGSL target does not support mix with a "
+                f"{selector_width}-component selector and "
+                f"{value_width}-component values"
+            )
+        x, y, a = (self.generate_expression(arg) for arg in node.arguments)
+        return f"select({x}, {y}, {a})"
+
+    BOOLEAN_COMPARISON_OPERATORS = {"<", ">", "<=", ">=", "==", "!="}
+    BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS = {
+        "lessThan",
+        "lessThanEqual",
+        "greaterThan",
+        "greaterThanEqual",
+        "equal",
+        "notEqual",
+        "not",
+    }
+
+    def boolean_expression_width(self, expr):
+        """Component count of a ``bool`` or ``vecN<bool>`` expression, else ``None``."""
+        expr_type = self.expression_type(expr)
+        if self.is_bool_type(expr_type):
+            return 1
+        shape = self.vector_shape(expr_type)
+        if shape is not None:
+            return shape[1] if shape[0] == "bool" else None
+        if isinstance(expr, BinaryOpNode):
+            if expr.operator in {"&&", "||"}:
+                return 1
+            if expr.operator in self.BOOLEAN_COMPARISON_OPERATORS:
+                operand_type = self.expression_type(expr.left) or (
+                    self.expression_type(expr.right)
+                )
+                return self.vector_component_count(operand_type) or 1
+            return None
+        if isinstance(expr, UnaryOpNode) and expr.operator == "!":
+            return 1
+        if (
+            isinstance(expr, FunctionCallNode)
+            and isinstance(expr.function, IdentifierNode)
+            and expr.function.name in self.BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS
+            and expr.arguments
+            and not self.is_user_function_name(expr.function.name)
+        ):
+            return self.vector_component_count(self.expression_type(expr.arguments[0]))
+        return None
+
     def generate_clamp_bound(self, bound, vector_type_name):
         rendered = self.generate_expression(bound)
         if self.vector_component_count(self.expression_type(bound)) is not None:
@@ -3895,6 +4179,8 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return self.generate_image_dimensions_call(args)
         if normalized_name == "texelfetch":
             return self.generate_texel_fetch_call(function_name, args)
+        if normalized_name == "texelfetchoffset":
+            return self.generate_texel_fetch_offset_call(function_name, args)
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
@@ -4102,17 +4388,56 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 "WGSL target supports textureSize() calls with texture or "
                 f"texture/lod arguments; got {len(args)} argument(s)"
             )
+        texture_expr = self.generate_expression(args[0])
         dimensions = (
             "textureDimensions("
-            + ", ".join(self.generate_expression(arg) for arg in args)
+            + ", ".join(
+                [texture_expr] + [self.generate_expression(arg) for arg in args[1:]]
+            )
             + ")"
         )
-        expected_shape = self.vector_shape(self._current_expression_expected_type)
+        expected_type = self._current_expression_expected_type
+        expected_shape = self.vector_shape(expected_type)
+        texture_type = self.sampled_texture_type(self.expression_type(args[0]))
+        if texture_type is None:
+            if expected_shape is not None:
+                element_type, size = expected_shape
+                if element_type == "f32":
+                    return f"vec{size}<f32>({dimensions})"
+            return dimensions
+
+        # CrossGL's textureSize follows GLSL: it returns int/ivecN, and an
+        # array texture's last component is its layer count. WGSL's
+        # textureDimensions returns u32/vecN<u32> without the layers.
+        base_type = re.sub(r"<[^>]*>$", "", texture_type)
+        if base_type.endswith("_array"):
+            dimensions = f"vec3<u32>({dimensions}, textureNumLayers({texture_expr}))"
+            size = 3
+        elif base_type.endswith("_1d"):
+            size = 1
+        elif base_type.endswith("_3d"):
+            size = 3
+        else:
+            size = 2
+
         if expected_shape is not None:
-            element_type, size = expected_shape
-            if element_type == "f32":
-                return f"vec{size}<f32>({dimensions})"
-        return dimensions
+            element_type = expected_shape[0]
+        else:
+            try:
+                element_type = (
+                    self.type_name_string(expected_type)
+                    if expected_type is not None
+                    else None
+                )
+            except ValueError:
+                element_type = None
+        if element_type not in {"i32", "u32", "f32"}:
+            element_type = "i32"
+        if element_type == "u32":
+            return dimensions
+        if size == 1:
+            return f"{element_type}({dimensions})"
+        return f"vec{size}<{element_type}>({dimensions})"
 
     def generate_image_dimensions_call(self, args):
         if len(args) != 1:
@@ -4137,6 +4462,20 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
+            f"{self.generate_expression(level)})"
+        )
+
+    def generate_texel_fetch_offset_call(self, function_name, args):
+        """``texelFetchOffset(t, P, lod, offset)`` reads the texel at ``P + offset`` (GLSL 4.60 section 8.9.2)."""
+        if len(args) != 4:
+            raise ValueError(
+                "WGSL target supports texelFetchOffset() calls with exactly 4 "
+                f"arguments; got {len(args)} for {function_name}"
+            )
+        texture, coords, level, offset = args
+        return (
+            f"textureLoad({self.generate_expression(texture)}, "
+            f"({self.generate_expression(coords)} + {self.generate_expression(offset)}), "
             f"{self.generate_expression(level)})"
         )
 
@@ -4254,6 +4593,22 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         return "workgroupBarrier()"
 
     def generate_constructor(self, node):
+        if node.named_arguments:
+            # Fields come from the source declaration: the emitted name of a
+            # structure such as ``filter`` is ``filter_``.
+            struct_name = self.struct_type_name(node.constructor_type)
+            struct = self._structs_by_name.get(struct_name)
+            fields = [
+                (member.name, member.member_type)
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
+            ]
+            arguments = named_struct_constructor_arguments(struct_name, node, fields)
+            args = ", ".join(
+                self.generate_expression_for_target(arg, field_type)
+                for arg, field_type in arguments
+            )
+            return f"{self.type_name_string(node.constructor_type)}({args})"
         if len(node.arguments) == 1:
             narrowed = self.generate_vector_narrowing_conversion(
                 node.constructor_type, node.arguments[0]
@@ -4263,8 +4618,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
+            convert_vectors = len(node.arguments) > 1
             args = ", ".join(
-                self.generate_vector_constructor_argument(arg, element_type)
+                self.generate_vector_constructor_argument(
+                    arg, element_type, convert_vectors
+                )
                 for arg in node.arguments
             )
         else:
@@ -4316,9 +4674,19 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             args.append("".join(current).strip())
         return args
 
-    def generate_vector_constructor_argument(self, arg, element_type):
-        if self.vector_shape(self.expression_type(arg)) is not None:
-            return self.generate_expression(arg)
+    def generate_vector_constructor_argument(
+        self, arg, element_type, convert_vectors=True
+    ):
+        arg_shape = self.vector_shape(self.expression_type(arg))
+        if arg_shape is not None:
+            rendered = self.generate_expression(arg)
+            # A WGSL vector constructor converts only a whole vector passed alone, so a vector of
+            # another component type that contributes components among other arguments is
+            # converted first.
+            element = self.scalar_type_name(element_type)
+            if convert_vectors and element is not None and element != arg_shape[0]:
+                return f"vec{arg_shape[1]}<{element}>({rendered})"
+            return rendered
         if self.is_float_vector_abstract_int_argument(arg, element_type):
             return self.generate_expression(arg)
         return self.generate_expression_for_target(arg, element_type)
@@ -4336,8 +4704,11 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         if vector_shape is None:
             return self.generate_call_arguments(function_name, arguments)
         element_type, _size = vector_shape
+        convert_vectors = len(arguments) > 1
         return ", ".join(
-            self.generate_vector_constructor_argument(arg, element_type)
+            self.generate_vector_constructor_argument(
+                arg, element_type, convert_vectors
+            )
             for arg in arguments
         )
 
@@ -5856,6 +6227,13 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 return self.type_name_string(function_name)
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
+            packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
+                self.semantic_key(function_name)
+            )
+            if packed_8bit is not None and not self.is_user_function_name(
+                function_name
+            ):
+                return packed_8bit[2]
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
@@ -6459,7 +6837,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 or self.vector_shape(return_type) is not None
             ):
                 return ("@location(0)",)
-        return_attributes = self.wgsl_attributes(attributes, direction="out")
+        return_attributes = self.wgsl_attributes(
+            attributes, direction="target" if stage_name == "fragment" else "out"
+        )
         return (return_attributes,) if return_attributes else ()
 
     def wgsl_attributes(self, attributes, direction="generic"):
@@ -6477,7 +6857,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
                 rendered.append(f"@builtin({builtin})")
                 continue
 
-            location = self.semantic_location(semantic, direction)
+            location = self.attribute_location(attr, semantic, direction)
             if location is not None:
                 rendered.append(f"@location({location})")
 
@@ -6513,35 +6893,31 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         return re.sub(r"[^a-z0-9_]+", "", semantic.lower())
 
     def semantic_location(self, semantic, direction):
+        """The location of a value with ``semantic`` (:mod:`.stage_io_semantic_locations`).
+
+        ``direction`` is ``"target"`` for a fragment output, whose ``COLORn`` names colour attachment ``n``.
+        """
         key = self.semantic_key(semantic)
-        if key in {"gl_fragcolor", "sv_target", "color"}:
-            return 0
+        # The Slang importer spells SV_Target<n> as Out_Color<n>.
+        target = re.fullmatch(r"(?:sv_target|gl_fragcolor|out_color)(\d*)", key)
+        if target is None and direction == "target":
+            target = re.fullmatch(r"color(\d*)", key)
+        if target is not None:
+            return int(target.group(1) or 0)
         if is_system_semantic_key(key):
             # System values are built-ins or refused, never user locations.
             return None
-        semantic_bases = {
-            "position": 0,
-            "normal": 1,
-            "texcoord": 2,
-            "uv": 2,
-            "tangent": 6,
-            "bitangent": 7,
-        }
-        for base, offset in semantic_bases.items():
-            if key == base:
-                return offset
-            if key.startswith(base):
-                suffix = key[len(base) :]
-                if suffix.isdigit():
-                    return offset + int(suffix)
-        numeric_suffix = re.search(r"(\d+)$", key)
-        if numeric_suffix:
-            return int(numeric_suffix.group(1))
-        return None
+        return shared_semantic_location(semantic)
 
-    def next_binding_attributes(self, group="0"):
-        binding = self.next_available_binding(group, self._global_binding_index)
-        self._global_binding_index = binding + 1
+    def next_binding_attributes(self, group="0", *, start=None):
+        group = str(group)
+        implicit = start is None
+        if implicit:
+            start = self._next_implicit_binding_by_group.get(group, 0)
+        binding = self.next_available_binding(group, start)
+        if implicit:
+            # Explicit resources and companion samplers must not consume lower free slots.
+            self._next_implicit_binding_by_group[group] = binding + 1
         self.mark_allocated_binding(group, binding)
         return f"@group({group}) @binding({binding})"
 
@@ -6556,9 +6932,6 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             if reserved_sampler is not None:
                 group, binding = reserved_sampler
                 self.mark_allocated_binding(group, binding)
-                self._global_binding_index = max(
-                    self._global_binding_index, binding + 1
-                )
                 return f"@group({group}) @binding({binding})"
         match = re.search(r"@binding\(([^)]+)\)", texture_attributes)
         if not match:
@@ -6569,7 +6942,6 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return self.next_binding_attributes(group=group)
         binding = self.next_available_binding(group, start)
         self.mark_allocated_binding(group, binding)
-        self._global_binding_index = max(self._global_binding_index, binding + 1)
         return f"@group({group}) @binding({binding})"
 
     def next_available_binding(self, group, start):
@@ -6745,11 +7117,9 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             return ""
         try:
             numeric_binding = int(str(binding), 0)
-            next_binding = numeric_binding + 1
             self.mark_allocated_binding(group, numeric_binding)
         except ValueError:
-            next_binding = self._global_binding_index
-        self._global_binding_index = max(self._global_binding_index, next_binding)
+            pass
         return f"@group({group}) @binding({binding})"
 
     def register_attribute_binding(self, arguments, default_group):

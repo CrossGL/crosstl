@@ -389,6 +389,6 @@ struct VSOutput { float3 A : TEXCOORD3; float4 Pos : SV_POSITION; float2 UV : CO
 VSOutput main(float3 p : POSITION0) { VSOutput o = (VSOutput)0; o.Pos = float4(p, 1.0); o.A = p; return o; }
 """
     spirv = _translate(tmp_path, source, "c.vert.hlsl", "vulkan")
-    # COLOR0 on a vertex output is a user varying, not colour attachment 0 (which A already uses).
-    assert _spirv_locations(spirv, "Output") == [0, 2]
+    # COLOR0 on a vertex output is a user varying at its GLSL location, not colour attachment 0.
+    assert _spirv_locations(spirv, "Output") == [8, 13]
     _spirv_val(tmp_path, spirv)

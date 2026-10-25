@@ -1443,7 +1443,7 @@ def test_parse_mesh_intrinsics_roundtrip_through_canonical_crossgl(
     assert regenerated_call in glsl
 
 
-def test_parse_task_payload_dispatch_pattern_roundtrips_as_payload_argument():
+def test_parse_task_payload_store_and_dispatch_roundtrip():
     code = """
     #version 450 core
     #extension GL_EXT_mesh_shader : require
@@ -1468,8 +1468,9 @@ def test_parse_task_payload_dispatch_pattern_roundtrips_as_payload_argument():
     assert "TaskPayload payload @taskPayloadSharedEXT;" in crossgl
     assert "TaskPayload localPayload;" in crossgl
     assert "localPayload.meshlet = 7u;" in crossgl
-    assert "DispatchMesh(2, 3, 4, localPayload);" in crossgl
-    assert "payload = localPayload;" not in crossgl
+    # The store into the payload stays a store; the dispatch passes no local as the payload.
+    assert "payload = localPayload;" in crossgl
+    assert "DispatchMesh(2, 3, 4);" in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
