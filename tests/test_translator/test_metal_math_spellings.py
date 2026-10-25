@@ -114,3 +114,40 @@ def test_pi_functions_are_refused_until_they_reduce_exactly(
         == f"project.translate.{backend}-metal-math-function-unsupported"
     )
     assert function in str(raised.value)
+
+
+PI_PROBE = """
+shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = sinpi(fin[i]) + cospi(fin[i]);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_keep_sinpi_and_cospi(tmp_path, backend):
+    path = tmp_path / "probe.cgl"
+    path.write_text(PI_PROBE, encoding="utf-8")
+    code = crosstl.translate(str(path), backend=backend)
+    assert "sinpi(fin[i])" in code
+    assert "cospi(fin[i])" in code
+
+
+@pytest.mark.parametrize("function", ["tanpi", "asinpi", "acospi", "atanpi"])
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_still_refuse_the_pi_functions_they_lack(
+    tmp_path, function, backend
+):
+    path = tmp_path / "probe.cgl"
+    path.write_text(PI_PROBE.replace("cospi(", f"{function}("), encoding="utf-8")
+    with pytest.raises(MetalMathFunctionUnsupportedError) as raised:
+        crosstl.translate(str(path), backend=backend)
+    assert function in str(raised.value)
+    assert not str(raised.value).startswith("MSL ")
