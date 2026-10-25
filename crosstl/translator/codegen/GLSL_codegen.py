@@ -45274,6 +45274,11 @@ complex64_t crossgl_complex64_mod_assign(
                 return bitcast_type
             if self.glsl_constructor_type(function_name):
                 return function_name
+            logical_type = self.glsl_hlsl_logical_result_type(
+                function_name, expression.arguments
+            )
+            if logical_type is not None:
+                return logical_type
             unified_type = self.glsl_unified_builtin_result_type(
                 function_name, expression.arguments
             )
