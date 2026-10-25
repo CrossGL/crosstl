@@ -802,6 +802,30 @@ shader SlangIntegerWidthValidator {
 """
 
 
+SLANG_BIT_QUERY_VALIDATOR_SHADER = """
+shader SlangBitQueryValidator {
+    RWStructuredBuffer<int> iin @binding(0);
+    RWStructuredBuffer<uint> uin @binding(1);
+    RWStructuredBuffer<ivec4> outp @binding(2);
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint i = tid.x;
+            ivec2 sv = ivec2(iin[i], iin[i + 1u]);
+            uvec3 uv = uvec3(uin[i], uin[i + 1u], 0u);
+            let pop = bitCount(uv);
+            let msb = findMSB(sv);
+            let lsb = findLSB(uin[i]);
+            let rev = bitfieldReverse(sv);
+            uint urev = bitfieldReverse(uin[i]);
+            bool none = findMSB(iin[i]) < 0;
+            outp[i] = ivec4(pop.x + msb.y + lsb, rev.x, int(urev), none ? 1 : 0);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -2966,6 +2990,40 @@ def test_generated_slang_8bit_and_64bit_integers_compile_with_slangc(tmp_path):
     shader_path.write_text(code, encoding="utf-8")
 
     # The HLSL target only re-emits source, so build SPIR-V and validate it.
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_bit_queries.slang"
+    spirv_path = tmp_path / "slang_bit_queries.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_BIT_QUERY_VALIDATOR_SHADER)
+    )
+    assert "int3 pop = int3(countbits(uv));" in code
+    assert "int2 msb = int2(firstbithigh(sv));" in code
+    assert "int lsb = int(firstbitlow(uin[i]));" in code
+    assert "int2 rev = reversebits(sv);" in code
+    assert "uint urev = reversebits(uin[i]);" in code
+    assert "bool none = int(firstbithigh(iin[i])) < 0;" in code
+    shader_path.write_text(code, encoding="utf-8")
+
     slangc = _require_tool("slangc")
     spirv_val = _require_tool("spirv-val")
     _run_validator(

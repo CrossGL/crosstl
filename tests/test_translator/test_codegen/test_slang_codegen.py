@@ -3149,7 +3149,7 @@ def test_glsl_bit_manipulation_builtins_lower_to_slang_intrinsics(tmp_path):
                 let lsbUnsigned = findLSB(uv);
                 let revSigned = bitfieldReverse(sv);
                 let revUnsigned = bitfieldReverse(uv);
-                outp[idx] = popSigned + uvec2(popScalar) + msbSigned + lsbUnsigned + uvec2(revSigned) + revUnsigned;
+                outp[idx] = uvec2(popSigned + ivec2(popScalar) + msbSigned + lsbUnsigned + revSigned) + revUnsigned;
             }
         }
     }
@@ -3159,10 +3159,12 @@ def test_glsl_bit_manipulation_builtins_lower_to_slang_intrinsics(tmp_path):
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint2 popSigned = countbits(sv);" in generated_code
-    assert "uint popScalar = countbits(uin[idx]);" in generated_code
-    assert "uint2 msbSigned = firstbithigh(sv);" in generated_code
-    assert "uint2 lsbUnsigned = firstbitlow(uv);" in generated_code
+    # Slang's countbits, firstbithigh and firstbitlow return uint; CrossGL's
+    # versions return int, so a scan that finds no bit stays -1.
+    assert "int2 popSigned = int2(countbits(sv));" in generated_code
+    assert "int popScalar = int(countbits(uin[idx]));" in generated_code
+    assert "int2 msbSigned = int2(firstbithigh(sv));" in generated_code
+    assert "int2 lsbUnsigned = int2(firstbitlow(uv));" in generated_code
     assert "int2 revSigned = reversebits(sv);" in generated_code
     assert "uint2 revUnsigned = reversebits(uv);" in generated_code
     for glsl_name in ("bitCount(", "findMSB(", "findLSB(", "bitfieldReverse("):
@@ -3170,6 +3172,53 @@ def test_glsl_bit_manipulation_builtins_lower_to_slang_intrinsics(tmp_path):
 
     if shutil.which("slangc") is not None:
         compile_generated_slang(generated_code, tmp_path, "compute")
+
+
+def test_glsl_bit_scans_keep_int_results_for_every_integer_width():
+    code = """
+    shader BuiltinGap {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                u8vec2 a = u8vec2(uint8(1u), uint8(2u));
+                i16vec3 b = i16vec3(int16(1), int16(-2), int16(3));
+                i64 c = i64(-4);
+                u64vec4 d = u64vec4(uint64(5u));
+                let popNarrow = bitCount(a);
+                let msbShort = findMSB(b);
+                let lsbLong = findLSB(c);
+                let popLong = bitCount(d);
+                let revLong = bitfieldReverse(d);
+                bool noBit = findLSB(0u) < 0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int2 popNarrow = int2(countbits(a));" in generated_code
+    assert "int3 msbShort = int3(firstbithigh(b));" in generated_code
+    assert "int lsbLong = int(firstbitlow(c));" in generated_code
+    assert "int4 popLong = int4(countbits(d));" in generated_code
+    assert "vector<uint64_t, 4> revLong = reversebits(d);" in generated_code
+    assert "bool noBit = int(firstbitlow(0u)) < 0;" in generated_code
+
+
+def test_glsl_bit_scan_of_a_non_integer_operand_is_refused():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float x = 1.0;
+                int msb = findMSB(x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(SlangLoweringRefused, match="findMSB"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_user_defined_bit_and_fwidth_function_names_are_not_lowered():
