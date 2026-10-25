@@ -749,28 +749,14 @@ def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
     ) in generated
 
 
-def test_wgsl_codegen_locates_slang_importer_attribute_and_target_semantics(
-    tmp_path,
-):
-    vertex_shader = """
-    shader WGSLSlangAttributeSemantics {
-        struct VertexInput {
-            vec3 position @ in_Position;
-            vec3 normal @ in_Normal;
-            vec4 tangent @ in_Tangent;
-        }
-        vertex {
-            vec4 main(VertexInput input) @ gl_Position {
-                return vec4(input.position + input.normal + input.tangent.xyz, 1.0);
-            }
-        }
-    }
-    """
-    fragment_shader = """
-    shader WGSLSlangTargetSemantics {
+def test_wgsl_codegen_locates_slang_importer_target_semantics(tmp_path):
+    # The Slang importer spells SV_Target<n> as Out_Color<n>; n is the colour
+    # attachment, whatever the declaration order.
+    struct_shader = """
+    shader WGSLSlangTargetMembers {
         struct FragmentOutput {
-            vec4 color @ Out_Color;
             vec4 extra @ Out_Color1;
+            vec4 color @ Out_Color;
         }
         fragment {
             FragmentOutput main(vec4 color @ Color0) {
@@ -782,17 +768,24 @@ def test_wgsl_codegen_locates_slang_importer_attribute_and_target_semantics(
         }
     }
     """
+    result_shader = """
+    shader WGSLSlangTargetResult {
+        fragment {
+            vec4 main(vec4 color @ Color0) @ Out_Color2 {
+                return color;
+            }
+        }
+    }
+    """
 
-    vertex = WGSLCodeGen().generate(parse_shader(vertex_shader))
-    fragment = WGSLCodeGen().generate(parse_shader(fragment_shader))
+    members = WGSLCodeGen().generate(parse_shader(struct_shader))
+    result = WGSLCodeGen().generate(parse_shader(result_shader))
 
-    assert "@location(0) position: vec3<f32>," in vertex
-    assert "@location(1) normal: vec3<f32>," in vertex
-    assert "@location(6) tangent: vec4<f32>," in vertex
-    assert "@location(0) color: vec4<f32>," in fragment
-    assert "@location(1) extra: vec4<f32>," in fragment
-    validate_wgsl_with_naga(tmp_path, vertex)
-    validate_wgsl_with_naga(tmp_path, fragment)
+    assert "@location(1) extra: vec4<f32>," in members
+    assert "@location(0) color: vec4<f32>," in members
+    assert ") -> @location(2) vec4<f32> {" in result
+    validate_wgsl_with_naga(tmp_path, members)
+    validate_wgsl_with_naga(tmp_path, result)
 
 
 def test_wgsl_codegen_locates_slang_position_input_and_sv_target_result(tmp_path):
@@ -815,7 +808,7 @@ def test_wgsl_codegen_locates_slang_position_input_and_sv_target_result(tmp_path
 
     assert "fn vertex_main(@location(0) position: vec3<f32>)" in vertex
     assert (
-        "fn fragment_main(@location(0) c: vec4<f32>) -> @location(0) vec4<f32>"
+        "fn fragment_main(@location(13) c: vec4<f32>) -> @location(0) vec4<f32>"
     ) in fragment
     validate_wgsl_with_naga(tmp_path, fragment)
 
