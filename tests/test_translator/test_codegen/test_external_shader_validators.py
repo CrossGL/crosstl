@@ -876,7 +876,16 @@ shader SlangMatrixGroupValidator {
             vec2 r = (m * 2.0)[j];
             float x = (m * 2.0)[1][0];
             vec2 y = m * 2.0 * v;
-            outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x + r.x + x + y.x;
+            vec3 u = vec3(s, 1.0, 2.0);
+            vec4 q = vec4(s, 1.0, 2.0, 3.0);
+            vec2 cm = matrixCompMult(m, m)[1];
+            vec3 cw = matrixCompMult(w, w)[1];
+            mat2x3 o = outerProduct(u, v);
+            vec3 n = outerProduct(q.xyz, q.xy)[1];
+            vec4 sq = outerProduct(q, q)[3];
+            vec3 ov = outerProduct(u, v) * v;
+            outp[i] = a.x + b.x + c.x + d.x + e.x + f.x + g.x + h.x + k.x + t.x + p.x + r.x + x + y.x
+                + cm.x + cw.x + o[1].x + n.x + sq.w + ov.x;
         }
     }
 }
@@ -3151,7 +3160,7 @@ def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
 
 
 def test_generated_slang_matrix_group_compiles_with_slangc(tmp_path):
-    """Column subscripts and ``mul`` on matrix-valued expressions are valid Slang (#2813)."""
+    """Column subscripts, ``mul``, ``matrixCompMult`` and ``outerProduct`` on matrices are valid Slang (#2813)."""
     shader_path = tmp_path / "slang_matrix_group.slang"
     spirv_path = tmp_path / "slang_matrix_group.spv"
 
@@ -3172,6 +3181,18 @@ def test_generated_slang_matrix_group_compiles_with_slangc(tmp_path):
     assert "float2 r = transpose((m * 2.0))[j];" in code
     assert "float x = (m * 2.0)[0][1];" in code
     assert "float2 y = mul(m * 2.0, v);" in code
+    assert "float2 cm = ((m * m))._m01_m11;" in code
+    assert "float3 cw = ((w * w))._m01_m11_m21;" in code
+    assert "float3x2 o = _crossgl_outer_product_float3x2(u, v);" in code
+    assert (
+        "float3 n = (_crossgl_outer_product_float3x2(q.xyz, q.xy))._m01_m11_m21;" in (
+            code
+        )
+    )
+    assert "float4 sq = (_crossgl_outer_product_float4x4(q, q))._m03_m13_m23_m33;" in (
+        code
+    )
+    assert "float3 ov = mul(_crossgl_outer_product_float3x2(u, v), v);" in code
     shader_path.write_text(code, encoding="utf-8")
 
     slangc = _require_tool("slangc")

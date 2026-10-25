@@ -24890,5 +24890,172 @@ def test_slang_subscripts_matrix_valued_expressions_by_column():
     assert "float2 y = mul(m * 2.0, v);" in generated_code
 
 
+def test_slang_lowers_matrix_comp_mult_and_outer_product():
+    """Slang declares neither built-in; slangc rejected both as undefined identifiers (#2813)."""
+    code = """
+    shader MatrixBuiltins {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float s = fin[i];
+                vec2 v = vec2(s, 1.0);
+                vec3 c = vec3(s, 1.0, 2.0);
+                vec4 q = vec4(s, 1.0, 2.0, 3.0);
+                mat2 m = mat2(s, 2.0, 3.0, 4.0);
+                mat2x3 w = mat2x3(s, 2.0, 3.0, 4.0, 5.0, 6.0);
+                dvec3 dc = dvec3(double(s), 1.0, 2.0);
+                dvec2 dv = dvec2(double(s), 3.0);
+                vec2 a = matrixCompMult(m, m)[1];
+                vec3 b = matrixCompMult(w, w)[1];
+                mat2x3 o = outerProduct(c, v);
+                vec3 n = outerProduct(c, v)[1];
+                vec3 d = outerProduct(q.xyz, q.xy)[1];
+                vec2 e = outerProduct(q.xy, q.xyz)[2];
+                mat4 sq = outerProduct(q, q);
+                dvec3 f = outerProduct(dc, dv)[1];
+                outp[i] = a.x + b.x + o[0].x + n.x + d.x + e.x + sq[3].w + float(f.x);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 a = ((m * m))._m01_m11;" in generated_code
+    assert "float3 b = ((w * w))._m01_m11_m21;" in generated_code
+    assert "float3x2 o = _crossgl_outer_product_float3x2(c, v);" in generated_code
+    assert "float3 n = (_crossgl_outer_product_float3x2(c, v))._m01_m11_m21;" in (
+        generated_code
+    )
+    assert (
+        "float3 d = (_crossgl_outer_product_float3x2(q.xyz, q.xy))._m01_m11_m21;" in (
+            generated_code
+        )
+    )
+    assert "float2 e = (_crossgl_outer_product_float2x3(q.xy, q.xyz))._m02_m12;" in (
+        generated_code
+    )
+    assert "float4x4 sq = _crossgl_outer_product_float4x4(q, q);" in generated_code
+    assert (
+        "double3 f = (_crossgl_outer_product_double3x2(dc, dv))._m01_m11_m21;"
+        in generated_code
+    )
+    assert (
+        "float3x2 _crossgl_outer_product_float3x2(float3 c, float2 r)\n"
+        "{\n"
+        "    return float3x2(c[0] * r, c[1] * r, c[2] * r);\n"
+        "}"
+    ) in generated_code
+    assert (
+        "double3x2 _crossgl_outer_product_double3x2(double3 c, double2 r)\n"
+        "{\n"
+        "    return double3x2(c[0] * r, c[1] * r, c[2] * r);\n"
+        "}"
+    ) in generated_code
+    assert generated_code.count("float3x2 _crossgl_outer_product_float3x2(") == 1
+    assert "outerProduct(" not in generated_code
+    assert "matrixCompMult(" not in generated_code
+
+
+def test_slang_outer_product_helper_avoids_user_symbols():
+    code = """
+    shader OuterProductName {
+        float _crossgl_outer_product_float3x2(float a) {
+            return a * 2.0;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 c = vec3(fin[i], 1.0, 2.0);
+                vec2 v = vec2(fin[i], 1.0);
+                vec3 o = outerProduct(c, v)[1];
+                outp[i] = o.x + _crossgl_outer_product_float3x2(fin[i]);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float3x2 _crossgl_outer_product_float3x2_1(float3 c, float2 r)"
+        in generated_code
+    )
+    assert "float3 o = (_crossgl_outer_product_float3x2_1(c, v))._m01_m11_m21;" in (
+        generated_code
+    )
+    assert "float _crossgl_outer_product_float3x2(float a)" in generated_code
+
+
+def test_slang_keeps_user_outer_product_function():
+    code = """
+    shader UserOuterProduct {
+        vec2 outerProduct(vec2 a, vec2 b) {
+            return a + b;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec2 v = vec2(fin[i], 1.0);
+                outp[i] = outerProduct(v, v)[1];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "outp[i] = outerProduct(v, v)[1];" in generated_code
+    assert "_crossgl_outer_product" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("expression", "reason"),
+    [
+        (
+            "outerProduct(s, s)[0].x",
+            "Slang outerProduct: requires two float or double vectors",
+        ),
+        (
+            "float(outerProduct(h, h)[0].x)",
+            "Slang outerProduct: requires two float or double vectors",
+        ),
+        (
+            "matrixCompMult(v, v).x",
+            "Slang matrixCompMult: requires a matrix of a known shape",
+        ),
+    ],
+    ids=["scalar-outer-product", "half-outer-product", "vector-comp-mult"],
+)
+def test_slang_refuses_matrix_builtins_without_a_known_shape(expression, reason):
+    code = f"""
+    shader MatrixBuiltinRefusal {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                float s = fin[i];
+                vec2 v = vec2(s, 1.0);
+                f16vec2 h = f16vec2(half(s), half(1.0));
+                outp[i] = {expression};
+            }}
+        }}
+    }}
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+
+    assert refused.reasons == (reason,)
+    assert "outerProduct(" not in refused.code
+    assert "matrixCompMult(" not in refused.code
+
+
 if __name__ == "__main__":
     pytest.main()
