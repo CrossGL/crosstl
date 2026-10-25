@@ -445,6 +445,10 @@ class SlangToCrossGLConverter:
             "uint2": "uvec2",
             "uint3": "uvec3",
             "uint4": "uvec4",
+            # Packed 8-bit vectors are plain 32-bit words in CrossGL, matching
+            # the HLSL importer and the uint results of pack_s8/pack_u8.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             "bool": "bool",
             "bool2": "bvec2",
             "bool3": "bvec3",
@@ -1997,6 +2001,11 @@ class SlangToCrossGLConverter:
             )
             if pointer_buffer_type:
                 return f"{pointer_buffer_type}{pointer_suffix}"
+            packed_buffer_type = self.map_packed_element_buffer_type(
+                slang_type, base_type
+            )
+            if packed_buffer_type:
+                return f"{packed_buffer_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2070,6 +2079,19 @@ class SlangToCrossGLConverter:
         if len(args) != 1 or "*" not in args[0]:
             return None
         return f"buffer<{self.map_type(args[0])}>"
+
+    def map_packed_element_buffer_type(self, slang_type, base_type):
+        # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+        # buffer of them is a structured buffer of uint, as in the HLSL importer.
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or args[0].strip() not in {
+            "int8_t4_packed",
+            "uint8_t4_packed",
+        }:
+            return None
+        return f"{base_type}<uint>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
