@@ -4030,13 +4030,24 @@ class MetalToCrossGLConverter(
                 output_name=output_name,
                 specialization_key=specialization_key,
             )
+        ray_attribute = next(
+            (
+                attribute.name
+                for attribute in getattr(function, "attributes", None) or []
+                if getattr(attribute, "name", None)
+                in self.rt_qualifiers - {"mesh", "object"}
+            ),
+            None,
+        )
+        if qualifier is None and ray_attribute is not None:
+            # [[intersection(bounding_box, ...)]] keeps the stage as an attribute rather than a qualifier.
+            qualifier = ray_attribute
         if qualifier in self.rt_qualifiers:
-            return f"    // {qualifier} function\n" + self.generate_function(
-                function,
-                template_value_bindings=template_value_bindings,
-                template_type_bindings=template_type_bindings,
-                output_name=output_name,
-                specialization_key=specialization_key,
+            # Printed as a plain helper, the function would lose the qualifier that lets the host place it in an
+            # intersection function table, and the targets would get no ray-tracing stage.
+            return self.refuse_import(
+                f"Metal {qualifier} function '{function.name}' has no CrossGL import; its ray-tracing "
+                "parameters and results are not yet mapped to a CrossGL ray stage"
             )
         return self.generate_function(
             function,
