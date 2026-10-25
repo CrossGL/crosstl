@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import execution, probes, rustgpu, spirv_input, validators
+from .features.spirv import is_core
 from .model import ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import lower
 
@@ -298,6 +299,21 @@ def run_output(feature: Feature, language: str) -> Result:
     return result("supported")
 
 
+def _encodes_otherwise(feature: Feature) -> bool:
+    """Whether CrossTL's SPIR-V generator writes a core instruction's operation without the instruction, as it
+    writes ``isnan`` as a test of the exponent bits: its translation of the feature's own CrossGL probe lacks the
+    instruction too. A round trip that drops it is then judged by its validation and execution, as the output row is.
+    """
+    if not is_core(feature):
+        return False
+    try:
+        probe = probes.build(feature, "crossgl")
+        direct = translate(probe.source, probe.suffix, OUTPUT_BACKENDS["spirv"], "cgl")
+    except (probes.ProbeError, Refused, Broken):
+        return False
+    return bool(spirv_input.dropped(feature, direct))
+
+
 def run_input(feature: Feature, language: str) -> Result:
     def result(outcome: str, detail: str = "") -> Result:
         tool = validators.TOOLS[language] if outcome in ("supported", "wrong") else ""
@@ -347,7 +363,7 @@ def run_input(feature: Feature, language: str) -> Result:
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
-    if lost:
+    if lost and not _encodes_otherwise(feature):
         return result("wrong", lost)
     if emitted == language and _runs(feature, language):
         return replace(result("supported"), sources=(probe.source, translated))

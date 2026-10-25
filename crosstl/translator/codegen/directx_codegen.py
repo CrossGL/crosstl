@@ -18236,6 +18236,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+                mapped_operator, left_type, right_type
+            )
+            if matrix_type is not None:
+                return matrix_type
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -18531,6 +18536,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
+            if func_name in {"matrixCompMult", "outerProduct"} and func_name not in (
+                getattr(self, "function_return_types", {})
+            ):
+                matrix_call_type = self.hlsl_matrix_orientation.call_type(
+                    func_name, [self.expression_result_type(arg) for arg in args]
+                )
+                if matrix_call_type is not None:
+                    return matrix_call_type
             if (
                 func_name in {
                     "frac",

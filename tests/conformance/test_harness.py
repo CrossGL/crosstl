@@ -18,7 +18,7 @@ def test_hazard_inventory_and_oracles():
     # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, the OpenCL
     # saturated conversions to uint (round to nearest even) and to char, the HLSL and GLSL workgroup-memory
     # exchanges, the CUDA warp shuffles called from CrossGL, GLSL and SPIR-V runtime-array lengths, and GLSL matrix
-    # orientation in values and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
+    # orientation in values, in matrix-valued expressions and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
     # built-ins, SPIR-V's FrexpStruct and ModfStruct, GLSL and SPIR-V extended integer arithmetic, and SPIR-V
     # integer instructions whose opcode signedness differs from their operand types, Metal clz/ctz and GLSL
     # findMSB/findLSB bit scans, SPIR-V structured control

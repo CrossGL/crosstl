@@ -9,10 +9,12 @@ in :data:`CURATED` when it is known to equal another feature, and otherwise stay
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections import Counter
 
 from . import constructs, probes, validators
+from .features.spirv import is_core
 from .model import Feature
 
 # Features with no SPIR-V lowering, keyed ``language/category/name``, and the semantic id they share with features
@@ -149,6 +151,13 @@ def lower(feature: Feature) -> tuple[str, str]:
         return constructs.semantic_id(feature), ""
     if feature.key in CURATED:
         return CURATED[feature.key], ""
+    if is_core(feature):
+        # A core instruction's id is the one of the GLSL call that compiles to it.
+        return lower(
+            dataclasses.replace(
+                feature, language="glsl", name=feature.spelling, spelling=""
+            )
+        )
     if feature.language == "spirv":
         return f"GLSL.std.450:{feature.name}", ""
     if (feature.language, feature.group) in UNIDENTIFIED:
