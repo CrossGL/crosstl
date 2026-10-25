@@ -631,7 +631,9 @@ def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_
     )
     wgsl, names = helpers_in(tmp_path, metal, body)
     assert "cgl_half_round4" in names
-    assert "l = cgl_half_round4(vec4<f32>((l + (cgl_half_round4((l + s)) * w))));" in wgsl
+    assert (
+        "l = cgl_half_round4(vec4<f32>((l + (cgl_half_round4((l + s)) * w))));" in wgsl
+    )
     assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
 
 
