@@ -102,6 +102,10 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .vertex_input_positions import (
+    VertexInputPositionUnsupportedError,
+    attribute_vertex_input_positions,
+)
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
@@ -139,6 +143,7 @@ __all__ = [
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
     "SubpassInputUnsupportedError",
+    "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "UndeclaredTypeError",
@@ -187,7 +192,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). A position built-in on a vertex input names the ``Position``
+    vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
     target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
@@ -260,6 +266,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     pass_builtin_inputs(program, report.target)
+    attribute_vertex_input_positions(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
