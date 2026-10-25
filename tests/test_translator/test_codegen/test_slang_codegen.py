@@ -11482,6 +11482,72 @@ def test_glsl_8bit_and_64bit_integer_spellings_emit_slang_types():
         assert glsl_spelling not in generated_code
 
 
+def test_glsl_8bit_and_64bit_integer_spellings_emit_slang_vector_types():
+    # Slang has no u8vec2/i8vec4/u64vec2/i64vec4 or uint8/int8/uint64/int64
+    # spellings; its 8- and 64-bit integer types are uint8_t/int8_t and
+    # uint64_t/int64_t, with vectors spelled vector<T, N>. CrossGL's scalar
+    # spellings i64/u64 and generic vectors vec2<i64>/vec2<u64> map the same
+    # way instead of being copied through unchanged (or collapsing to "i642").
+    code = """
+    shader Widths {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+                i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+                u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+                i64vec4 d = i64vec4(int64(1), int64(2), int64(3), int64(4));
+                i64 e = i64(uin[i]);
+                u64 f = u64(uin[i]);
+                vec2<i64> g = vec2<i64>(e, e);
+                vec2<u64> h = vec2<u64>(f, f);
+                outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(d.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i]), uint8_t(1u));"
+        in generated_code
+    )
+    assert (
+        "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1), int8_t(2), int8_t(3), "
+        "int8_t(4));" in generated_code
+    )
+    assert (
+        "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i]), "
+        "uint64_t(2u));" in generated_code
+    )
+    assert (
+        "vector<int64_t, 4> d = vector<int64_t, 4>(int64_t(1), int64_t(2), "
+        "int64_t(3), int64_t(4));" in generated_code
+    )
+    assert "int64_t e = int64_t(uin[i]);" in generated_code
+    assert "uint64_t f = uint64_t(uin[i]);" in generated_code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in generated_code
+    assert "vector<uint64_t, 2> h = vector<uint64_t, 2>(f, f);" in generated_code
+
+    for invalid_token in (
+        "u8vec",
+        "i8vec",
+        "u64vec",
+        "i64vec",
+        "uint8(",
+        "int8(",
+        "uint64(",
+        "int64(",
+        "i642",
+        "u642",
+    ):
+        assert invalid_token not in generated_code
+
+
 def test_resource_types_emit_slang_texture_names():
     code = """
     shader Resources {

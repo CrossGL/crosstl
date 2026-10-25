@@ -46,10 +46,12 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - Structure member extents named by constants, such as `float data[Total];` with `constant constexpr size_t Total = X * Y * Z;` declared after the structure, are folded to integers on every target.
 - The Metal importer resolves the `<simd/simd.h>` aliases such as `simd::float4`, `simd_float4x4` and `vector_float3`, declares the `<metal_stdlib>` plain-data structures a source uses without declaring, such as the tessellation factor and indirect argument records, and imports `atomic_fetch_sub_explicit` as an atomic add of the negated value instead of copying the call.
 - HLSL implicit vector truncation in assignments and initializers becomes a leading-component swizzle on every target.
+- SPIR-V output lowers Metal structures with device, constant, threadgroup or thread pointer members to resource handles, as HLSL and GLSL output do. On all three targets such a member may hold a null pointer that is overwritten before every use, and a thread pointer member may point into a fixed-size local array.
 
 ### Fixed
 
 - Mojo output of a component-wise vector comparison such as `a < b` on `vec2` operands is a `SIMD[DType.bool, 2]` mask written with `a.lt(b)`, and `any` and `all` of a boolean vector become `reduce_or()` and `reduce_and()`, ignoring the padding lane of three-component vectors. A `bvec2` initialized from a comparison used to be refused.
+- CUDA and HIP output writes `min` and `max` of integer operands as the integer intrinsics instead of `fminf` and `fmaxf`, which converted the operands to `float` and rounded values above 2^24, and writes `double` operands as `fmin` and `fmax`. Operands of different integer types are cast to the type they promote to, as `min(static_cast<unsigned int>(i), 32u)`.
 - WGSL output gives resources without an explicit binding the lowest free slots in their bind group, as GLSL and HLSL output do. Explicit bindings in any group used to push them higher: next to `cbuffer Params @binding(3)`, two storage buffers without a binding took slots 4 and 5 instead of 0 and 1.
 - Metal output of matrix shape conversions such as `(float3x3)m`, of `as_type<long>` and `as_type<ulong>`, and of fragment colour attachment inputs compiles, and HLSL `GetDimensions` assigns its stride output on Metal.
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.

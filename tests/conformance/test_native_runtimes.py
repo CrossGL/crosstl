@@ -7,11 +7,15 @@ With CROSSTL_CONFORMANCE_REQUIRE naming runtimes, an unavailable required runtim
 
 import json
 import os
+from dataclasses import replace
 
 import pytest
 
 from . import runner
+from .process import run
 from .runtimes import RUNTIMES, provision
+from .test_multiple_inputs import make_case
+from .toolchains import tool
 
 # The HLSL check binds a 12-byte structured-buffer stride. It is not h_precise: DXC emits that kernel's
 # a * b - c as an unfused fmul and fsub without fast-math flags, and WARP 1.0.19 and 1.0.21 still fuse them,
@@ -115,3 +119,118 @@ def test_d3d12_device_runs_the_harness_shader_model(tmp_path):
     report = "\n".join(f"{model}: {result}" for model, result in models.items())
     print(f"{device}\n{report}")
     assert models[HLSL_PROFILE] == "ok", f"{device}\n{report}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [name for name, runtime in RUNTIMES.items() if runtime.target != "hlsl"],
+)
+@pytest.mark.parametrize("input_count", [2, 3])
+def test_native_mixed_inputs_reproduce_the_oracle(tmp_path, name, input_count):
+    runtime = RUNTIMES[name]
+    provided = provision(runtime)
+    if not provided.available:
+        if name in REQUIRED:
+            pytest.fail(provided.reason)
+        pytest.skip(provided.reason)
+    case = make_case(
+        tmp_path, "metal" if runtime.target == "metal" else "glsl", input_count
+    )
+    if runtime.target == "spirv":
+        compiler, disassembler = tool("glslangValidator"), tool("spirv-dis")
+        if not compiler.available or not disassembler.available:
+            pytest.skip(
+                "glslangValidator and spirv-dis are needed for the mixed-input fixture"
+            )
+        binary, assembly = tmp_path / "probe.spv", tmp_path / "probe.spvasm"
+        compiled = run([*compiler.command, "-V", case.src, "-o", binary])
+        assert compiled.status == "accepted", compiled.log
+        disassembled = run([*disassembler.command, binary, "-o", assembly])
+        assert disassembled.status == "accepted", disassembled.log
+        case = replace(case, src=assembly, lang="spirv")
+    [record] = runner.run_suite(
+        [case],
+        [runtime.target],
+        ["strict"],
+        {runtime.target: [(runtime, provided)]},
+        tmp_path / "run",
+        reference=True,
+    )
+    assert record["outcome"] == "preserved", record
+    assert record["inputUnchanged"] and record["outputGuardIntact"]
+
+
+@pytest.mark.parametrize(
+    "change, expected",
+    [("same", "supported"), ("different", "wrong"), ("input-write", "wrong")],
+)
+def test_coverage_executes_mixed_input_probes(change, expected):
+    from tools.coverage import execution, probes
+    from tools.coverage.model import Feature, Param, Result, Signature, Type
+
+    runtime = RUNTIMES["opengl-llvmpipe"]
+    provided = provision(runtime)
+    if not provided.available:
+        if runtime.id in REQUIRED:
+            pytest.fail(provided.reason)
+        pytest.skip(provided.reason)
+    feature = Feature(
+        "glsl",
+        "function",
+        "ldexp",
+        Signature(Type("float"), (Param(Type("float")), Param(Type("int")))),
+    )
+    source = probes.build(feature, "glsl").source.replace(
+        "#version 460", "#version 450"
+    )
+    translated = source
+    if change == "different":
+        translated = source.replace("ldexp(a0, a1)", "ldexp(a0, a1 + 1)")
+    elif change == "input-write":
+        translated = source.replace("outp[i] = r;", "outp[i] = r; iin[i] = -1;")
+    [result], used = execution.run(
+        [Result(feature, "output", "supported", sources=(source, translated))],
+        runtimes=runtime.id,
+    )
+    assert used == [runtime.id]
+    assert result.outcome == expected, result
+    assert result.runtime == runtime.id
+    if change == "input-write":
+        assert "into its input buffer" in result.detail
+
+
+@pytest.mark.parametrize("input_count", [2, 3])
+@pytest.mark.parametrize("change", ["same", "binding", "drop-constants"])
+def test_coverage_checks_mixed_inputs_with_constants(tmp_path, input_count, change):
+    from tools.coverage import execution
+    from tools.coverage.model import Feature, Result
+
+    runtime = RUNTIMES["opengl-llvmpipe"]
+    provided = provision(runtime)
+    if not provided.available:
+        if runtime.id in REQUIRED:
+            pytest.fail(provided.reason)
+        pytest.skip(provided.reason)
+    case = make_case(tmp_path, "glsl", input_count)
+    block = f"layout(std140, binding = {input_count + 1}) uniform Params {{ float scale; }};\n"
+    source = case.src.read_text().replace("void main()", block + "void main()")
+    source = source.replace("outp[i] = ", "outp[i] = scale * ")
+    translated = source
+    if change == "binding":
+        translated = source.replace(
+            f"binding = {input_count})", f"binding = {input_count + 2})"
+        )
+    elif change == "drop-constants":
+        translated = source.replace(block, "").replace("scale * ", "2.5 * ")
+    probe = Result(
+        Feature("glsl", "construct", "mixed-inputs", None),
+        "output",
+        "supported",
+        sources=(source, translated),
+    )
+    [result], used = execution.run([probe], runtimes=runtime.id)
+    assert used == [runtime.id]
+    assert result.runtime == runtime.id, result
+    assert result.outcome == ("supported" if change == "same" else "wrong"), result
+    if change != "same":
+        assert execution.REBOUND in result.detail

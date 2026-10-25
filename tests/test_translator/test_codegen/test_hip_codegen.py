@@ -3465,6 +3465,58 @@ class TestHipCodeGen:
         assert "float3 complexCapped = fminf(a, nextWeight());" not in hip_code
         assert "int3 ilo = fminf(ia, ib);" not in hip_code
 
+    def test_scalar_min_max_keeps_integer_and_double_operands(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint x = gl_GlobalInvocationID.x;
+                    int y = int(x);
+                    uint a = min(x, 32u);
+                    int b = max(y, 3);
+                    uint mixed = min(y, 32u);
+                    int64_t w = 7;
+                    uint64_t uw = 7u;
+                    double d = 1.5;
+                    double wide = max(d, 2.0);
+                    float f = 0.5;
+                    float narrow = min(f, 1.0);
+                    int64_t wide64 = max(w, 3);
+                    uint64_t big = min(uw, 3u);
+                    int64_t same64 = min(w, w);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int a = min(x, 32u);" in hip_code
+        assert "int b = max(y, 3);" in hip_code
+        assert (
+            "unsigned int mixed = min(static_cast<unsigned int>(y), 32u);" in hip_code
+        )
+        assert "double wide = fmax(d, 2.0);" in hip_code
+        assert "float narrow = fminf(f, 1.0);" in hip_code
+        # int64_t is long on LP64 Linux, so both operands are cast to one type.
+        assert (
+            "int64_t wide64 = max(static_cast<long long>(w), "
+            "static_cast<long long>(3));" in hip_code
+        )
+        assert (
+            "uint64_t big = min(static_cast<unsigned long long>(uw), "
+            "static_cast<unsigned long long>(3u));" in hip_code
+        )
+        assert "int64_t same64 = min(w, w);" in hip_code
+        assert "fminf(x, 32u)" not in hip_code
+        assert "fmaxf(y, 3)" not in hip_code
+        assert "fminf(d, 2.0)" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_vector_clamp_expands_hip_components(self):
         source_code = """
         shader TestShader {
