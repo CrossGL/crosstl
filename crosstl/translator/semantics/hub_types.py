@@ -394,7 +394,10 @@ class TypeScope:
         op = expr.op
         left, right = self.infer(expr.left), self.infer(expr.right)
         if op in ("&&", "||", "^^"):
-            return BOOL
+            # Vector operands combine component by component.
+            return BOOL.with_lanes(
+                max(left.lanes if left else 1, right.lanes if right else 1)
+            )
         if op in ("<", "<=", ">", ">=", "==", "!="):
             lanes = max(left.lanes if left else 1, right.lanes if right else 1)
             return BOOL.with_lanes(lanes)
@@ -452,6 +455,9 @@ class TypeScope:
         direct = type_from_name(name)
         if direct is not None:
             return direct
+        if name in ("and", "or") and name not in self.functions:
+            lanes = [value.lanes for value in map(self.infer, arguments) if value]
+            return BOOL.with_lanes(max(lanes, default=1))
         first = self.infer(arguments[0]) if arguments else None
         lanes = first.lanes if first is not None else 1
         if name in ("asuint", "floatBitsToUint"):

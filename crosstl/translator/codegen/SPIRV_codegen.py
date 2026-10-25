@@ -194,6 +194,7 @@ from .spirv_shading_rate import (
 from .spirv_short_circuit import (
     SHORT_CIRCUIT_OPERATORS,
     evaluate_loop_condition,
+    lower_logical_intrinsic,
     lower_short_circuit_logical,
     lower_short_circuit_ternary,
 )
@@ -12041,6 +12042,9 @@ class VulkanSPIRVCodeGen(
                 function_name,
                 "fabs requires a floating-point scalar or vector operand",
             )
+
+        if function_name in {"and", "or"} and len(args) == 2:
+            return lower_logical_intrinsic(self, function_name, args)
 
         # MSL select(a, b, c) (MSL 6.4) yields c ? b : a per component, like mix(a, b, bvec).
         if function_name == "select" and len(args) == 3:

@@ -10311,6 +10311,9 @@ class MetalCodeGen(
                     shape = self.metal_expression_emulated_matrix_shape(arg)
                     if shape is not None:
                         return f"bool{shape[1]}x{shape[2]}"
+                logical_type = self.metal_hlsl_logical_result_type(func_name, args)
+                if logical_type is not None:
+                    return logical_type
             if func_name == "select" and len(args) == 3:
                 for arg in args[:2]:
                     if self.metal_expression_emulated_matrix_shape(arg) is not None:
