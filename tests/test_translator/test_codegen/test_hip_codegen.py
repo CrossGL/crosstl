@@ -14072,3 +14072,21 @@ class TestHipCodeGen:
         spec_idx = hip_code.index("hipTextureObject_t specular;")
         amb_idx = hip_code.index("hipTextureObject_t ambient;")
         assert diff_idx < spec_idx < amb_idx
+
+
+def test_hip_vector_constructor_splats_a_scalar_cast():
+    source_code = """
+    shader Splat {
+        ivec3 widen(uint x) {
+            ivec3 a = ivec3(int(x));
+            vec4 c = vec4(float(x));
+            return a + ivec3(c.x);
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "int3 a = cgl_int3_splat(int(x));" in hip_code
+    assert "float4 c = cgl_float4_splat(float(x));" in hip_code
+    assert "make_int3(int(x))" not in hip_code
+    assert "make_float4(float(x))" not in hip_code

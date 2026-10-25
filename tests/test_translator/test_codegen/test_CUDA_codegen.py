@@ -19919,6 +19919,45 @@ def test_unsized_scalar_constructors_keep_functional_casts():
     assert "return double(float(int(uint(value))));" in cuda_code
 
 
+def test_vector_constructor_splats_a_scalar_cast(tmp_path):
+    source_code = """
+    shader Splat {
+        ivec3 widen(uint x) {
+            ivec3 a = ivec3(int(x));
+            vec4 c = vec4(float(x));
+            uvec2 d = uvec2(u64(x));
+            return a + ivec3(c.x) + ivec3(int(d.x));
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "int3 a = cgl_int3_splat(int(x));" in cuda_code
+    assert "float4 c = cgl_float4_splat(float(x));" in cuda_code
+    assert "uint2 d = cgl_uint2_splat(" in cuda_code
+    assert "__device__ inline int3 cgl_int3_splat(int value)" in cuda_code
+    assert "make_int3(int(x))" not in cuda_code
+    assert "make_float4(float(x))" not in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_vector_constructor_keeps_user_function_named_like_a_cast():
+    source_code = """
+    shader UserCast {
+        int scale(uint x) {
+            return int(x) * 2;
+        }
+
+        ivec3 widen(uint x) {
+            return ivec3(scale(x), 1, 2);
+        }
+    }
+    """
+    cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "make_int3(scale(x), 1, 2)" in cuda_code
+
+
 def test_fixed_width_integers_include_cstdint(tmp_path):
     source_code = """
     shader Wide {
