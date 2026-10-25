@@ -10363,6 +10363,11 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
             if integer_bit_result_type is not None:
                 return integer_bit_result_type
             if (
+                func_name in self.PACKED_BYTE_INTRINSICS
+                and func_name not in self.user_function_names
+            ):
+                return self.PACKED_BYTE_INTRINSICS[func_name][0]
+            if (
                 func_name in self.METAL_ANGLE_CONVERSION_FACTORS
                 and len(args or []) == 1
                 and func_name not in self.user_function_names
@@ -11440,25 +11445,30 @@ class MetalCodeGen(MetalHlslResourceMixin, MetalHlslValueMixin, MetalHlslFunctio
     # the least significant byte on the little-endian Apple GPUs.
     # unpack_u8u32/unpack_s8s32 (and the 16-bit forms) reinterpret the uint as
     # uchar4 or char4 and widen each lane, sign-extending the signed lanes.
+    # Each entry is (result type, template); expression_result_type reports the
+    # result type so HLSL's implicit conversions of the result get a constructor.
     PACKED_BYTE_INTRINSICS = {
-        "pack_u8": "as_type<uint>(uchar4(uint4({value})))",
-        "pack_s8": "as_type<uint>(uchar4(uint4({value})))",
+        "pack_u8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
+        "pack_s8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
         "pack_clamp_u8": (
-            "as_type<uint>(uchar4(clamp(int4({value}), int4(0), int4(255))))"
+            "uint",
+            "as_type<uint>(uchar4(clamp(int4({value}), int4(0), int4(255))))",
         ),
         "pack_clamp_s8": (
-            "as_type<uint>(char4(clamp(int4({value}), int4(-128), int4(127))))"
+            "uint",
+            "as_type<uint>(char4(clamp(int4({value}), int4(-128), int4(127))))",
         ),
-        "unpack_u8u32": "uint4(as_type<uchar4>(uint({value})))",
-        "unpack_s8s32": "int4(as_type<char4>(uint({value})))",
-        "unpack_u8u16": "ushort4(as_type<uchar4>(uint({value})))",
-        "unpack_s8s16": "short4(as_type<char4>(uint({value})))",
+        "unpack_u8u32": ("uint4", "uint4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s32": ("int4", "int4(as_type<char4>(uint({value})))"),
+        "unpack_u8u16": ("ushort4", "ushort4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s16": ("short4", "short4(as_type<char4>(uint({value})))"),
     }
 
     def generate_packed_byte_call(self, func_name, args):
-        template = self.PACKED_BYTE_INTRINSICS.get(func_name)
-        if template is None or func_name in self.user_function_names:
+        entry = self.PACKED_BYTE_INTRINSICS.get(func_name)
+        if entry is None or func_name in self.user_function_names:
             return None
+        template = entry[1]
         if len(args) != 1:
             raise ValueError(
                 f"Metal {func_name} alias requires 1 argument; got {len(args)}"

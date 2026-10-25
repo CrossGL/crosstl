@@ -34233,10 +34233,6 @@ def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
     )
 
 
-if __name__ == "__main__":
-    pytest.main()
-
-
 def test_translate_hlsl_packed_byte_intrinsics_to_metal_byte_vectors(tmp_path):
     source_path = tmp_path / "pack.hlsl"
     source_path.write_text(
@@ -34274,3 +34270,37 @@ def test_translate_hlsl_packed_byte_intrinsics_to_metal_byte_vectors(tmp_path):
     assert "uint4u1=uint4(as_type<uchar4>(uint(r1)));" in compact
     for name in ("pack_s8", "pack_u8", "pack_clamp", "unpack_s8s32", "unpack_u8u32"):
         assert f"{name}(" not in generated
+
+
+def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
+    tmp_path,
+):
+    # MSL has no implicit conversion between vector types, so the HLSL implicit
+    # conversions of the unpacked lanes need an explicit constructor.
+    source_path = tmp_path / "unpack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<uint> iin;
+        RWStructuredBuffer<int> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int4 v = unpack_u8u32(iin[0]);
+            uint4 w = unpack_s8s32(iin[1]);
+            float4 f = unpack_s8s32(iin[2]);
+            int4 s = unpack_u8u16(iin[3]);
+            outp[0] = v.x + int(w.y) + int(f.z) + s.w;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "int4v=int4(uint4(as_type<uchar4>(uint(iin[0]))));" in compact
+    assert "uint4w=uint4(int4(as_type<char4>(uint(iin[1]))));" in compact
+    assert "float4f=float4(int4(as_type<char4>(uint(iin[2]))));" in compact
+    assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
+
+
+if __name__ == "__main__":
+    pytest.main()
