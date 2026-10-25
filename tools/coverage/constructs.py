@@ -1,7 +1,7 @@
-"""Language-level features: control flow, types, compute, resources and shader stages.
+"""Language-level features: control flow, operators, types, compute, resources and shader stages.
 
-The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches or which
-stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
+The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
+its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
 instruction, a capability, a storage class, a built-in or an execution model), and the anchors are checked against the
 pinned grammar. The stages are the grammar's shader execution models and the scalar types its width capabilities, so
 a new stage or width upstream shows up as untested until it has a probe.
@@ -24,7 +24,7 @@ from .model import Feature, Type
 from .templates import ABSENT, Template
 from .validators import GLSL_STAGES
 
-CATEGORIES = ("control-flow", "type", "compute", "resource", "stage")
+CATEGORIES = ("control-flow", "operator", "type", "compute", "resource", "stage")
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
 _STAGE_CAPABILITIES = frozenset(
     {"Shader", "Geometry", "Tessellation", "MeshShadingEXT", "RayTracingKHR"}
@@ -77,11 +77,74 @@ def _curated() -> list[Construct]:
             "OpDemoteToHelperInvocation",
             stage="fragment",
         ),
+        c("operator", "integer-arithmetic", "OpIAdd", "OpISub", "OpIMul"),
+        c("operator", "float-arithmetic", "OpFAdd", "OpFSub", "OpFMul", "OpFDiv"),
+        c("operator", "integer-division", "OpSDiv", "OpSMod"),
+        c("operator", "unsigned-division", "OpUDiv", "OpUMod"),
+        c("operator", "signed-shift", "OpShiftLeftLogical", "OpShiftRightArithmetic"),
+        c("operator", "unsigned-shift", "OpShiftLeftLogical", "OpShiftRightLogical"),
+        c(
+            "operator",
+            "bitwise-logic",
+            "OpBitwiseAnd",
+            "OpBitwiseOr",
+            "OpBitwiseXor",
+            "OpNot",
+        ),
+        c("operator", "negation", "OpSNegate", "OpFNegate"),
+        c(
+            "operator",
+            "signed-comparison",
+            "OpSLessThan",
+            "OpSGreaterThanEqual",
+            "OpIEqual",
+            "OpINotEqual",
+        ),
+        c(
+            "operator",
+            "unsigned-comparison",
+            "OpULessThan",
+            "OpUGreaterThanEqual",
+            "OpUGreaterThan",
+            "OpULessThanEqual",
+        ),
+        c(
+            "operator",
+            "float-comparison",
+            "OpFOrdLessThan",
+            "OpFOrdGreaterThanEqual",
+            "OpFOrdEqual",
+            "OpFUnordNotEqual",
+        ),
+        c(
+            "operator",
+            "boolean-logic",
+            "OpLogicalNot",
+            "OpLogicalEqual",
+            "OpLogicalNotEqual",
+        ),
+        c("operator", "increment-decrement", "OpIAdd", "OpISub"),
+        c("operator", "float-to-integer", "OpConvertFToS", "OpConvertFToU"),
+        c("operator", "integer-to-float", "OpConvertSToF", "OpConvertUToF"),
+        c("operator", "signed-to-unsigned", "OpBitcast"),
+        c(
+            "operator",
+            "compound-assignment",
+            "OpIAdd",
+            "OpIMul",
+            "OpSDiv",
+            "OpSMod",
+            "OpShiftLeftLogical",
+            "OpBitwiseAnd",
+        ),
+        c("operator", "vector-scalar-product", "OpVectorTimesScalar"),
+        c("operator", "matrix-vector-product", "OpMatrixTimesVector"),
+        c("operator", "matrix-product", "OpMatrixTimesMatrix"),
+        c("operator", "vector-matrix-product", "OpVectorTimesMatrix"),
         c("type", "array", "OpTypeArray"),
         c("type", "struct", "OpTypeStruct"),
         c("type", "array-of-structs", "OpTypeArray", "OpTypeStruct"),
         c("type", "swizzle", "OpVectorShuffle"),
-        c("type", "matrix-vector-product", "OpMatrixTimesVector"),
         c("type", "global-constant", "OpConstant"),
         c("type", "runtime-array-length", "OpTypeRuntimeArray", "OpArrayLength"),
         c("compute", "shared-memory", "StorageClass.Workgroup", "OpControlBarrier"),

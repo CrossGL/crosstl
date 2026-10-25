@@ -3,7 +3,7 @@
 import re
 import struct
 from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
@@ -235,6 +235,7 @@ from .spirv_uniform_block_arrays import (
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
 from .stage_utils import requests_early_fragment_tests
+from .task_payload_variables import dispatch_mesh_payload_names
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -3690,7 +3691,7 @@ class VulkanSPIRVCodeGen(
             return self.unsupported_matrix_operation(op, result_type)
 
         if left_matrix is not None and right_matrix is not None:
-            if op in {"+", "-"}:
+            if op in {"+", "-", "/"}:
                 return self.componentwise_matrix_operation(
                     op, left, left_type, left_matrix, right, right_type, right_matrix
                 )
@@ -3707,10 +3708,9 @@ class VulkanSPIRVCodeGen(
             if right_vector is None:
                 if op == "*":
                     return self.matrix_times_scalar(left, left_type, left_matrix, right)
-                if op == "/":
-                    return self.matrix_divided_by_scalar(
-                        left, left_type, left_matrix, right
-                    )
+                return self.matrix_scalar_componentwise(
+                    op, left, left_type, left_matrix, right, scalar_first=False
+                )
             return self.unsupported_matrix_operation(op, result_type)
 
         left_vector = self.vector_type_info_from_type(left_type)
@@ -3718,6 +3718,10 @@ class VulkanSPIRVCodeGen(
             return self.vector_times_matrix(left, left_vector, right, right_matrix)
         if op == "*" and left_vector is None and right_matrix is not None:
             return self.matrix_times_scalar(right, right_type, right_matrix, left)
+        if left_vector is None and right_matrix is not None:
+            return self.matrix_scalar_componentwise(
+                op, right, right_type, right_matrix, left, scalar_first=True
+            )
 
         return self.unsupported_matrix_operation(op, result_type)
 
@@ -3812,18 +3816,27 @@ class VulkanSPIRVCodeGen(
         )
         return spirv_id
 
-    def matrix_divided_by_scalar(
-        self, matrix: SpirvId, matrix_type: SpirvId, matrix_info, scalar: SpirvId
+    def matrix_scalar_componentwise(
+        self,
+        op: str,
+        matrix: SpirvId,
+        matrix_type: SpirvId,
+        matrix_info,
+        scalar: SpirvId,
+        *,
+        scalar_first: bool,
     ) -> SpirvId:
+        """``m op s`` or ``s op m`` for ``+``, ``-`` or ``/``, one column at a time (GLSL 4.60 section 5.9)."""
         scalar = self.matrix_scalar_operand(scalar, matrix_info["component_type"])
         if scalar is None:
-            return self.unsupported_matrix_operation("/", matrix_type)
+            return self.unsupported_matrix_operation(op, matrix_type)
 
         columns = []
         for index in range(matrix_info["column_count"]):
             column = self.composite_extract(matrix, matrix_info["column_type"], index)
+            operands = (scalar, column) if scalar_first else (column, scalar)
             columns.append(
-                self.binary_operation("/", matrix_info["column_type"], column, scalar)
+                self.binary_operation(op, matrix_info["column_type"], *operands)
             )
         return self.composite_construct(matrix_type, columns)
 
@@ -4702,6 +4715,20 @@ class VulkanSPIRVCodeGen(
             complex_negation = self.complex_struct_negate_operation(operand)
             if complex_negation is not None:
                 return complex_negation
+            # OpFNegate takes no matrix, so a matrix is negated one column at a time.
+            matrix_info = self.matrix_operand_info(self.registered_value_type(operand))
+            if matrix_info is not None:
+                columns = [
+                    self.unary_operation(
+                        "-",
+                        matrix_info["column_type"],
+                        self.composite_extract(
+                            operand, matrix_info["column_type"], index
+                        ),
+                    )
+                    for index in range(matrix_info["column_count"])
+                ]
+                return self.composite_construct(matrix_info["type"], columns)
             component_type = self.scalar_or_vector_component_type(result_type.type)
             # Unary minus on a bool result: SPIR-V has no negation opcode for
             # bool (OpFNegate/OpSNegate reject bool), and C++ promotes bool to int
@@ -9265,8 +9292,21 @@ class VulkanSPIRVCodeGen(
                 )
             )
 
-        max_vertices = self.mesh_stage_limit(self.current_stage, "max_vertices")
-        max_primitives = self.mesh_stage_limit(self.current_stage, "max_primitives")
+        return self.mesh_stage_limits_with_observed_counts(
+            self.current_stage, observed_vertices, observed_primitives
+        )
+
+    def mesh_stage_limits_with_observed_counts(
+        self, stage, observed_vertices, observed_primitives
+    ) -> Tuple[int, int]:
+        """Mesh output limits from metadata, then output array sizes, raised to constant observed counts."""
+        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
+        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
+        declared = self.mesh_output_array_limits(stage)
+        if max_vertices is None:
+            max_vertices = declared.get("vertices")
+        if max_primitives is None:
+            max_primitives = declared.get("primitives")
         if observed_vertices is not None:
             max_vertices = max(observed_vertices, max_vertices or 0)
         if observed_primitives is not None:
@@ -14233,6 +14273,7 @@ class VulkanSPIRVCodeGen(
             "localsizez",
             "max_primitives",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "max_vertices",
             "maxprimitives",
             "maxtessfactor",
@@ -14589,12 +14630,18 @@ class VulkanSPIRVCodeGen(
                     self.is_storage_resource_parameter(param)
                     or self.is_entry_point_descriptor_parameter(param)
                     or self.is_bound_uniform_value_parameter(param, execution_model)
+                    or self.is_mesh_payload_entry_parameter(param, execution_model)
                 )
             ],
             execution_model,
         )
         for param, _param_type, param_value_type in runtime_parameters:
             param_name = getattr(param, "name", None) or "param"
+            if self.is_mesh_payload_entry_parameter(param, execution_model):
+                self.local_variables[param_name] = (
+                    self.process_mesh_payload_entry_parameter(param, param_value_type)
+                )
+                continue
             if self.is_storage_resource_parameter(param):
                 variable = self.process_entry_point_storage_buffer_parameter(param)
                 self.local_variables[param_name] = variable
@@ -14805,6 +14852,7 @@ class VulkanSPIRVCodeGen(
                     interface_name,
                     member_type,
                     member_node,
+                    planned_location=location_index,
                 )
                 if fields is not None:
                     components.append(
@@ -14882,6 +14930,7 @@ class VulkanSPIRVCodeGen(
                     interface_name,
                     member_type,
                     member_node,
+                    planned_location=location_index,
                 )
                 if fields is not None:
                     struct_outputs.append((member_index, member_type, fields))
@@ -20185,7 +20234,19 @@ class VulkanSPIRVCodeGen(
         cache_key = self.workgroup_variable_cache_key(node, var_type)
         variable = self.workgroup_variables_by_declaration.get(cache_key)
         if variable is None:
-            variable = self.create_variable(var_type, "Workgroup", node.name)
+            # task_payload_variables.py: a task entry's DispatchMesh payload is task-payload storage.
+            payload = (
+                self.current_execution_model == "TaskEXT"
+                and node.name in dispatch_mesh_payload_names(
+                    getattr(self.current_function_node, "body", None)
+                )
+            )
+            storage_class = "TaskPayloadWorkgroupEXT" if payload else "Workgroup"
+            variable = self.create_variable(var_type, storage_class, node.name)
+            if payload:
+                self.require_capability("MeshShadingEXT")
+                self.require_extension("SPV_EXT_mesh_shader")
+                self.task_payload_shared_variables[node.name] = variable
             self.workgroup_variables_by_declaration[cache_key] = variable
         self.mark_function_interface_variable(variable)
         return variable
@@ -21130,6 +21191,31 @@ class VulkanSPIRVCodeGen(
             for qualifier in getattr(node, "qualifiers", [])
         )
         return names
+
+    def is_mesh_payload_entry_parameter(
+        self, param, execution_model: Optional[str]
+    ) -> bool:
+        """Whether a mesh entry parameter is the task payload (HLSL ``in payload``, CrossGL ``@mesh_payload``)."""
+        if execution_model != "MeshEXT":
+            return False
+        return bool(
+            self.declaration_metadata_names(param)
+            & {"mesh_payload", "meshpayload", "payload"}
+        )
+
+    def process_mesh_payload_entry_parameter(self, param, value_type) -> SpirvId:
+        """Declare a mesh entry's payload parameter as the TaskPayloadWorkgroupEXT variable it reads.
+
+        The task stage's ``EmitMeshTasksEXT`` payload reaches each mesh workgroup through TaskPayloadWorkgroupEXT
+        storage (SPV_EXT_mesh_shader); a stage ``Input`` holds per-vertex data that no mesh entry receives.
+        """
+        variable = self.create_variable(
+            value_type, "TaskPayloadWorkgroupEXT", getattr(param, "name", "payload")
+        )
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.mark_function_interface_variable(variable)
+        return variable
 
     def is_task_payload_shared_node(self, node) -> bool:
         return bool(
@@ -31416,6 +31502,26 @@ class VulkanSPIRVCodeGen(
                 return max(0, limit)
         return None
 
+    def mesh_output_array_limits(self, stage) -> Dict[str, int]:
+        """The vertex and primitive limits that a mesh entry's output arrays declare.
+
+        ``SetMeshOutputCounts`` may take counts computed at run time, so its arguments bound
+        ``OutputVertices`` and ``OutputPrimitivesEXT`` only when they are constants; the ``@vertices``,
+        ``@primitives`` and ``@indices`` array sizes are the limits the entry declares, as HLSL's are.
+        """
+        limits: Dict[str, int] = {}
+        entry = getattr(stage, "entry_point", None)
+        for param in getattr(entry, "parameters", getattr(entry, "params", [])) or []:
+            info = self.mesh_output_parameter_info(param, "MeshEXT")
+            if info is None:
+                continue
+            count = info.get("count")
+            if not isinstance(count, int) or isinstance(count, bool):
+                continue
+            key = "vertices" if info.get("role") == "vertices" else "primitives"
+            limits[key] = max(count, limits.get(key, 0))
+        return limits
+
     def mesh_stage_topology_mode(self, stage) -> str:
         """Return the SPIR-V mesh output-topology execution mode."""
         topology = self.stage_attribute_value(stage, "outputtopology")
@@ -31680,13 +31786,9 @@ class VulkanSPIRVCodeGen(
         observed_vertices, observed_primitives = (
             self.mesh_output_counts_by_function.get(function_id.id, (None, None))
         )
-        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
-        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
-        if observed_vertices is not None:
-            max_vertices = max(observed_vertices, max_vertices or 0)
-        if observed_primitives is not None:
-            max_primitives = max(observed_primitives, max_primitives or 0)
-        return max(1, max_vertices or 1), max(1, max_primitives or 1)
+        return self.mesh_stage_limits_with_observed_counts(
+            stage, observed_vertices, observed_primitives
+        )
 
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None

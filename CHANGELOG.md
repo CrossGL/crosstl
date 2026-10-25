@@ -12,12 +12,19 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - CrossGL `sizeof` of a scalar, a 2- or 4-component vector or a sized array is folded to a constant on Metal, HLSL and GLSL. Other operands are refused with `SizeofUnsupportedError`; `sizeof` used to be written out unchanged, so GLSL rejected it and HLSL and Metal measured with their own layout rules.
 - The Metal importer refuses `sinpi`, `cospi`, `tanpi`, `asinpi`, `acospi`, `atanpi` and `atan2pi`, which are exact at integers and half-integers where `sin(x * pi)` is not, and calls to functions that the source declares but never defines. Both used to reach every target as calls to undeclared functions.
 - Metal indirect command buffers (`command_buffer`, `render_command`, `compute_command`) and rasterization rate maps are refused with `MetalRuntimeTypeUnsupportedError` for every target other than Metal when a stage uses them. HLSL and GLSL output used to copy the type names.
+- HLSL output refuses a constant buffer larger than Direct3D's 64 KiB limit, such as a large Metal `constant T&` argument or GLSL uniform block, with `ConstantBufferTooLargeError`, and matrix varyings whose semantic indices overlap with `InterfaceLocationConflictError`. DXC used to reject the generated shader.
+- The GLSL importer refuses `tensorARM` uniforms with `GLSLTypeUnsupportedError`. It used to drop them, so every target referenced an undeclared name. GLSL output refuses string literals outside `#include`, `#line` and `debugPrintfEXT` formats.
+- The Metal importer refuses ray-tracing functions, and the uses of mesh and object functions it cannot import, such as `set_indices`, with `MetalImportRefused`. They used to be printed as plain helpers that still called Metal methods.
 
 ### Added
 
 - `crosstl doctor` lists, for each backend, the validation tools CrossTL looks for and which of them are on `PATH`. A validation that cannot run now names the missing tool.
 - CrossGL `textureResidency(read, texel)` and `textureResident(code)` query sparse texture residency on GLSL, Metal, HLSL and SPIR-V.
 - `metal_sizeof(x)` measures a type with Metal's layout rules. The Metal importer writes it for operands it cannot size, such as template parameters.
+- Metal `[[mesh]]` and `[[object]]` functions import as CrossGL mesh and task stages.
+- `gl_InstanceIndex` translates to OpenGL as `gl_InstanceID + gl_BaseInstance`, to OpenGL ES as `gl_InstanceID`, to HLSL as `SV_InstanceID` and to SPIR-V. As with `gl_VertexIndex`, HLSL's value does not include the base instance.
+- Metal fixed sampler state (`constexpr sampler`) translates to OpenGL through host sampler objects. GLSL output starts with a `// crosstl-fixed-samplers:` line that lists each state with its uniforms and texture units. WebGL still refuses it.
+- The SPIR-V importer reads subpass inputs as `subpassLoad`. MSL `clz` and `ctz` import through `findMSB` and `findLSB` for 8-, 16- and 32-bit operands, and Metal output lowers `findMSB` and `findLSB` instead of copying them.
 
 ### Improved
 
@@ -36,6 +43,9 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - Texel lookup offsets that a program keeps in constant locals or computes in short constant loops become constant expressions on GLSL, HLSL, WGSL, SPIR-V and Slang. SPIR-V output refuses a non-constant offset outside gathers instead of writing an invalid module.
 - Metal `half` matrices translate to SPIR-V and WGSL as float matrices that hold binary16 values, rounded after each operation, and `half` operands in mixed expressions are typed. The Metal importer maps the `simd::` vector and matrix types like the Metal ones.
 - GLSL `length()` of a vector or matrix becomes its component or column count on other targets.
+- Structure member extents named by constants, such as `float data[Total];` with `constant constexpr size_t Total = X * Y * Z;` declared after the structure, are folded to integers on every target.
+- The Metal importer resolves the `<simd/simd.h>` aliases such as `simd::float4`, `simd_float4x4` and `vector_float3`, declares the `<metal_stdlib>` plain-data structures a source uses without declaring, such as the tessellation factor and indirect argument records, and imports `atomic_fetch_sub_explicit` as an atomic add of the negated value instead of copying the call.
+- HLSL implicit vector truncation in assignments and initializers becomes a leading-component swizzle on every target.
 
 ### Fixed
 
@@ -62,6 +72,17 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - HLSL output stores bfloat16 vectors as per-lane `uint` payloads, writes `fwidthFine` and `fwidthCoarse` with fine and coarse derivatives, and the HLSL importer maps packed 8-bit structured buffer elements.
 - A scalar swizzle such as `s.xxx` becomes a vector constructor on Metal, WGSL and GLSL ES, which do not accept it.
 - Slang output reads `gl_NumWorkGroups` as `WorkgroupCount()`, and Metal output infers the type of a shader-scope `let` from its initializer.
+- Metal `device T&` and `const device T&` arguments that reference a structure read the buffer on every target. HLSL, GLSL and SPIR-V used to declare them as stage inputs, so the shader read vertex attributes or nothing.
+- Metal `[[vertex_id]]`, `[[instance_id]]` and `[[primitive_id]]` arguments keep their `uint` type, so arithmetic on them wraps as in MSL. They used to import as `int`.
+- A GLSL local whose initializer reads an outer variable of the same name, as in `float scale = scale * 3.0;`, is renamed on HLSL, Metal, CUDA, HIP and Slang, where the initializer would read the new, uninitialized variable. The GLSL importer no longer reads a local that shadows a member of an anonymous buffer block, or of a uniform block it flattens, as that member.
+- GLSL output zero-initializes arrays with one constructor argument per element, and refuses an array whose size it cannot evaluate with `OpenGLZeroValueError`. HLSL output writes a one-argument vector constructor of unknown width as a cast, which splats a scalar.
+- Locals named after built-ins that GLSL and HLSL output call, such as `texture`, `textureSize`, `mod` and `imageSize`, are renamed so they no longer hide those functions.
+- HLSL output adds no second `SV_Position` parameter to a fragment entry whose input structure has one, declares `int` members that carry `SV_RenderTargetArrayIndex`, `SV_ViewportArrayIndex`, `SV_PrimitiveID` or an index system value as `uint`, and gives members named `view`, `layer` or `viewport` no system-value semantic. A Metal varying `float3 view` used to carry the view index.
+- Early fragment tests reach HLSL as `[earlydepthstencil]`, SPIR-V and Metal output, and the HLSL importer reads `[earlydepthstencil]`. Only GLSL output kept them.
+- The HLSL importer keeps a value-returning function marked `[numthreads]` as a helper, as DXC does, and GLSL output converts a scalar returned by a `float4` pixel entry to the output's type.
+- SPIR-V output declares immutable scalar, vector and matrix globals with constant initializers as constants, so `constant uint T = W * 3;` is valid, and flattens structure members of vertex outputs and fragment inputs that carry no location, such as the nested structures of a Metal mesh pipeline's `[[stage_in]]`. They used to overlap the next member's location.
+- GLSL output of a multi-stage file emits each helper only under the macros of the stages that call it, so a fragment-only helper that calls `fwidth` no longer breaks the vertex stage. Written half-precision stage inputs are copied into locals, and varyings no longer take the names of entry resource parameters.
+- Depth comparisons with 16-bit float reference values translate.
 
 ---
 

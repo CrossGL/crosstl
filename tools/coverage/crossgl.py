@@ -324,6 +324,9 @@ class CrossGL(Dialect):
         if name == SUBSCRIPT:
             vector, index = arguments
             return f"{vector}[{index}]"
+        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument.
+        if "{}" in name:
+            return name.format(*arguments)
         return super().call(name, arguments)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:

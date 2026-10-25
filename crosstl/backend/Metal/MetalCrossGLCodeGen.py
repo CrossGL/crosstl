@@ -43,6 +43,8 @@ from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from ..switch_clauses import ordered_switch_clauses
 from .barrier_import import metal_barrier_statements
+from .bit_scan_import import lower_scan as lower_bit_scan
+from .bit_scan_import import scan_function as bit_scan_function
 from .buffer_layout_import import MetalBufferLayoutImport
 from .color_attachments import (
     color_attachment_semantic,
@@ -57,8 +59,10 @@ from .dependent_builtins import (
     unbound_template_type_names,
 )
 from .external_functions import refuse_external_function_calls
+from .library_structs import declare_referenced_library_structs
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
+from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -146,6 +150,11 @@ class MetalBuiltinOverloadResolutionError(ValueError):
             f"{function_name}({signature}); candidates are "
             f"{', '.join(self.candidates)}"
         )
+
+
+def parse_metal_structs(source):
+    """Parse Metal ``source`` and return its structure declarations."""
+    return MetalParser(MetalLexer(source).tokenize()).parse().structs
 
 
 class MetalBuiltinResultTypeResolutionError(ValueError):
@@ -972,6 +981,18 @@ class MetalAtomicLoadLoweringError(ValueError):
         )
 
 
+class MetalAtomicFetchSubLoweringError(ValueError):
+    """Raised when an atomic subtraction has no CrossGL atomic addition of the same width."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-fetch-sub-unsupported"
+    missing_capabilities = ("metal.atomic-fetch-sub-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(f"Cannot lower Metal atomic_fetch_sub_explicit: {reason}")
+
+
 class MetalAtomicCompareExchangeLoweringError(ValueError):
     """Raised when a compare-exchange contract cannot be preserved."""
 
@@ -1002,7 +1023,9 @@ class MetalConstexprBranchLoweringError(ValueError):
         )
 
 
-class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
+class MetalToCrossGLConverter(
+    ImportRefusalMixin, MetalBufferLayoutImport, MetalMeshImport
+):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     IMPORT_REFUSAL_TYPE = MetalImportRefused
@@ -3379,6 +3402,7 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
         """
         refuse_external_function_calls(ast)
+        declare_referenced_library_structs(ast, parse_metal_structs)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -3992,13 +4016,40 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 )
                 + "    }\n\n"
             )
-        if qualifier in self.rt_qualifiers:
-            return f"    // {qualifier} function\n" + self.generate_function(
+        if qualifier == "mesh":
+            return self.generate_metal_mesh_stage(
                 function,
                 template_value_bindings=template_value_bindings,
                 template_type_bindings=template_type_bindings,
                 output_name=output_name,
                 specialization_key=specialization_key,
+            )
+        if qualifier == "object":
+            return self.generate_metal_object_stage(
+                function,
+                template_value_bindings=template_value_bindings,
+                template_type_bindings=template_type_bindings,
+                output_name=output_name,
+                specialization_key=specialization_key,
+            )
+        ray_attribute = next(
+            (
+                attribute.name
+                for attribute in getattr(function, "attributes", None) or []
+                if getattr(attribute, "name", None)
+                in self.rt_qualifiers - {"mesh", "object"}
+            ),
+            None,
+        )
+        if qualifier is None and ray_attribute is not None:
+            # [[intersection(bounding_box, ...)]] keeps the stage as an attribute rather than a qualifier.
+            qualifier = ray_attribute
+        if qualifier in self.rt_qualifiers:
+            # Printed as a plain helper, the function would lose the qualifier that lets the host place it in an
+            # intersection function table, and the targets would get no ray-tracing stage.
+            return self.refuse_import(
+                f"Metal {qualifier} function '{function.name}' has no CrossGL import; its ray-tracing "
+                "parameters and results are not yet mapped to a CrossGL ray stage"
             )
         return self.generate_function(
             function,
@@ -9543,6 +9594,11 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         )
 
     def format_parameter_decl(self, var, index, semantic_context=None):
+        mesh_declaration = self.metal_mesh_parameter_declaration(
+            var
+        ) or self.metal_object_parameter_declaration(var)
+        if mesh_declaration is not None:
+            return mesh_declaration
         if getattr(var, "name", None):
             declaration = self.format_decl(
                 var,
@@ -9846,7 +9902,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             annotations = " ".join(
-                item for item in [fn_semantic, *linkage_annotations] if item
+                item
+                for item in [
+                    fn_semantic,
+                    *linkage_annotations,
+                    self.metal_mesh_function_annotation(func),
+                ]
+                if item
             )
             suffix = f" {annotations}" if annotations else ""
             function_name = self.sanitize_identifier(
@@ -9886,8 +9948,16 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     bound_value_names=active_value_bindings,
                 )
             )
-            body = value_param_decls + self.generate_function_body(
-                function_body, indent=indent + 1
+            body = (
+                value_param_decls
+                + self.metal_mesh_body_prologue(func, indent + 1)
+                + self.metal_object_body_prologue(func, indent + 1)
+                + self.generate_function_body(
+                    function_body,
+                    indent=indent + 1 + self.metal_object_body_indent(func),
+                )
+                + self.metal_object_body_epilogue(func, indent + 1)
+                + self.metal_mesh_body_epilogue(func, indent + 1)
             )
             for index, parameter in enumerate(func.params):
                 if (
@@ -9896,7 +9966,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                     and not re.search(rf"\b{re.escape(parameter_names[index])}\b", body)
                 ):
                     parameter_declarations[index] += " @maybe_unused"
-            params = ", ".join(parameter_declarations)
+            params = ", ".join(
+                declaration for declaration in parameter_declarations if declaration
+            )
             code += (
                 f"{generic_prefix}{return_type} {function_name}({params})"
                 f"{suffix} {{\n"
@@ -10456,6 +10528,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         code += f"{constructor_array}\n"
                         continue
                 code += self.generate_assignment(stmt, is_main) + ";\n"
+            elif isinstance(stmt, ReturnNode) and self.generate_metal_object_return(
+                stmt
+            ):
+                code += self.generate_metal_object_return(stmt)
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
                     if stmt.value is None:
@@ -10542,7 +10618,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 else:
                     code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, (MethodCallNode, CallNode)):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
+                lowered_mesh_call = self.generate_metal_mesh_statement(
+                    stmt, indent, is_main
+                ) or self.generate_metal_object_statement(stmt, is_main)
+                if lowered_mesh_call is not None:
+                    code += lowered_mesh_call
+                else:
+                    code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, PostfixOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, ContinueNode):
@@ -12347,6 +12429,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             )
             if uniform_value is not None:
                 return uniform_value
+            bit_scan = self.metal_bit_scan_expression(expr.name, expr.args, is_main)
+            if bit_scan is not None:
+                return bit_scan
             sync_call = self.metal_synchronization_function_call(
                 expr.name,
                 expr.args,
@@ -12603,6 +12688,9 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                         else ""
                     )
                     if coord and value:
+                        value = self.storage_image_write_value(
+                            expr.object, expr.args[0], value
+                        )
                         return f"imageStore({obj}, {coord}, {value})"
                     return f"{obj}.write({args})"
                 return self.unsupported_sampled_texture_write(
@@ -13086,6 +13174,21 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         separator = ";\n" + "    " * indent
         return separator.join(f"{call}()" for call in lowered) + ";\n"
 
+    def metal_bit_scan_expression(self, name, args, is_main):
+        """MSL ``clz``/``ctz`` as a CrossGL ``findMSB``/``findLSB`` expression, or ``None`` for other calls."""
+        function = bit_scan_function(name, self.user_function_names)
+        if function is None or len(args) != 1:
+            return None
+        metal_type = self.resolve_type_alias(self.expression_metal_type(args[0]))
+        return lower_bit_scan(
+            function,
+            self.generate_expression(args[0], is_main),
+            metal_type,
+            self.map_type(metal_type) if metal_type else None,
+            self.metal_small_vector_type_parts,
+            self.metal_scalar_arithmetic_type_info,
+        )
+
     def metal_uniform_value_expression(self, name, args, is_main):
         """Lower Metal's uniformity assertion while preserving its value."""
         function_name = str(name).lstrip(":")
@@ -13238,6 +13341,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             value = self.generate_expression(args[1], is_main)
             return f"atomicStore({target}, {value})"
         unscoped_name = str(name).split("::")[-1]
+        if (
+            unscoped_name == "atomic_fetch_sub_explicit"
+            and unscoped_name not in self.user_function_names
+            and not self.metal_user_function_overloads(name)
+            and len(args) >= 2
+        ):
+            return self.metal_atomic_fetch_sub(args, is_main, source_location)
         mapped = self.metal_atomic_intrinsics.get(unscoped_name)
         if mapped is None or unscoped_name in self.user_function_names:
             return None
@@ -13248,6 +13358,38 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         target = self.generate_metal_atomic_target(args[0], is_main)
         value = self.generate_expression(args[1], is_main)
         return f"{mapped}({target}, {value})"
+
+    def metal_atomic_fetch_sub(self, args, is_main, source_location=None):
+        """Spell ``atomic_fetch_sub_explicit(object, operand, order)`` as ``atomicAdd`` of the negated operand.
+
+        CrossGL, GLSL and HLSL have no atomic subtraction. Metal's integer atomics wrap modulo 2^N (MSL 3.2
+        section 6.15.4.5), so adding the two's-complement negation stores and returns the same values; negating a
+        float operand is exact.
+        """
+        element = self.atomic_element_type(
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.metal_pointer_pointee_type_once(
+                        self.expression_metal_type(args[0])
+                    )
+                    or ""
+                )
+            )
+        )
+        element = self.map_type(element) if element else None
+        if element not in {"int", "uint", "float"}:
+            raise MetalAtomicFetchSubLoweringError(
+                "requires an atomic_int, atomic_uint or atomic_float object",
+                source_location,
+            )
+        target = self.generate_metal_atomic_target(args[0], is_main)
+        value = self.generate_expression(args[1], is_main)
+        operand_type = self.expression_metal_type(args[1])
+        if not operand_type or self.map_type(operand_type) != element:
+            value = f"{element}({value})"
+        if element == "uint":
+            return f"atomicAdd({target}, 0u - {value})"
+        return f"atomicAdd({target}, -({value}))"
 
     def generate_metal_atomic_target(self, expr, is_main):
         # Metal addresses an atomic as a pointer (`&buffer[i]` or a pointer var);
@@ -19777,6 +19919,9 @@ float {scalar}(float value) {{
             suffix = base[-1] + suffix
             base = base[:-1].strip()
 
+        if base in SIMD_TYPE_ALIASES:
+            # <simd/simd.h> reserves these names for the Metal types they alias.
+            return f"{SIMD_TYPE_ALIASES[base]}{suffix}"
         if (
             "<" not in base
             and ":" not in base
@@ -19825,6 +19970,9 @@ float {scalar}(float value) {{
                 suffix = alias_suffix + suffix
         finally:
             self.current_type_resolution_context = previous_context
+        if base in SIMD_TYPE_ALIASES:
+            # A user alias may resolve to a <simd/simd.h> name such as float4.
+            base = SIMD_TYPE_ALIASES[base]
         return f"{base}{suffix}"
 
     def atomic_element_type(self, metal_type):
@@ -22672,7 +22820,11 @@ float {scalar}(float value) {{
             if atomic_name.startswith("metal::"):
                 atomic_name = atomic_name[len("metal::") :]
             if (
-                atomic_name in {"atomic_load_explicit", *self.metal_atomic_intrinsics}
+                atomic_name in {
+                    "atomic_load_explicit",
+                    "atomic_fetch_sub_explicit",
+                    *self.metal_atomic_intrinsics,
+                }
                 and len(expr.args)
                 == (2 if atomic_name == "atomic_load_explicit" else 3)
                 and not self.metal_user_function_overloads(expr.name)
@@ -22718,6 +22870,23 @@ float {scalar}(float value) {{
         if is_depth_texture_name(base_name):
             return f"{call}.x"
         return call
+
+    def storage_image_write_value(self, texture_expr, value_expr, value):
+        """Spell the implicit conversion of a texture ``write`` value to the texel type.
+
+        ``write(Tv color, ...)`` takes the texel type of the texture (MSL 3.2 section 6.12.16); a scalar argument
+        converts to it like any scalar-to-vector initialisation (MSL 3.2 section 2.12), so ``tex.write(0, c)``
+        stores ``float4(0.0)`` in a ``texture2d<float, access::write>``.
+        """
+        texel_type = self.metal_texture_method_result_type(texture_expr, "read")
+        value_type = self.expression_metal_type(value_expr)
+        if not texel_type or not value_type:
+            return value
+        value_type = self.metal_source_overload_value_type(value_type) or value_type
+        if self.metal_scalar_arithmetic_type_info(value_type) is None:
+            # Only a scalar converts implicitly; a vector value already has the texel type.
+            return value
+        return f"{self.map_type(self.normalized_metal_type(texel_type))}({value})"
 
     def metal_texture_method_result_type(self, texture_expr, method):
         """The MSL type of ``texture.method(...)`` when the texture's type fixes it, else ``None``."""

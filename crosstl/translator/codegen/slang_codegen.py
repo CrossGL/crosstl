@@ -352,6 +352,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdxFine": "ddx_fine",
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
+            "fwidthCoarse": "fwidth_coarse",
+            "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "floatBitsToInt": "asint",
@@ -4690,7 +4692,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return f"uvec{type_node.size}"
             if element_type == "bool":
                 return f"bvec{type_node.size}"
-            if element_type in {"i8", "u8", "i16", "u16"}:
+            if element_type in {"i8", "u8", "i16", "u16", "i64", "u64"}:
                 return f"vec{type_node.size}<{element_type}>"
             return f"{element_type}{type_node.size}"
         return str(type_node)
@@ -9101,6 +9103,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdyCoarse",
             "dFdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
             "inversesqrt",
             "inverseSqrt",
         }:
@@ -10718,8 +10722,40 @@ class SlangCodeGen(LoweringRefusalMixin):
             "u8": "uint8_t",
             "i16": "int16_t",
             "u16": "uint16_t",
+            "int16": "int16_t",
+            "uint16": "uint16_t",
+            "i16vec2": "vector<int16_t, 2>",
+            "i16vec3": "vector<int16_t, 3>",
+            "i16vec4": "vector<int16_t, 4>",
+            "u16vec2": "vector<uint16_t, 2>",
+            "u16vec3": "vector<uint16_t, 3>",
+            "u16vec4": "vector<uint16_t, 4>",
             "i32": "int",
             "u32": "uint",
+            "i64": "int64_t",
+            "u64": "uint64_t",
+            "int8": "int8_t",
+            "uint8": "uint8_t",
+            "int64": "int64_t",
+            "uint64": "uint64_t",
+            "i8vec2": "vector<int8_t, 2>",
+            "i8vec3": "vector<int8_t, 3>",
+            "i8vec4": "vector<int8_t, 4>",
+            "u8vec2": "vector<uint8_t, 2>",
+            "u8vec3": "vector<uint8_t, 3>",
+            "u8vec4": "vector<uint8_t, 4>",
+            "i64vec2": "vector<int64_t, 2>",
+            "i64vec3": "vector<int64_t, 3>",
+            "i64vec4": "vector<int64_t, 4>",
+            "u64vec2": "vector<uint64_t, 2>",
+            "u64vec3": "vector<uint64_t, 3>",
+            "u64vec4": "vector<uint64_t, 4>",
+            "vec2<i64>": "vector<int64_t, 2>",
+            "vec3<i64>": "vector<int64_t, 3>",
+            "vec4<i64>": "vector<int64_t, 4>",
+            "vec2<u64>": "vector<uint64_t, 2>",
+            "vec3<u64>": "vector<uint64_t, 3>",
+            "vec4<u64>": "vector<uint64_t, 4>",
             "half": "half",
             "half2": "half2",
             "half3": "half3",
