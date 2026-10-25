@@ -7773,6 +7773,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "atomicExchange": ("atomicExch", 2, add_exchange_kinds, "int/uint/float"),
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
+            # System-scoped HIP forms take a pointer first argument like the defaults.
+            "atomicAdd_system": ("atomicAdd_system", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicSub_system": ("atomicSub_system", 2, integer_kinds, "int/uint"),
+            "atomicMin_system": ("atomicMin_system", 2, integer_kinds, "int/uint"),
+            "atomicMax_system": ("atomicMax_system", 2, integer_kinds, "int/uint"),
+            "atomicAnd_system": ("atomicAnd_system", 2, integer_kinds, "int/uint"),
+            "atomicOr_system": ("atomicOr_system", 2, integer_kinds, "int/uint"),
+            "atomicXor_system": ("atomicXor_system", 2, integer_kinds, "int/uint"),
+            "atomicExchange_system": ("atomicExch_system", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicCompareExchange_system": ("atomicCAS_system", 3, integer_kinds, "int/uint"),
+            "atomicCompSwap_system": ("atomicCAS_system", 3, integer_kinds, "int/uint"),
         }
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):

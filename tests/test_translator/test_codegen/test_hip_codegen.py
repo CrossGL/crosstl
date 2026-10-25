@@ -9899,6 +9899,64 @@ class TestHipCodeGen:
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
+    def test_system_scoped_structured_buffer_atomics_emit_hip_pointer_atomics(self):
+        """HIP _system forms take a pointer first argument, like the unscoped ones."""
+        source_code = """
+        shader SystemScopedStructuredBufferAtomicsHIP {
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+
+            void process(uint index, uint value, int signedValue) {
+                uint oldAdd = atomicAdd_system(counters[index], value);
+                uint oldSub = atomicSub_system(counters[index], value);
+                uint oldMin = atomicMin_system(counters[index], value);
+                uint oldMax = atomicMax_system(counters[index], value);
+                uint oldAnd = atomicAnd_system(counters[index], value);
+                uint oldOr = atomicOr_system(counters[index], value);
+                uint oldXor = atomicXor_system(counters[index], value);
+                uint oldExchange = atomicExchange_system(counters[index], value);
+                uint oldCas = atomicCompareExchange_system(
+                    counters[index],
+                    oldAdd,
+                    value
+                );
+                int oldSigned = atomicAdd_system(signedCounters[index], signedValue);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int oldAdd = atomicAdd_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldSub = atomicSub_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldMin = atomicMin_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldMax = atomicMax_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldAnd = atomicAnd_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldOr = atomicOr_system(&counters[index], value);" in hip_code
+        assert "unsigned int oldXor = atomicXor_system(&counters[index], value);" in hip_code
+        assert (
+            "unsigned int oldExchange = atomicExch_system(&counters[index], value);"
+            in hip_code
+        )
+        assert (
+            "unsigned int oldCas = atomicCAS_system(&counters[index], oldAdd, value);"
+            in hip_code
+        )
+        assert (
+            "int oldSigned = atomicAdd_system(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        # Never the by-value form the bug produced.
+        assert "atomicAdd_system(counters[index]" not in hip_code
+        assert "atomicCAS_system(counters[index]" not in hip_code
     def test_float_structured_buffer_add_and_exchange_atomics_emit_hip_atomics(
         self, tmp_path
     ):
