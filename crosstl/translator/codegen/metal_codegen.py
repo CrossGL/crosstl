@@ -1128,6 +1128,7 @@ class MetalCodeGen(
         self.generated_return_wrapper_struct_names = set()
         self.metal_vertex_entry_input_struct_names = set()
         self.metal_vertex_entry_output_struct_names = set()
+        self.metal_mesh_primitive_struct_names = set()
         self.metal_fragment_entry_input_struct_names = set()
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
@@ -2056,6 +2057,7 @@ class MetalCodeGen(
         self.generated_return_wrapper_struct_names = set()
         self.metal_vertex_entry_input_struct_names = set()
         self.metal_vertex_entry_output_struct_names = set()
+        self.metal_mesh_primitive_struct_names = set()
         self.metal_fragment_entry_input_struct_names = set()
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
@@ -2242,10 +2244,16 @@ class MetalCodeGen(
                 ast, target_stage, "vertex"
             )
         )
+        # A mesh function's vertex and primitive structures feed the fragment ``[[stage_in]]`` as a vertex
+        # function's output does, and link by the same ``[[user(...)]]`` keys (:mod:`.metal_varyings`).
         self.metal_vertex_entry_output_struct_names = (
             self.collect_metal_stage_entry_return_struct_names(
                 ast, target_stage, "vertex"
             )
+            | self.collect_metal_mesh_output_struct_names(ast, target_stage, "vertices")
+        )
+        self.metal_mesh_primitive_struct_names = (
+            self.collect_metal_mesh_output_struct_names(ast, target_stage, "primitives")
         )
         self.metal_fragment_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -4654,9 +4662,13 @@ class MetalCodeGen(
         """Whether ``struct_name`` carries values from a vertex entry to a fragment entry (:mod:`.metal_varyings`)."""
         if struct_name in getattr(self, "metal_vertex_entry_input_struct_names", ()):
             return False
-        return struct_name in getattr(
-            self, "metal_vertex_entry_output_struct_names", ()
-        ) or struct_name in getattr(self, "metal_fragment_entry_input_struct_names", ())
+        return (
+            struct_name in getattr(self, "metal_vertex_entry_output_struct_names", ())
+            or struct_name in getattr(self, "metal_mesh_primitive_struct_names", ())
+            or struct_name in getattr(
+                self, "metal_fragment_entry_input_struct_names", ()
+            )
+        )
 
     def metal_varying_member_attribute(
         self, member, struct_name, default_member_semantics, offset=0
@@ -15579,6 +15591,21 @@ class MetalCodeGen(
     ):
         target_info = self.metal_mesh_output_assignment_target(target)
         if target_info is None:
+            # A write through a member's component or element (``v[i].uv.x = ...``): the mesh object sets a
+            # vertex or primitive as a whole, and the accumulators carry whole members only.
+            inner = target
+            while isinstance(inner, (MemberAccessNode, ArrayAccessNode)):
+                inner = (
+                    inner.object
+                    if isinstance(inner, MemberAccessNode)
+                    else getattr(inner, "array", None)
+                )
+                enclosing = self.metal_mesh_output_assignment_target(inner)
+                if enclosing is not None:
+                    return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                        enclosing,
+                        "component writes of an output member are not supported",
+                    )
             return None
 
         compound_member_assignment = (
@@ -18688,6 +18715,19 @@ class MetalCodeGen(
             struct_node = self.metal_return_struct(func)
             if struct_node is not None:
                 struct_names.add(struct_node.name)
+        return struct_names
+
+    def collect_metal_mesh_output_struct_names(self, ast, target_stage, role):
+        struct_names = set()
+        for func in self.metal_stage_entry_functions(ast, "mesh", target_stage):
+            for parameter in getattr(func, "parameters", None) or []:
+                if self.metal_mesh_output_parameter_role(parameter) != role:
+                    continue
+                raw_type = getattr(parameter, "param_type", None)
+                element = getattr(raw_type, "element_type", raw_type)
+                struct_name = self.type_name_string(element)
+                if struct_name in self.structs_by_name:
+                    struct_names.add(struct_name)
         return struct_names
 
     def metal_parameter_user_struct_type(self, parameter):

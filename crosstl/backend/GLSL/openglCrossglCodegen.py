@@ -684,7 +684,6 @@ class GLSLToCrossGLConverter:
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
@@ -1654,10 +1653,6 @@ class GLSLToCrossGLConverter:
             if qualifier in qualifiers
         ]
 
-    def is_task_payload_shared_variable(self, var):
-        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
-        return "taskpayloadsharedext" in qualifiers
-
     def is_buffer_reference_forward_declaration(self, var):
         if not isinstance(var, VariableNode):
             return False
@@ -2611,11 +2606,6 @@ class GLSLToCrossGLConverter:
         self.flattened_uniform_block_member_renames = {}
         rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.task_payload_shared_names = {
-            var.name
-            for var in getattr(node, "global_variables", []) or []
-            if self.is_task_payload_shared_variable(var)
-        }
         self.function_name_renames = self.collect_function_name_renames(
             getattr(node, "functions", []) or []
         )
@@ -3337,57 +3327,9 @@ class GLSLToCrossGLConverter:
         )
 
     def generate_statement_sequence(self, statements):
-        generated = []
-        index = 0
-        while index < len(statements):
-            folded = self.generate_task_payload_dispatch_statement(statements, index)
-            if folded is not None:
-                generated.append(folded)
-                index += 2
-                continue
-            generated.append(self.generate_statement(statements[index]))
-            index += 1
-        return generated
-
-    def generate_task_payload_dispatch_statement(self, statements, index):
-        if self.shader_type not in {"task", "amplification", "object"}:
-            return None
-        if index + 1 >= len(statements):
-            return None
-
-        assignment = statements[index]
-        dispatch = statements[index + 1]
-        payload_expr = self.task_payload_assignment_expression(assignment)
-        if payload_expr is None:
-            return None
-        if not self.is_emit_mesh_tasks_call(dispatch):
-            return None
-
-        dispatch_args = [
-            self.generate_expression(arg) for arg in getattr(dispatch, "args", [])[:3]
-        ]
-        payload = self.generate_expression(payload_expr)
-        return f"DispatchMesh({', '.join(dispatch_args + [payload])});"
-
-    def task_payload_assignment_expression(self, statement):
-        if not isinstance(statement, AssignmentNode):
-            return None
-        if getattr(statement, "operator", "=") != "=":
-            return None
-        if not self.task_payload_shared_names:
-            return None
-
-        target = self.expression_base_name(getattr(statement, "left", None))
-        if target not in self.task_payload_shared_names:
-            return None
-        return getattr(statement, "right", None)
-
-    def is_emit_mesh_tasks_call(self, statement):
-        if not isinstance(statement, FunctionCallNode):
-            return False
-        if len(getattr(statement, "args", []) or []) != 3:
-            return False
-        return self.function_call_name(statement) == "EmitMeshTasksEXT"
+        # A task shader's payload stores stay stores and EmitMeshTasksEXT stays a three-argument DispatchMesh:
+        # semantics.glsl_mesh_stages passes the taskPayloadSharedEXT variable itself for HLSL and Metal.
+        return [self.generate_statement(statement) for statement in statements]
 
     def function_call_name(self, node):
         name = getattr(node, "name", None)
