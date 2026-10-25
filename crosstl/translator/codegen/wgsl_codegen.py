@@ -3251,6 +3251,15 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
             function_name, node.arguments, function=resolved_function
         )
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
+        if (
+            function_name == "atan"
+            and len(node.arguments) == 2
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
+            # argument and spells the two-argument form atan2(y, x).
+            return f"atan2({args})"
         if mapped_name == function_name and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
