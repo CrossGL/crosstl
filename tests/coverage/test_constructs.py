@@ -14,6 +14,7 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
+from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
     ("Vertex", ["Shader"]),
@@ -366,22 +367,100 @@ def test_a_kernel_probe_declares_only_the_input_buffers_it_reads():
     )
 
 
-def test_the_hlsl_matrix_probe_multiplies_the_crossgl_probe_matrix():
-    # HLSL fills a matrix from scalars by rows and CrossGL by columns, so the probes must list them differently.
-    if not validators.can_lower("hlsl"):
-        pytest.skip("dxc or spirv-dis is not installed")
-    feature = _feature("hlsl", "matrix-vector-product")
-    native = probes.build(feature, "hlsl").source
-    by_columns = probes.DIALECTS["hlsl"].kernel(
+# Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
+# The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
+_HLSL_BY_COLUMNS = {
+    "matrix-indexing": (
+        [("int", "iin"), ("float", "outp")],
+        [
+            "float f = float(iin[i]);",
+            "float2x2 m = float2x2(f, 1.0, 2.0, 3.0);",
+            "float2 c = m[iin[i] & 1];",
+            "outp[i] = m[1][0] * 100.0 + m[0].y * 10.0 + c.x + 0.5 * c.y;",
+        ],
+    ),
+    "matrix-vector-product": (
         [("float", "fin"), ("float", "outp")],
         [
             "float2x2 m = transpose(float2x2(fin[i], 1.0, 2.0, 3.0));",
             "float2 v = mul(m, float2(1.0, fin[i]));",
             "outp[i] = v.y;",
         ],
-    )
+    ),
+    "matrix-product": (
+        [("int", "iin"), ("float", "outp")],
+        [
+            "float f = float(iin[i]);",
+            "float2x2 m = transpose(float2x2(f, 1.0, 2.0, 3.0));",
+            "float2x2 n = transpose(float2x2(1.0, f, 0.5, 2.0));",
+            "float2 v = mul(mul(m, n), float2(1.0, f));",
+            "outp[i] = v.x + 2.0 * v.y;",
+        ],
+    ),
+    "vector-matrix-product": (
+        [("int", "iin"), ("float", "outp")],
+        [
+            "float f = float(iin[i]);",
+            "float2x2 m = transpose(float2x2(f, 1.0, 2.0, 3.0));",
+            "float2 v = mul(float2(1.0, f), m);",
+            "outp[i] = v.x + 2.0 * v.y;",
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_HLSL_BY_COLUMNS))
+def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
+    # HLSL fills and indexes a matrix by rows and CrossGL by columns, so the probes must write them differently.
+    if not validators.can_lower("hlsl"):
+        pytest.skip("dxc or spirv-dis is not installed")
+    feature = _feature("hlsl", name)
+    native = probes.build(feature, "hlsl").source
+    by_columns = probes.DIALECTS["hlsl"].kernel(*_HLSL_BY_COLUMNS[name])
     probe = Result(feature, "output", "supported", sources=(native, by_columns))
     [result], used = execution.run([probe], workers=1)
     if not used:
         pytest.skip("no Vulkan runtime")
     assert (result.outcome, result.runtime) == ("supported", used[0])
+
+
+# glslang folds the swizzle probe's v.wzyx.x to one OpCompositeExtract.
+_UNANCHORED_TYPES = {"swizzle"}
+
+
+def test_operator_and_type_probes_compile_to_their_anchors():
+    # glslang lowers the GLSL probe of each operator and type to the instructions the construct is anchored to; it
+    # writes a signed remainder as OpSMod, which the probes' non-negative operands make equal to OpSRem. Scalar
+    # widths are anchored to capabilities, which this leaves out.
+    if not validators.can_lower("glsl"):
+        pytest.skip("glslangValidator or spirv-dis is not installed")
+    missing = []
+    for construct in constructs.universe(GRAMMAR):
+        if construct.category not in ("operator", "type"):
+            continue
+        if construct.name in _UNANCHORED_TYPES:
+            continue
+        probe = probes.build(_feature("glsl", construct.name), "glsl")
+        assembly, log = validators.lower(
+            "glsl", probe.source, probe.entry, "compute", raw_ids=False
+        )
+        assert assembly, log
+        found = set(re.findall(r"\bOp\w+", assembly))
+        missing += [
+            f"{construct.name}: {a}"
+            for a in construct.anchors
+            if a.startswith("Op") and a not in found
+        ]
+    assert not missing
+
+
+def test_c_operator_probes_cast_rather_than_construct():
+    # CUDA, HIP and OpenCL C have no constructor casts, and CUDA spells uint as unsigned int.
+    for language in ("cuda", "hip", "opencl"):
+        table = templates.TEMPLATES[language]
+        bodies = [table[name].body for name in OPERATORS if table[name] is not ABSENT]
+        assert not [
+            b for b in bodies if re.search(r"\b(float|int|uint)\(", b)
+        ], language
+    unsigned = templates.TEMPLATES["cuda"]["unsigned-division"].body
+    assert unsigned.startswith("unsigned int a = (unsigned int)iin[i] + 7u;")

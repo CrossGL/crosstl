@@ -29,7 +29,7 @@ __all__ = [
 USER_IO_STAGES = frozenset({"vertex", "fragment"})
 
 # Colour-target semantics are user locations, not built-in values.
-_COLOR_TARGET_RE = re.compile(r"(?:sv_target\d*|gl_fragcolor)")
+_COLOR_TARGET_RE = re.compile(r"(?:sv_target\d*|gl_fragcolor\d*|gl_fragdata)")
 
 
 class WGSLStageIOUnsupportedError(TranslationDiagnostic):

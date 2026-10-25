@@ -53,8 +53,8 @@ const uint dupScale = 2;
 layout(constant_id = 24) gl_MaxImageUnits;
 #endif
 
-in vec4 ucol[arraySize];
-in vec4 dupUcol[dupArraySize];
+layout(location = 0) in vec4 ucol[arraySize];
+layout(location = 5) in vec4 dupUcol[dupArraySize];
 out vec4 color;
 flat out int size;
 // Vertex Shader

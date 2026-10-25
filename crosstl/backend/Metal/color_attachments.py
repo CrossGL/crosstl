@@ -5,7 +5,8 @@ with the host (``[[color(RenderTargetAlbedo)]]``). A fragment output's attachmen
 symbolic output index becomes ``@location(name)``, which the binding-constant pass folds on the CrossGL program. A
 fragment *input* with ``[[color(n)]]`` reads the attachment back (framebuffer fetch); CrossGL spells it
 ``@gl_FragColor<n>`` and needs the integer here, so it is resolved from the unscoped enumerators declared in the
-source and refused otherwise.
+source and refused otherwise. That holds for the members of a structure a fragment function takes as a parameter
+other than its ``[[stage_in]]`` input (:func:`framebuffer_fetch_struct_names`) as well as for plain parameters.
 """
 
 import re
@@ -63,6 +64,39 @@ def enumerator_index_values(enums):
                 values[name] = current
             next_value = None if current is None else current + 1
     return values
+
+
+_TYPE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_TYPE_QUALIFIERS = frozenset({"const", "thread", "volatile", "struct"})
+
+
+def framebuffer_fetch_struct_names(functions, struct_names):
+    """The structures a fragment function takes as a parameter that is not its ``[[stage_in]]`` input.
+
+    Such a parameter is a framebuffer-fetch input, so ``[[color(n)]]`` on its members reads attachment ``n`` back
+    (Metal Shading Language Specification, section 5.2.3.4, "Fragment Function Input Attributes"). The members are
+    declared in the structure, before the importer sees the parameter, so the names are collected up front.
+    """
+    struct_names = frozenset(struct_names)
+    names = set()
+    for function in functions or []:
+        if str(getattr(function, "qualifier", "") or "").lower() != "fragment":
+            continue
+        for parameter in getattr(function, "params", None) or []:
+            attributes = {
+                str(getattr(attribute, "name", "")).lower()
+                for attribute in getattr(parameter, "attributes", None) or []
+            }
+            if "stage_in" in attributes:
+                continue
+            words = [
+                word
+                for word in _TYPE_NAME.findall(str(getattr(parameter, "vtype", "")))
+                if word not in _TYPE_QUALIFIERS
+            ]
+            if len(words) == 1 and words[0] in struct_names:
+                names.add(words[0])
+    return names
 
 
 def color_attachment_semantic(argument, *, is_input, enumerator_values):
