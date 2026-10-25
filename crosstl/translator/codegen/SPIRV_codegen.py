@@ -234,6 +234,7 @@ from .spirv_uniform_block_arrays import (
 )
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
+from .stage_utils import requests_early_fragment_tests
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -31718,6 +31719,9 @@ class VulkanSPIRVCodeGen(
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+            entry_function = getattr(stage, "entry_point", None)
+            if requests_early_fragment_tests(entry_function, stage):
+                self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
             if function_id.id in self.fragment_depth_replacing_function_ids:
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
             if function_id.id in self.fragment_stencil_ref_replacing_function_ids:

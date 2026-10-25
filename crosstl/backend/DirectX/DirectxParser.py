@@ -2275,6 +2275,9 @@ class HLSLParser:
             return "task"
         if "numthreads" in attribute_names:
             return "compute"
+        if "earlydepthstencil" in attribute_names:
+            # [earlydepthstencil] applies to pixel shaders only.
+            return "fragment"
         if semantic:
             semantic_upper = semantic.upper()
             if semantic_upper.startswith("SV_TARGET"):
