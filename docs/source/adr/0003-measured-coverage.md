@@ -31,7 +31,7 @@ Mojo and OpenCL C input follow. A direction CrossTL does not offer, such as WGSL
 
 | Language | Source, pinned by commit and SHA-256 in `tools/coverage/upstream.py` |
 |---|---|
-| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`; the core grammar's shader subset follows |
+| SPIR-V | KhronosGroup/SPIRV-Headers: `extinst.glsl.std.450.grammar.json`, and the instructions of `spirv.core.grammar.json` that a GLSL built-in function compiles to |
 | HLSL | microsoft/DirectXShaderCompiler: `utils/hct/gen_intrin_main.txt` |
 | GLSL | KhronosGroup/GLSL: `chapters/builtinfunctions.adoc` of the GLSL 4.60 specification |
 | WGSL | google/dawn: Tint's `src/tint/lang/wgsl/wgsl.def` |

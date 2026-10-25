@@ -2,8 +2,8 @@
 
 SPIR-V has no source language of its own to write a probe in, and glslang is the reference GLSL compiler, so its
 output is the SPIR-V a GLSL project would hand to CrossTL. A function probe counts only when the module calls the
-feature's own GLSL.std.450 instruction, and the round trip is correct only when its module still calls it, or
-calls what the specification defines it as: ``NClamp`` is ``NMin(NMax(x, minVal), maxVal)``. The NaN-aware
+feature's own GLSL.std.450 instruction, or has its own core instruction, and the round trip is correct only when its
+module still does, or calls what the specification defines it as: ``NClamp`` is ``NMin(NMax(x, minVal), maxVal)``. The NaN-aware
 instructions have no GLSL built-in; their probe is the one of the instruction with the same operands, renamed in the
 assembly.
 
@@ -23,9 +23,9 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from . import constructs, probes, validators
+from . import constructs, probes, semantic, validators
 from .dialect import ProbeError
-from .features.spirv import NAN_AWARE
+from .features.spirv import NAN_AWARE, is_core
 from .model import Feature, Param, Signature, Type
 
 _STAND_INS = {"NMin": "FMin", "NMax": "FMax", "NClamp": "FClamp"}
@@ -44,6 +44,10 @@ _ENCODINGS = {
     "NClamp": ({"NClamp"}, {"NMin", "NMax"}),
 }
 _EXTENDED = re.compile(r"(\bOpExtInst\s+%\w+\s+%\w+\s+)(\w+)\b")
+# The vertex stream instructions, which need the GeometryStreams capability. glslang declares it only for a shader
+# that declares an output stream, so the module a probe of them compiles to declares it here.
+_STREAMS = re.compile(r"\bOp(?:EmitStreamVertex|EndStreamPrimitive)\b")
+_GEOMETRY = re.compile(r"^( *)OpCapability Geometry$", re.MULTILINE)
 # Each pointer form, with the struct form glslang writes for the GLSL call.
 _POINTER_FORMS = {"Frexp": "FrexpStruct", "Modf": "ModfStruct"}
 
@@ -109,7 +113,9 @@ def build(feature: Feature) -> probes.Probe:
         if feature.signature is None:
             raise ProbeError(feature.note or "the feature list gives no signature")
         spelling = (
-            NAN_AWARE[instruction][0] if instruction in NAN_AWARE else feature.crossgl
+            NAN_AWARE[instruction][0]
+            if instruction in NAN_AWARE
+            else feature.spelling or feature.crossgl
         )
         glsl = dataclasses.replace(glsl, spelling=spelling)
     probe = probes.build(glsl, "glsl")
@@ -120,7 +126,14 @@ def build(feature: Feature) -> probes.Probe:
         raise ProbeError(
             f"glslang rejects the GLSL probe: {validators.first_error(log)}"
         )
-    if instruction:
+    if instruction and is_core(feature):
+        if not _calls(feature, assembly):
+            raise ProbeError(f"glslang does not lower {glsl.spelling} to {instruction}")
+        if _STREAMS.search(assembly) and "OpCapability GeometryStreams" not in assembly:
+            assembly = _GEOMETRY.sub(
+                r"\g<0>\n\1OpCapability GeometryStreams", assembly, 1
+            )
+    elif instruction:
         stand_in = _STAND_INS.get(instruction, struct_form)
         emitted = sorted({match[2] for match in _EXTENDED.finditer(assembly)})
         if stand_in not in emitted:
@@ -157,6 +170,10 @@ def ignores_nan(feature: Feature, assembly: str) -> str:
 
 
 def _calls(feature: Feature, assembly: str) -> bool:
+    if is_core(feature):
+        # Semantic tokens carry constant operands and group operations after the opcode: OpControlBarrier(2,2,264).
+        tokens = semantic.instructions(assembly)
+        return any(re.match(rf"{feature.name}\b", token) for token in tokens)
     called = {match[2] for match in _EXTENDED.finditer(assembly)}
     return any(
         encoding <= called
