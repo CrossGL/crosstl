@@ -288,6 +288,11 @@ class VectorArithmeticMixin:
                 return struct_members[member]
             vector_info = self.vector_type_info(object_type)
             if not vector_info:
+                native_component_type = self.native_vector_component_type(object_type)
+                if native_component_type is not None and (
+                    len(member) == 1 and member in "xyzwrgba"
+                ):
+                    return native_component_type
                 return None
             if len(member) == 1:
                 return vector_info["component_type"]
@@ -324,6 +329,11 @@ class VectorArithmeticMixin:
         if remaining_suffix:
             return f"{base_type}{remaining_suffix}"
         return base_type
+
+    def native_vector_component_type(self, type_name):
+        """Return the component type of a native vector that ``vector_type_info``
+        deliberately leaves undescribed (so its arithmetic stays native), or None."""
+        return None
 
     def vector_type_info(self, type_name):
         """Return constructor and component metadata for a vector type."""

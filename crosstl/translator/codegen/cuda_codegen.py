@@ -11090,6 +11090,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return narrow_info
         return super().vector_type_info(type_name)
 
+    def native_vector_component_type(self, type_name):
+        # half2 maps to the native half2 type, which vector_type_info leaves
+        # undescribed; its components are still half
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in {
+            "half2",
+            "f16vec2",
+            "float16vec2",
+            "vec2<f16>",
+            "vec2<float16>",
+            "vec2<half>",
+        }:
+            return "half"
+        return None
+
     def cuda_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
