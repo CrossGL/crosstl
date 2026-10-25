@@ -2262,6 +2262,12 @@ class HLSLCodeGen(
         "mad",
         # Software subgroup barriers must retain the target synchronization call.
         "GroupMemoryBarrierWithGroupSync",
+        # Resource queries become helper functions of these names; a local of the same name would hide them.
+        "imageSamples",
+        "imageSize",
+        "textureQueryLevels",
+        "textureSamples",
+        "textureSize",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
