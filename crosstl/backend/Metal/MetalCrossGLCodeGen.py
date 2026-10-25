@@ -978,6 +978,18 @@ class MetalAtomicLoadLoweringError(ValueError):
         )
 
 
+class MetalAtomicFetchSubLoweringError(ValueError):
+    """Raised when an atomic subtraction has no CrossGL atomic addition of the same width."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-fetch-sub-unsupported"
+    missing_capabilities = ("metal.atomic-fetch-sub-lowering",)
+
+    def __init__(self, reason, source_location=None):
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(f"Cannot lower Metal atomic_fetch_sub_explicit: {reason}")
+
+
 class MetalAtomicCompareExchangeLoweringError(ValueError):
     """Raised when a compare-exchange contract cannot be preserved."""
 
@@ -13248,6 +13260,13 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             value = self.generate_expression(args[1], is_main)
             return f"atomicStore({target}, {value})"
         unscoped_name = str(name).split("::")[-1]
+        if (
+            unscoped_name == "atomic_fetch_sub_explicit"
+            and unscoped_name not in self.user_function_names
+            and not self.metal_user_function_overloads(name)
+            and len(args) >= 2
+        ):
+            return self.metal_atomic_fetch_sub(args, is_main, source_location)
         mapped = self.metal_atomic_intrinsics.get(unscoped_name)
         if mapped is None or unscoped_name in self.user_function_names:
             return None
@@ -13258,6 +13277,38 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
         target = self.generate_metal_atomic_target(args[0], is_main)
         value = self.generate_expression(args[1], is_main)
         return f"{mapped}({target}, {value})"
+
+    def metal_atomic_fetch_sub(self, args, is_main, source_location=None):
+        """Spell ``atomic_fetch_sub_explicit(object, operand, order)`` as ``atomicAdd`` of the negated operand.
+
+        CrossGL, GLSL and HLSL have no atomic subtraction. Metal's integer atomics wrap modulo 2^N (MSL 3.2
+        section 6.15.4.5), so adding the two's-complement negation stores and returns the same values; negating a
+        float operand is exact.
+        """
+        element = self.atomic_element_type(
+            self.normalized_metal_type(
+                self.resolve_type_alias(
+                    self.metal_pointer_pointee_type_once(
+                        self.expression_metal_type(args[0])
+                    )
+                    or ""
+                )
+            )
+        )
+        element = self.map_type(element) if element else None
+        if element not in {"int", "uint", "float"}:
+            raise MetalAtomicFetchSubLoweringError(
+                "requires an atomic_int, atomic_uint or atomic_float object",
+                source_location,
+            )
+        target = self.generate_metal_atomic_target(args[0], is_main)
+        value = self.generate_expression(args[1], is_main)
+        operand_type = self.expression_metal_type(args[1])
+        if not operand_type or self.map_type(operand_type) != element:
+            value = f"{element}({value})"
+        if element == "uint":
+            return f"atomicAdd({target}, 0u - {value})"
+        return f"atomicAdd({target}, -({value}))"
 
     def generate_metal_atomic_target(self, expr, is_main):
         # Metal addresses an atomic as a pointer (`&buffer[i]` or a pointer var);
@@ -22685,7 +22736,11 @@ float {scalar}(float value) {{
             if atomic_name.startswith("metal::"):
                 atomic_name = atomic_name[len("metal::") :]
             if (
-                atomic_name in {"atomic_load_explicit", *self.metal_atomic_intrinsics}
+                atomic_name in {
+                    "atomic_load_explicit",
+                    "atomic_fetch_sub_explicit",
+                    *self.metal_atomic_intrinsics,
+                }
                 and len(expr.args)
                 == (2 if atomic_name == "atomic_load_explicit" else 3)
                 and not self.metal_user_function_overloads(expr.name)
