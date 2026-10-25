@@ -19081,6 +19081,18 @@ class MetalCodeGen(
         )
         if threadgroup_limit:
             attributes.append(f"max_total_threads_per_threadgroup({threadgroup_limit})")
+        grid_limit = self.metal_stage_attribute_arguments(
+            func, "max_total_threadgroups_per_mesh_grid"
+        )
+        if stage_keyword == "object" and grid_limit:
+            if len(grid_limit) != 1:
+                raise ValueError(
+                    "Metal object stage max_total_threadgroups_per_mesh_grid requires exactly one argument"
+                )
+            attributes.append(
+                "max_total_threadgroups_per_mesh_grid("
+                f"{self.attribute_value_to_string(grid_limit[0])})"
+            )
         return f"[[{', '.join(attributes)}]]"
 
     def metal_ray_intersection_stage_attribute(self, func, raw_return_type):
@@ -22282,6 +22294,7 @@ class MetalCodeGen(
             "max_primitives",
             "maxtessfactor",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "max_vertices",
             "maxvertexcount",
             "outputcontrolpoints",

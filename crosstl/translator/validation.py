@@ -479,6 +479,7 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "domain": "domain",
     "local_size": "threadgroup_size",
     "max_total_threads_per_threadgroup": "max_total_threads_per_threadgroup",
+    "max_total_threadgroups_per_mesh_grid": "max_total_threadgroups_per_mesh_grid",
     "maxprimitivecount": "maxprimitivecount",
     "maxvertexcount": "maxvertexcount",
     "numthreads": "threadgroup_size",
