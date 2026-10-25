@@ -305,13 +305,16 @@ COUNTERPARTS["metal"].update(
     }
 )
 # CrossGL's relaxed atomicLoad and atomicStore, which GLSL lacks, are the ones the Metal importer writes for
-# atomic_load_explicit and atomic_store_explicit.
+# atomic_load_explicit and atomic_store_explicit. Metal's atomic_max and atomic_min are its 64-bit ones, which return
+# nothing.
 COUNTERPARTS["metal"].update(
     {
         f"atomic_{op}{suffix}": prototype
         for op, prototype in (
             ("load", "int atomicLoad(inout int)"),
             ("store", "void atomicStore(inout int, int)"),
+            ("max", "void atomicMax(inout uint64_t, uint64_t)"),
+            ("min", "void atomicMin(inout uint64_t, uint64_t)"),
         )
         for suffix in ("", "_explicit")
     }

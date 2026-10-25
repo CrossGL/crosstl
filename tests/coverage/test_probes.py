@@ -737,6 +737,14 @@ def test_metal_atomic_load_and_store_probes_call_crossgl_load_and_store():
     assert "atomicStore(outp[i], a1);" in probes.build(store, "crossgl").source
 
 
+def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
+    (wide,) = metal.parse("metal_atomic atomic_min void(inout ulong, ulong)\n")
+    assert "atomic_min(&outp[i], a1);" in probes.build(wide, "metal").source
+    crossgl = probes.build(wide, "crossgl").source
+    assert "buffer uint64_t* outp;" in crossgl
+    assert "atomicMin(outp[i], a1);" in crossgl
+
+
 CUDA_SIGNATURES = [
     feature("fmaf", Type("float"), Type("float"), Type("float"), Type("float")),
     feature("frexpf", Type("float"), Type("float"), Param(Type("int"), "out")),
