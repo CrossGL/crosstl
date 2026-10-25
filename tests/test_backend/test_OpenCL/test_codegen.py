@@ -11,6 +11,7 @@ from crosstl.backend.OpenCL.target_lowering import (
     OpenCLTargetUnsupportedError,
     validate_opencl_intermediate_for_target,
 )
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -560,3 +561,28 @@ def test_opencl_function_local_anonymous_records_materialize_named_types():
     assert "struct None" not in crossgl
     assert "struct <anonymous>" not in crossgl
     assert "union <anonymous>" not in crossgl
+
+
+def test_opencl_atomic_subtraction_lowers_to_atomic_add_of_negated_operand():
+    source = """
+        kernel void probe(global int *outp, global uint *counts, int v) {
+          uint i = get_global_id(0);
+          atomic_dec(&outp[i]);
+          int a = atomic_sub(&outp[i], v);
+          int b = atomic_fetch_sub(&outp[i], v - 2);
+          uint c = atomic_sub(&counts[i], 3u);
+          outp[0] = a + b + (int)c;
+        }
+        """
+
+    cgl_ast, crossgl = parse_crossgl_from_opencl(source)
+
+    assert "atomicSub" not in crossgl
+    assert "atomicAdd(outp[i], -1);" in crossgl
+    assert "atomicAdd(outp[i], -v)" in crossgl
+    assert "atomicAdd(outp[i], -(v - 2))" in crossgl
+    assert "atomicAdd(counts[i], -3u)" in crossgl
+
+    hlsl = HLSLCodeGen().generate(cgl_ast)
+    assert "atomicSub" not in hlsl
+    assert "InterlockedAdd(outp[i], -1" in hlsl

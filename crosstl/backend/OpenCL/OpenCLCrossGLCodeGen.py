@@ -187,9 +187,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "atomic_add": "atomicAdd",
         "atomic_fetch_add": "atomicAdd",
         "atomic_fetch_add_explicit": "atomicAdd",
-        "atomic_sub": "atomicSub",
-        "atomic_fetch_sub": "atomicSub",
-        "atomic_fetch_sub_explicit": "atomicSub",
+        "atomic_sub": "atomicAdd",
+        "atomic_fetch_sub": "atomicAdd",
+        "atomic_fetch_sub_explicit": "atomicAdd",
         "atomic_xchg": "atomicExchange",
         "atomic_exchange": "atomicExchange",
         "atomic_exchange_explicit": "atomicExchange",
@@ -214,7 +214,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "atomic_fetch_xor": "atomicXor",
         "atomic_fetch_xor_explicit": "atomicXor",
         "atomic_inc": "atomicAdd",
-        "atomic_dec": "atomicSub",
+        "atomic_dec": "atomicAdd",
     }
     OPENCL_SIZEOF_SCALAR_SIZES = {
         "bool": 1,
@@ -1054,8 +1054,32 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
         elif node.operation == "atomic_dec" and len(args) == 1:
-            args.append("1")
+            args.append("-1")
+        elif node.operation in self.OPENCL_ATOMIC_SUB_OPERATIONS and len(args) >= 2:
+            # CrossGL has no atomicSub, so subtract by adding the negated
+            # operand; both return the value the memory held before.
+            args[1] = self.negate_atomic_operand(args[1])
         return f"{operation}({', '.join(args)})"
+
+    OPENCL_ATOMIC_SUB_OPERATIONS = frozenset(
+        {"atomic_sub", "atomic_fetch_sub", "atomic_fetch_sub_explicit"}
+    )
+
+    @staticmethod
+    def negate_atomic_operand(operand):
+        text = operand.strip()
+        if text.isidentifier() or re.fullmatch(r"[0-9][0-9A-Za-z_.]*", text):
+            return f"-{text}"
+        if text.startswith("(") and text.endswith(")"):
+            depth = 0
+            for index, char in enumerate(text):
+                depth += char == "("
+                depth -= char == ")"
+                if depth == 0 and index < len(text) - 1:
+                    break
+            else:
+                return f"-{text}"
+        return f"-({text})"
 
     def format_opencl_builtin_call(self, func_name, args):
         if func_name == "get_global_size" and len(args) == 1:
