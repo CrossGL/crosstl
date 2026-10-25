@@ -4,7 +4,6 @@ import re
 
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
-    AssignmentNode,
     BinaryOpNode,
     CastNode,
     DesignatedInitializerNode,
@@ -15,6 +14,7 @@ from crosstl.backend.HIP.HipAst import (
     MemberAccessNode,
     ReturnNode,
     StructNode,
+    TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
@@ -822,8 +822,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def emit_statement(self, stmt):
         if self.is_opencl_prefetch_call(stmt):
             for arg in stmt.args:
-                if not self.opencl_expression_is_side_effect_free(arg):
-                    super().emit_statement(arg)
+                self.emit_opencl_discarded_expression_effects(arg)
             return
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
         if (
@@ -852,35 +851,62 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             and len(getattr(stmt, "args", []) or []) == 2
         )
 
+    def emit_opencl_discarded_expression_effects(self, expression):
+        # The value is unused, so only its side effects are kept: each
+        # assignment, ++/-- or possibly side-effecting call becomes its own
+        # statement, without the casts, arithmetic and subscripts around it.
+        if self.opencl_expression_is_side_effect_free(expression):
+            return
+        operands = self.opencl_always_evaluated_operands(expression)
+        if operands is None:
+            self.emit_statement(expression)
+            return
+        for operand in operands:
+            self.emit_opencl_discarded_expression_effects(operand)
+
     def opencl_expression_is_side_effect_free(self, expression):
-        if isinstance(expression, (str, int, float, bool)):
+        if expression is None or isinstance(expression, (str, int, float, bool)):
             return True
-        if isinstance(expression, AssignmentNode):
-            return False
+        if isinstance(expression, TernaryOpNode):
+            operands = [
+                expression.condition,
+                expression.true_expr,
+                expression.false_expr,
+            ]
+        elif isinstance(expression, BinaryOpNode) and expression.op in ("&&", "||"):
+            operands = [expression.left, expression.right]
+        else:
+            operands = self.opencl_always_evaluated_operands(expression)
+            if operands is None:
+                return False
+        return all(
+            self.opencl_expression_is_side_effect_free(operand) for operand in operands
+        )
+
+    def opencl_always_evaluated_operands(self, expression):
+        """The operands evaluated whenever ``expression`` is, or ``None`` when
+        it may have a side effect itself or evaluates an operand conditionally."""
         if isinstance(expression, FunctionCallNode):
-            return expression.name in _OPENCL_WORK_ITEM_QUERIES and all(
-                self.opencl_expression_is_side_effect_free(arg)
-                for arg in getattr(expression, "args", []) or []
-            )
+            if expression.name == "sizeof":
+                return []  # sizeof does not evaluate its operand
+            if expression.name in _OPENCL_WORK_ITEM_QUERIES:
+                return list(getattr(expression, "args", []) or [])
+            return None
         if isinstance(expression, UnaryOpNode):
             if "++" in str(expression.op) or "--" in str(expression.op):
-                return False
-            return self.opencl_expression_is_side_effect_free(expression.operand)
+                return None
+            return [expression.operand]
         if isinstance(expression, BinaryOpNode):
-            return self.opencl_expression_is_side_effect_free(
-                expression.left
-            ) and self.opencl_expression_is_side_effect_free(expression.right)
+            if expression.op in ("&&", "||"):
+                return None
+            return [expression.left, expression.right]
         if isinstance(expression, CastNode):
-            return self.opencl_expression_is_side_effect_free(
-                getattr(expression, "expression", None)
-            )
+            return [getattr(expression, "expression", None)]
         if isinstance(expression, ArrayAccessNode):
-            return self.opencl_expression_is_side_effect_free(
-                expression.array
-            ) and self.opencl_expression_is_side_effect_free(expression.index)
+            return [expression.array, expression.index]
         if isinstance(expression, MemberAccessNode):
-            return self.opencl_expression_is_side_effect_free(expression.object)
-        return False
+            return [expression.object]
+        return None
 
     def can_lower_opencl_event_local_memory(self):
         return self.opencl_sdk_reduce_materialize_op

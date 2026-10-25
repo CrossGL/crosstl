@@ -201,6 +201,8 @@ def test_opencl_prefetch_is_dropped_as_a_hint():
             prefetch((const global float *)outp, n);
             prefetch(outp + i, 4);
             prefetch(&outp[get_global_id(0)], 1);
+            prefetch(outp, i > 0u ? 4 : 8);
+            prefetch(outp, sizeof(uint));
             outp[i] = 0u;
         }
         """)
@@ -208,6 +210,8 @@ def test_opencl_prefetch_is_dropped_as_a_hint():
     assert "prefetch" not in crossgl
     assert "ptr<" not in crossgl
     assert "&outp" not in crossgl
+    assert "?" not in crossgl
+    assert "4;" not in [line.strip() for line in crossgl.splitlines()]
     assert "outp[i] = 0u;" in crossgl
 
 
@@ -215,14 +219,20 @@ def test_opencl_prefetch_keeps_argument_side_effects():
     crossgl = generate_crossgl("""
         kernel void probe(global float *outp) {
             uint i = get_global_id(0);
+            uint j = i;
+            uint n = 0u;
             prefetch(outp, i++);
-            outp[i] = 1.0f;
+            prefetch((const global float4 *)(outp + j++), n = 4u);
+            outp[i + j] = (float)n;
         }
         """)
 
     assert "prefetch" not in crossgl
-    assert "i++" in crossgl
-    assert crossgl.index("i++") < crossgl.index("outp[i] = 1.0")
+    assert "ptr<" not in crossgl
+    assert "outp +" not in crossgl
+    effects = [crossgl.index(effect) for effect in ("i++", "j++", "n = 4u;")]
+    assert effects == sorted(effects)
+    assert effects[-1] < crossgl.index("outp[(i + j)]")
 
 
 def test_opencl_prefetch_translates_to_targets(tmp_path):
