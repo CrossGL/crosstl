@@ -3147,3 +3147,30 @@ def test_wgsl_codegen_rejects_mismatched_matrix_comp_mult_operands():
         match=r"matrixCompMult\(\) operands to be two float matrices of the same type",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_two_argument_atan_lowers_to_atan2(tmp_path):
+    # WGSL atan() takes one argument; GLSL's two-argument atan(y, x) is atan2 (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                vec3 r = atan(a0, a0) + atan(a0);
+                float s = atan(fin[i], 2.0);
+                outp[i] = r + vec3(s);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "atan2(a0, a0)" in generated
+    assert "atan(a0)" in generated
+    assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
+    assert "atan(a0, a0)" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
