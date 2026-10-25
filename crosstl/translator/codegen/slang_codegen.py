@@ -61,7 +61,9 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .c_family_operands import postfix_operand, prefix_unary_operand
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -87,6 +89,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -350,6 +353,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdxFine": "ddx_fine",
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
+            "fwidthCoarse": "fwidth_coarse",
+            "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "floatBitsToInt": "asint",
@@ -2941,6 +2946,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 if builtin_name is not None:
                     return builtin_name
             if hasattr(attr, "name"):
+                if attr.name == "gl_FragData":
+                    index = frag_data_attachment_index(node)
+                    if index is not None:
+                        return f"gl_FragData[{index}]"
                 return attr.name
         return None
 
@@ -3922,6 +3931,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             target_index = semantic_name[len("gl_FragColor") :]
             if target_index.isdigit():
                 return f"SV_Target{target_index}"
+        frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
+        if frag_data:
+            return f"SV_Target{frag_data.group(1)}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
     def slang_semantic_output_kind(self, semantic):
@@ -4184,6 +4196,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
             if semantic is None:
+                continue
+            # An ``out`` parameter carries a stage output, as in HLSL.
+            if "out" in {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", None) or []
+            }:
                 continue
             if (
                 self.slang_ray_semantic_role(parameter, shader_type)
@@ -6635,28 +6653,39 @@ class SlangCodeGen(LoweringRefusalMixin):
         self, body_statements, shader_type, param_list
     ):
         candidates = self.slang_intrinsic_builtin_candidates(shader_type)
-        if not candidates:
-            return {}
 
         declared_names = {
             getattr(param, "name", None)
             for param in param_list or []
             if getattr(param, "name", None)
         }
+        identifiers = []
         for node in self.walk_ast(body_statements):
             if isinstance(node, VariableNode):
                 declared_names.add(node.name)
+            elif isinstance(node, IdentifierNode):
+                identifiers.append(node)
 
         aliases = {}
-        for node in self.walk_ast(body_statements):
-            if not isinstance(node, IdentifierNode):
+        for node in identifiers:
+            if node.name in declared_names:
                 continue
-            if node.name not in candidates or node.name in declared_names:
-                continue
-
-            return_type, intrinsic = candidates[node.name]
-            aliases[node.name] = intrinsic
-            self.register_variable_type(node.name, return_type)
+            if node.name in candidates:
+                return_type, intrinsic = candidates[node.name]
+                aliases[node.name] = intrinsic
+                self.register_variable_type(node.name, return_type)
+            elif node.name == "gl_NumWorkGroups":
+                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
+                # alias above is only made for a compute entry point.
+                where = (
+                    f"a {shader_type} entry point"
+                    if shader_type
+                    else "a helper function"
+                )
+                self.refuse_lowering(
+                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"in a compute entry point, not in {where}"
+                )
         return aliases
 
     def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
@@ -7766,6 +7795,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "compute":
+            # Slang has no SV_ system value for the dispatch size; it exposes
+            # the number of workgroups through the WorkgroupCount() intrinsic.
+            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 
@@ -9111,6 +9144,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdyCoarse",
             "dFdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
             "inversesqrt",
             "inverseSqrt",
         }:
@@ -9248,7 +9283,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression)
         elif isinstance(node, AssignmentNode):
-            return self.generate_assignment(node)
+            return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):
             hull_output_alias = self.slang_hull_output_array_alias(node)
             if hull_output_alias is not None:
@@ -9263,7 +9298,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if matrix_access is not None:
                 return matrix_access
-            array = self.generate_expression(array_expr)
+            array = postfix_operand(self.generate_expression(array_expr))
             index = self.format_array_access_index(index_expr)
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
@@ -9294,10 +9329,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if member_info is not None:
                 return member_info["global_name"]
-            obj = self.generate_expression_without_expected(node.object)
+            obj = postfix_operand(
+                self.generate_expression_without_expected(node.object)
+            )
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
-            pointer = self.generate_expression(node.pointer_expr)
+            pointer = postfix_operand(self.generate_expression(node.pointer_expr))
             return f"{pointer}->{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
@@ -9477,8 +9514,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             if isinstance(node.operand, BinaryOpNode):
                 operand = f"({operand})"
             if getattr(node, "is_postfix", False):
-                return f"{operand}{node.op}"
-            return f"{node.op}{operand}"
+                return f"{postfix_operand(operand)}{node.op}"
+            return f"{node.op}{prefix_unary_operand(node.op, operand)}"
         elif isinstance(node, TernaryOpNode):
             bool_vector_select = self.generate_bool_vector_select_expression(
                 node.condition, node.true_expr, node.false_expr
@@ -10726,6 +10763,14 @@ class SlangCodeGen(LoweringRefusalMixin):
             "u8": "uint8_t",
             "i16": "int16_t",
             "u16": "uint16_t",
+            "int16": "int16_t",
+            "uint16": "uint16_t",
+            "i16vec2": "vector<int16_t, 2>",
+            "i16vec3": "vector<int16_t, 3>",
+            "i16vec4": "vector<int16_t, 4>",
+            "u16vec2": "vector<uint16_t, 2>",
+            "u16vec3": "vector<uint16_t, 3>",
+            "u16vec4": "vector<uint16_t, 4>",
             "i32": "int",
             "u32": "uint",
             "half": "half",
@@ -14067,6 +14112,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if coord_spec is None:
             return None
         numerator, divisor = coord_spec
+        coord = postfix_operand(coord)
         return f"{coord}.{numerator} / {coord}.{divisor}"
 
     def unsupported_texture_projected_call(self, func_name, reason):

@@ -53,6 +53,7 @@ from ..ast import (
 )
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
+from .assignment_values import is_reevaluable_place
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_refusals import RustLoweringRefused
@@ -5415,7 +5416,7 @@ class RustCodeGen(LoweringRefusalMixin):
             if hasattr(stmt, "expression"):
                 if self.is_discard_statement(stmt):
                     return f"{indent_str}gpu::discard();\n"
-                expression = self.generate_expression(stmt.expression)
+                expression = self.generate_discarded_expression(stmt.expression)
                 if getattr(stmt, "is_tail_expression", False):
                     return f"{indent_str}{expression}\n"
                 return f"{indent_str}{expression};\n"
@@ -8733,7 +8734,7 @@ class RustCodeGen(LoweringRefusalMixin):
         if init.endswith(";"):
             init = init[:-1]
         condition = self.generate_condition_expression(node.condition)
-        update = self.generate_expression(node.update)
+        update = self.generate_discarded_expression(node.update)
 
         code = f"{indent_str}{init};\n"
         code += f"{indent_str}while {condition} {{\n"
@@ -8845,6 +8846,27 @@ class RustCodeGen(LoweringRefusalMixin):
 
         return code
 
+    def generate_discarded_expression(self, expr):
+        """Render an expression whose value is unused, such as a for update."""
+        if isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        return self.generate_expression(expr)
+
+    def generate_assignment_value(self, node):
+        """Lower an assignment used as a value.
+
+        A Rust assignment has type ``()``, so the stored value is read back
+        from the target inside a block expression.
+        """
+        target = getattr(node, "target", getattr(node, "left", None))
+        if not is_reevaluable_place(target):
+            return self.refuse_lowering(
+                "assignment used as a value: its target has side effects, so "
+                "the stored value cannot be read back"
+            )
+        assignment = self.generate_assignment(node)
+        return f"{{ {assignment}; {self.generate_expression(target)} }}"
+
     def generate_expression(self, expr):
         """Render a CrossGL expression as Rust expression syntax."""
         if expr is None:
@@ -8873,7 +8895,7 @@ class RustCodeGen(LoweringRefusalMixin):
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             return self.generate_binary_expression(expr)
         elif isinstance(expr, AssignmentNode):
-            return self.generate_assignment(expr)
+            return self.generate_assignment_value(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(expr)
         elif isinstance(expr, ConstructorNode):

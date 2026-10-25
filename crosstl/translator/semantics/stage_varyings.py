@@ -7,8 +7,8 @@ variable per structure member and link stages by location. :mod:`.geometry_strea
 
 * read the semantic, built-in and explicit location a structure member carries;
 * give a user varying the location the neighbouring stage gives the same member (:func:`neighbour_location`):
-  its explicit ``location``, else for GLSL the location of its semantic, else for SPIR-V its semantic's fixed
-  location or its running position in the structure (:mod:`..codegen.stage_io_semantic_locations`);
+  its explicit ``location``, else the fixed location of its semantic, else for SPIR-V the location the structure
+  allocates it (:func:`allocated_locations`, :mod:`..codegen.stage_io_semantic_locations`);
 * declare that varying (:func:`varying_declaration`) under a name no other declaration uses (:class:`FreshNames`);
 * rewrite ``v[i].member`` reads of an entry-point array into reads of those variables, or build a local copy of the
   array when it is used otherwise (:func:`rewrite_array_reads`).
@@ -17,10 +17,7 @@ variable per structure member and link stages by location. :mod:`.geometry_strea
 from __future__ import annotations
 
 from .. import ast as A
-from ..codegen.stage_io_semantic_locations import (
-    glsl_semantic_location,
-    spirv_semantic_location,
-)
+from ..codegen.stage_io_semantic_locations import allocate_locations, semantic_location
 from .rewrite import child_slots, get_child, set_child
 
 __all__ = [
@@ -37,6 +34,7 @@ __all__ = [
     "is_system_value",
     "is_written",
     "literal_int",
+    "allocated_locations",
     "location_span",
     "member_type",
     "neighbour_location",
@@ -130,6 +128,24 @@ def location_span(type_node):
     return 1
 
 
+def allocated_locations(members):
+    """``member name -> location`` of each user varying of ``members`` as the SPIR-V emitter allocates it.
+
+    Built-ins and system values take no location; the others keep their explicit or semantic location, or take the
+    next free one (:func:`..codegen.stage_io_semantic_locations.allocate_locations`).
+    """
+    names, entries = [], []
+    for member in members:
+        if builtin(member) is not None or is_system_value(member):
+            continue
+        fixed = explicit_location(member)
+        if fixed is None:
+            fixed = semantic_location(semantic(member))
+        names.append(member.name)
+        entries.append((fixed, location_span(member_type(member))))
+    return dict(zip(names, allocate_locations(entries)))
+
+
 def neighbour_location(target, struct_name, member, running, refuse):
     """The location of a user varying the neighbouring stage declares from the same structure member.
 
@@ -140,7 +156,7 @@ def neighbour_location(target, struct_name, member, running, refuse):
         return explicit
     found = semantic(member)
     if target in GLSL_TARGETS:
-        location = glsl_semantic_location(found)
+        location = semantic_location(found)
         if location is None:
             refuse(
                 f"member '{struct_name}.{member.name}' (semantic {found or 'none'}) has no GLSL location, "
@@ -149,7 +165,7 @@ def neighbour_location(target, struct_name, member, running, refuse):
                 "unlocated-varying",
             )
         return location
-    location = spirv_semantic_location(found)
+    location = semantic_location(found)
     return running if location is None else location
 
 

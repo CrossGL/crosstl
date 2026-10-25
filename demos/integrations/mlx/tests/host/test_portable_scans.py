@@ -17,7 +17,7 @@ from demos.integrations.mlx.portable_host import (
     scan_packages,
     verify_scans,
 )
-from tools import ci_coverage
+from tests import workflow_text
 
 
 def buffers(dtype="float32", axis=129, stride=1, rows=3):
@@ -714,8 +714,8 @@ def test_scan_bounded_verification_requires_complete_result_records(
 def test_scan_host_checks_share_existing_platform_jobs_and_deadline():
     root = Path(__file__).resolve().parents[5]
     workflow = (root / ".github/workflows/demo-project-testing.yml").read_text()
-    job = ci_coverage.workflow_job_text(workflow, "portable-host")
-    step = ci_coverage.workflow_step_section(
+    job = workflow_text.workflow_job_text(workflow, "portable-host")
+    step = workflow_text.workflow_step_section(
         job, "Execute upstream tests on the translated backend"
     )
     assert "--scans" in step and "--timeout-seconds 4000" in step

@@ -33,12 +33,12 @@ OpMemberDecorate %13 1 Offset 16
 OpDecorate %15 DescriptorSet 0
 OpDecorate %15 Binding 0
 OpDecorate %20 BuiltIn Position
-OpDecorate %21 Location 1
+OpDecorate %21 Location 13
 OpDecorate %23 Location 0
-OpDecorate %27 Location 1
+OpDecorate %27 Location 13
 OpDecorate %47 Location 0
 OpDecorate %48 BuiltIn FragCoord
-OpDecorate %50 Location 1
+OpDecorate %50 Location 13
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1

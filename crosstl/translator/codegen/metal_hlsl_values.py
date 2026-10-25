@@ -492,8 +492,7 @@ class MetalHlslValueMixin:
         if any(self.metal_expression_emulated_matrix_shape(arg) for arg in args):
             return f"crosstl_hlsl_{func_name}({left}, {right})"
         operator = "&&" if func_name == "and" else "||"
-        left_type = self.expression_result_type(args[0])
-        width = self.vector_value_width(left_type) if left_type is not None else None
+        width = self.metal_hlsl_logical_width(args)
         if width is not None:
             left = f"bool{width}({left})"
             right = f"bool{width}({right})"
@@ -501,6 +500,24 @@ class MetalHlslValueMixin:
             left = f"bool({left})"
             right = f"bool({right})"
         return f"({left} {operator} {right})"
+
+    def metal_hlsl_logical_width(self, args):
+        """The vector width of an HLSL ``and``/``or``: its widest operand's, or None for scalars."""
+        widths = []
+        for arg in args:
+            arg_type = self.expression_result_type(arg)
+            width = self.vector_value_width(arg_type) if arg_type is not None else None
+            if width is not None:
+                widths.append(width)
+        return max(widths) if widths else None
+
+    def metal_hlsl_logical_result_type(self, func_name, args):
+        if func_name not in {"and", "or"} or len(args or []) != 2:
+            return None
+        if func_name in self.user_function_names:
+            return None
+        width = self.metal_hlsl_logical_width(args)
+        return "bool" if width is None else f"bool{width}"
 
     def generate_metal_value_constructor_arguments(self, metal_type, args):
         """Render constructor arguments, converting vectors to the target components.
