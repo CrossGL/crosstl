@@ -3524,6 +3524,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args_str = ", ".join(args)
 
+        euclidean_norm_name = self.cuda_euclidean_norm_function_name(
+            func_name, raw_args
+        )
+        if euclidean_norm_name is not None:
+            return f"{euclidean_norm_name}({args_str})"
+
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
@@ -9870,6 +9876,50 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 object_expr
             )
         return False
+
+    def cuda_euclidean_norm_function_name(self, func_name, raw_args):
+        """Name CrossGL ``norm``/``rnorm`` of an array for its element type.
+
+        CrossGL spells both precisions without the ``f`` suffix. CUDA's ``norm``/``rnorm``
+        take ``const double*`` and ``normf``/``rnormf`` take ``const float*``, so an array
+        of any other element type, or of one the generator cannot resolve, is refused.
+        """
+        if (
+            func_name not in {"norm", "rnorm"}
+            or len(raw_args or []) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+
+        array_expr = raw_args[1]
+        lvalue = self.strip_address_of_expression(array_expr)
+        if lvalue is not array_expr:
+            # ``&x`` points at ``x`` itself.
+            element_type = self.type_name_string(self.expression_result_type(lvalue))
+        else:
+            array_type = self.type_name_string(self.expression_result_type(array_expr))
+            base_type, array_suffix = split_array_type_suffix(array_type or "")
+            pointer = self.cuda_indirect_type_info(array_type)
+            if array_suffix.count("[") == 1:
+                # A one-dimensional array decays to a pointer to its first element.
+                element_type = base_type
+            elif pointer is not None and pointer["kind"] == "pointer":
+                element_type = pointer["pointee_type"]
+            else:
+                element_type = None
+
+        component = self.scalar_component_type(element_type) if element_type else None
+        if component == "float":
+            return f"{func_name}f"
+        if component == "double":
+            return func_name
+        elements = f"{element_type} elements" if element_type else "unresolved elements"
+        raise CudaLoweringRefused(
+            [
+                f"Euclidean norm: {func_name} of {elements}: CUDA has normf and "
+                "rnormf for float arrays and norm and rnorm for double arrays"
+            ]
+        )
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
