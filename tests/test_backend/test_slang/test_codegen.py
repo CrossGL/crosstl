@@ -685,7 +685,7 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 position @ Out_Position;" in generated_code
+    assert "vec4 position @ gl_Position;" in generated_code
     assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
@@ -1041,7 +1041,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
 
     assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
     assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
     cgl_translator.parse(generated_code)
 
@@ -1117,7 +1117,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ Out_Position)"
+        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
