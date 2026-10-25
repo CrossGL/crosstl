@@ -5,6 +5,10 @@ HLSL's ``in payload`` mesh parameter (CrossGL ``@mesh_payload``) is the data the
 SPIR-V generator flattened it into per-vertex ``Input`` variables with locations, which no stage writes. GLSL now
 declares it ``taskPayloadSharedEXT`` and SPIR-V as a ``TaskPayloadWorkgroupEXT`` variable on the entry interface
 (GL_EXT_mesh_shader, SPV_EXT_mesh_shader).
+
+On the task side, the ``groupshared`` variable a task entry passes to ``DispatchMesh`` is likewise declared
+``taskPayloadSharedEXT`` and ``TaskPayloadWorkgroupEXT``, which GLSL and SPIR-V require of the payload that
+``EmitMeshTasksEXT`` passes on.
 """
 
 import re
@@ -128,4 +132,65 @@ def test_hlsl_mesh_payload_parameter_reaches_spirv_as_task_payload(tmp_path):
     assembly = crosstl.translate(str(source), backend="vulkan", format_output=False)
 
     assert "TaskPayloadWorkgroupEXT" in assembly
+    _validate_spirv(tmp_path, assembly)
+
+
+TASK = """
+shader TaskPayloadDispatch {
+    struct Payload {
+        uint count;
+        vec3 color;
+    }
+
+    task {
+        void main(uint lid @gl_LocalInvocationIndex) @numthreads(8, 1, 1)
+            @max_total_threadgroups_per_mesh_grid(4) {
+            groupshared Payload payload;
+            if (lid == 0u) {
+                payload.count = 3u;
+                payload.color = vec3(1.0, 0.0, 0.0);
+            }
+            workgroupBarrier();
+            DispatchMesh(1u, 1u, 1u, payload);
+        }
+    }
+}
+"""
+
+
+def test_glsl_task_dispatch_payload_is_task_payload_shared(tmp_path):
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(TASK), "task")
+
+    assert re.search(r"^taskPayloadSharedEXT Payload \w*payload;$", code, re.M), code
+    assert "shared Payload" not in code.replace("taskPayloadSharedEXT Payload", "")
+    assert "EmitMeshTasksEXT(1u, 1u, 1u);" in code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not available")
+    shader = tmp_path / "payload.task"
+    shader.write_text(code, encoding="utf-8")
+    result = _run(
+        [
+            glslang,
+            "-S",
+            "task",
+            "--target-env",
+            "vulkan1.3",
+            "-o",
+            str(tmp_path / "task.spv"),
+            str(shader),
+        ]
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spirv_task_dispatch_payload_is_task_payload_workgroup_storage(tmp_path):
+    assembly = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(TASK))
+
+    payload_id = re.search(r'OpName (%\w+) "payload"', assembly).group(1)
+    assert re.search(
+        rf"{payload_id} = OpVariable %\w+ TaskPayloadWorkgroupEXT", assembly
+    ), assembly
+    assert re.search(rf"OpEmitMeshTasksEXT %\w+ %\w+ %\w+ {payload_id}\b", assembly)
     _validate_spirv(tmp_path, assembly)

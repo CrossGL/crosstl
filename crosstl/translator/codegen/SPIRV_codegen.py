@@ -235,6 +235,7 @@ from .spirv_uniform_block_arrays import (
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
 from .stage_utils import requests_early_fragment_tests
+from .task_payload_variables import dispatch_mesh_payload_names
 from .texture_lod_clamp import (
     TEXTURE_LOD_CLAMP_INTRINSIC_NAMES,
     is_texture_lod_clamp_operation,
@@ -14246,6 +14247,7 @@ class VulkanSPIRVCodeGen(
             "localsizez",
             "max_primitives",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "max_vertices",
             "maxprimitives",
             "maxtessfactor",
@@ -20206,7 +20208,19 @@ class VulkanSPIRVCodeGen(
         cache_key = self.workgroup_variable_cache_key(node, var_type)
         variable = self.workgroup_variables_by_declaration.get(cache_key)
         if variable is None:
-            variable = self.create_variable(var_type, "Workgroup", node.name)
+            # task_payload_variables.py: a task entry's DispatchMesh payload is task-payload storage.
+            payload = (
+                self.current_execution_model == "TaskEXT"
+                and node.name in dispatch_mesh_payload_names(
+                    getattr(self.current_function_node, "body", None)
+                )
+            )
+            storage_class = "TaskPayloadWorkgroupEXT" if payload else "Workgroup"
+            variable = self.create_variable(var_type, storage_class, node.name)
+            if payload:
+                self.require_capability("MeshShadingEXT")
+                self.require_extension("SPV_EXT_mesh_shader")
+                self.task_payload_shared_variables[node.name] = variable
             self.workgroup_variables_by_declaration[cache_key] = variable
         self.mark_function_interface_variable(variable)
         return variable
