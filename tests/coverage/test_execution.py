@@ -165,13 +165,13 @@ def test_rebinding_names_what_the_harness_cannot_bind(tmp_path):
     native.write_text(NATIVE)
     rebound.write_text(REBOUND)
     broken.write_text("kernel void a() {}\nkernel void b() {}\n")
-    assert execution.rebinding("metal", native, native) == ""
+    assert execution.rebinding("metal", native, native, False) == ""
     assert (
-        execution.rebinding("metal", native, rebound)
+        execution.rebinding("metal", native, rebound, False)
         == "Expected Metal buffer slots [0, 1], found [2, 3]"
     )
     # A native probe the harness cannot bind either is no evidence against the translation.
-    assert execution.rebinding("metal", broken, rebound) == ""
+    assert execution.rebinding("metal", broken, rebound, False) == ""
 
 
 @pytest.mark.parametrize("outcome", ["harness-error", "preserved"])
@@ -200,6 +200,88 @@ def test_a_rebound_translation_keeps_its_result_when_the_native_probe_does_not_r
     monkeypatch.setattr(harness, "run_suite", native_fails)
     [result], _ = execution.run([supported(REBOUND)])
     assert (result.outcome, result.runtime) == ("supported", "")
+
+
+# A Metal probe that scales its input by the first float of a constants block, as the uniform-buffer probe does.
+SCALED = """#include <metal_stdlib>
+using namespace metal;
+struct Params {
+    float scale;
+};
+kernel void probe(device float* fin [[buffer(0)]], device float* outp [[buffer(1)]],
+                  uint3 id [[thread_position_in_grid]], constant Params& params [[buffer(3)]]) {
+    uint i = id.x;
+    outp[i] = fin[i] * params.scale;
+}
+"""
+
+
+def _constants_given(monkeypatch):
+    """Collect the constants block of every case the fake harness runs, by case id."""
+    given = {}
+    original = harness.run_suite
+
+    def run_suite(cases, *args, **kwargs):
+        given.update((case.id, case.constants) for case in cases)
+        return original(cases, *args, **kwargs)
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    return given
+
+
+def test_a_probe_that_declares_a_constants_block_gets_one(monkeypatch, tmp_path):
+    _fake_harness(monkeypatch, "preserved", 0)
+    given = _constants_given(monkeypatch)
+    [scaled, plain], _ = execution.run(
+        [
+            Result(SIN, "output", "supported", sources=(SCALED, SCALED)),
+            supported(),
+        ]
+    )
+    assert scaled.outcome == plain.outcome == "supported"
+    assert given == {
+        "00000-native": execution.CONSTANTS,
+        "00000-translated": execution.CONSTANTS,
+        "00001-native": None,
+        "00001-translated": None,
+    }
+    assert np.frombuffer(execution.CONSTANTS, np.float32).tolist() == [
+        2.5,
+        -1.75,
+        3.25,
+        0.5,
+    ]
+    path = tmp_path / "scaled.metal"
+    path.write_text(SCALED)
+    assert execution.declares_constants("metal", path)
+    path.write_text(NATIVE)
+    assert not execution.declares_constants("metal", path)
+
+
+def test_a_translation_without_the_native_constants_block_is_wrong(monkeypatch):
+    _fake_harness(monkeypatch, "preserved", 0)
+    [result], _ = execution.run(
+        [Result(SIN, "output", "supported", sources=(SCALED, NATIVE))]
+    )
+    assert result.outcome == "wrong"
+    assert result.detail.startswith(
+        f"on metal-apple, the translation {execution.REBOUND}\n"
+    )
+    assert "Expected one constants block" in result.detail
+
+
+@pytest.mark.skipif(not metal_runs(), reason="no Metal runtime")
+def test_metal_reads_the_constants_block_at_the_translation_offsets():
+    shifted = SCALED.replace("float scale;", "float pad;\n    float scale;")
+    (same, other), used = execution.run(
+        [
+            Result(SIN, "output", "supported", sources=(SCALED, SCALED)),
+            Result(SIN, "output", "supported", sources=(SCALED, shifted)),
+        ]
+    )
+    assert used == ["metal-apple"]
+    assert (same.outcome, same.runtime) == ("supported", "metal-apple")
+    assert other.outcome == "wrong" and execution.DIVERGED in other.detail
 
 
 def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
@@ -423,7 +505,7 @@ def test_the_harness_takes_coverage_probes_as_cases(tmp_path):
     path = tmp_path / "probe.metal"
     path.write_text(NATIVE)
     case = execution._case(
-        "00000-native", path, "metal", execution.inputs("fin"), outputs
+        "00000-native", path, "metal", execution.inputs("fin"), None, outputs
     )
     [record] = harness.run_suite(
         [case], ["metal"], ["strict"], {"metal": []}, tmp_path / "run", reference=True
