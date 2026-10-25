@@ -11618,6 +11618,28 @@ def test_coherent_storage_buffer_declaration_is_globallycoherent():
     assert "uint* counters" not in generated_code
 
 
+def test_storage_buffer_dereference_reads_its_first_element():
+    """``*name`` of a storage buffer is ``name[0]``: a structured buffer has no address to dereference."""
+    code = """
+    shader Deref {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* data;
+            buffer float* outp;
+            void main() {
+                *outp = *data + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "outp[0] = data[0] + 1.0;" in generated_code
+    assert "*data" not in generated_code
+    assert "*outp" not in generated_code
+
+
 def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
     code = """
     shader SlangReadonlyStructuredBuffer {

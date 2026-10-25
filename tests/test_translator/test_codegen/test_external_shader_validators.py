@@ -777,6 +777,28 @@ shader SlangWorkgroupCountValidator {
 """
 
 
+SLANG_STORAGE_BUFFER_COMPUTE_SHADER = """
+shader SlangStorageBufferValidator {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer readonly Particle* particles;
+        buffer float* masses;
+        coherent buffer uint* counters;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            masses[i] = particles[i].position.x + particles[i].mass + *masses;
+            atomicAdd(counters[0], 1u);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -2923,6 +2945,53 @@ def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
         ]
     )
     _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
+    """``buffer T* name`` is a structured buffer at its own binding, not a pointer parameter (#2921)."""
+    shader_path = tmp_path / "slang_storage_buffers.slang"
+    spirv_path = tmp_path / "slang_storage_buffers.spv"
+    hlsl_path = tmp_path / "slang_storage_buffers.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_STORAGE_BUFFER_COMPUTE_SHADER)
+    )
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Particle> particles : register(t0"
+        in code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u0);" in code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u1);" in code
+    )
+    assert "masses[0]" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+    # A global pointer reached HLSL as ``Ptr<float, ...>``, which DXC rejects.
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
+    )
+    assert "Ptr<" not in hlsl_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

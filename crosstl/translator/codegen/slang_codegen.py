@@ -1791,7 +1791,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         """Return the structured-buffer type a CrossGL storage buffer declares.
 
         ``buffer T* name`` names bound storage, so it becomes ``RWStructuredBuffer<T>``
-        (``StructuredBuffer<T>`` when the kernel only reads it). Slang has no pointer to
+        (``StructuredBuffer<T>`` when it is declared ``readonly``). Slang has no pointer to
         bound memory: a global pointer is an implicit shader parameter, one
         ``PhysicalStorageBuffer`` address per buffer, which a host cannot bind as a
         storage buffer on any slangc target (#2921).
@@ -8932,6 +8932,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 return f"{operand_type}*"
             if expr.op == "*" and operand_type is not None:
+                if self.is_structured_buffer_resource_type(operand_type):
+                    return self.structured_buffer_element_type(operand_type)
                 return self.pointer_pointee_type_name(operand_type) or operand_type
             return operand_type
         if isinstance(expr, AssignmentNode):
@@ -9538,6 +9540,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, RayTracingOpNode):
             return self.generate_slang_ray_tracing_op_expression(node)
         elif isinstance(node, UnaryOpNode):
+            if node.op == "*" and self.is_structured_buffer_resource_type(
+                self.expression_result_type(node.operand)
+            ):
+                # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
+                return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
             operand = self.generate_expression(node.operand)
             if isinstance(node.operand, BinaryOpNode):
                 operand = f"({operand})"
