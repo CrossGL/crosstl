@@ -24834,6 +24834,37 @@ def _pointer_reinterpret_failure_details(
     return dict(sorted(details.items()))
 
 
+def _resource_aggregate_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.resource-aggregate-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    aggregate = {}
+    fields = {
+        "sourceType": getattr(exc, "source_type", None),
+        "member": getattr(exc, "member", None),
+        "addressSpace": getattr(exc, "address_space", None),
+        "entryPoint": getattr(exc, "entry_point", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            aggregate[name] = value
+            details[name] = value
+    if aggregate:
+        details["resourceAggregate"] = dict(sorted(aggregate.items()))
+    return dict(sorted(details.items()))
+
+
 def _generic_member_call_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -25187,6 +25218,7 @@ def _translation_failure_details(
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
+        **_resource_aggregate_failure_details(exc, unit, artifact_path),
         **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_call_operator_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
