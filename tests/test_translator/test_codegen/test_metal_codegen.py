@@ -2370,6 +2370,38 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     compile_with_metal_if_available(generated_code)
 
 
+def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
+    # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 x = dFdxFine(uv) + dFdxCoarse(uv);
+        vec2 y = dFdyFine(uv) + dFdyCoarse(uv);
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(x + y, w);
+    }
+    """
+    shader_path = tmp_path / "derivatives.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "dfdx(input.uv) + dfdx(input.uv)" in generated_code
+    assert "dfdy(input.uv) + dfdy(input.uv)" in generated_code
+    assert "fwidth(input.uv) + fwidth(input.uv)" in generated_code
+    for name in ("_fine(", "_coarse("):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
     shader = """
     shader MetalFineFwidthShadow {
