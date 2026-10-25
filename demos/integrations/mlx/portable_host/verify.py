@@ -135,7 +135,7 @@ REDUCTION_NEGATIVE_CHECKS = {
     "reduce-allocation": "storage does not match",
     "reduce-empty": "No translated reduction variant",
     "reduce-row": "Small-row dispatch requires the pinned MLX source root",
-    "reduce-column": "small-column and long-column reduction plans",
+    "reduce-column": "Small column dispatch requires the pinned MLX source root",
 }
 
 
