@@ -40426,9 +40426,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_parameters = {}
         for parameter in parameters or []:
             semantic = self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
-            if semantic == "SV_Position":
+            if str(semantic or "").lower() == "sv_position":
                 stage_parameters["gl_FragCoord"] = getattr(parameter, "name", None)
+                continue
+            # A stage input structure with an SV_Position member already carries the fragment
+            # coordinate; a second SV_Position parameter would overlap it ("overlapping semantic index").
+            member = self.hlsl_struct_member_with_semantic(parameter, "SV_Position")
+            if member is not None and "gl_FragCoord" not in stage_parameters:
+                stage_parameters["gl_FragCoord"] = f"{parameter.name}.{member}"
         return stage_parameters
+
+    def hlsl_struct_member_with_semantic(self, parameter, semantic):
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        struct = self.structs_by_name.get(
+            str(getattr(raw_type, "name", raw_type) or "")
+        )
+        if struct is None or not getattr(parameter, "name", None):
+            return None
+        for member in getattr(struct, "members", None) or []:
+            member_semantic = self.hlsl_canonical_semantic(
+                self.semantic_from_node(member)
+            )
+            if str(member_semantic or "").lower() == semantic.lower():
+                return getattr(member, "name", None)
+        return None
 
     def used_hlsl_fragment_builtin_names(self, body):
         builtin_names = {"gl_FragCoord", "gl_FragSizeEXT"}

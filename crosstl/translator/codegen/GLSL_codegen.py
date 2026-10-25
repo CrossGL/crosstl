@@ -2046,12 +2046,37 @@ class GLSLCodeGen(
         "metal::signbit",
         "metal_u3a_u3asignbit",
     }
+    # Built-in functions the generator calls in place of source operations (HLSL methods and intrinsics). A local
+    # of the same name would hide the function in its scope ("can't use function syntax on variable").
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
+        "dFdx",
+        "dFdy",
         "floatBitsToInt",
         "floatBitsToUint",
+        "fract",
+        "imageLoad",
+        "imageSamples",
+        "imageSize",
+        "imageStore",
         "intBitsToFloat",
+        "inversesqrt",
         "mix",
+        "mod",
+        "texelFetch",
+        "texelFetchOffset",
+        "texture",
+        "textureGather",
+        "textureGatherOffset",
+        "textureGrad",
+        "textureLod",
+        "textureLodOffset",
+        "textureOffset",
+        "textureProj",
+        "textureQueryLevels",
+        "textureQueryLod",
+        "textureSamples",
+        "textureSize",
         "uintBitsToFloat",
     }
     GLSL_BITCAST_FUNCTIONS = {"asfloat", "asint", "asuint"}
