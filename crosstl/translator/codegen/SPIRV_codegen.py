@@ -153,6 +153,7 @@ from .spirv_inline_requirements import (
     is_inline_spirv_attribute,
 )
 from .spirv_local_references import SpirvLocalReferenceMixin
+from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
 from .spirv_matrix_builtins import SpirvMatrixBuiltinMixin
 from .spirv_matrix_constructors import one_argument_matrix_columns
@@ -195,6 +196,7 @@ from .spirv_shading_rate import (
 from .spirv_short_circuit import (
     SHORT_CIRCUIT_OPERATORS,
     evaluate_loop_condition,
+    lower_logical_intrinsic,
     lower_short_circuit_logical,
     lower_short_circuit_ternary,
 )
@@ -1744,10 +1746,21 @@ class VulkanSPIRVCodeGen(
             return left / right
         return None
 
-    def image_offset_operand(self, offset_id: SpirvId) -> str:
+    def image_offset_operand(self, offset_id: SpirvId, *, gather: bool = False) -> str:
+        """``ConstOffset`` for a constant offset; otherwise ``Offset``, which Vulkan allows on gathers only.
+
+        Vulkan accepts a non-constant ``Offset`` image operand only on ``OpImage*Gather`` unless the
+        ``maintenance8`` feature is enabled (VUID-RuntimeSpirv-Offset-10213), so it is refused elsewhere, as GLSL
+        and HLSL refuse non-constant offsets of their sampling functions.
+        """
         if self.is_constant_instruction(offset_id):
             return f"ConstOffset %{offset_id.id}"
 
+        if not gather:
+            self.refuse_lowering(
+                "texture offset: a non-constant texel offset is valid only on gather operations "
+                "(Vulkan requires maintenance8 for others, VUID-RuntimeSpirv-Offset-10213)"
+            )
         self.require_capability("ImageGatherExtended")
         return f"Offset %{offset_id.id}"
 
@@ -5158,7 +5171,7 @@ class VulkanSPIRVCodeGen(
         if isinstance(image_operand, str):
             image_operands = f" {image_operand}"
         elif image_operand is not None:
-            image_operands = f" {self.image_offset_operand(image_operand)}"
+            image_operands = f" {self.image_offset_operand(image_operand, gather=True)}"
 
         id_value = self.get_id()
         self.emit(
@@ -6904,7 +6917,7 @@ class VulkanSPIRVCodeGen(
 
             id_value = self.get_id()
             image_operands = (
-                f" {self.image_offset_operand(extra_args[0])}"
+                f" {self.image_offset_operand(extra_args[0], gather=True)}"
                 if function_name == "textureGatherCompareOffset"
                 else ""
             )
@@ -12042,6 +12055,9 @@ class VulkanSPIRVCodeGen(
                 function_name,
                 "fabs requires a floating-point scalar or vector operand",
             )
+
+        if function_name in {"and", "or"} and len(args) == 2:
+            return lower_logical_intrinsic(self, function_name, args)
 
         # MSL select(a, b, c) (MSL 6.4) yields c ? b : a per component, like mix(a, b, bvec).
         if function_name == "select" and len(args) == 3:
@@ -20917,9 +20933,8 @@ class VulkanSPIRVCodeGen(
                 node, storage_class, explicit_location, patch=patch
             )
             if used_slots & slot_keys:
-                raise ValueError(
-                    f"Duplicate SPIR-V {storage_class.lower()} location "
-                    f"{explicit_location}"
+                raise InterfaceLocationConflictError(
+                    storage_class, explicit_location, getattr(node, "name", None)
                 )
             used_slots.update(slot_keys)
             return explicit_location
@@ -20929,9 +20944,8 @@ class VulkanSPIRVCodeGen(
                 node, storage_class, preferred_location, patch=patch
             )
             if used_slots & slot_keys:
-                raise ValueError(
-                    f"Duplicate SPIR-V {storage_class.lower()} location "
-                    f"{preferred_location}"
+                raise InterfaceLocationConflictError(
+                    storage_class, preferred_location, getattr(node, "name", None)
                 )
             used_slots.update(slot_keys)
             self.record_global_interface_location(

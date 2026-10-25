@@ -179,7 +179,7 @@ def test_written_entry_point_parameter_is_copied():
         (
             "data[0] = 1;",
             "",
-            "inout parameter v of entry point main",
+            "inout parameter v of compute entry point main",
         ),
     ],
 )
@@ -189,7 +189,7 @@ def test_unlowerable_reference_parameters_fail_closed(body, helpers, message):
         compute(body, helpers, entry_parameters=entry_parameters)
 
 
-def test_entry_point_out_parameter_from_hlsl_fails_closed():
+def test_entry_point_out_parameter_from_hlsl_becomes_stage_output():
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
     from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
     from crosstl.backend.DirectX.DirectxParser import HLSLParser
@@ -202,8 +202,13 @@ def test_entry_point_out_parameter_from_hlsl_fails_closed():
     crossgl = HLSLToCrossGLConverter().generate(
         HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
     )
-    with pytest.raises(ValueError, match="out parameter color of entry point"):
-        WGSLCodeGen().generate(Parser(Lexer(crossgl).get_tokens()).parse())
+    wgsl = WGSLCodeGen().generate(Parser(Lexer(crossgl).get_tokens()).parse())
+    flat = " ".join(wgsl.split())
+    assert "struct PSMainOutput { @location(0) color: vec4<f32>, };" in flat, wgsl
+    assert (
+        "fn fragment_main(@builtin(position) pos: vec4<f32>) -> PSMainOutput {"
+        " var color: vec4<f32>; color = (pos * 0.5); return PSMainOutput(color); }"
+    ) in flat, wgsl
 
 
 def test_lowered_program_validates_with_naga(tmp_path):

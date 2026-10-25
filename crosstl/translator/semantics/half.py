@@ -330,6 +330,21 @@ class Kind:
     lanes: int = 1
 
 
+class _HalfScope(TypeScope):
+    """A type scope that reads the binary16 type the pass carries on the expressions it has rewritten.
+
+    The rewritten operations are calls of helpers the program does not declare yet, so an enclosing expression
+    (``cgl_half_round(a + b) * f``, ``max(cgl_half_div(a, b), x)``) would otherwise have an unknown type.
+    """
+
+    def infer(self, expr) -> HubType | None:
+        if isinstance(expr, A.ASTNode):
+            carried = expr.annotations.get("cgl_half")
+            if carried is not None:
+                return carried
+        return super().infer(expr)
+
+
 # The pass -------------------------------------------------------------------------------------------------------
 class HalfLegalizer:
     def __init__(self, program, source, target):
@@ -337,7 +352,7 @@ class HalfLegalizer:
         self.source = source
         self.target = target
         self.literals_adopt = source in FLOAT_LITERAL_ADOPTING
-        self.scope = TypeScope(program)
+        self.scope = _HalfScope(program)
         self.functions = {}
         for function in _functions(program):
             self.functions.setdefault(function.name, []).append(function)
