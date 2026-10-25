@@ -218,6 +218,7 @@ from .generic_struct_utils import (
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
+from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_hlsl_cbuffer import GLSLHlslConstantBuffers
@@ -9165,9 +9166,11 @@ class GLSLCodeGen(
         # Stage inputs and outputs become globals in GLSL, where they share one namespace with variables,
         # functions and the members of unnamed blocks (GLSL 4.60 section 4.2.7). The whole program is consulted so
         # that stages translated one at a time name their varyings alike.
-        self.stage_io_reserved_value_names = self.collect_glsl_global_identifier_names(
-            ast, None
-        ) | set(self.function_return_types)
+        self.stage_io_reserved_value_names = (
+            self.collect_glsl_global_identifier_names(ast, None)
+            | set(self.function_return_types)
+            | glsl_entry_resource_parameter_names(self, ast)
+        )
         self.fragment_input_struct_names = self.stage_parameter_struct_names(
             ast, "fragment"
         )
