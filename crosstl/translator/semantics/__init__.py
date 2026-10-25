@@ -84,6 +84,7 @@ from .stage_interface_structs import (
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -142,6 +143,7 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
@@ -256,6 +258,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_static_locals(program, report.target)
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
