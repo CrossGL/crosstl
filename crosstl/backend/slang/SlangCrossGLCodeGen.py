@@ -491,17 +491,21 @@ class SlangToCrossGLConverter:
             "RWTextureCubeArray": "imageCubeArray",
         }
         self.function_map = {
+            "countbits": "bitCount",
             "ddx": "dFdx",
             "ddx_coarse": "dFdxCoarse",
             "ddx_fine": "dFdxFine",
             "ddy": "dFdy",
             "ddy_coarse": "dFdyCoarse",
             "ddy_fine": "dFdyFine",
+            "firstbithigh": "findMSB",
+            "firstbitlow": "findLSB",
             "fwidth_coarse": "fwidthCoarse",
             "fwidth_fine": "fwidthFine",
             "frac": "fract",
             "fmod": "fmod",
             "lerp": "mix",
+            "reversebits": "bitfieldReverse",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
             # HLSL barrier intrinsics, mapped the same way as the HLSL importer.

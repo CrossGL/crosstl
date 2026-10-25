@@ -347,6 +347,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.function_map = {
             "mix": "lerp",
             "fract": "frac",
+            "bitCount": "countbits",
+            "bitfieldReverse": "reversebits",
+            "findLSB": "firstbitlow",
+            "findMSB": "firstbithigh",
             "dFdx": "ddx",
             "dFdy": "ddy",
             "dFdxCoarse": "ddx_coarse",
@@ -9225,6 +9229,8 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name in {
             "fract",
+            "bitfieldReverse",
+            "reversebits",
             "dFdx",
             "dFdy",
             "dFdxCoarse",
@@ -9242,7 +9248,70 @@ class SlangCodeGen(LoweringRefusalMixin):
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
 
+        bit_query_type = self.slang_bit_query_result_type(func_name, args)
+        if bit_query_type is not None:
+            return bit_query_type
+
         return self.glsl_bitcast_result_type(func_name, args)
+
+    def slang_bit_query_result_type(self, func_name, args):
+        # Slang's countbits, firstbitlow and firstbithigh return uint components for any integer operand; CrossGL's
+        # bitCount, findLSB and findMSB return int components (GLSL 4.60 section 8.8).
+        result_scalar = {
+            "bitCount": "int",
+            "findLSB": "int",
+            "findMSB": "int",
+            "countbits": "uint",
+            "firstbitlow": "uint",
+            "firstbithigh": "uint",
+        }.get(func_name)
+        if result_scalar is None or len(args or ()) != 1:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            return None
+
+        mapped = self.convert_type(arg_type)
+        integer_scalars = {
+            "int",
+            "uint",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int64_t",
+            "uint64_t",
+        }
+        if mapped in integer_scalars:
+            return result_scalar
+        for scalar in sorted(integer_scalars, key=len, reverse=True):
+            if mapped.startswith(scalar):
+                suffix = mapped[len(scalar) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"{result_scalar}{suffix}"
+        vector_match = re.fullmatch(
+            r"vector<\s*([A-Za-z0-9_]+)\s*,\s*([234])\s*>", mapped
+        )
+        if vector_match and vector_match.group(1) in integer_scalars:
+            return f"{result_scalar}{vector_match.group(2)}"
+        return None
+
+    def generate_slang_bit_query_call(self, func_name, args, generated_args):
+        """``bitCount``, ``findLSB`` or ``findMSB`` as the Slang intrinsic converted to CrossGL's ``int`` result.
+
+        The conversion keeps -1 for a scan that finds no bit, where the bare intrinsic would give 0xFFFFFFFF.
+        Returns ``None`` for any other call.
+        """
+        if func_name not in {"bitCount", "findLSB", "findMSB"}:
+            return None
+        result_type = self.slang_bit_query_result_type(func_name, args)
+        if result_type is None:
+            return self.refuse_lowering(
+                f"Slang {func_name}: the operand is not a known integer scalar or vector",
+                "0",
+            )
+        return f"{result_type}({self.function_map[func_name]}({generated_args}))"
 
     def glsl_bitcast_result_type(self, func_name, args):
         component_type = {
@@ -9578,6 +9647,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             ):
                 callee = "atan2"
             if callee not in self.user_function_names:
+                bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
+                if bit_query is not None:
+                    return bit_query
                 callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
         elif isinstance(node, ConstructorNode):
