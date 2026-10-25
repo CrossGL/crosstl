@@ -183,6 +183,17 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "get_local_size": "gl_WorkGroupSize",
         "get_num_groups": "gl_NumWorkGroups",
     }
+    # OpenCL fence flags name the address spaces a fence orders; each maps to
+    # the CrossGL fence over the same memory. More than one flag, or a flag
+    # that is not a literal, needs the fence over all memory.
+    OPENCL_MEM_FENCE_FLAG_BARRIERS = {
+        "CLK_LOCAL_MEM_FENCE": "memoryBarrierShared",
+        "CLK_GLOBAL_MEM_FENCE": "memoryBarrierBuffer",
+        "CLK_IMAGE_MEM_FENCE": "memoryBarrierImage",
+    }
+    OPENCL_MEM_FENCE_FUNCTIONS = frozenset(
+        {"read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
+    )
     OPENCL_ATOMIC_MAP = {
         "atomic_add": "atomicAdd",
         "atomic_fetch_add": "atomicAdd",
@@ -793,7 +804,24 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            fence = self.format_opencl_fence_call(func_name, raw_args)
+            if fence is not None:
+                return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_fence_call(self, func_name, args):
+        if func_name == "sub_group_barrier" and args:
+            # sub_group_barrier(flags[, scope]) synchronizes the sub-group and
+            # orders the flagged memory, which subgroupBarrier() does.
+            return "subgroupBarrier()"
+        if func_name not in self.OPENCL_MEM_FENCE_FUNCTIONS or not args:
+            return None
+        flags = set(re.findall(r"\bCLK_\w+\b", self.visit(args[0])))
+        if len(flags) == 1:
+            barrier = self.OPENCL_MEM_FENCE_FLAG_BARRIERS.get(flags.pop())
+            if barrier is not None:
+                return f"{barrier}()"
+        return "memoryBarrier()"
 
     def emit_statement(self, stmt):
         can_lower_event_local = self.can_lower_opencl_event_local_memory()
