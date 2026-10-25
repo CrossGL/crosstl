@@ -25,7 +25,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
-from .constant_extents import fold_constant_extents
+from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -70,6 +70,10 @@ from .hlsl_stage_interfaces import (
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .interface_block_instances import (
+    InterfaceBlockInstanceUnsupportedError,
+    declare_interface_block_instances,
+)
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
@@ -157,6 +161,7 @@ __all__ = [
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
@@ -291,6 +296,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
+    fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
@@ -324,6 +330,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     declare_task_payload_storage(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
     lower_metal_ray_dispatch(program, report.target)
+    declare_interface_block_instances(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
