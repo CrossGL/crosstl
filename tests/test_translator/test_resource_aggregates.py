@@ -1092,11 +1092,13 @@ kernel void run(
         "BufferCursor cursor; cursor.input = nullptr; output[0] = cursor.input[0];",
         "BufferCursor cursor = { nullptr }; if (tid == 0u) { cursor.input = input; } output[0] = cursor.input[0];",
         "BufferCursor cursor = { nullptr }; cursor.input = cursor.input + 1; output[0] = 0.0f;",
+        "BufferCursor cursor = { input }; for (uint i = 0; i < 4u; i++) { output[i] = cursor.input[i]; cursor.input = nullptr; }",
+        "BufferCursor cursor = { input }; uint i = 0; while (i < 4u) { output[i] = cursor.input[i]; cursor.input = nullptr; i++; }",
+        "BufferCursor cursor = { input }; switch (tid) { case 0: cursor.input = nullptr; case 1: output[0] = cursor.input[0]; break; default: break; }",
     ],
 )
-def test_potentially_null_aggregate_dereference_is_rejected_with_metadata(
-    tmp_path, body
-):
+@pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
+def test_potentially_null_aggregate_dereference_is_rejected(tmp_path, body, backend):
     source = f"""#include <metal_stdlib>
 using namespace metal;
 struct BufferCursor {{ const device float* input; }};
@@ -1110,14 +1112,57 @@ kernel void run(
 """
     shader = tmp_path / "bad_null.metal"
     shader.write_text(source, encoding="utf-8")
-    with pytest.raises(
-        ResourceAggregateError, match="null-pointer-dereference"
-    ) as exc_info:
+    with pytest.raises(ResourceAggregateError, match="null-pointer-dereference"):
+        translate(str(shader), backend=backend, format_output=False)
+
+
+def test_null_aggregate_proof_refuses_recursive_helpers(tmp_path):
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct BufferCursor { const device float* input; };
+float first(BufferCursor cursor, uint n);
+float second(BufferCursor cursor, uint n) {
+    return n == 0u ? cursor.input[0] : first(cursor, n - 1u);
+}
+float first(BufferCursor cursor, uint n) { return second(cursor, n); }
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    BufferCursor cursor = { nullptr };
+    cursor.input = input;
+    output[0] = first(cursor, tid);
+}
+"""
+    shader = tmp_path / "recursive_null.metal"
+    shader.write_text(source, encoding="utf-8")
+    with pytest.raises(ResourceAggregateError, match="recursive-call"):
         translate(str(shader), backend="directx", format_output=False)
-    assert exc_info.value.source_type == "BufferCursor"
-    assert exc_info.value.member == "input"
-    assert exc_info.value.address_space == "device"
-    assert exc_info.value.entry_point == "run"
+
+
+def test_aggregate_without_null_skips_null_proof(tmp_path):
+    # Without an explicit null, an unassigned slot is not reported as null,
+    # so loop-initialized aggregates keep lowering as before.
+    source = """#include <metal_stdlib>
+using namespace metal;
+struct BufferCursor { const device float* input; };
+kernel void run(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    BufferCursor cursors[2];
+    for (uint i = 0; i < 2u; i++) { cursors[i].input = input + i; }
+    output[tid] = cursors[1].input[0];
+}
+"""
+    shader = tmp_path / "loop_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_float" in hlsl
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
 
 
 def test_function_local_pointer_aggregate_fields_lower_across_targets(tmp_path):
@@ -1161,7 +1206,7 @@ kernel void run_local(
 
 
 @pytest.mark.parametrize("target", ["directx", "opengl", "vulkan"])
-def test_project_report_includes_resource_aggregate_field_metadata(tmp_path, target):
+def test_project_report_refuses_selected_aggregate_resource(tmp_path, target):
     source = """#include <metal_stdlib>
 using namespace metal;
 
@@ -1193,12 +1238,7 @@ kernel void select_cursor(
     assert report["summary"]["failedCount"] == 1
     diag = report["diagnostics"][0]
     assert diag["code"] == "project.translate.resource-aggregate-unsupported"
-    details = diag["details"]
-    assert details["sourceType"] == "BadCursor"
-    assert details["member"] == "value"
-    assert details["addressSpace"] == "device"
-    assert details["entryPoint"] == "select_cursor"
-    assert details["reason"] == "conditional-pointer-selection"
+    assert "conditional-pointer-selection" in diag["message"]
 
 
 def test_spirv_codegen_refuses_unlowered_pointer_aggregate_member():

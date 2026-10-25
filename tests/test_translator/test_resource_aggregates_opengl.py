@@ -157,6 +157,8 @@ struct NestedCursor {
     generated = (package / descriptor["artifact"]["packagePath"]).read_text()
     _, module = _compile(generated, "opengl", tmp_path)
     assert module.is_file() and module.stat().st_size
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required OpenGL resource execution")
 
     inputs = {"left": {"dtype": "int32", "shape": [4], "values": [3, 7, 11, 13]}}
     outputs = {

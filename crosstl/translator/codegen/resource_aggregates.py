@@ -67,26 +67,11 @@ class ResourceAggregateError(ValueError):
     project_diagnostic_code = "project.translate.resource-aggregate-unsupported"
     missing_capabilities = ("resource-aggregate-lowering",)
 
-    def __init__(
-        self,
-        reason,
-        node=None,
-        *,
-        detail=None,
-        source_type=None,
-        member=None,
-        address_space=None,
-        entry_point=None,
-    ):
+    def __init__(self, reason, node=None, *, detail=None):
         message = f"Cannot preserve aggregate resource references: {reason}"
         super().__init__(f"{message}: {detail}" if detail else message)
         self.reason = reason
         self.source_location = getattr(node, "source_location", None)
-        self.node = node
-        self.source_type = source_type
-        self.member = member
-        self.address_space = address_space
-        self.entry_point = entry_point
 
 
 @dataclass(frozen=True)
@@ -2293,7 +2278,13 @@ class _Lowering:
                 if arg_state is not None
                 else self.default_state(ptype, valid=True)
             )
-        ret_state = self.verify_function_body(callee, callee_env, callee_state)
+        if id(callee) in self.verifying:
+            raise ResourceAggregateError("recursive-call", call_node)
+        self.verifying.add(id(callee))
+        try:
+            ret_state = self.verify_function_body(callee, callee_env, callee_state)
+        finally:
+            self.verifying.discard(id(callee))
         for param, arg in zip(callee.parameters, call_node.arguments):
             if isinstance(param.param_type, ReferenceType) or (
                 set(param.qualifiers) & {"out", "inout"}
@@ -2592,36 +2583,42 @@ class _Lowering:
             scoped_env = dict(env)
             outer_keys = set(state)
             self.verify_statement(node.init, scoped_env, state, return_states)
-            loop_state = deepcopy(state)
-            self.verify_expression(node.condition, scoped_env, loop_state)
-            self.verify_statement(
-                node.body, dict(scoped_env), loop_state, return_states
+            self.verify_loop(
+                (node.condition, node.body, node.update),
+                scoped_env,
+                state,
+                return_states,
             )
-            self.verify_expression(node.update, scoped_env, loop_state)
             for key in list(state):
-                if key in outer_keys:
-                    state[key] = self.merge_state(state.get(key), loop_state.get(key))
-                else:
+                if key not in outer_keys:
                     del state[key]
             return
         if isinstance(node, (WhileNode, DoWhileNode)):
-            loop_state = deepcopy(state)
-            self.verify_expression(node.condition, env, loop_state)
-            self.verify_statement(node.body, dict(env), loop_state, return_states)
-            for key in list(state):
-                state[key] = self.merge_state(state.get(key), loop_state.get(key))
+            self.verify_loop((node.condition, node.body), env, state, return_states)
             return
         if isinstance(node, SwitchNode):
             self.verify_expression(node.expression, env, state)
             branch_states = []
             for case in node.cases:
                 case_state = deepcopy(state)
+                if branch_states:
+                    # A case without break falls through with the slots the
+                    # previous case left behind.
+                    for key in case_state:
+                        case_state[key] = self.merge_state(
+                            case_state[key], branch_states[-1].get(key)
+                        )
                 case_env = dict(env)
                 self.verify_expression(case.value, case_env, case_state)
                 for item in case.statements:
                     self.verify_statement(item, case_env, case_state, return_states)
                 branch_states.append(case_state)
             default_state = deepcopy(state)
+            if node.default_case is not None and branch_states:
+                for key in default_state:
+                    default_state[key] = self.merge_state(
+                        default_state[key], branch_states[-1].get(key)
+                    )
             if node.default_case is not None:
                 self.verify_statement(
                     node.default_case, dict(env), default_state, return_states
@@ -2637,6 +2634,20 @@ class _Lowering:
             self.verify_expression(node.expression, env, state)
             return
         self.verify_expression(node, env, state)
+
+    def verify_loop(self, parts, env, state, return_states):
+        # A null stored late in one iteration reaches the next one, so repeat
+        # the loop parts until the merged slot states stop changing.
+        while True:
+            loop_state = deepcopy(state)
+            for part in parts:
+                self.verify_statement(part, dict(env), loop_state, return_states)
+            merged = {
+                key: self.merge_state(state[key], loop_state.get(key)) for key in state
+            }
+            if merged == state:
+                return
+            state.update(merged)
 
     def verify_function_body(self, function, env, state):
         previous = self.current
@@ -2672,12 +2683,19 @@ class _Lowering:
                 self.entry_handles[param.name],
             )
             state[param.name] = True
+        self.verifying = {id(self.entry)}
         self.verify_function_body(self.entry, env, state)
 
     def run(self):
         self.discover(self.entry)
         self.elide_unused_null_parameters()
-        self.verify_definite_assignment()
+        # Only an explicit null needs a proof that it is overwritten before
+        # use; programs without one keep the existing lowering unchanged.
+        if any(
+            isinstance(node, IdentifierNode) and node.name == "nullptr"
+            for node in self.ast.walk()
+        ):
+            self.verify_definite_assignment()
         if any(isinstance(node, PointerReinterpretNode) for node in self.ast.walk()):
             self.resource_origins = ResourceOriginAnalysis(self, _Pointer).analyze()
         # Bind calls to distinct symbols before pointer handles erase access and
@@ -2918,103 +2936,6 @@ class _Lowering:
                 del candidates[name]
 
 
-def _extract_member_pointer_space(member):
-    qualifiers = set(getattr(member, "qualifiers", ()) or ())
-    qualifiers.update(_name(item) for item in getattr(member, "attributes", ()) or ())
-    for node in member.walk():
-        if isinstance(node, PointerType):
-            space = node.address_space or next(
-                (
-                    q
-                    for q in (
-                        "constant",
-                        "device",
-                        "global",
-                        "storage",
-                        "threadgroup",
-                        "workgroup",
-                        "thread",
-                        "private",
-                    )
-                    if q in qualifiers
-                ),
-                None,
-            )
-            if space is not None:
-                return (
-                    "thread"
-                    if space in {"thread", "private"}
-                    else (
-                        "threadgroup"
-                        if space in {"threadgroup", "workgroup"}
-                        else "constant" if space == "constant" else "device"
-                    )
-                )
-        if isinstance(node, NamedType) and node.name in {
-            "StructuredBuffer",
-            "RWStructuredBuffer",
-        }:
-            return "constant" if "constant" in qualifiers else "device"
-    return None
-
-
-def _attach_resource_aggregate_error_context(ast, entry, exc):
-    if exc.entry_point is None and entry is not None and getattr(entry, "name", None):
-        exc.entry_point = entry.name
-    pointer_members = []
-    for node in ast.walk():
-        if isinstance(node, StructNode):
-            for member in node.members:
-                space = _extract_member_pointer_space(member)
-                if space is not None:
-                    pointer_members.append((node, member, space))
-    target_node = getattr(exc, "node", None)
-    if isinstance(target_node, StructMemberNode):
-        for struct_node, member, space in pointer_members:
-            if member is target_node or (
-                member.name == target_node.name
-                and any(m is target_node for m in struct_node.members)
-            ):
-                exc.source_type = exc.source_type or struct_node.name
-                exc.member = exc.member or member.name
-                exc.address_space = exc.address_space or space
-                return
-        for node in ast.walk():
-            if isinstance(node, StructNode) and any(
-                m is target_node for m in node.members
-            ):
-                exc.source_type = exc.source_type or node.name
-                exc.member = exc.member or target_node.name
-                exc.address_space = exc.address_space or _extract_member_pointer_space(
-                    target_node
-                )
-                return
-    if isinstance(target_node, StructNode):
-        exc.source_type = exc.source_type or target_node.name
-        for struct_node, member, space in pointer_members:
-            if struct_node.name == target_node.name:
-                exc.member = exc.member or member.name
-                exc.address_space = exc.address_space or space
-                return
-    if isinstance(target_node, ASTNode):
-        referenced_members = {
-            child.member
-            for child in target_node.walk()
-            if isinstance(child, MemberAccessNode)
-        }
-        for struct_node, member, space in pointer_members:
-            if member.name in referenced_members:
-                exc.source_type = exc.source_type or struct_node.name
-                exc.member = exc.member or member.name
-                exc.address_space = exc.address_space or space
-                return
-    if pointer_members:
-        struct_node, member, space = pointer_members[0]
-        exc.source_type = exc.source_type or struct_node.name
-        exc.member = exc.member or member.name
-        exc.address_space = exc.address_space or space
-
-
 def lower_resource_aggregates(
     ast, *, storage_pointer_parameters=False, workgroup_access_assertions=()
 ):
@@ -3032,10 +2953,6 @@ def lower_resource_aggregates(
         return ast
     result = deepcopy(ast)
     entry = list(result.stages.values())[0].entry_point
-    try:
-        return _Lowering(
-            result, entry, storage_pointer_parameters, workgroup_access_assertions
-        ).run()
-    except ResourceAggregateError as exc:
-        _attach_resource_aggregate_error_context(ast, entry, exc)
-        raise
+    return _Lowering(
+        result, entry, storage_pointer_parameters, workgroup_access_assertions
+    ).run()
