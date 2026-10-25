@@ -682,7 +682,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._current_stage_name = None
         self._current_workgroup_size = None
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._cbuffer_member_accesses = {}
         self._function_texture_parameters = {}
         self._function_pointer_parameters = {}
@@ -753,7 +753,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -2512,21 +2512,28 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         root_name = self.module_identifier_name(node.name)
         bindings = []
         declarations = []
+        next_texture_binding = None
         for index in range(array_size):
             texture_name = self.safe_wgsl_identifier(f"{root_name}_{index}")
             texture_attributes = (
                 self.explicit_binding_attributes(node)
                 if index == 0
                 else self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             )
             if not texture_attributes:
                 texture_attributes = self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             sampler_attributes = self.sampler_binding_attributes_for_texture(
                 texture_attributes
+            )
+            # Expanded elements follow their preceding sampler, even when the first binding is explicit.
+            next_texture_binding = (
+                int(re.search(r"@binding\((\d+)\)", sampler_attributes).group(1)) + 1
             )
             sampler_name = self.texture_sampler_name(texture_name)
             bindings.append(
@@ -6829,9 +6836,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return None
         return shared_semantic_location(semantic)
 
-    def next_binding_attributes(self, group="0"):
-        binding = self.next_available_binding(group, self._global_binding_index)
-        self._global_binding_index = binding + 1
+    def next_binding_attributes(self, group="0", *, start=None):
+        group = str(group)
+        implicit = start is None
+        if implicit:
+            start = self._next_implicit_binding_by_group.get(group, 0)
+        binding = self.next_available_binding(group, start)
+        if implicit:
+            # Explicit resources and companion samplers must not consume lower free slots.
+            self._next_implicit_binding_by_group[group] = binding + 1
         self.mark_allocated_binding(group, binding)
         return f"@group({group}) @binding({binding})"
 
@@ -6846,9 +6859,6 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             if reserved_sampler is not None:
                 group, binding = reserved_sampler
                 self.mark_allocated_binding(group, binding)
-                self._global_binding_index = max(
-                    self._global_binding_index, binding + 1
-                )
                 return f"@group({group}) @binding({binding})"
         match = re.search(r"@binding\(([^)]+)\)", texture_attributes)
         if not match:
@@ -6859,7 +6869,6 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self.next_binding_attributes(group=group)
         binding = self.next_available_binding(group, start)
         self.mark_allocated_binding(group, binding)
-        self._global_binding_index = max(self._global_binding_index, binding + 1)
         return f"@group({group}) @binding({binding})"
 
     def next_available_binding(self, group, start):
@@ -7035,11 +7044,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return ""
         try:
             numeric_binding = int(str(binding), 0)
-            next_binding = numeric_binding + 1
             self.mark_allocated_binding(group, numeric_binding)
         except ValueError:
-            next_binding = self._global_binding_index
-        self._global_binding_index = max(self._global_binding_index, next_binding)
+            pass
         return f"@group({group}) @binding({binding})"
 
     def register_attribute_binding(self, arguments, default_group):

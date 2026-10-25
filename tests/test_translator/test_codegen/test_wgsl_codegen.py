@@ -1411,7 +1411,7 @@ def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
 
     assert "@group(2) @binding(4)\nvar<storage, read> values: array<f32>;" in generated
     assert (
-        "@group(0) @binding(5)\n"
+        "@group(0) @binding(0)\n"
         "var<storage, read_write> outValues: array<f32>;" in generated
     )
     assert "outValues[gid.x] = values[gid.x];" in generated
