@@ -138,7 +138,7 @@ def _executed(report: dict) -> list[str]:
     return [
         "Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one "
         "input buffer also runs: the native probe and CrossTL's translation get the same inputs, and a "
-        "translation that writes other results is wrong. HLSL, Slang and WGSL probes run as the SPIR-V their "
+        "translation that binds other resources or writes other results is wrong. HLSL, Slang and WGSL probes run as the SPIR-V their "
         f"reference compiler writes for them. Executed: {ran}.",
         "",
     ]

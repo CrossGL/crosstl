@@ -65,6 +65,10 @@ from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
     lower_metal_ray_dispatch,
 )
+from .metal_runtime_types import (
+    MetalRuntimeTypeUnsupportedError,
+    refuse_metal_runtime_types,
+)
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -135,6 +139,7 @@ __all__ = [
     "ImplicitLodStageUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "MetalRayDispatchUnsupportedError",
+    "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -260,6 +265,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
