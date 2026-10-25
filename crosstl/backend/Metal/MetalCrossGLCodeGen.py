@@ -43,6 +43,8 @@ from ...translator.standard_constants import standard_math_constant
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from ..switch_clauses import ordered_switch_clauses
 from .barrier_import import metal_barrier_statements
+from .bit_scan_import import lower_scan as lower_bit_scan
+from .bit_scan_import import scan_function as bit_scan_function
 from .buffer_layout_import import MetalBufferLayoutImport
 from .color_attachments import (
     color_attachment_semantic,
@@ -12400,6 +12402,9 @@ class MetalToCrossGLConverter(
             )
             if uniform_value is not None:
                 return uniform_value
+            bit_scan = self.metal_bit_scan_expression(expr.name, expr.args, is_main)
+            if bit_scan is not None:
+                return bit_scan
             sync_call = self.metal_synchronization_function_call(
                 expr.name,
                 expr.args,
@@ -13141,6 +13146,21 @@ class MetalToCrossGLConverter(
             return None
         separator = ";\n" + "    " * indent
         return separator.join(f"{call}()" for call in lowered) + ";\n"
+
+    def metal_bit_scan_expression(self, name, args, is_main):
+        """MSL ``clz``/``ctz`` as a CrossGL ``findMSB``/``findLSB`` expression, or ``None`` for other calls."""
+        function = bit_scan_function(name, self.user_function_names)
+        if function is None or len(args) != 1:
+            return None
+        metal_type = self.resolve_type_alias(self.expression_metal_type(args[0]))
+        return lower_bit_scan(
+            function,
+            self.generate_expression(args[0], is_main),
+            metal_type,
+            self.map_type(metal_type) if metal_type else None,
+            self.metal_small_vector_type_parts,
+            self.metal_scalar_arithmetic_type_info,
+        )
 
     def metal_uniform_value_expression(self, name, args, is_main):
         """Lower Metal's uniformity assertion while preserving its value."""

@@ -273,6 +273,7 @@ from .glsl_stage_output_values import (
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
+from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
@@ -8365,6 +8366,8 @@ class GLSLCodeGen(
             self.GLSL_UNAVAILABLE_BUILTINS,
             self.GLSL_UNAVAILABLE_FUNCTION_PATTERNS,
         ):
+            self.refuse_lowering(reason)
+        for reason in string_literal_reasons(code):
             self.refuse_lowering(reason)
         return code
 
