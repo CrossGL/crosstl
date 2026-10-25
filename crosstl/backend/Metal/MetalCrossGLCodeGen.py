@@ -19889,7 +19889,10 @@ float {scalar}(float value) {{
                 suffix = alias_suffix + suffix
         finally:
             self.current_type_resolution_context = previous_context
-        return f"{SIMD_TYPE_ALIASES.get(base, base)}{suffix}"
+        if base in SIMD_TYPE_ALIASES:
+            # A user alias may resolve to a <simd/simd.h> name such as float4.
+            base = SIMD_TYPE_ALIASES[base]
+        return f"{base}{suffix}"
 
     def atomic_element_type(self, metal_type):
         # Metal atomics lower to their plain element type in CrossGL; atomicity is
