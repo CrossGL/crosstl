@@ -254,9 +254,57 @@ def test_pixel_coordinates_are_refused(tmp_path, backend):
     )
 
 
-def test_opengl_still_refuses_fixed_sampler_state(tmp_path):
+def _validate_glsl(tmp_path, glsl):
+    validator = shutil.which("glslangValidator")
+    if validator is None:
+        return
+    shader = tmp_path / "shader.frag"
+    shader.write_text(glsl, encoding="utf-8")
+    completed = subprocess.run([validator, str(shader)], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_opengl_names_the_combined_uniforms_of_each_fixed_sampler(tmp_path):
+    glsl = _translate(tmp_path, SAMPLERS, "opengl")
+    records = _records(glsl)
+    units = dict(re.findall(r"layout\(binding = (\d+)\) uniform \w+ (\w+);", glsl))
+    units = {name: int(unit) for unit, name in units.items()}
+
+    assert set(records) == {
+        "linearRepeat",
+        "fallback",
+        "compare",
+        "crosstl_fixed_sampler_0",
+    }
+    for name, record in records.items():
+        assert record["uniforms"], name
+        for uniform in record["uniforms"]:
+            # Each uniform is declared with the unit its record names, and sampled in the shader.
+            assert units[uniform["uniform"]] == uniform["unit"], (name, uniform)
+            assert f"texture({uniform['uniform']}," in glsl
+    assert [u["texture"] for u in records["compare"]["uniforms"]] == ["depth"]
+    assert records["compare"]["state"]["compare_func"] == "less"
+    # The texture read through three sampler states takes one uniform per state.
+    tex_uniforms = {
+        uniform["uniform"]
+        for name in ("linearRepeat", "fallback", "crosstl_fixed_sampler_0")
+        for uniform in records[name]["uniforms"]
+    }
+    assert len(tex_uniforms) == 3
+    _validate_glsl(tmp_path, glsl)
+
+
+def test_opengl_fixed_sampler_in_a_helper_reaches_the_callers_uniform(tmp_path):
+    glsl = _translate(tmp_path, SHADOWED, "opengl")
+    records = parse_fixed_sampler_contract(glsl)
+    assert sorted(r["state"]["mag_filter"] for r in records) == ["linear", "nearest"]
+    assert all(record["uniforms"] for record in records)
+    _validate_glsl(tmp_path, glsl)
+
+
+def test_webgl_still_refuses_fixed_sampler_state(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
-        _translate(tmp_path, SAMPLERS, "opengl")
+        _translate(tmp_path, SAMPLERS, "webgl")
 
 
 KEYWORD_NAMED_SAMPLER = """#include <metal_stdlib>

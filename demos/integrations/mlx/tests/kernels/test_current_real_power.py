@@ -11,6 +11,7 @@ from demos.integrations.mlx.tests.kernels.floating_binary_runtime import (
 )
 from demos.integrations.mlx.tests.kernels.test_current_additive import _check_words
 from demos.integrations.mlx.tests.kernels.test_current_extrema import _guard, _request
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_metal_power import (
     _finite_pairs,
@@ -19,7 +20,6 @@ from tests.test_translator.test_metal_power import (
     _operand_flush_pairs,
     _oracle,
 )
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_REAL_POWER"
@@ -183,7 +183,7 @@ def test_current_real_power_native_parity(tmp_path, profile, binary_metal_refere
 
 def test_ci_requires_real_power_on_existing_native_targets():
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned real power"
     )
     path = "demos/integrations/mlx/tests/kernels/test_current_real_power.py"

@@ -445,6 +445,10 @@ class SlangToCrossGLConverter:
             "uint2": "uvec2",
             "uint3": "uvec3",
             "uint4": "uvec4",
+            # Packed 8-bit vectors are plain 32-bit words in CrossGL, matching
+            # the HLSL importer and the uint results of pack_s8/pack_u8.
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             "bool": "bool",
             "bool2": "bvec2",
             "bool3": "bvec3",
@@ -499,6 +503,28 @@ class SlangToCrossGLConverter:
             "lerp": "mix",
             "rsqrt": "inversesqrt",
             "atan2": "atan",
+            # HLSL barrier intrinsics, mapped the same way as the HLSL importer.
+            "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
+            # GroupMemoryBarrier orders groupshared memory only: GLSL's memoryBarrierShared, not groupMemoryBarrier,
+            # which orders buffer and image accesses as well.
+            "GroupMemoryBarrier": "memoryBarrierShared",
+            "DeviceMemoryBarrier": "deviceMemoryBarrier",
+            "AllMemoryBarrier": "allMemoryBarrier",
+        }
+        # A barrier with group sync that orders device memory releases the writes before it and acquires them
+        # after it: a fence on each side of the execution barrier. DeviceMemoryBarrierWithGroupSync does not order
+        # groupshared memory, so its execution barrier is workgroupExecutionBarrier.
+        self.function_statement_sequences = {
+            "DeviceMemoryBarrierWithGroupSync": (
+                "deviceMemoryBarrier",
+                "workgroupExecutionBarrier",
+                "deviceMemoryBarrier",
+            ),
+            "AllMemoryBarrierWithGroupSync": (
+                "allMemoryBarrier",
+                "workgroupBarrier",
+                "allMemoryBarrier",
+            ),
         }
         self.user_function_names = set()
         self.function_name_map = {}
@@ -1229,6 +1255,12 @@ class SlangToCrossGLConverter:
             if sincos_statement is not None:
                 code += sincos_statement
                 continue
+            lowered_sequence = self.generate_function_call_statement_sequence(
+                stmt, indent
+            )
+            if lowered_sequence is not None:
+                code += lowered_sequence
+                continue
             if isinstance(stmt, ReturnNode):
                 code += self.generate_statement_label(stmt, indent)
                 code += self.generate_deferred_scope_exits(
@@ -1322,6 +1354,20 @@ class SlangToCrossGLConverter:
         for deferred_body in reversed(deferred_statements or []):
             code += self.generate_function_body(deferred_body, indent, is_main)
         return code
+
+    def generate_function_call_statement_sequence(self, stmt, indent=0):
+        if not isinstance(stmt, FunctionCallNode) or stmt.args:
+            return None
+        function_name, is_hlsl_namespace_builtin = self.canonical_function_call_name(
+            stmt.name
+        )
+        if not is_hlsl_namespace_builtin and stmt.name in self.user_function_names:
+            return None
+        sequence = self.function_statement_sequences.get(function_name)
+        if sequence is None:
+            return None
+        indent_text = "    " * indent
+        return "".join(f"{indent_text}{func_name}();\n" for func_name in sequence)
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
         if not isinstance(stmt, FunctionCallNode):
@@ -1997,6 +2043,11 @@ class SlangToCrossGLConverter:
             )
             if pointer_buffer_type:
                 return f"{pointer_buffer_type}{pointer_suffix}"
+            packed_buffer_type = self.map_packed_element_buffer_type(
+                slang_type, base_type
+            )
+            if packed_buffer_type:
+                return f"{packed_buffer_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2070,6 +2121,19 @@ class SlangToCrossGLConverter:
         if len(args) != 1 or "*" not in args[0]:
             return None
         return f"buffer<{self.map_type(args[0])}>"
+
+    def map_packed_element_buffer_type(self, slang_type, base_type):
+        # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+        # buffer of them is a structured buffer of uint, as in the HLSL importer.
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or args[0].strip() not in {
+            "int8_t4_packed",
+            "uint8_t4_packed",
+        }:
+            return None
+        return f"{base_type}<uint>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
@@ -2198,6 +2262,7 @@ class SlangToCrossGLConverter:
             or name in self.HLSL_NAMESPACE_BITCAST_BUILTINS
             or name in self.HLSL_NAMESPACE_PASSTHROUGH_BUILTINS
             or name in self.function_map
+            or name in self.function_statement_sequences
         )
 
     def generate_bitcast_intrinsic_call(

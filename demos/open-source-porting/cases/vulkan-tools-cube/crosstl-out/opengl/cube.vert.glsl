@@ -6,8 +6,8 @@ layout(location = 1) out vec3 frag_pos;
 // Constant Buffers
 layout(std140, binding = 0) uniform buf {
     mat4 MVP;
-    vec4 position[(12 * 3)];
-    vec4 attr[(12 * 3)];
+    vec4 position[36];
+    vec4 attr[36];
 };
 // Vertex Shader
 void main() {

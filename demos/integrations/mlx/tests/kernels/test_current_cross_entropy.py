@@ -913,14 +913,14 @@ def test_current_mlx_cross_entropy_native_parity(
 
 
 def test_ci_requires_native_cross_entropy_parity():
+    from tests import workflow_text
     from tests.ci_helpers import (
         assert_native_step_prerequisites,
         assert_workflow_triggers,
     )
-    from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow,
         "mlx-metal-porting",
         "Prove current MLX new-unit native parity",

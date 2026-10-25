@@ -27,6 +27,7 @@ from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
 )
 from demos.integrations.mlx.tests.kernels.test_current_complex_power import MLX_COMMIT
 from demos.integrations.mlx.tests.kernels.test_current_copy import _half_payload
+from tests import workflow_text
 from tests.runtime_helpers import _prepare_native_package, _validate
 from tests.test_translator.test_boolean_buffer_runtime import (
     _bound_values,
@@ -37,7 +38,6 @@ from tests.test_translator.test_boolean_buffer_runtime import (
 from tests.test_translator.test_metal_half_remainder import _oracle, _pairs
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 from tests.test_translator.test_software_subgroup_product import _package
-from tools import ci_coverage
 
 ROOT = Path(__file__).resolve().parents[5]
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_HALF_REMAINDER"
@@ -338,7 +338,7 @@ def test_ci_requires_pinned_half_remainder_in_existing_native_jobs():
         ("portable-host", "Validate pinned native binary math"),
         ("mlx-metal-porting", "Prove current MLX binary shape parity"),
     ):
-        step = ci_coverage.workflow_job_step_section(workflow, job, name)
+        step = workflow_text.workflow_job_step_section(workflow, job, name)
         assert f'{REQUIRE_ENV}: "1"' in step
         assert (
             "demos/integrations/mlx/tests/kernels/test_current_half_remainder.py"

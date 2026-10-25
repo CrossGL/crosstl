@@ -558,3 +558,34 @@ def _explicit_template_function_specialization_for_selected_overload(
         value[:-3] if value.endswith("...") else value for value in selected_signature
     )
     return canonical_specialization
+
+
+def deducible_template_parameters(preprocessor: Any, template: Any) -> set[str]:
+    """Template parameters of ``template`` that its function parameter types can deduce.
+
+    A parameter counts when it is named in a parameter's type outside a nested-name qualifier (``Owner::member``)
+    and outside the parameter's default argument. A call that names fewer template arguments deduces these from its
+    arguments before any default applies.
+    """
+    source = str(getattr(template, "source", "") or "")
+    body = source.find("{")
+    header = source if body == -1 else source[:body]
+    span = preprocessor._function_parameter_list_span(header)
+    if span is None:
+        return set()
+    names = set(getattr(template, "template_parameters", ()) or ())
+    deducible: set[str] = set()
+    for parameter in preprocessor._split_top_level_commas(
+        header[span[0] + 1 : span[1]]
+    ):
+        declaration = _strip_metal_attribute_blocks(parameter).split("=", 1)[0]
+        for match in re.finditer(r"[A-Za-z_]\w*", declaration):
+            token = match.group(0)
+            if token not in names:
+                continue
+            qualified = declaration[match.end() :].lstrip().startswith("::") or (
+                declaration[: match.start()].rstrip().endswith("::")
+            )
+            if not qualified:
+                deducible.add(token)
+    return deducible

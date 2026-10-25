@@ -128,3 +128,56 @@ def signedness_reference(inputs):
             int(y < x),
         ]
     return np.array(out, np.uint32)
+
+
+def _clz(word, bits=32):
+    word &= (1 << bits) - 1
+    return bits - word.bit_length()
+
+
+def _ctz(word, bits=32):
+    word &= (1 << bits) - 1
+    return bits if word == 0 else (word & -word).bit_length() - 1
+
+
+def _find_msb(word, signed=False):
+    """GLSL findMSB: the highest set bit, or for a negative int the highest clear bit; -1 when there is none."""
+    word &= _MASK
+    if signed and word & 0x80000000:
+        word = ~word & _MASK
+    return word.bit_length() - 1
+
+
+def _find_lsb(word):
+    word &= _MASK
+    return -1 if word == 0 else _ctz(word)
+
+
+def bit_scan_inputs():
+    """One word per thread: the first half of ``integer_pair_inputs``, edge words first."""
+    return integer_pair_inputs()[:THREADS]
+
+
+def metal_bit_scan_reference(inputs):
+    """Eight words per thread, in the order ``m_bit_scans`` stores them."""
+    out = []
+    for x in (int(word) for word in inputs):
+        s = _signed(x)
+        out += [_clz(x), _ctz(x), _clz(x), _ctz(x), _clz(x), _clz(~x)]
+        out += [_ctz(~s), _ctz(x >> 16)]
+    return np.array(out, np.uint32)
+
+
+def glsl_bit_scan_reference(inputs):
+    """Eight words per thread, in the order ``g_bit_scans`` stores them; -1 is stored as its two's complement."""
+    out = []
+    for x in (int(word) for word in inputs):
+        _signed(x)
+        out += [_find_msb(x), _find_lsb(x), _find_msb(x, True), _find_lsb(x)]
+        out += [
+            _find_msb(x, True),
+            _find_msb(~x, True),
+            _find_lsb(~x),
+            _find_lsb(x >> 16),
+        ]
+    return np.array([value & _MASK for value in out], np.uint32)
