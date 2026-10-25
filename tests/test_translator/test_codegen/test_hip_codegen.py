@@ -32,6 +32,7 @@ from crosstl.translator.codegen.hip_codegen import (
     HipCodeGen,
     UnsupportedHIPAstNodeError,
 )
+from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -1297,6 +1298,64 @@ class TestHipCodeGen:
         assert "doubleBitsToLong(" not in hip_code
         assert "longBitsToDouble(" not in hip_code
         compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            (
+                "dvec2 v = dvec2(1.0, 2.0);",
+                "int64_t bits = doubleBitsToLong(v);",
+                "doubleBitsToLong of double2",
+            ),
+            (
+                "i64vec2 v = i64vec2(1, 2);",
+                "double value = longBitsToDouble(v);",
+                "longBitsToDouble of i64vec2",
+            ),
+        ],
+    )
+    def test_64bit_bitcast_of_a_vector_is_refused(self, declaration, call, reason):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    {call}
+                }}
+            }}
+        }}
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match=reason) as refusal:
+            HipCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.hip-lowering-unsupported"
+
+    def test_64bit_bitcast_refusal_inside_a_match_arm_is_raised(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int mode = 1;
+                    dvec2 v = dvec2(1.0, 2.0);
+                    int64_t bits = match mode {
+                        0 => doubleBitsToLong(v),
+                        _ => int64_t(1),
+                    };
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match="doubleBitsToLong of double2"):
+            HipCodeGen().generate(ast)
 
     def test_hlsl_as_bitcast_aliases_lower_to_hip_intrinsics(self):
         source_code = """
