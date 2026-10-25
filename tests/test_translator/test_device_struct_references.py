@@ -1,5 +1,6 @@
 """``device T&`` structure arguments of Metal entry points are buffers, not stage inputs."""
 
+import re
 import shutil
 import subprocess
 
@@ -84,10 +85,21 @@ def test_glsl_binds_structure_references_as_storage_blocks(tmp_path):
 def test_spirv_reads_structure_references_from_storage_buffers(tmp_path, source):
     path = tmp_path / "shader.metal"
     path.write_text(source)
-    spirv = crosstl.translate(str(path), backend="vulkan")
-    # The structure used to be read from Input variables, one per member.
-    assert "OpTypePointer Input %Params" not in spirv
-    assert "OpTypePointer Input %mat4v4float" not in spirv
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    names = {
+        name: identifier
+        for identifier, name in re.findall(r'OpName (%\d+) "(\w+)"', spirv)
+    }
+    # The argument is a buffer block variable; the structure used to be read from Input variables, one per member.
+    argument = "params"
+    block = names[f"{argument}Buffer"]
+    assert re.search(rf"OpDecorate {block} (?:BufferBlock|Block)\n", spirv)
+    variable = re.search(rf"{names[argument]} = OpVariable (%\d+) (\w+)", spirv)
+    assert variable is not None and variable.group(2) in ("Uniform", "StorageBuffer")
+    pointers = re.findall(r"= OpTypePointer Input (%\d+)", spirv)
+    assert not set(pointers) & {
+        identifier for name, identifier in names.items() if name.startswith("Params")
+    }
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
         (tmp_path / "out.spvasm").write_text(spirv)
         _run(
