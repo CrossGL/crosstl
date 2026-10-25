@@ -325,6 +325,32 @@ def test_float16_aliases_emit_slang_half_types():
     assert "f16(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("crossgl_type", "slang_type"),
+    [
+        ("i8", "int8_t"),
+        ("u8", "uint8_t"),
+        ("i64", "int64_t"),
+        ("u64", "uint64_t"),
+        ("int8", "int8_t"),
+        ("uint8", "uint8_t"),
+        ("int32", "int"),
+        ("uint32", "uint"),
+        ("int64", "int64_t"),
+        ("uint64", "uint64_t"),
+        ("i8vec2", "vector<int8_t, 2>"),
+        ("i8vec4", "vector<int8_t, 4>"),
+        ("u8vec2", "vector<uint8_t, 2>"),
+        ("u64vec2", "vector<uint64_t, 2>"),
+        ("i64vec4", "vector<int64_t, 4>"),
+        ("vec2<i64>", "vector<int64_t, 2>"),
+        ("vec2<u64>", "vector<uint64_t, 2>"),
+    ],
+)
+def test_integer_width_types_convert_to_slang_spellings(crossgl_type, slang_type):
+    assert SlangCodeGen().convert_type(crossgl_type) == slang_type
+
+
 def test_stage_only_shader_emits_slang_entry_point():
     code = """
     shader main {
@@ -6678,6 +6704,126 @@ def test_slang_codegen_refuses_num_workgroups_outside_a_compute_entry_point(
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_slang_codegen_maps_builtin_attribute_parameters_to_system_values():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id),
+                      uvec3 lid @builtin(local_invocation_id),
+                      uvec3 wid @builtin(workgroup_id)) {
+                o[gid.x] = lid.x + wid.x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint3 gid : SV_DispatchThreadID" in generated
+    assert "uint3 lid : SV_GroupThreadID" in generated
+    assert "uint3 wid : SV_GroupID" in generated
+    assert ": builtin" not in generated
+
+
+def test_slang_codegen_maps_builtin_attribute_stage_io_like_gl_spellings():
+    code = """
+    shader Q {
+        vertex {
+            vec4 main(vec3 p @ POSITION, uint vid @builtin(vertex_index)) @builtin(position) {
+                return vec4(p, float(vid));
+            }
+        }
+        fragment {
+            vec4 main(vec4 fc @builtin(position)) @gl_FragColor {
+                return fc;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint vid : SV_VertexID) : SV_Position" in generated
+    assert "float4 fc : SV_Position) : SV_Target" in generated
+    assert "builtin" not in generated
+
+
+def test_slang_codegen_maps_builtin_sample_mask_input_and_output_to_coverage():
+    code = """
+    shader Q {
+        struct FOut {
+            vec4 color @gl_FragColor;
+            uint mask @builtin(sample_mask);
+        };
+        fragment {
+            FOut main(uint coverage @builtin(sample_mask)) {
+                FOut o;
+                o.color = vec4(1.0);
+                o.mask = coverage;
+                return o;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "uint mask : SV_Coverage;" in generated
+    assert "uint coverage : SV_Coverage" in generated
+    assert "builtin" not in generated
+
+
+def test_slang_codegen_refuses_unknown_builtin_attribute():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(bogus_value)) {
+                o[gid.x] = 1u;
+            }
+        }
+    }
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    assert any(
+        "unknown built-in @builtin(bogus_value) on 'gid'" in reason
+        for reason in refused.reasons
+    )
+
+
+def test_slang_codegen_binds_num_workgroups_parameter_from_workgroup_count():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* o;
+            void main(uvec3 gid @builtin(global_invocation_id), uvec3 nwg @gl_NumWorkGroups,
+                      uvec3 count @builtin(num_workgroups)) {
+                o[gid.x] = nwg.x + count.y;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "void main(uint3 gid : SV_DispatchThreadID)" in generated
+    assert "uint3 nwg = WorkgroupCount();" in generated
+    assert "uint3 count = WorkgroupCount();" in generated
+    assert "gl_NumWorkGroups" not in generated
+
+
+def test_slang_codegen_refuses_num_workgroups_parameter_outside_compute():
+    code = """
+    shader P {
+        fragment {
+            vec4 main(uvec3 nwg @gl_NumWorkGroups) @gl_FragColor {
+                return vec4(float(nwg.x));
+            }
+        }
+    }
+    """
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
+    assert any(
+        "gl_NumWorkGroups parameter 'nwg'" in reason for reason in refused.reasons
+    )
+
+
 def test_ray_stage_semantic_parameters_emit_slang_directions():
     code = """
     shader RayStageSemantics {
@@ -11583,6 +11729,157 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     assert "buffer_store(" not in generated_code
     assert "buffer_dimensions(" not in generated_code
     assert "StructuredBuffer<vec4>" not in generated_code
+
+
+def test_storage_buffer_pointer_declarations_become_structured_buffers():
+    """A CrossGL ``buffer T* name`` declares bound storage, not a Slang pointer.
+
+    Fixes #2921: Slang has no pointer to bound memory, so a global pointer is an implicit shader parameter holding one
+    ``PhysicalStorageBuffer`` address per buffer, and no slangc target lets a host bind that as a storage buffer. The
+    README kernel's two buffers are named at the interface, as GLSL, HLSL, Metal, SPIR-V and WGSL declare them.
+    """
+    code = """
+    shader Saxpy {
+        compute {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer float* x;
+            buffer float* y;
+            uniform float a;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                y[i] = a * x[i] + y[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RWStructuredBuffer<float> x : register(u0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> y : register(u1);"
+        in generated_code
+    )
+    assert "float* x" not in generated_code
+    assert "float* y" not in generated_code
+    assert "y[i] = a * x[i] + y[i];" in generated_code
+
+
+def test_readonly_storage_buffer_declaration_binds_a_structured_buffer():
+    """A read-only storage buffer is a ``StructuredBuffer``, the t-register view of the same binding (#2921)."""
+    code = """
+    shader Reduce {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, set = 0, binding = 2) buffer readonly float* src;
+            layout(std430, set = 1, binding = 0) buffer float* dst;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                dst[i] = src[i];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> src : register(t2, space0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 1)]] RWStructuredBuffer<float> dst : register(u0, space1);"
+        in generated_code
+    )
+    assert "dst[i] = src[i];" in generated_code
+
+
+def test_storage_buffer_of_structs_declares_its_element_type():
+    """``buffer Particle* name`` becomes ``RWStructuredBuffer<Particle>``, so member access reads the element."""
+    code = """
+    shader Particles {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(std430, binding = 0) buffer Particle* particles;
+            buffer float* masses;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                masses[i] = particles[i].position.x + particles[i].mass;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[vk::binding(0, 0)]] RWStructuredBuffer<Particle> particles " in (
+        generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> masses : register(u1);"
+        in generated_code
+    )
+    assert "masses[i] = particles[i].position.x + particles[i].mass;" in generated_code
+    assert "Particle* particles" not in generated_code
+
+    # The importer reads the declaration back, so a round trip keeps the element type.
+    assert "RWStructuredBuffer<Particle> particles" in generate_crossgl_from_slang(
+        generated_code
+    )
+
+
+def test_coherent_storage_buffer_declaration_is_globallycoherent():
+    """A ``coherent`` storage buffer keeps its memory qualifier, which Slang spells ``globallycoherent``."""
+    code = """
+    shader Counters {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            coherent buffer uint* counters;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                counters[i] = counters[i] + 1u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] globallycoherent RWStructuredBuffer<uint> counters "
+        ": register(u0);" in generated_code
+    )
+    assert "uint* counters" not in generated_code
+
+
+def test_storage_buffer_dereference_reads_its_first_element():
+    """``*name`` of a storage buffer is ``name[0]``: a structured buffer has no address to dereference."""
+    code = """
+    shader Deref {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* data;
+            buffer float* outp;
+            void main() {
+                *outp = *data + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "outp[0] = data[0] + 1.0;" in generated_code
+    assert "*data" not in generated_code
+    assert "*outp" not in generated_code
 
 
 def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():

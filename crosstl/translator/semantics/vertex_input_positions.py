@@ -11,8 +11,9 @@ Metal put ``[[position]]`` in the ``[[stage_in]]`` structure (rejected by ``xcru
 :func:`attribute_vertex_input_positions` rewrites the attribute on a vertex entry point's inputs to the
 ``Position`` vertex attribute, the one HLSL's ``POSITION`` semantic imports as, for every target except
 HLSL, which keeps the ``SV_Position`` input element. A structure that is also another entry point's output
-or a non-vertex stage's input, and a vertex input that already has a ``Position`` attribute, are refused
-with :class:`VertexInputPositionUnsupportedError`, because one declaration cannot name both.
+or a non-vertex stage's input, an ``inout`` vertex entry parameter bound to the position built-in, and a
+vertex input that already has a ``Position`` attribute, are refused with
+:class:`VertexInputPositionUnsupportedError`, because one declaration cannot name both.
 """
 
 from .. import ast as A
@@ -56,10 +57,17 @@ def attribute_vertex_input_positions(program, target) -> int:
         if _stage_name(stage) != "vertex":
             continue
         entry = getattr(stage, "entry_point", None)
+        parameters = getattr(entry, "parameters", None) or []
+        for parameter in parameters:
+            if _is_inout(parameter) and _position_index(parameter) is not None:
+                raise VertexInputPositionUnsupportedError(
+                    f"The inout parameter '{getattr(parameter, 'name', '')}' of vertex entry point "
+                    f"'{getattr(entry, 'name', '')}' is the {POSITION_ATTRIBUTE} vertex attribute as an "
+                    "input and the position built-in as an output",
+                    target,
+                )
         inputs = [
-            parameter
-            for parameter in getattr(entry, "parameters", None) or []
-            if _direction(parameter) == "input"
+            parameter for parameter in parameters if _direction(parameter) == "input"
         ]
         inputs.extend(
             variable
@@ -170,6 +178,13 @@ def _direction(node, default="input"):
     if "in" in names or "input" in names:
         return "input"
     return default
+
+
+def _is_inout(node):
+    return any(
+        str(qualifier).lower() == "inout"
+        for qualifier in getattr(node, "qualifiers", None) or []
+    )
 
 
 def _type_name(type_node):
