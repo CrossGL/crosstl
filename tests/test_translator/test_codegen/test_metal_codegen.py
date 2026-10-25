@@ -2367,6 +2367,7 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
         "fwidthCoarse(",
     ):
         assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
@@ -2388,6 +2389,7 @@ def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
 
     assert "float2 w = metal::fwidth(uv);" in generated_code
     assert "fwidthFine(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
