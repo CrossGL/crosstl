@@ -68,8 +68,6 @@ def test_boolean_reductions_run_with_native_mojo(tmp_path, width):
         for name in ("either", "every")
     }
     output = f"""
-from std.builtin import SIMD, DType
-
 def either(a: SIMD[DType.float32, {storage}], b: SIMD[DType.float32, {storage}]) -> Bool:
     return {expressions['either']}
 
