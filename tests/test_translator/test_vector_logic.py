@@ -6,6 +6,7 @@ GLSL refused it with a vector-to-scalar conversion error, and WGSL emitted ``x &
 no ``and``/``or`` built-in either, and SPIR-V refused them as unknown functions.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -151,8 +152,14 @@ def test_wgsl_lowers_and_or_calls(tmp_path):
 
 def test_spirv_lowers_and_or_calls(tmp_path):
     code = _translate(tmp_path, INTRINSICS, "vulkan")
-    assert "OpLogicalAnd %v2bool" in code
-    assert "OpLogicalOr %v2bool" in code
+    # The ids are symbolic when spirv-tools reformat the module and numeric otherwise, so resolve the type.
+    boolean = re.search(r"^\s*(%\S+) = OpTypeBool$", code, re.MULTILINE)
+    assert boolean is not None, code
+    pattern = rf"^\s*(%\S+) = OpTypeVector {re.escape(boolean.group(1))} 2$"
+    bool2 = re.search(pattern, code, re.MULTILINE)
+    assert bool2 is not None, code
+    for opcode in ("OpLogicalAnd", "OpLogicalOr"):
+        assert re.search(rf"= {opcode} {re.escape(bool2.group(1))} ", code), code
 
 
 def test_metal_converts_non_boolean_vector_operands(tmp_path):
