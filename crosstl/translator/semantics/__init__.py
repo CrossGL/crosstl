@@ -53,6 +53,7 @@ from .fragment_colour_outputs import (
 )
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
+from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hlsl_geometry_streams import (
     HlslGeometryStreamUnsupportedError,
@@ -113,6 +114,7 @@ from .structured_layouts import (
     legalize_structured_layouts,
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
+from .task_payload_storage import declare_task_payload_storage
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -150,6 +152,7 @@ __all__ = [
     "FragmentColourOutputUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "GlslMeshStageUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
@@ -231,8 +234,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
     inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
-    becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
-    become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
+    becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
+    output arrays and task payload become entry parameters (:mod:`.glsl_mesh_stages`), while for GLSL and SPIR-V a
+    module-scope ``groupshared`` task payload is declared in task-payload storage (:mod:`.task_payload_storage`).
+    HLSL-style hull and domain stages become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
     hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
@@ -315,6 +320,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
+    raise_glsl_mesh_stages(program, report.target)
+    declare_task_payload_storage(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
     lower_metal_ray_dispatch(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
