@@ -3844,6 +3844,72 @@ def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
+    # Slang accepts the HLSL barrier intrinsics; they must lower to the same
+    # CrossGL barriers the HLSL importer emits instead of passing through.
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        GroupMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+        DeviceMemoryBarrier();
+        AllMemoryBarrier();
+        DeviceMemoryBarrierWithGroupSync();
+        AllMemoryBarrierWithGroupSync();
+        if (id.x == 0u) {
+            hlsl::DeviceMemoryBarrierWithGroupSync();
+        }
+        outp[id.x] = 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+    barrier_lines = [line for line in lines if "arrier" in line]
+
+    assert barrier_lines == [
+        "workgroupBarrier();",
+        "memoryBarrierShared();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "workgroupBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+    ]
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
+    code = """
+    void AllMemoryBarrierWithGroupSync() {}
+    void GroupMemoryBarrier() {}
+
+    void main() {
+        AllMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "allMemoryBarrier" not in generated_code
+    assert "workgroupBarrier" not in generated_code
+    assert "memoryBarrierShared" not in generated_code
+
+
 def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
     # Source: Slang core module reference for sincos.
     # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html
@@ -3867,6 +3933,55 @@ def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignment
     assert "        s = sin(c);" in generated_code
     assert "        c = cos(c);" in generated_code
     assert "sincos(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_vector_types_map_to_uint_like_the_hlsl_importer():
+    # CrossGL has no int8_t4_packed/uint8_t4_packed; the HLSL importer maps
+    # both to uint, and pack_s8/pack_u8 return uint in CrossGL.
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        uint i = id.x;
+        int4 a0 = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+        int8_t4_packed r = pack_s8(a0);
+        uint8_t4_packed u = (uint8_t4_packed)outp[i];
+        outp[i] = (uint)r + (uint)u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int8_t4_packed" not in generated_code
+    assert "uint r = pack_s8(a0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_structured_buffer_elements_map_to_uint():
+    # A structured buffer of int8_t4_packed/uint8_t4_packed is a structured
+    # buffer of uint in CrossGL, as in the HLSL importer.
+    code = """
+    StructuredBuffer<uint8_t4_packed> pin;
+    RWStructuredBuffer<int8_t4_packed> pout;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        pout[id.x] = pin[id.x];
+        outp[id.x] = pin[id.x];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "StructuredBuffer<uint> pin;" in generated_code
+    assert "RWStructuredBuffer<uint> pout;" in generated_code
+    assert "int8_t4_packed" not in generated_code
     cgl_translator.parse(generated_code)
 
 

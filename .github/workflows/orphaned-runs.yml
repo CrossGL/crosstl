@@ -1,13 +1,21 @@
-name: Orphaned Merge-Group Runs
+name: Orphaned Runs
 
-# When an entry fails or leaves the merge queue, GitHub replaces the merge groups behind it but lets the runs of the
-# old groups finish. This cancels those runs (tools/orphaned_runs.py) so they free their runners; the runs of a
-# group that landed are kept. Pull requests that change the tool list what it would cancel.
+# Cancels the runs that can no longer change what the merge queue does (tools/orphaned_runs.py). When an entry fails
+# or leaves the merge queue, GitHub replaces the groups behind it but lets the runs of the old groups finish; the
+# runs of a group that landed are kept. A run that already has a failed job will fail its required result check, but
+# that check reports only after the run's slowest leg, and the queue waits for it. The runs of a pull request that
+# merged or closed also carry on, although nothing reads their checks.
+#
+# Replacing groups creates new ones, so a sweep starts on every merge_group event and repeats every five minutes
+# while the queue has groups. Runs triggered meanwhile share one concurrency group: the newest waits for the
+# running sweep and the others are dropped. The schedule is a backstop only, since GitHub starts scheduled runs on
+# this repository hours late. Pull requests that change the tool list what it would cancel.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
+  merge_group:
   schedule:
     - cron: '7,27,47 * * * *'
   pull_request:
@@ -20,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: orphaned-runs-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: orphaned-runs-${{ github.event.pull_request.number || 'sweep' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -31,6 +39,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+      checks: read
       contents: read
     steps:
       - uses: actions/checkout@v7
@@ -45,15 +54,16 @@ jobs:
     name: Cancel orphaned runs
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 320
     permissions:
       actions: write
+      checks: read
       contents: read
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Cancel the runs of discarded merge groups
+      - name: Cancel discarded, failed and closed runs while the queue has groups
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -m tools.orphaned_runs --repo "$GITHUB_REPOSITORY" --apply
+        run: python3 -m tools.orphaned_runs --repo "$GITHUB_REPOSITORY" --apply --watch 300

@@ -249,7 +249,11 @@ Implementation Notes
 
 GLSL differs from HLSL and Metal because stage entry points lower to ``main``
 and stage structs may need to be flattened into global ``in`` and ``out``
-declarations. Keep flattening behavior near ``GLSLCodeGen`` stage helpers, and
+declarations. GLSL stage inputs and built-in inputs are read-only, so an entry
+parameter that the body writes, increments or passes to an ``out`` or ``inout``
+parameter is first copied into a local (``uvec3 gid_copy =
+gl_GlobalInvocationID;``) and the body uses the copy; the interface variable
+keeps the parameter's name. Keep flattening behavior near ``GLSLCodeGen`` stage helpers, and
 use the shared codegen utilities only for backend-neutral operations such as
 array declarators, resource array hints, and stage-name normalization.
 

@@ -10,6 +10,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     ASTNode,
     BreakNode,
     CbufferNode,
@@ -45,6 +46,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -3503,9 +3505,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if node is None:
             return
 
-        result = self.visit(node)
+        result = self.visit_discarded_expression(node)
         if isinstance(result, str) and result.strip():
             self.add_line(f"{result};")
+
+    def visit_discarded_expression(self, node):
+        """Render a node whose value is unused, such as a statement."""
+        if isinstance(node, AssignmentNode):
+            return self.format_assignment_expression(node)
+        return self.visit(node)
 
     def emit_body(self, body):
         """Render a list-like or block-like function body."""
@@ -3556,11 +3564,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node.init, VariableNode):
             init = self.format_variable_declaration(node.init)
         elif hasattr(node.init, "expression"):
-            init = self.visit(node.init.expression)
+            init = self.visit_discarded_expression(node.init.expression)
         else:
-            init = self.visit(node.init) if node.init else ""
+            init = self.visit_discarded_expression(node.init) if node.init else ""
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit(node.update) if node.update else ""
+        update = self.visit_discarded_expression(node.update) if node.update else ""
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
@@ -3746,6 +3754,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_AssignmentNode(self, node) -> str:
+        return assignment_value_expression(self.format_assignment_expression(node))
+
+    def format_assignment_expression(self, node) -> str:
         operator = getattr(node, "operator", getattr(node, "op", "="))
         diagnostic = self.glsl_buffer_block_write_diagnostic(node.left, "assignment")
         if diagnostic is not None:
@@ -9000,7 +9011,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return f"{helper_name}()"
 
     def visit_ExpressionStatementNode(self, node) -> str:
-        expr = self.visit(node.expression)
+        expr = self.visit_discarded_expression(node.expression)
         self.add_line(f"{expr};")
         return ""
 

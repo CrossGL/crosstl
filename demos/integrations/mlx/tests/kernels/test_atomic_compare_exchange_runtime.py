@@ -29,13 +29,13 @@ CASES = ("compare", "multiply", "contention")
 
 
 def test_compare_exchange_and_dependencies_are_required_on_each_native_target():
+    from tests import workflow_text
     from tests.test_translator.test_metal_constexpr_branches import (
         REQUIRE_ENV as constexpr_env,
     )
     from tests.test_translator.test_metal_constrained_calls import (
         REQUIRE_ENV as constrained_env,
     )
-    from tools import ci_coverage
 
     workflow = (
         Path(__file__).resolve().parents[5]
@@ -46,7 +46,7 @@ def test_compare_exchange_and_dependencies_are_required_on_each_native_target():
         "Validate indexed DirectX gather and resource aggregates",
         "Validate indexed OpenGL gather and resource aggregates",
     ):
-        step = ci_coverage.workflow_step_section(workflow, name)
+        step = workflow_text.workflow_step_section(workflow, name)
         for variable in (REQUIRE_ENV, constexpr_env, constrained_env):
             assert f'{variable}: "1"' in step
         for module in (
