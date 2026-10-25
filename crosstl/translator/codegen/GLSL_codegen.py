@@ -289,6 +289,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
+from .glsl_zero_values import zero_array_value
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -55218,6 +55219,8 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{code}{indent_str}return {self.zero_value_expression(return_type)};\n"
 
     def zero_value_expression(self, vtype):
+        if isinstance(vtype, ArrayType):
+            return zero_array_value(self, vtype, self.map_type(vtype))
         mapped_type = self.map_type(vtype)
         if mapped_type == "void":
             return ""
@@ -55237,6 +55240,9 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{mapped_type}(0)"
         if mapped_type.startswith(("vec", "dvec", "mat", "dmat")):
             return f"{mapped_type}(0.0)"
+        array = zero_array_value(self, None, mapped_type)
+        if array is not None:
+            return array
         struct = self.glsl_struct_node(mapped_type)
         if struct is not None:
             member_values = []

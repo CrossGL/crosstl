@@ -9,6 +9,7 @@ from crosstl.translator.codegen.texture_lod_clamp import (
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
+from .block_member_names import instance_block_member_names, rename_shadowing_locals
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -2165,6 +2166,18 @@ class GLSLToCrossGLConverter:
         )
         return output_names
 
+    def uniform_block_instance_names(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+        for uniform in uniforms or []:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+        return instance_names
+
     def unique_cbuffer_member_name(self, block_name, field_name):
         safe_block_name = re.sub(r"\W+", "_", str(block_name or "Block")).strip("_")
         safe_block_name = safe_block_name or "Block"
@@ -2184,18 +2197,7 @@ class GLSLToCrossGLConverter:
         if not field_names:
             return
 
-        block_struct = self.structs_by_name.get(block_name)
-        instance_names = set()
-        if block_struct is not None:
-            instance_name = getattr(block_struct, "interface_instance_name", None)
-            if instance_name:
-                instance_names.add(str(instance_name).split("[", 1)[0])
-
-        for uniform in uniforms:
-            if getattr(uniform, "vtype", None) == block_name:
-                instance_names.add(str(uniform.name).split("[", 1)[0])
-
-        for instance_name in instance_names:
+        for instance_name in self.uniform_block_instance_names(block_name, uniforms):
             if instance_name:
                 self.flattened_uniform_block_instances[instance_name] = field_names
                 renames = {
@@ -2605,6 +2607,7 @@ class GLSLToCrossGLConverter:
         self.local_vars = []
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
+        rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
         self.task_payload_shared_names = {
             var.name
