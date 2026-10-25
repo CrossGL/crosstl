@@ -29,8 +29,8 @@ emitters lower that form. :func:`lower_geometry_streams` rewrites an HLSL-style 
   stream lose that parameter and move into the geometry stage.
 
 A user varying takes the location the neighbouring stage gives the same structure member
-(:mod:`..codegen.stage_io_semantic_locations`): its explicit ``location``, else for GLSL the location of its semantic,
-else for SPIR-V its semantic's fixed location or its running position in the structure. A GLSL varying whose
+(:mod:`..codegen.stage_io_semantic_locations`): its explicit ``location``, else the fixed location of its semantic,
+else for SPIR-V the location its structure allocates it. A GLSL varying whose
 semantic has no location would link by name, and a geometry stage cannot declare an input and an output of the same
 name, so it is refused. Several output streams (``EmitStreamVertex``), clip and cull distances and other system
 values in the vertex structures are refused with :class:`GeometryStreamUnsupportedError` until they are lowered.
@@ -43,14 +43,13 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
 from .stage_varyings import GLSL_TARGETS as _GLSL_TARGETS
 from .stage_varyings import SPIRV_TARGETS as _SPIRV_TARGETS
-from .stage_varyings import FreshNames
+from .stage_varyings import FreshNames, allocated_locations
 from .stage_varyings import builtin as _builtin
 from .stage_varyings import call_statement as _call_statement
 from .stage_varyings import indexed as _indexed
 from .stage_varyings import int_literal as _int
 from .stage_varyings import is_system_value as _is_system_value
 from .stage_varyings import literal_int as _literal_int
-from .stage_varyings import location_span as _location_span
 from .stage_varyings import member_type as _member_type
 from .stage_varyings import (
     neighbour_location,
@@ -303,9 +302,9 @@ class _GeometryLowering:
 
     # Stage interface variables.
 
-    def varying_location(self, struct_name, member, running):
+    def varying_location(self, struct_name, member, allocated):
         return neighbour_location(
-            self.target, struct_name, member, running, self.refuse
+            self.target, struct_name, member, allocated, self.refuse
         )
 
     def varying(self, prefix, member, var_type, location, direction):
@@ -318,7 +317,7 @@ class _GeometryLowering:
         struct = self.structs.get(_type_name(element))
         members = struct.members if struct is not None else [primitive]
         sources = {}
-        running = 0
+        allocated = allocated_locations(members)
         for member in members:
             member_type = _member_type(member)
             key = member.name if struct is not None else None
@@ -340,7 +339,9 @@ class _GeometryLowering:
                     "input-aggregate",
                 )
             else:
-                location = self.varying_location(_type_name(element), member, running)
+                location = self.varying_location(
+                    _type_name(element), member, allocated[member.name]
+                )
                 variable = self.varying(
                     "in",
                     member,
@@ -350,14 +351,14 @@ class _GeometryLowering:
                 )
                 declarations.append(variable)
                 sources[key] = _indexed(variable.name)
-            running += _location_span(member_type)
         return sources
 
     def output_targets(self, element_name, declarations):
         """``member name -> (target name, GLSL type or None)`` for each member of the emitted vertex."""
         outputs = {}
-        running = 0
-        for member in self.structs[element_name].members:
+        members = self.structs[element_name].members
+        allocated = allocated_locations(members)
+        for member in members:
             member_type = _member_type(member)
             builtin = _builtin(member)
             if builtin in _OUTPUT_BUILTINS:
@@ -377,11 +378,12 @@ class _GeometryLowering:
                     "output-aggregate",
                 )
             else:
-                location = self.varying_location(element_name, member, running)
+                location = self.varying_location(
+                    element_name, member, allocated[member.name]
+                )
                 variable = self.varying("out", member, member_type, location, "out")
                 declarations.append(variable)
                 outputs[member.name] = (variable.name, None)
-            running += _location_span(member_type)
         return outputs
 
     # Body rewrites.

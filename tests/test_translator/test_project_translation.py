@@ -7705,7 +7705,7 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
 
     assert "struct VSMain_Input" in metal
     assert "float4 position [[attribute(0)]];" in metal
-    assert "float2 uv [[attribute(4)]];" in metal
+    assert "float2 uv [[attribute(5)]];" in metal
     assert "VSMain_Input _crossglInput [[stage_in]]" in metal
     assert "float4 position = _crossglInput.position;" in metal
     assert "float2 uv = _crossglInput.uv;" in metal
@@ -7715,8 +7715,8 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "[[TexCoord]]" not in metal
     assert "fragment void fragment_main" not in metal
 
-    assert "layout(location = 4) out vec2 out_uv;" in opengl
-    assert "layout(location = 4) in vec2 out_uv;" in opengl
+    assert "layout(location = 5) out vec2 out_uv;" in opengl
+    assert "layout(location = 5) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
     assert "fragColor = texture(g_texture, out_uv);" in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
@@ -7876,7 +7876,9 @@ def test_translate_project_lowers_hlsl_struct_main_vsh_psh_pair_to_native_entrie
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", vertex_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSInput\b", fragment_glsl)
     assert not re.search(r"void\s+main\s*\([^)]*\bPSOutput\b", fragment_glsl)
-    assert vertex_glsl.splitlines().count("in vec4 VSIn_Color;") == 1
+    assert (
+        vertex_glsl.splitlines().count("layout(location = 1) in vec4 VSIn_Color;") == 1
+    )
     # COLOR0 links by its GLSL location on both sides of the interface.
     assert (
         vertex_glsl.splitlines().count("layout(location = 13) out vec4 PSIn_Color;")
