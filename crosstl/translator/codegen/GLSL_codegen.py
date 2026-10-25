@@ -19781,6 +19781,44 @@ class GLSLCodeGen(
             infos[param.name] = info
         return infos
 
+    def generate_glsl_mesh_payload_parameter_declaration(self, func):
+        """Declare a mesh entry's payload parameter as the ``taskPayloadSharedEXT`` block it reads.
+
+        GL_EXT_mesh_shader passes the task stage's ``EmitMeshTasksEXT`` payload to every mesh workgroup through a
+        ``taskPayloadSharedEXT`` variable; the entry body keeps reading it under the parameter's name.
+        """
+        payloads = [
+            param
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+            if self.is_glsl_mesh_payload_parameter(param)
+        ]
+        if not payloads:
+            return ""
+        if len(payloads) > 1:
+            raise ValueError(
+                "GLSL mesh entry declares more than one payload parameter: "
+                + ", ".join(param.name for param in payloads)
+            )
+        param = payloads[0]
+        param_type = self.map_type(
+            self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+        )
+        declaration = format_c_style_array_declaration(param_type, param.name)
+        return f"taskPayloadSharedEXT {declaration};\n"
+
+    def is_glsl_mesh_payload_parameter(self, param):
+        names = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(param, "attributes", []) or []
+        }
+        names.update(
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        )
+        return bool(names & {"mesh_payload", "meshpayload", "payload"})
+
     def generate_mesh_output_parameter_declarations(self, mesh_outputs):
         code = ""
         emitted = set()
@@ -21012,6 +21050,8 @@ class GLSLCodeGen(
             code += self.generate_mesh_output_parameter_declarations(
                 mesh_output_parameters
             )
+        if shader_type == "mesh":
+            code += self.generate_glsl_mesh_payload_parameter_declaration(func)
 
         stage_layout = self.generate_stage_layout(
             shader_type, func, stage_layout_qualifiers
