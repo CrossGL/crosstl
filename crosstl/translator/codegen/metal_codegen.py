@@ -168,7 +168,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
-    reject_unresolved_explicit_generic_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import (
     build_generic_struct_specialization,
@@ -12028,7 +12028,7 @@ class MetalCodeGen(
                 callee = specialized_func_name
                 func_name = specialized_func_name
             else:
-                reject_unresolved_explicit_generic_call(self, func_name, "Metal")
+                reject_unresolved_generic_function_call(self, func_name, "Metal")
             if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
