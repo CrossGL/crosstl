@@ -382,7 +382,9 @@ class VectorArithmeticMixin:
         if len(args) != 1:
             return None
 
-        arg_type = self.expression_result_type(raw_args[0])
+        arg_type = self.expression_result_type(
+            raw_args[0]
+        ) or self.scalar_cast_result_type(raw_args[0])
         if arg_type is None or self.vector_type_info(arg_type):
             return None
         if self.is_repeat_safe_expression(raw_args[0]):
@@ -390,6 +392,30 @@ class VectorArithmeticMixin:
 
         helper_name = self.require_vector_splat_helper(vector_info)
         return f"{helper_name}({args[0]})"
+
+    def scalar_cast_result_type(self, expr):
+        """Return the target type of a one-argument scalar cast such as ``int(x)``.
+
+        Scalar casts are parsed as calls and have no inferred type, so a vector
+        constructor such as ``ivec3(int(x))`` would otherwise not be splatted.
+        """
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        raw_args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        if len(raw_args) != 1:
+            return None
+        function_expr = getattr(expr, "function", getattr(expr, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.vector_type_info(type_name) is not None:
+            return None
+        if (
+            self.scalar_component_type(type_name) is None
+            and self.map_vector_arithmetic_type(type_name) != "half"
+        ):
+            return None
+        return type_name
 
     def require_vector_splat_helper(self, vector_info):
         """Register a helper that splats one scalar into a CUDA/HIP vector."""
