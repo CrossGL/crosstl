@@ -95,6 +95,11 @@ def test_probe_refuses_what_it_cannot_express():
         probes.build(feature("abs", Type("double"), Type("double")), "metal")
 
 
+def test_an_operation_crossgl_writes_as_an_expression_fills_its_holes():
+    clamp = feature("NClamp", VEC3, VEC3, VEC3, VEC3, crossgl="fmin(fmax({}, {}), {})")
+    assert "vec3 r = fmin(fmax(a0, a1), a2);" in probes.build(clamp, "crossgl").source
+
+
 def test_an_interpolant_is_read_straight_from_a_shader_input():
     vec2 = Type("float", (2,))
     centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")
