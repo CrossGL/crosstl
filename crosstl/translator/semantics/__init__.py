@@ -32,6 +32,10 @@ from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
 )
+from .device_references import (
+    DeviceReferenceUnsupportedError,
+    lower_device_struct_references,
+)
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
@@ -133,6 +137,7 @@ __all__ = [
     "CudaWarpIntrinsicUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
+    "DeviceReferenceUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
@@ -281,6 +286,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
+    lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
