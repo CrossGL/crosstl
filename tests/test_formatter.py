@@ -368,7 +368,7 @@ def test_clang_formatter_disables_include_sorting(
     )
     assert style == {
         "BasedOnStyle": expected_base_style,
-        "SortIncludes": "Never",
+        "SortIncludes": False,
     }
 
 

@@ -145,9 +145,11 @@ class CodeFormatter:
             ShaderLanguage.CUDA: "Google",
             ShaderLanguage.HIP: "Google",
         }
+        # The generated #include order is significant (hipcc needs hip_runtime.h first).
+        # false rather than Never: clang-format 12 and older reject Never here.
         style_config = {
             "BasedOnStyle": style_map.get(language, "LLVM"),
-            "SortIncludes": "Never",
+            "SortIncludes": False,
         }
         if (
             "// crosstl-resource-origin:" in code
