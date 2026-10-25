@@ -11164,6 +11164,44 @@ def test_scalar_aliases_emit_slang_fundamental_type_names():
     assert "f32(" not in generated_code
 
 
+def test_glsl_8bit_and_64bit_integer_spellings_emit_slang_types():
+    # Slang spells 8-bit and 64-bit integers uint8_t/int8_t/uint64_t/int64_t
+    # and vector<T, N>; GLSL's u8vec/i64vec, int8()/uint64() and CrossGL's
+    # i64/u64 are not Slang types.
+    code = """
+    shader Widths {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* uin;
+            buffer uvec4* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                u8vec2 a = u8vec2(uint8(uin[i]), uint8(1u));
+                i8vec4 b = i8vec4(int8(1), int8(2), int8(3), int8(4));
+                u64vec2 c = u64vec2(uint64(uin[i]), uint64(2u));
+                i64 e = i64(uin[i]);
+                vec2<i64> g = vec2<i64>(e, e);
+                outp[i] = uvec4(uint(a.x), uint(b.y), uint(c.x), uint(g.x));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vector<uint8_t, 2> a = vector<uint8_t, 2>(uint8_t(uin[i])" in (
+        generated_code
+    )
+    assert "vector<int8_t, 4> b = vector<int8_t, 4>(int8_t(1)" in generated_code
+    assert "vector<uint64_t, 2> c = vector<uint64_t, 2>(uint64_t(uin[i])" in (
+        generated_code
+    )
+    assert "int64_t e = int64_t(uin[i]);" in generated_code
+    assert "vector<int64_t, 2> g = vector<int64_t, 2>(e, e);" in generated_code
+    for glsl_spelling in ("u8vec", "i8vec", "u64vec", "i642", "i64(", "uint8("):
+        assert glsl_spelling not in generated_code
+
+
 def test_resource_types_emit_slang_texture_names():
     code = """
     shader Resources {
