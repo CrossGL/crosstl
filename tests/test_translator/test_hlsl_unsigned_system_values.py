@@ -44,14 +44,16 @@ def _compile(tmp_path, hlsl, profile, entry):
 
 
 @pytest.mark.parametrize(
-    "source, name, semantics, profile, entry",
+    "source, name, semantics, profile, entry, signed",
     [
+        # MSL's [[vertex_id]] and [[instance_id]] are uint, and the import keeps them uint.
         (
             METAL_VERTEX,
             "shader.metal",
             ("SV_VertexID", "SV_InstanceID"),
             "vs_6_0",
             "VSMain",
+            False,
         ),
         (
             CROSSGL_FRAGMENT,
@@ -59,11 +61,12 @@ def _compile(tmp_path, hlsl, profile, entry):
             ("SV_PrimitiveID", "SV_SampleIndex"),
             "ps_6_0",
             "PSMain",
+            True,
         ),
     ],
 )
 def test_unsigned_system_values_arrive_as_uint(
-    tmp_path, source, name, semantics, profile, entry
+    tmp_path, source, name, semantics, profile, entry, signed
 ):
     hlsl = _translate(tmp_path, source, name)
 
@@ -71,6 +74,7 @@ def test_unsigned_system_values_arrive_as_uint(
         parameter = re.search(rf"(\w+) (\w+)\s*:\s*{semantic}\b", hlsl)
         assert parameter, hlsl
         assert parameter.group(1) == "uint", hlsl
-        # The body keeps reading the int it read before.
-        assert re.search(rf"int \w+ = int\({parameter.group(2)}\);", hlsl), hlsl
+        # An int parameter keeps reading the int it read before; a uint one reads the system value directly.
+        converted = re.search(rf"int \w+ = int\({parameter.group(2)}\);", hlsl)
+        assert bool(converted) == signed, hlsl
     _compile(tmp_path, hlsl, profile, entry)
