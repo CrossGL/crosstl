@@ -17,6 +17,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
@@ -38,6 +39,12 @@ class OpenCLRecordSemanticError(ValueError):
         super().__init__(
             f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
         )
+
+
+class OpenCLFenceScopeUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C fence or sub-group barrier whose memory scope no CrossGL fence covers."""
+
+    code = CODE_PREFIX + "opencl-fence-scope-unsupported"
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -198,7 +205,20 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "CLK_IMAGE_MEM_FENCE": "memoryBarrierImage",
     }
     OPENCL_MEM_FENCE_FUNCTIONS = frozenset(
-        {"read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
+        {"mem_fence", "read_mem_fence", "write_mem_fence", "atomic_work_item_fence"}
+    )
+    # The CrossGL fences order memory at device scope at most, and
+    # subgroupBarrier() orders it for the sub-group only.
+    OPENCL_DEVICE_FENCE_SCOPES = frozenset(
+        {
+            "memory_scope_work_item",
+            "memory_scope_sub_group",
+            "memory_scope_work_group",
+            "memory_scope_device",
+        }
+    )
+    OPENCL_SUB_GROUP_FENCE_SCOPES = frozenset(
+        {"memory_scope_work_item", "memory_scope_sub_group"}
     )
     OPENCL_ATOMIC_MAP = {
         "atomic_add": "atomicAdd",
@@ -704,9 +724,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
             self.emit("workgroupBarrier();")
-        elif node.sync_type == "mem_fence":
-            args = ", ".join(self.visit(arg) for arg in node.args)
-            self.emit(f"// OpenCL mem_fence({args})")
+        elif node.sync_type == "mem_fence" and node.args:
+            # mem_fence(flags) orders loads and stores over the flagged memory,
+            # as read_mem_fence and write_mem_fence do for one of them.
+            self.emit(f"{self.format_opencl_fence_call('mem_fence', node.args)};")
         else:
             super().visit_SyncNode(node)
 
@@ -818,16 +839,36 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def format_opencl_fence_call(self, func_name, args):
         if func_name == "sub_group_barrier" and args:
             # sub_group_barrier(flags[, scope]) synchronizes the sub-group and
-            # orders the flagged memory, which subgroupBarrier() does.
+            # orders the flagged memory, which subgroupBarrier() does for the
+            # default sub-group scope.
+            self.require_opencl_fence_scope(
+                func_name, args[1:], self.OPENCL_SUB_GROUP_FENCE_SCOPES
+            )
             return "subgroupBarrier()"
         if func_name not in self.OPENCL_MEM_FENCE_FUNCTIONS or not args:
             return None
+        if func_name == "atomic_work_item_fence":
+            # The memory order is dropped: the CrossGL fences are acquire-release
+            # fences and no target has a stronger one, so seq_cst lowers the same.
+            self.require_opencl_fence_scope(
+                func_name, args[2:], self.OPENCL_DEVICE_FENCE_SCOPES
+            )
         flags = set(re.findall(r"\bCLK_\w+\b", self.visit(args[0])))
         if len(flags) == 1:
             barrier = self.OPENCL_MEM_FENCE_FLAG_BARRIERS.get(flags.pop())
             if barrier is not None:
                 return f"{barrier}()"
         return "memoryBarrier()"
+
+    def require_opencl_fence_scope(self, func_name, scope_args, scopes):
+        """Refuse a fence whose memory_scope argument is wider than ``scopes``."""
+        for arg in scope_args:
+            scope = self.visit(arg).strip()
+            if scope not in scopes:
+                raise OpenCLFenceScopeUnsupportedError(
+                    f"{func_name} with {scope}: CrossGL has no {func_name} "
+                    "lowering that orders memory at that scope"
+                )
 
     def emit_statement(self, stmt):
         can_lower_event_local = self.can_lower_opencl_event_local_memory()

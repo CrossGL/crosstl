@@ -4,7 +4,10 @@ import crosstl
 from crosstl.backend.common_ast import UnaryOpNode
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
-from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
+    OpenCLFenceScopeUnsupportedError,
+    OpenCLToCrossGLConverter,
+)
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser
 from crosstl.backend.OpenCL.target_lowering import (
@@ -605,3 +608,41 @@ def test_opencl_memory_fences_lower_to_crossgl_fences_by_flag():
     assert "memoryBarrierImage();" in crossgl
     assert "memoryBarrier();" in crossgl
     assert "subgroupBarrier();" in crossgl
+
+
+def test_opencl_mem_fence_and_scoped_fences_lower_to_crossgl_fences():
+    crossgl = generate_crossgl("""
+        kernel void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            mem_fence(CLK_GLOBAL_MEM_FENCE);
+            atomic_work_item_fence(
+                CLK_LOCAL_MEM_FENCE, memory_order_seq_cst, memory_scope_device);
+            sub_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_sub_group);
+            outp[i] = 0u;
+        }
+        """)
+
+    assert "mem_fence" not in crossgl
+    assert "memory_" not in crossgl
+    assert "memoryBarrierBuffer();" in crossgl
+    assert "memoryBarrierShared();" in crossgl
+    assert "subgroupBarrier();" in crossgl
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE, memory_order_acq_rel, "
+        "memory_scope_all_svm_devices)",
+        "sub_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_work_group)",
+        "sub_group_barrier(CLK_LOCAL_MEM_FENCE, memory_scope_device)",
+    ],
+)
+def test_opencl_fences_refuse_scopes_no_crossgl_fence_orders(call):
+    with pytest.raises(OpenCLFenceScopeUnsupportedError, match="memory_scope_"):
+        generate_crossgl(f"""
+            kernel void probe(global uint *outp) {{
+                {call};
+                outp[get_global_id(0)] = 0u;
+            }}
+            """)
