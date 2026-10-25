@@ -210,6 +210,17 @@ def test_glsl_runs_as_glsl_450_because_llvmpipe_implements_opengl_45():
     assert execution.runnable("metal", NATIVE) == NATIVE
 
 
+def test_glsl_460_group_votes_run_through_arb_shader_group_vote():
+    source = "#version 460\nvoid main() { bool r = allInvocationsEqual (b) || anyInvocation(c); }\n"
+    assert execution.runnable("glsl", source) == (
+        "#version 450 core\n#extension GL_ARB_shader_group_vote : require\n"
+        "void main() { bool r = allInvocationsEqualARB (b) || anyInvocationARB(c); }\n"
+    )
+    # GLSL 4.50 has no unsuffixed vote functions, so a source that declares 4.50 runs as written.
+    written = "#version 450 core\nvoid main() { bool r = allInvocations(b); }\n"
+    assert execution.runnable("glsl", written) == written
+
+
 @pytest.mark.parametrize(
     ("declared", "expected"),
     [("#version 460", "supported"), ("#version 450 core", "wrong")],

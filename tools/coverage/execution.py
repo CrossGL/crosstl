@@ -46,6 +46,11 @@ _INPUT = re.compile(r"\b(fin|iin|uin)\b")
 # rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
 # use what 4.60 adds.
 _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
+# GLSL 4.60 took its group vote functions from ARB_shader_group_vote, which llvmpipe implements. At 4.50 they need
+# that extension, which names them with an ARB suffix.
+_GROUP_VOTE = re.compile(
+    r"\b(anyInvocation|allInvocations|allInvocationsEqual)(?=\s*\()"
+)
 # lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
@@ -86,9 +91,13 @@ def executable(result: Result) -> bool:
 
 def runnable(language: str, source: str) -> str:
     """``source`` as the runtime for ``language`` compiles it."""
-    if language == "glsl":
-        return _GLSL_460.sub("#version 450 core", source, count=1)
-    return source
+    if language != "glsl" or not _GLSL_460.search(source):
+        return source
+    version = "#version 450 core"
+    if _GROUP_VOTE.search(source):
+        version += "\n#extension GL_ARB_shader_group_vote : require"
+        source = _GROUP_VOTE.sub(r"\1ARB", source)
+    return _GLSL_460.sub(version, source, count=1)
 
 
 def runs(language: str) -> bool:
