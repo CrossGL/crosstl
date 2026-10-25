@@ -42,6 +42,29 @@ OPERATORS = {
         "int a = iin[i];\noutp[i] = float(((a & 6) | (a ^ 5)) + ~a);"
     ),
     "negation": Template("int a = -iin[i];\noutp[i] = -fin[i] + float(a);"),
+    # Each comparison adds its own power of two, so the output says which of them held. The unsigned probe compares
+    # wrapped negative values, which a signed comparison would order first.
+    "signed-comparison": Template(
+        "int a = iin[i] - 8;\noutp[i] = (a < 3 ? 1.0 : 0.0) + (a >= -2 ? 2.0 : 0.0) + (a == 4 ? 4.0 : 0.0)"
+        " + (a != 0 ? 8.0 : 0.0);"
+    ),
+    "unsigned-comparison": Template(
+        "uint a = uint(iin[i] - 8);\noutp[i] = (a < 4u ? 1.0 : 0.0) + (a >= 2147483648u ? 2.0 : 0.0)"
+        " + (a > 5u ? 4.0 : 0.0) + (a <= 2u ? 8.0 : 0.0);"
+    ),
+    "float-comparison": Template(
+        "float f = float(iin[i] - 8) * 0.5;\noutp[i] = (f < 0.25 ? 1.0 : 0.0) + (f >= 1.0 ? 2.0 : 0.0)"
+        " + (f == 1.5 ? 4.0 : 0.0) + (f != -2.0 ? 8.0 : 0.0);"
+    ),
+    "boolean-logic": Template(
+        "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\n"
+        "outp[i] = (!p ? 1.0 : 0.0) + (p == q ? 2.0 : 0.0) + (p != q ? 4.0 : 0.0);"
+    ),
+    # A postfix operator yields the value before the change and a prefix one the value after it.
+    "increment-decrement": Template(
+        "int a = iin[i];\nint b = a++;\nint c = ++a;\nint d = a--;\n--a;\n"
+        "outp[i] = float(a * 1000 + b * 100 + c * 10 + d);"
+    ),
     "float-to-integer": Template(
         "outp[i] = float(int(fin[i])) + float(uint(fin[i] + 4.0));"
     ),
