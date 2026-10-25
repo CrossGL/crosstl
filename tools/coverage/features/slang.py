@@ -610,6 +610,26 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
     return ""
 
 
+def unprobed_generic(declaration: Declaration) -> str:
+    """Why no probe can call a function with a type generic parameter that neither its parameters nor its result
+    mention and whose constraint has no probe type, such as ``usesNativeSpirvDescriptorHandle<T :
+    IOpaqueDescriptor>()``: slangc cannot infer the argument, and the probe has no type to spell for it. An empty
+    string when there is no such parameter.
+    """
+    match = _HEAD.fullmatch(declaration.head)
+    if not match:
+        return ""
+    mentioned = (
+        f"{match.group('params')} {match.group('arrow') or match.group('result')}"
+    )
+    for name, bound in _generics(declaration.generics).items():
+        if bound.startswith("?") and not re.search(
+            rf"\b{re.escape(name)}\b", mentioned
+        ):
+            return f"no probe type for the generic parameter {name} : {bound[1:]}"
+    return ""
+
+
 def parse(
     core: str, hlsl: str, glsl_names: set[str] | frozenset[str] = frozenset()
 ) -> list[Feature]:
@@ -631,6 +651,8 @@ def parse(
         if candidates:
             chosen = pick(sorted((s for s, _ in candidates), key=_preference))
         source = next((d for s, d in candidates if s == chosen), declared[0][1])
+        if chosen and (unprobed := unprobed_generic(source)):
+            chosen, note = None, unprobed
         spelled = explicit(source, chosen) if chosen else ""
         crossgl = spellings.spelling("slang", name, glsl_names)
         features.append(
