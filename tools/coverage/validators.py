@@ -161,7 +161,7 @@ def command(name: str) -> tuple[str, ...]:
     return (found,) if found else ()
 
 
-# The Mojo line the probes target: the compute job pins mojo-compiler 1.1.0.
+# The Mojo line the probes target: the compute job pins mojo-compiler 1.2.0.
 _MOJO_RELEASE = re.compile(r"mojo\s+1\.", re.IGNORECASE)
 
 
