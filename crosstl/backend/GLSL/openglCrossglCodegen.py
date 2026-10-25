@@ -3080,12 +3080,16 @@ class GLSLToCrossGLConverter:
                     and not self.is_fragment_explicit_entry_return(main_function)
                 ):
                     self.entry_bare_return_value = self.outputs[0].name
+                # The entry's locals get a scope of their own, as other functions' do, so that a local that
+                # shadows a member of an anonymous buffer block is not read as that member.
+                self.push_variable_type_scope()
                 try:
                     for statement in self.generate_statement_sequence(
                         main_function.body
                     ):
                         result += self.indent() + statement + "\n"
                 finally:
+                    self.pop_variable_type_scope()
                     self.entry_bare_return_value = None
 
                 if self.shader_type in ("vertex",) and not any(
@@ -3406,8 +3410,11 @@ class GLSLToCrossGLConverter:
             ray_control = self.ray_control_statement(node)
             if ray_control is not None:
                 return ray_control + ";"
+            # GLSL starts a local's scope after its initializer (GLSL 4.60 section 4.2.2): the initializer
+            # reads outer names, so the local is registered once the declaration is rendered.
+            declaration = self.generate_variable_declaration(node)
             self.register_variable_type(node)
-            return self.generate_variable_declaration(node) + ";"
+            return declaration + ";"
         elif isinstance(node, StructNode):
             return self.generate_struct(node)
         elif isinstance(node, FunctionCallNode):

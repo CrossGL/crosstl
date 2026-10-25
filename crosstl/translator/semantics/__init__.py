@@ -26,6 +26,7 @@ from .constant_reference_layouts import (
     hoist_constant_reference_layouts,
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .declaration_scopes import separate_initializer_scopes
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
@@ -274,6 +275,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
+    separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
     lower_vector_logic(program, report.target)
