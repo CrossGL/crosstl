@@ -102,6 +102,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .generic_struct_utils import named_struct_constructor_arguments
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -9657,6 +9658,18 @@ class SlangCodeGen(LoweringRefusalMixin):
             if enum_constructor is not None:
                 return enum_constructor
             constructor_type = self.type_name_string(node.constructor_type)
+            if node.named_arguments:
+                fields = list(
+                    self.struct_member_types.get(constructor_type, {}).items()
+                )
+                arguments = named_struct_constructor_arguments(
+                    constructor_type, node, fields
+                )
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, field_type)
+                    for arg, field_type in arguments
+                )
+                return f"{self.convert_type(constructor_type)}({args})"
             matrix_constructor = self.hlsl_matrix_orientation.constructor(
                 constructor_type,
                 node.arguments,
