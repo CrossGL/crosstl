@@ -2382,6 +2382,99 @@ def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
     assert "dFdy(" not in generated_code
 
 
+def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
+    shader = """
+    shader MetalFineCoarseDerivatives {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 fx = dFdxFine(uv);
+                vec2 cx = dFdxCoarse(uv);
+                float fy = dFdyFine(uv.x);
+                float cy = dFdyCoarse(uv.y);
+                vec2 fw = fwidthFine(uv);
+                vec2 cw = fwidthCoarse(uv * 2.0);
+                return vec4(fx + cx + fw + cw, fy, cy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 fx = dfdx(uv);" in generated_code
+    assert "float2 cx = dfdx(uv);" in generated_code
+    assert "float fy = dfdy(uv.x);" in generated_code
+    assert "float cy = dfdy(uv.y);" in generated_code
+    assert "float2 fw = fwidth(uv);" in generated_code
+    assert "float2 cw = fwidth(uv * float2(2.0));" in generated_code
+    for name in (
+        "dFdxFine(",
+        "dFdxCoarse(",
+        "dFdyFine(",
+        "dFdyCoarse(",
+        "fwidthFine(",
+        "fwidthCoarse(",
+    ):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
+    # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 x = dFdxFine(uv) + dFdxCoarse(uv);
+        vec2 y = dFdyFine(uv) + dFdyCoarse(uv);
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(x + y, w);
+    }
+    """
+    shader_path = tmp_path / "derivatives.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "dfdx(input.uv) + dfdx(input.uv)" in generated_code
+    assert "dfdy(input.uv) + dfdy(input.uv)" in generated_code
+    assert "fwidth(input.uv) + fwidth(input.uv)" in generated_code
+    for name in ("_fine(", "_coarse("):
+        assert name not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_fine_and_coarse_fwidth_qualify_target_when_shadowed():
+    shader = """
+    shader MetalFineFwidthShadow {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float fwidth = uv.x;
+                vec2 w = fwidthFine(uv);
+                return vec4(w, fwidth, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 w = metal::fwidth(uv);" in generated_code
+    assert "fwidthFine(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
     shader = """
     shader MetalDerivativeAliasTargetShadow {
