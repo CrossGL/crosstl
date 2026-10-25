@@ -50,6 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output discards the value of a call statement to a `@must_use` built-in such as `min(a, 4u);` with a phony assignment, `_ = min(a, 4u);`. The call used to be written as a statement, which WGSL rejects. Atomics, barriers, `textureStore` and functions the shader declares are written unchanged.
 - CUDA and HIP output keep `sinpi` and `cospi`, which both math libraries provide exactly at integers and half-integers: `sinpif` and `cospif` for `float`, `sinpi` and `cospi` for `double`, per component for vectors. They used to be refused with `MetalMathFunctionUnsupportedError`, whose message also named MSL when the call came from CUDA or HIP source.
 - Mojo output of a component-wise vector comparison such as `a < b` on `vec2` operands is a `SIMD[DType.bool, 2]` mask written with `a.lt(b)`, and `any` and `all` of a boolean vector become `reduce_or()` and `reduce_and()`, ignoring the padding lane of three-component vectors. A `bvec2` initialized from a comparison used to be refused.
 - WGSL and Slang output keep the named fields of a braced structure initializer such as `Pair { b: y, a: x }`, in member order, and refuse a missing, unknown or repeated field. They used to construct the structure with no arguments, which zeroed every field.
