@@ -1880,7 +1880,9 @@ def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
     generated_code = generate_code(ast)
 
     assert "// from std.math import ceildiv" in generated_code
-    assert "let float_dtype = DType.float32;" in generated_code
+    # A comptime DType alias names an element type, not a value (#2808).
+    assert "float_dtype = DType.float32" not in generated_code
+    assert "let vector_size = 1000;" in generated_code
     assert (
         "lhs_host_buffer = " "ctx.enqueue_create_host_buffer[float_dtype](vector_size);"
     ) in generated_code
@@ -1892,6 +1894,28 @@ def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
         "(lhs_tensor, rhs_tensor, result_tensor, grid_dim = num_blocks, "
         "block_dim = block_size);"
     ) in generated_code
+
+
+def test_mojo_comptime_dtype_alias_is_not_lowered_to_global():
+    # #2808: `comptime name = DType.x` (and `alias`) names a Mojo element type.
+    # Lowering it to an untyped CrossGL `let` gives targets a global whose type
+    # they cannot infer; other comptime values are still declared.
+    code = """
+    comptime float_dtype = DType.float32
+    alias int_dtype = DType.int32
+    var runtime_dtype = DType.float16
+    comptime vector_size = 4
+
+    def main():
+        var x: Int = vector_size
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "float_dtype" not in generated_code
+    assert "int_dtype" not in generated_code
+    assert "runtime_dtype = DType.float16" in generated_code
+    assert "let vector_size = 4;" in generated_code
 
 
 def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
