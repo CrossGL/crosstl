@@ -50,6 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
 - CUDA and HIP output splat a vector constructor whose only argument is a scalar cast, such as `ivec3(int(x))`, through the `cgl_int3_splat` helper. It used to be written as `make_int3(int(x))`, which does not compile because `make_int3` takes one argument per component.
 - CUDA and HIP output keep `sinpi` and `cospi`, which both math libraries provide exactly at integers and half-integers: `sinpif` and `cospif` for `float`, `sinpi` and `cospi` for `double`, per component for vectors. They used to be refused with `MetalMathFunctionUnsupportedError`, whose message also named MSL when the call came from CUDA or HIP source.
 - Mojo output of a component-wise vector comparison such as `a < b` on `vec2` operands is a `SIMD[DType.bool, 2]` mask written with `a.lt(b)`, and `any` and `all` of a boolean vector become `reduce_or()` and `reduce_and()`, ignoring the padding lane of three-component vectors. A `bvec2` initialized from a comparison used to be refused.
