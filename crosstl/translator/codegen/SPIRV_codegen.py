@@ -30262,6 +30262,7 @@ class VulkanSPIRVCodeGen(
             "SV_VERTEXID": "gl_VertexID",
             "GL_VERTEXINDEX": "gl_VertexID",
             "SV_INSTANCEID": "gl_InstanceID",
+            "GL_INSTANCEINDEX": "gl_InstanceID",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",

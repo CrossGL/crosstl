@@ -225,6 +225,7 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_instance_index import INSTANCE_INDEX, instance_index_expression
 from .glsl_interface_block_io import (
     block_declared_stage_io,
     block_member_location_type,
@@ -36650,6 +36651,8 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_builtin_identifier_result_type(self, name):
         if not name:
             return None
+        if name == INSTANCE_INDEX:
+            return crossgl_builtin_variable_type(name)
         return crossgl_builtin_variable_type(self.glsl_target_builtin_identifier(name))
 
     def expression_result_type(self, expr):
@@ -39277,6 +39280,8 @@ complex64_t crossgl_complex64_mod_assign(
                 return quadgroup_alias
         if stage_name == "vertex" and name == "gl_VertexIndex":
             return "gl_VertexID"
+        if stage_name == "vertex" and name == INSTANCE_INDEX:
+            return instance_index_expression(self)
         return name
 
     def glsl_identifier_is_resolved(self, name):
