@@ -3031,6 +3031,24 @@ def test_generated_slang_storage_buffers_compile_with_slangc(tmp_path):
     assert "Ptr<" not in hlsl_path.read_text(encoding="utf-8")
 
 
+def test_generated_slang_named_struct_initializer_compiles_with_slangc(tmp_path):
+    """``Pair { b: x, a: y }`` keeps its fields in member order (#3068)."""
+    shader_path = tmp_path / "slang_named_struct_initializer.slang"
+    hlsl_path = tmp_path / "slang_named_struct_initializer.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER)
+    )
+    assert "Pair q = Pair(1.0, values[gid.x]);" in code
+    assert "Pair r = Pair(values[gid.x], 3.0);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hlsl_path, "main", "compute", "sm_6_0"
+    )
+
+
 def test_generated_slang_workgroup_count_compiles_with_slangc(tmp_path):
     shader_path = tmp_path / "slang_workgroup_count.slang"
     spirv_path = tmp_path / "slang_workgroup_count.spv"
@@ -3134,23 +3152,6 @@ def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
         ]
     )
     _run_validator([spirv_val, str(spirv_path)])
-
-
-def test_generated_slang_named_struct_initializer_compiles_with_slangc(tmp_path):
-    shader_path = tmp_path / "slang_named_struct_initializer.slang"
-    hlsl_path = tmp_path / "slang_named_struct_initializer.hlsl"
-
-    code = SlangCodeGen().generate(
-        crosstl.translator.parse(CROSSGL_NAMED_STRUCT_INITIALIZER_SHADER)
-    )
-    assert "Pair q = Pair(1.0, values[gid.x]);" in code
-    assert "Pair r = Pair(values[gid.x], 3.0);" in code
-    shader_path.write_text(code, encoding="utf-8")
-
-    slangc = _require_tool("slangc")
-    _compile_slang_hlsl_entry(
-        slangc, shader_path, hlsl_path, "main", "compute", "cs_6_0"
-    )
 
 
 @pytest.mark.parametrize(
