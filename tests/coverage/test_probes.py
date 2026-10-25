@@ -329,6 +329,16 @@ def test_constant_unsigned_arguments_are_one(language):
     assert "float r = WaveClusteredRotate(a0, a1, 1u);" in source
 
 
+@pytest.mark.parametrize("language", ["slang", "crossgl"])
+def test_compile_time_conditions_are_true(language):
+    # A false condition would fail the probe however CrossTL translates the call.
+    check = feature(
+        "static_assert", VOID, Param(Type("bool"), "condition"), Param(STRING, "const")
+    )
+    source = probes.build(check, language).source
+    assert 'static_assert(true, "");' in source
+
+
 @pytest.mark.parametrize("language", ["glsl", "crossgl"])
 def test_constant_array_arguments_are_local_constants(language):
     source = probes.build(GATHER_OFFSETS, language).source

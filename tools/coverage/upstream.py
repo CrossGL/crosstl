@@ -208,17 +208,17 @@ SOURCES = {
     # Slang's standard library is the core module slangc is built from, pinned to the release CI installs.
     "slang": Source(
         "shader-slang/slang",
-        "4685b35be78104ae007013cb749a1e906c414600",
+        "d9ede2dd5836afc0e9586da18d9236b171d0faa8",
         "source/slang/hlsl.meta.slang",
-        "419f659ed73658539e6d962640c51cc748a7abefe1b76d37bacc6d3c38c470b0",
-        "Slang v2026.9.1 core module: HLSL-compatible built-in functions",
+        "da5f4febdc674f42a43679cbc4b37544457bf93d0831920af6c3a276e4e14cb4",
+        "Slang v2026.20 core module: HLSL-compatible built-in functions",
     ),
     "slang-core": Source(
         "shader-slang/slang",
-        "4685b35be78104ae007013cb749a1e906c414600",
+        "d9ede2dd5836afc0e9586da18d9236b171d0faa8",
         "source/slang/core.meta.slang",
-        "983a544e6e666b02dc8966bf557363966bd6d7abb82a9177707cef6ebf04b357",
-        "Slang v2026.9.1 core module: core built-in functions",
+        "634c1397f6e4e689d7621495e9ea50693cdace2db8935eef93d48ce427ba198e",
+        "Slang v2026.20 core module: core built-in functions",
     ),
     "spirv": Source(
         "KhronosGroup/SPIRV-Headers",

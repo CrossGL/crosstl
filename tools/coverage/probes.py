@@ -261,6 +261,8 @@ class _Builder:
                 arguments.append(local)
             elif param.direction == "const":
                 arguments.append(dialect.constant(param.type))
+            elif param.direction == "condition":
+                arguments.append(dialect.true)
             elif param.direction == "address":
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
