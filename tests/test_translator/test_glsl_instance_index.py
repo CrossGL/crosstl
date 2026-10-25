@@ -1,5 +1,6 @@
 """``gl_InstanceIndex`` (Vulkan GLSL) for OpenGL, OpenGL ES and HLSL targets."""
 
+import re
 import shutil
 import subprocess
 
@@ -75,8 +76,8 @@ def test_spirv_reads_the_instance_index(tmp_path):
     # SPIR-V's InstanceIndex includes the first instance, as gl_InstanceIndex does; it used to be refused.
     path = tmp_path / "shader.vert"
     path.write_text(SOURCE.format(version=450))
-    spirv = crosstl.translate(str(path), backend="vulkan")
-    assert "OpDecorate %gl_InstanceIndex BuiltIn InstanceIndex" in spirv
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    assert re.search(r"OpDecorate %\w+ BuiltIn InstanceIndex\n", spirv)
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
         (tmp_path / "out.spvasm").write_text(spirv)
         for command in (
