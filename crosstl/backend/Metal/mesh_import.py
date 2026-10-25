@@ -476,6 +476,14 @@ class MetalMeshImport:
                 f"Metal object function '{name}' takes more than one mesh_grid_properties parameter"
             )
             return None
+        payload = payloads[0]
+        if "object_data" not in {
+            str(qualifier) for qualifier in getattr(payload, "qualifiers", []) or []
+        } or not str(getattr(payload, "vtype", "")).strip().endswith("&"):
+            self.refuse_import(
+                f"Metal object function '{name}': payload '{payload.name}' must be an object_data reference"
+            )
+            return None
         plan = MetalObjectFunction(
             function=function, payload=payloads[0], grid=grids[0] if grids else None
         )

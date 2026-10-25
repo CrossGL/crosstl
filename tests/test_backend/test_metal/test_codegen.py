@@ -8501,7 +8501,10 @@ def test_codegen_mesh_object_functions_without_mesh_outputs_are_refused():
     """
     with pytest.raises(MetalImportRefused) as refusal:
         convert(code)
-    assert "Metal object function 'object_main'" in str(refusal.value)
+    assert (
+        "Metal object function 'object_main': payload 'payload' must be an object_data reference"
+        in str(refusal.value)
+    )
     assert (
         "Metal mesh function 'mesh_main' must take exactly one metal::mesh parameter, found 0"
         in str(refusal.value)
