@@ -5,17 +5,17 @@ A ray generation shader asks the scheduler to reorder the threads of a wave arou
 Shader Model 6.9; DirectX Raytracing 1.2, "Shader Execution Reordering"). CrossGL spells the call the way HLSL does,
 ``dx::MaybeReorderThread(hint, bits)``, and the DirectX generator writes it back unchanged, which DXC compiles.
 
-No other target has the operation. Vulkan ray tracing has no shader execution reordering and SPIR-V has no
-instruction for it (SPV_KHR_ray_tracing adds none); Metal Shading Language, GLSL, GLSL ES, WGSL, CUDA C++, HIP and
-Mojo have no such intrinsic; the Slang generator emits Slang for SPIR-V, and rust-gpu emits SPIR-V too. Each
-generator copied the HLSL spelling into its output anyway, and every one of those compilers rejects it: the Metal
-compiler reports ``error: use of undeclared identifier 'dx'``, and ``glslangValidator`` reports ``'::' : not
-supported`` on the GLSL. :func:`refuse_shader_execution_reordering` refuses those targets with
-:class:`ShaderExecutionReorderingUnsupportedError` before generation, so a program that reorders its threads never
-reaches a target as a call its compiler cannot resolve.
+Vulkan has the operation through the ``shader_invocation_reorder`` extensions (``reorderThreadEXT`` in GLSL,
+``OpReorderThreadWithHintEXT`` in SPIR-V) and Slang spells it ``ReorderThread``, but the GLSL, SPIR-V and Slang
+generators do not lower the call to those forms. Metal Shading Language, GLSL ES, WGSL, CUDA C++, HIP, rust-gpu and
+Mojo have no such intrinsic. The generators copied the HLSL spelling into their output anyway, which the target
+compilers reject: the Metal compiler reports ``error: use of undeclared identifier 'dx'``, and ``glslangValidator``
+reports ``'::' : not supported`` on the GLSL. :func:`refuse_shader_execution_reordering` refuses every target but
+Direct3D with :class:`ShaderExecutionReorderingUnsupportedError` before generation, so a program that reorders its
+threads never reaches a target as a call its compiler cannot resolve.
 
-The three-argument overload, which also names a hit object, is refused by this rule as well. The ``dx::HitObject``
-type it declares and the ``dx::HitObject::`` static methods it calls are refused by :mod:`.hit_objects`.
+The overloads that take a hit object share the name and are refused by this rule as well. The ``dx::HitObject``
+type they use and the ``dx::HitObject::`` static methods are refused by :mod:`.hit_objects`.
 """
 
 from __future__ import annotations
@@ -39,24 +39,26 @@ REORDERING_TARGETS = frozenset(
 )
 _REASONS = {
     "vulkan": (
-        "Vulkan ray tracing has no shader execution reordering and SPIR-V has no instruction for it"
+        "the SPIR-V generator does not lower it to OpReorderThreadWithHintEXT "
+        "(SPV_EXT_shader_invocation_reorder)"
     ),
     "metal": "Metal Shading Language has no shader execution reordering intrinsic",
-    "opengl": "GLSL has no shader execution reordering intrinsic",
+    "opengl": (
+        "the GLSL generator does not lower it to reorderThreadEXT "
+        "(GL_EXT_shader_invocation_reorder)"
+    ),
     "webgl": "GLSL ES 3.00 has no shader execution reordering intrinsic",
     "wgsl": "WGSL has no shader execution reordering intrinsic",
     "cuda": "CUDA C++ has no shader execution reordering intrinsic",
     "hip": "HIP C++ has no shader execution reordering intrinsic",
-    "slang": (
-        "Slang output is compiled to SPIR-V here, which has no shader execution reordering instruction"
-    ),
+    "slang": "the Slang generator does not lower it to Slang's ReorderThread",
     "rust": "rust-gpu has no shader execution reordering intrinsic",
     "mojo": "Mojo has no shader execution reordering intrinsic",
 }
 
 
 class ShaderExecutionReorderingUnsupportedError(TranslationDiagnostic):
-    """A shader execution reordering call for a target that has no such operation."""
+    """A shader execution reordering call for a target whose generator does not carry it."""
 
     def __init__(self, target, name, *, source_location=None):
         self.source_location = source_location

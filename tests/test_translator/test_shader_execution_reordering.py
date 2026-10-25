@@ -91,7 +91,7 @@ def test_a_reorder_call_in_a_helper_function_is_refused(tmp_path):
         crosstl.translate(str(path), backend="metal")
 
 
-@pytest.mark.parametrize("backend", ["directx", "hlsl", "dx11", "dx12"])
+@pytest.mark.parametrize("backend", ["directx", "hlsl", "dx12", "d3d12"])
 def test_direct3d_keeps_the_reorder_call(tmp_path, backend):
     path = tmp_path / "reorder.hlsl"
     path.write_text(RAYGEN_REORDER, encoding="utf-8")
