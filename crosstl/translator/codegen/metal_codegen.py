@@ -368,6 +368,7 @@ from .metal_array_copies import (
     render_metal_split_member_constructor_arguments,
 )
 from .metal_atomic_addresses import metal_vector_component_address
+from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
 from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
@@ -388,6 +389,7 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
     rename_metal_keyword_parameters,
 )
+from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
@@ -1126,6 +1128,7 @@ class MetalCodeGen(
         self.generated_return_wrapper_struct_names = set()
         self.metal_vertex_entry_input_struct_names = set()
         self.metal_vertex_entry_output_struct_names = set()
+        self.metal_mesh_primitive_struct_names = set()
         self.metal_fragment_entry_input_struct_names = set()
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
@@ -2054,6 +2057,7 @@ class MetalCodeGen(
         self.generated_return_wrapper_struct_names = set()
         self.metal_vertex_entry_input_struct_names = set()
         self.metal_vertex_entry_output_struct_names = set()
+        self.metal_mesh_primitive_struct_names = set()
         self.metal_fragment_entry_input_struct_names = set()
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
@@ -2240,10 +2244,16 @@ class MetalCodeGen(
                 ast, target_stage, "vertex"
             )
         )
+        # A mesh function's vertex and primitive structures feed the fragment ``[[stage_in]]`` as a vertex
+        # function's output does, and link by the same ``[[user(...)]]`` keys (:mod:`.metal_varyings`).
         self.metal_vertex_entry_output_struct_names = (
             self.collect_metal_stage_entry_return_struct_names(
                 ast, target_stage, "vertex"
             )
+            | self.collect_metal_mesh_output_struct_names(ast, target_stage, "vertices")
+        )
+        self.metal_mesh_primitive_struct_names = (
+            self.collect_metal_mesh_output_struct_names(ast, target_stage, "primitives")
         )
         self.metal_fragment_entry_input_struct_names = (
             self.collect_metal_stage_entry_parameter_struct_names(
@@ -3256,6 +3266,7 @@ class MetalCodeGen(
         code += self.generate_metal_wave_helpers()
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
+        code += emit_metal_bit_scan_helpers(self)
         code += emit_metal_texture_residency_helpers(self)
         code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
@@ -4253,6 +4264,9 @@ class MetalCodeGen(
             return None
         if node.name in self.lowered_glsl_buffer_block_struct_names:
             return None
+        if is_metal_library_struct(node):
+            # <metal_stdlib> declares it; a second declaration is ambiguous.
+            return None
         if node.name in self.glsl_buffer_block_struct_names:
             code = self.glsl_buffer_block_diagnostic("Metal", node.name, None, None)
             code += self.unsupported_glsl_buffer_block_struct_placeholder(
@@ -4648,9 +4662,13 @@ class MetalCodeGen(
         """Whether ``struct_name`` carries values from a vertex entry to a fragment entry (:mod:`.metal_varyings`)."""
         if struct_name in getattr(self, "metal_vertex_entry_input_struct_names", ()):
             return False
-        return struct_name in getattr(
-            self, "metal_vertex_entry_output_struct_names", ()
-        ) or struct_name in getattr(self, "metal_fragment_entry_input_struct_names", ())
+        return (
+            struct_name in getattr(self, "metal_vertex_entry_output_struct_names", ())
+            or struct_name in getattr(self, "metal_mesh_primitive_struct_names", ())
+            or struct_name in getattr(
+                self, "metal_fragment_entry_input_struct_names", ()
+            )
+        )
 
     def metal_varying_member_attribute(
         self, member, struct_name, default_member_semantics, offset=0
@@ -11009,7 +11027,35 @@ class MetalCodeGen(
             rhs = f"{native_vector}({rhs})"
         if op == "=" and self.pointer_assignment_needs_address(target, value):
             rhs = f"&{rhs}"
+        matrix_update = self.metal_matrix_compound_assignment(
+            target, value, op, lhs, rhs
+        )
+        if matrix_update is not None:
+            return matrix_update
         return f"{lhs} {op} {rhs}"
+
+    def metal_matrix_compound_assignment(self, target, value, op, lhs, rhs):
+        """``m op= v`` for a componentwise matrix update MSL has no operator for, or ``None``.
+
+        The update becomes ``m = helper(m, v)``, which evaluates ``m`` twice, so a target with side effects is
+        refused.
+        """
+        if op not in {"+=", "-=", "/="}:
+            return None
+        update = self.metal_matrix_builtins.componentwise(
+            op[:-1], target, value, lhs, rhs
+        )
+        if update is None:
+            return None
+        if not self.metal_expression_is_side_effect_free(target):
+            raise UnsupportedMetalFeatureError(
+                "matrix compound assignment",
+                f"Metal has no '{op}' for this matrix operand, and the target "
+                "of the rewritten update has side effects",
+                operation=op,
+                reason="target-has-side-effects",
+            )
+        return f"{lhs} = {update}"
 
     def generate_metal_stage_io_lowered_assignment(self, target, rhs, op):
         if isinstance(target, MemberAccessNode):
@@ -11671,6 +11717,11 @@ class MetalCodeGen(
             )
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
+            matrix_arithmetic = self.metal_matrix_builtins.componentwise(
+                operator, expr.left, expr.right, left, right
+            )
+            if matrix_arithmetic is not None:
+                return matrix_arithmetic
             if operator in {"+", "-", "*", "/", "%"}:
                 expected_type = self.current_expression_expected_type
                 expression_width = self.vector_value_width(
@@ -11744,6 +11795,12 @@ class MetalCodeGen(
                     operand, self.expression_result_type(expr.operand)
                 )
             operand = self.metal_narrow_vector_operand(expr.operand, operand)
+            if operator == "-":
+                matrix_negation = self.metal_matrix_builtins.negation(
+                    expr.operand, operand
+                )
+                if matrix_negation is not None:
+                    return matrix_negation
             if operator in {"+", "-"} and operand.startswith(("+", "-")):
                 # Keep adjacent signs from becoming an increment or decrement.
                 operand = f"({operand})"
@@ -11919,6 +11976,9 @@ class MetalCodeGen(
             exponent_call = metal_exponent_call(self, func_name, expr.args)
             if exponent_call is not None:
                 return exponent_call
+            bit_scan_call = metal_bit_scan_call(self, func_name, expr.args)
+            if bit_scan_call is not None:
+                return bit_scan_call
             extended_arithmetic = metal_extended_arithmetic_call(
                 self, func_name, expr.args
             )
@@ -15570,6 +15630,21 @@ class MetalCodeGen(
     ):
         target_info = self.metal_mesh_output_assignment_target(target)
         if target_info is None:
+            # A write through a member's component or element (``v[i].uv.x = ...``): the mesh object sets a
+            # vertex or primitive as a whole, and the accumulators carry whole members only.
+            inner = target
+            while isinstance(inner, (MemberAccessNode, ArrayAccessNode)):
+                inner = (
+                    inner.object
+                    if isinstance(inner, MemberAccessNode)
+                    else getattr(inner, "array", None)
+                )
+                enclosing = self.metal_mesh_output_assignment_target(inner)
+                if enclosing is not None:
+                    return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                        enclosing,
+                        "component writes of an output member are not supported",
+                    )
             return None
 
         compound_member_assignment = (
@@ -18681,6 +18756,19 @@ class MetalCodeGen(
                 struct_names.add(struct_node.name)
         return struct_names
 
+    def collect_metal_mesh_output_struct_names(self, ast, target_stage, role):
+        struct_names = set()
+        for func in self.metal_stage_entry_functions(ast, "mesh", target_stage):
+            for parameter in getattr(func, "parameters", None) or []:
+                if self.metal_mesh_output_parameter_role(parameter) != role:
+                    continue
+                raw_type = getattr(parameter, "param_type", None)
+                element = getattr(raw_type, "element_type", raw_type)
+                struct_name = self.type_name_string(element)
+                if struct_name in self.structs_by_name:
+                    struct_names.add(struct_name)
+        return struct_names
+
     def metal_parameter_user_struct_type(self, parameter):
         param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
         type_name = self.type_name_string(param_type)
@@ -19077,6 +19165,18 @@ class MetalCodeGen(
         )
         if threadgroup_limit:
             attributes.append(f"max_total_threads_per_threadgroup({threadgroup_limit})")
+        grid_limit = self.metal_stage_attribute_arguments(
+            func, "max_total_threadgroups_per_mesh_grid"
+        )
+        if stage_keyword == "object" and grid_limit:
+            if len(grid_limit) != 1:
+                raise ValueError(
+                    "Metal object stage max_total_threadgroups_per_mesh_grid requires exactly one argument"
+                )
+            attributes.append(
+                "max_total_threadgroups_per_mesh_grid("
+                f"{self.attribute_value_to_string(grid_limit[0])})"
+            )
         return f"[[{', '.join(attributes)}]]"
 
     def metal_ray_intersection_stage_attribute(self, func, raw_return_type):
@@ -22278,6 +22378,7 @@ class MetalCodeGen(
             "max_primitives",
             "maxtessfactor",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "max_vertices",
             "maxvertexcount",
             "outputcontrolpoints",

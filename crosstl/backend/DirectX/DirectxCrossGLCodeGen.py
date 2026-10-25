@@ -34,6 +34,7 @@ from .hlsl_matrix_import import (
     crossgl_matrix_type_name,
     hlsl_matrix_type_map,
 )
+from .implicit_vector_truncation import HLSLImplicitVectorTruncationMixin
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
@@ -85,6 +86,7 @@ class HLSLToCrossGLConverter(
     HLSLTexelBufferMixin,
     HLSLTrigonometricReductionMixin,
     HLSLValueShapeMixin,
+    HLSLImplicitVectorTruncationMixin,
 ):
     """Serialize DirectX backend AST nodes back into CrossGL source."""
 
@@ -2179,8 +2181,13 @@ class HLSLToCrossGLConverter(
             "min16uint",
             "min16int",
             "min12int",
+            "float16_t",
+            "uint16_t",
+            "int16_t",
             "double",
             "float",
+            "half",
+            "fixed",
             "uint",
             "int",
             "bool",
@@ -4447,6 +4454,7 @@ class HLSLToCrossGLConverter(
                     value = self.generate_expression(
                         stmt.value, is_main, expected_type=stmt.vtype
                     )
+                    value = self.truncated_initializer_value(stmt, value)
                     self.record_variable_type(stmt)
                     code += (
                         f"{qualifier_prefix}{self.map_variable_type(stmt)} "
@@ -5139,6 +5147,7 @@ class HLSLToCrossGLConverter(
             return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
+        rhs = self.truncated_assignment_value(node, rhs)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
@@ -5176,6 +5185,7 @@ class HLSLToCrossGLConverter(
                 return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
+            right = self.truncated_assignment_value(expr, right)
             op = expr.operator
             return f"{left} {op} {right}"
 
