@@ -4112,9 +4112,7 @@ class WGSLCodeGen(WGSLParameterLoweringMixin):
         )
         expected_type = self._current_expression_expected_type
         expected_shape = self.vector_shape(expected_type)
-        texture_type = self.SAMPLED_TEXTURE_TYPE_MAP.get(
-            self.resource_type_name(self.expression_type(args[0])) or ""
-        )
+        texture_type = self.sampled_texture_type(self.expression_type(args[0]))
         if texture_type is None:
             if expected_shape is not None:
                 element_type, size = expected_shape
