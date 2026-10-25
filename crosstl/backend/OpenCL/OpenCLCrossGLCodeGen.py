@@ -10,6 +10,7 @@ from crosstl.backend.HIP.HipAst import (
     FunctionCallNode,
     FunctionNode,
     KernelNode,
+    MemberAccessNode,
     ReturnNode,
     StructNode,
     TypeAliasNode,
@@ -17,6 +18,7 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
@@ -38,6 +40,12 @@ class OpenCLRecordSemanticError(ValueError):
         super().__init__(
             f"OpenCL {feature} is unsupported for record '{record_name}' in {context}"
         )
+
+
+class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``read_imagef`` call or ``sampler_t`` value that CrossGL cannot carry exactly."""
+
+    code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -277,6 +285,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     def __init__(self, normalize_target_safe_cgl=False, threadgroup_size=None):
         super().__init__(threadgroup_size=threadgroup_size)
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
+        self.opencl_image_access = {}
+        self.opencl_sampler_states = {}
 
     def generate(self, ast_node):
         self.opencl_sizeof_symbols = {}
@@ -284,6 +294,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.opencl_event_tokens = set()
         self.opencl_workgroup_pointer_helper_params = {}
         self.opencl_sdk_reduce_materialize_op = False
+        self.opencl_image_access = {}
+        self.opencl_sampler_states = {}
         return super().generate(ast_node)
 
     def generic_visit(self, node):
@@ -537,6 +549,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         )
         self.push_variable_type_scope()
         self.push_identifier_name_scope()
+        sampler_states = dict(self.opencl_sampler_states)
         try:
             resource_binding = 0
             for index, param in enumerate(getattr(kernel, "params", []) or []):
@@ -562,9 +575,6 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 else:
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
-                    )
-                    param_type = self.opencl_kernel_image_parameter_type(
-                        raw_type, param_type
                     )
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
@@ -600,6 +610,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.indent_level -= 1
             self.emit("}")
         finally:
+            self.opencl_sampler_states = sampler_states
             self.pop_identifier_name_scope()
             self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
@@ -715,20 +726,21 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
             == "sampler"
         ):
-            # A sampler_t initializer is a CLK_* bitmask of sampler state;
-            # CrossGL samplers are bound resources, so drop the initializer.
-            value = node.value
-            node.value = None
-            try:
-                super().visit_VariableNode(node)
-            finally:
-                node.value = value
+            # A sampler_t constant fixes its state in source with CLK_* flags,
+            # as a CrossGL sampler(...) constructor does.
+            state = self.format_opencl_sampler_state(node.value)
+            output_name = self.register_variable_declaration_name(node.name)
+            for name in (node.name, output_name):
+                self.register_variable_type(name, "sampler")
+                self.opencl_sampler_states[name] = state
+            self.emit(f"const sampler {output_name} = {state};")
             return
         super().visit_VariableNode(node)
 
     def visit_FunctionNode(self, node):
         previous_function_name = self.opencl_current_function_name
         self.opencl_current_function_name = getattr(node, "name", None)
+        sampler_states = dict(self.opencl_sampler_states)
         original_body = getattr(node, "body", None)
         materialized_op = False
         if self.should_materialize_opencl_sdk_op_helper(node):
@@ -741,6 +753,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if materialized_op:
                 node.body = original_body
             self.opencl_current_function_name = previous_function_name
+            self.opencl_sampler_states = sampler_states
 
     def should_materialize_opencl_sdk_op_helper(self, node):
         return (
@@ -815,97 +828,203 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 return builtin
         return super().visit_FunctionCallNode(node)
 
-    # OpenCL images are read_only unless declared write_only or read_write, and
-    # a read_only image is read through a sampler or a texel fetch, so it is a
-    # sampled texture rather than a storage image.
+    # A read_only image (the OpenCL default access) is read through a sampler
+    # or a texel fetch, so it is a sampled texture rather than a storage image.
+    # Depth and buffer images keep their image type; reading them is refused.
     OPENCL_SAMPLED_IMAGE_TYPES = {
-        "image1D": "texture1D",
-        "image2D": "texture2D",
-        "image3D": "texture3D",
-        "image2DArray": "texture2DArray",
+        "image1d_t": "texture1D",
+        "image1d_array_t": "texture1DArray",
+        "image2d_t": "texture2D",
+        "image2d_array_t": "texture2DArray",
+        "image3d_t": "texture3D",
     }
-    OPENCL_WRITABLE_IMAGE_QUALIFIERS = {
-        "write_only",
-        "__write_only",
-        "read_write",
-        "__read_write",
+    # OpenCL addresses 3D images and 2D image arrays with a four-component
+    # coordinate; CrossGL takes the three the image has.
+    OPENCL_IMAGE_INT4_COORD_SHAPES = {"3D", "2DArray"}
+    # The CrossGL sampler state each OpenCL C sampler flag selects. A field no
+    # flag names is zero: unnormalized coordinates and CLK_ADDRESS_NONE.
+    # CLK_ADDRESS_NONE leaves out-of-range reads undefined, so clamp_to_edge
+    # keeps it; CLK_ADDRESS_CLAMP returns (0, 0, 0, 0), or (0, 0, 0, 1) for a
+    # format without alpha, which is clamp_to_zero.
+    OPENCL_SAMPLER_FLAGS = {
+        "CLK_NORMALIZED_COORDS_TRUE": ("coord", "normalized"),
+        "CLK_NORMALIZED_COORDS_FALSE": ("coord", "pixel"),
+        "CLK_ADDRESS_NONE": ("address", "clamp_to_edge"),
+        "CLK_ADDRESS_CLAMP_TO_EDGE": ("address", "clamp_to_edge"),
+        "CLK_ADDRESS_CLAMP": ("address", "clamp_to_zero"),
+        "CLK_ADDRESS_REPEAT": ("address", "repeat"),
+        "CLK_ADDRESS_MIRRORED_REPEAT": ("address", "mirrored_repeat"),
+        "CLK_FILTER_NEAREST": ("filter", "nearest"),
+        "CLK_FILTER_LINEAR": ("filter", "linear"),
     }
 
-    def opencl_kernel_image_parameter_type(self, raw_type, param_type):
-        """Map a read_only image kernel argument to a sampled texture type."""
-        sampled_type = self.OPENCL_SAMPLED_IMAGE_TYPES.get(param_type)
-        if sampled_type is None:
-            return param_type
-        if set(str(raw_type).split()) & self.OPENCL_WRITABLE_IMAGE_QUALIFIERS:
-            return param_type
-        return sampled_type
+    def opencl_resource_parameter_type(self, raw_type, name, crossgl_type):
+        """Record an image parameter's access; a read_only image is a texture."""
+        image_type = self.resolve_opencl_type_alias_chain(str(raw_type))
+        if image_type == "sampler_t":
+            # A sampler parameter has its caller's state, not a constant's.
+            self.opencl_sampler_states.pop(name, None)
+        if not image_type.startswith("image"):
+            return crossgl_type
+        words = {word.lstrip("_") for word in str(raw_type).split()}
+        access = next(
+            (access for access in ("read_write", "write_only") if access in words),
+            "read_only",
+        )
+        self.opencl_image_access[name] = (image_type, access)
+        if access != "read_only":
+            return crossgl_type
+        return self.OPENCL_SAMPLED_IMAGE_TYPES.get(image_type, crossgl_type)
 
-    # 3D images and 2D image arrays take a four-component coordinate in
-    # OpenCL; CrossGL texture and image calls take the three the image has.
-    OPENCL_IMAGE_FOUR_COMPONENT_COORD_TYPES = {
-        "image3D",
-        "image2DArray",
-        "texture3D",
-        "texture2DArray",
-    }
+    def format_opencl_sampler_state(self, value):
+        """The CrossGL ``sampler(...)`` constructor for a CLK_* sampler value."""
+        flags = {}
+        for flag in self.opencl_sampler_flags(value):
+            field, _setting = self.OPENCL_SAMPLER_FLAGS[flag]
+            if flags.setdefault(field, flag) != flag:
+                raise OpenCLImageReadUnsupportedError(
+                    f"sampler_t value {self.visit(value)} names two {field} flags"
+                )
+        state = {"coord": "pixel", "address": "clamp_to_edge"}
+        state.update(self.OPENCL_SAMPLER_FLAGS[flag] for flag in flags.values())
+        if "filter" not in state:
+            raise OpenCLImageReadUnsupportedError(
+                f"sampler_t value {self.visit(value)} names no CLK_FILTER_* flag"
+            )
+        if state["coord"] == "pixel" and "repeat" in state["address"]:
+            raise OpenCLImageReadUnsupportedError(
+                f"sampler_t value {self.visit(value)} repeats unnormalized "
+                "coordinates; OpenCL repeats only with CLK_NORMALIZED_COORDS_TRUE"
+            )
+        return (
+            f"sampler(coord::{state['coord']}, address::{state['address']}, "
+            f"filter::{state['filter']})"
+        )
+
+    def opencl_sampler_flags(self, value):
+        if isinstance(value, BinaryOpNode) and value.op == "|":
+            return [
+                *self.opencl_sampler_flags(value.left),
+                *self.opencl_sampler_flags(value.right),
+            ]
+        if isinstance(value, str) and value in self.OPENCL_SAMPLER_FLAGS:
+            return [value]
+        raise OpenCLImageReadUnsupportedError(
+            f"sampler_t value {self.visit(value)}: only CLK_* sampler flags joined "
+            "with | have CrossGL sampler state"
+        )
 
     def format_opencl_image_read(self, func_name, args):
         """Lower read_imagef to textureLod, texelFetch or imageLoad.
 
-        ``read_imagef(image, sampler, float coord)`` samples level 0 (a kernel
-        has no derivatives); an integer coordinate, with or without a sampler,
-        reads one texel.  A read_write image is a storage image and is read
-        with imageLoad.
+        A read through a sampler samples level 0 (a kernel has no derivatives)
+        with that sampler's state, so CLK_NORMALIZED_COORDS_FALSE keeps pixel
+        coordinates. A read without a sampler takes integer coordinates and
+        fetches one texel; a read_write image is read with imageLoad.
         """
-        if func_name != "read_imagef" or len(args) not in (2, 3):
+        if func_name != "read_imagef" or self.is_user_defined_function(func_name):
             return None
-        image = args[0]
+        image = args[0] if args else None
         image_name = image if isinstance(image, str) else getattr(image, "name", None)
-        image_type = self.lookup_variable_type(image_name) if image_name else None
-        is_texture = image_type in self.OPENCL_SAMPLED_IMAGE_TYPES.values()
-        is_image = image_type in self.OPENCL_SAMPLED_IMAGE_TYPES
-        if not (is_texture or is_image):
-            return None
-        if is_image and len(args) != 2:
-            return None
+        image_type, access = self.opencl_image_access.get(image_name, ("", None))
+        crossgl_type = str(self.lookup_variable_type(image_name) or "")
+        sampled = crossgl_type.startswith("texture")
+        shape = re.sub(r"^(?:texture|[iu]?image)", "", crossgl_type)
 
-        raw_coord = args[-1]
-        float_coord = self.opencl_image_coordinate_is_float(raw_coord)
-        rendered_image = self.visit(image)
-        rendered_coord = self.visit(raw_coord)
-        if image_type in self.OPENCL_IMAGE_FOUR_COMPONENT_COORD_TYPES:
-            rendered_coord = f"({rendered_coord}).xyz"
-
-        if is_image:
-            return f"imageLoad({rendered_image}, {rendered_coord})"
-        if len(args) == 3 and float_coord is not False:
-            rendered_sampler = self.visit(args[1])
-            return (
-                f"textureLod({rendered_image}, {rendered_sampler}, "
-                f"{rendered_coord}, 0.0)"
+        def refuse(reason):
+            return OpenCLImageReadUnsupportedError(
+                f"read_imagef on {image_name or 'an image expression'}: {reason}"
             )
-        if float_coord:
-            return None
-        return f"texelFetch({rendered_image}, {rendered_coord}, 0)"
 
-    def opencl_image_coordinate_is_float(self, raw_coord):
-        """Return True for a float coordinate, False for an integer one, else None."""
-        name = raw_coord if isinstance(raw_coord, str) else None
-        if name is None and type(raw_coord).__name__ == "VariableNode":
-            name = getattr(raw_coord, "name", None)
-        type_name = None
-        if isinstance(name, str) and self.is_simple_identifier(name):
-            type_name = self.lookup_variable_type(name)
-        text = type_name or self.strip_wrapping_parentheses(
-            str(self.visit(raw_coord)).strip()
-        )
-        match = re.match(r"(?:vec\d<)?([fiu])\d+\b", text)
-        if match:
-            return match.group(1) == "f"
-        if re.fullmatch(r"-?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?f?", text):
-            return True
-        if re.fullmatch(r"-?\d+[uU]?", text):
-            return False
+        if len(args) not in (2, 3):
+            raise refuse(
+                f"the {len(args)}-argument form has no CrossGL lowering, only "
+                "read_imagef(image, coord) and read_imagef(image, sampler, coord)"
+            )
+        if "depth" in image_type or "buffer" in image_type:
+            raise refuse(
+                f"{image_type} has no CrossGL read (a depth image read returns "
+                "one float, and a buffer image is not a texture)"
+            )
+        if not sampled and access != "read_write":
+            raise refuse(
+                f"{access or 'an unknown'} {image_type or crossgl_type or 'image'} "
+                "is not a read_only or read_write image argument"
+            )
+        kind = self.opencl_image_coordinate_kind(args[-1])
+        coord = self.visit(args[-1])
+        if kind is None:
+            raise refuse(f"the element type of coordinate {coord} is unknown")
+        if shape in self.OPENCL_IMAGE_INT4_COORD_SHAPES:
+            coord = f"({coord}).xyz"
+        rendered_image = self.visit(image)
+        if len(args) == 2:
+            if kind == "float":
+                raise refuse("a read without a sampler takes integer coordinates")
+            if sampled:
+                return f"texelFetch({rendered_image}, {coord}, 0)"
+            return f"imageLoad({rendered_image}, {coord})"
+        if not sampled:
+            raise refuse("a read_write image is read without a sampler")
+        sampler = args[1]
+        if isinstance(sampler, str) and self.lookup_variable_type(sampler) == "sampler":
+            state = self.opencl_sampler_states.get(sampler, "")
+            sampler = self.visit(sampler)
+        else:
+            # The sampler argument may be the CLK_* flags themselves.
+            sampler = state = self.format_opencl_sampler_state(sampler)
+        # OpenCL reads integer coordinates through a sampler with unnormalized
+        # coordinates and nearest filtering, whose addressing still applies, so
+        # they are sampled as pixel coordinates.
+        if (kind == "int" or "coord::pixel" in state) and shape not in {"1D", "2D"}:
+            raise refuse(
+                f"pixel coordinates on a {shape} image have no CrossGL sampler: "
+                "Metal and Vulkan sample pixel coordinates only on 1D and 2D "
+                "images, and Direct3D has none"
+            )
+        if kind == "int":
+            coord = format_conversion(
+                "convert_float2" if shape == "2D" else "convert_float",
+                coord,
+                self.convert_hip_type_to_crossgl,
+            )
+        return f"textureLod({rendered_image}, {sampler}, {coord}, 0.0)"
+
+    def opencl_image_coordinate_kind(self, coord):
+        """``"float"`` or ``"int"`` for an image coordinate, ``None`` if unknown."""
+        if isinstance(coord, (BinaryOpNode, UnaryOpNode)):
+            operands = (
+                (coord.left, coord.right)
+                if isinstance(coord, BinaryOpNode)
+                else (coord.operand,)
+            )
+            kinds = [self.opencl_image_coordinate_kind(item) for item in operands]
+            # An integer operand converts to a float one, never the reverse.
+            if "float" in kinds:
+                return "float"
+            return "int" if all(kind == "int" for kind in kinds) else None
+        type_name = self.expression_declared_type(coord)
+        if type_name is None and isinstance(coord, MemberAccessNode):
+            # A swizzle keeps the element type of the vector it reads.
+            return self.opencl_image_coordinate_kind(coord.object)
+        if type_name is None and isinstance(coord, FunctionCallNode):
+            # (float2)(x, y) is a call named after its type, as is the result
+            # of convert_<type> and as_<type>.
+            name = str(coord.name)
+            type_name = re.sub(r"^(?:convert|as)_", "", name).split("_")[0]
+        if type_name is None and isinstance(coord, str):
+            type_name = coord
+        if not type_name:
+            return None
+        text = self.convert_hip_type_to_crossgl(str(type_name))
+        if re.fullmatch(r"(?:vec\d<)?f\d+>?", text) or re.fullmatch(
+            r"-?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?[fF]?", text
+        ):
+            return "float"
+        if re.fullmatch(r"(?:vec\d<)?[iu]\d+>?", text) or re.fullmatch(
+            r"-?\d+[uU]?", text
+        ):
+            return "int"
         return None
 
     def emit_statement(self, stmt):
@@ -1245,7 +1364,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if name in specialized_params and self.is_opencl_local_pointer_type(hip_type):
             element_type = self.convert_hip_pointer_element_type(hip_type)
             return f"array<{element_type}, {_DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE}>"
-        return super().convert_hip_variable_type_to_crossgl(hip_type, name)
+        return self.opencl_resource_parameter_type(
+            hip_type, name, super().convert_hip_variable_type_to_crossgl(hip_type, name)
+        )
 
     def convert_opencl_pointer_to_array_element_type(self, hip_type):
         if hip_type is None:
