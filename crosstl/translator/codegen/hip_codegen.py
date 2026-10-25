@@ -96,6 +96,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .hip_refusals import HipLoweringRefused
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -189,6 +190,11 @@ HIP_BITCAST_FUNCTION_TARGETS = {
     "asfloat": "float",
     "asint": "int",
     "asuint": "uint",
+}
+
+HIP_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
 }
 
 HIP_INTEGER_BIT_FUNCTION_ALIASES = {
@@ -4348,6 +4354,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return HIP_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def hip_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
+
         target_component = HIP_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -4375,6 +4389,25 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         result_type = self.hip_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None
+
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and HIP converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise HipLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
