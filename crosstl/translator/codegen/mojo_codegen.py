@@ -1,1 +1,15845 @@
-FILE_CONTENT_HERE
+"""CrossGL-to-Mojo code generator."""
+
+import re
+
+from ..ast import (
+    ArrayAccessNode,
+    ArrayLiteralNode,
+    ArrayNode,
+    AssignmentNode,
+    AtomicOpNode,
+    BinaryOpNode,
+    BreakNode,
+    BufferOpNode,
+    BuiltinVariableNode,
+    CaseNode,
+    CastNode,
+    ConstantNode,
+    ConstructorNode,
+    ConstructorPatternNode,
+    ContinueNode,
+    DoWhileNode,
+    EnumNode,
+    ExpressionStatementNode,
+    ForInNode,
+    ForNode,
+    FunctionCallNode,
+    IdentifierNode,
+    IdentifierPatternNode,
+    IfNode,
+    LiteralPatternNode,
+    LoopNode,
+    MatchNode,
+    MemberAccessNode,
+    MeshOpNode,
+    RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
+    ReturnNode,
+    StructNode,
+    StructPatternNode,
+    SwitchNode,
+    SwizzleNode,
+    SyncNode,
+    TernaryOpNode,
+    TextureNode,
+    TextureOpNode,
+    UnaryOpNode,
+    VariableNode,
+    WaveOpNode,
+    WhileNode,
+    WildcardPatternNode,
+)
+from ..matrix_shape import matrix_type_spelling
+from .array_utils import (
+    collect_literal_int_constants,
+    evaluate_literal_int_expression,
+    get_array_size_from_node,
+)
+from .enum_utils import (
+    build_generic_enum_specialization,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_parameter_names,
+    enum_constant_name,
+    enum_struct_fields,
+    enum_variant_constructor_name,
+    enum_variant_payload_fields,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
+    type_node_contains_generic_parameter,
+)
+from .generic_function_utils import (
+    collect_unresolved_generic_function_call_names,
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    iter_function_nodes,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+    raise_unresolved_generic_function_call,
+)
+from .image_access_contracts import (
+    explicit_image_format,
+    image_format_channel_count,
+    image_format_component_kind,
+)
+from .sampler_pairs import canonicalize_separate_textures
+from .stage_utils import is_fragment_output_parameter
+
+
+def _matrix_aliases(prefix, dtype, *, rows_first):
+    aliases = {}
+    for first in (2, 3, 4):
+        for second in (2, 3, 4):
+            columns, rows = (second, first) if rows_first else (first, second)
+            aliases[f"{prefix}{first}x{second}"] = (dtype, columns, rows)
+    return aliases
+
+
+def _square_matrix_aliases(prefix, dtype):
+    return {f"{prefix}{size}": (dtype, size, size) for size in (2, 3, 4)}
+
+
+MOJO_VECTOR_TYPES = {
+    "vec2": ("DType.float32", 2, 2, None),
+    "vec3": ("DType.float32", 3, 4, "0.0"),
+    "vec4": ("DType.float32", 4, 4, None),
+    "float2": ("DType.float32", 2, 2, None),
+    "float3": ("DType.float32", 3, 4, "0.0"),
+    "float4": ("DType.float32", 4, 4, None),
+    "packed_float2": ("DType.float32", 2, 2, None),
+    "packed_float3": ("DType.float32", 3, 4, "0.0"),
+    "packed_float4": ("DType.float32", 4, 4, None),
+    "simd_float2": ("DType.float32", 2, 2, None),
+    "simd_float3": ("DType.float32", 3, 4, "0.0"),
+    "simd_float4": ("DType.float32", 4, 4, None),
+    "vec2<f32>": ("DType.float32", 2, 2, None),
+    "vec3<f32>": ("DType.float32", 3, 4, "0.0"),
+    "vec4<f32>": ("DType.float32", 4, 4, None),
+    "vec2<f16>": ("DType.float16", 2, 2, None),
+    "vec3<f16>": ("DType.float16", 3, 4, "0.0"),
+    "vec4<f16>": ("DType.float16", 4, 4, None),
+    "half2": ("DType.float16", 2, 2, None),
+    "half3": ("DType.float16", 3, 4, "0.0"),
+    "half4": ("DType.float16", 4, 4, None),
+    "packed_half2": ("DType.float16", 2, 2, None),
+    "packed_half3": ("DType.float16", 3, 4, "0.0"),
+    "packed_half4": ("DType.float16", 4, 4, None),
+    "simd_half2": ("DType.float16", 2, 2, None),
+    "simd_half3": ("DType.float16", 3, 4, "0.0"),
+    "simd_half4": ("DType.float16", 4, 4, None),
+    "f16vec2": ("DType.float16", 2, 2, None),
+    "f16vec3": ("DType.float16", 3, 4, "0.0"),
+    "f16vec4": ("DType.float16", 4, 4, None),
+    "min16float2": ("DType.float16", 2, 2, None),
+    "min16float3": ("DType.float16", 3, 4, "0.0"),
+    "min16float4": ("DType.float16", 4, 4, None),
+    "min10float2": ("DType.float16", 2, 2, None),
+    "min10float3": ("DType.float16", 3, 4, "0.0"),
+    "min10float4": ("DType.float16", 4, 4, None),
+    "vec2<f64>": ("DType.float64", 2, 2, None),
+    "vec3<f64>": ("DType.float64", 3, 4, "0.0"),
+    "vec4<f64>": ("DType.float64", 4, 4, None),
+    "double2": ("DType.float64", 2, 2, None),
+    "double3": ("DType.float64", 3, 4, "0.0"),
+    "double4": ("DType.float64", 4, 4, None),
+    "simd_double2": ("DType.float64", 2, 2, None),
+    "simd_double3": ("DType.float64", 3, 4, "0.0"),
+    "simd_double4": ("DType.float64", 4, 4, None),
+    "vec2<i8>": ("DType.int8", 2, 2, None),
+    "vec3<i8>": ("DType.int8", 3, 4, "0"),
+    "vec4<i8>": ("DType.int8", 4, 4, None),
+    "vec2<i32>": ("DType.int32", 2, 2, None),
+    "vec3<i32>": ("DType.int32", 3, 4, "0"),
+    "vec4<i32>": ("DType.int32", 4, 4, None),
+    "vec2<i16>": ("DType.int16", 2, 2, None),
+    "vec3<i16>": ("DType.int16", 3, 4, "0"),
+    "vec4<i16>": ("DType.int16", 4, 4, None),
+    "int2": ("DType.int32", 2, 2, None),
+    "int3": ("DType.int32", 3, 4, "0"),
+    "int4": ("DType.int32", 4, 4, None),
+    "packed_int2": ("DType.int32", 2, 2, None),
+    "packed_int3": ("DType.int32", 3, 4, "0"),
+    "packed_int4": ("DType.int32", 4, 4, None),
+    "simd_int2": ("DType.int32", 2, 2, None),
+    "simd_int3": ("DType.int32", 3, 4, "0"),
+    "simd_int4": ("DType.int32", 4, 4, None),
+    "short2": ("DType.int16", 2, 2, None),
+    "short3": ("DType.int16", 3, 4, "0"),
+    "short4": ("DType.int16", 4, 4, None),
+    "packed_short2": ("DType.int16", 2, 2, None),
+    "packed_short3": ("DType.int16", 3, 4, "0"),
+    "packed_short4": ("DType.int16", 4, 4, None),
+    "simd_short2": ("DType.int16", 2, 2, None),
+    "simd_short3": ("DType.int16", 3, 4, "0"),
+    "simd_short4": ("DType.int16", 4, 4, None),
+    "i8vec2": ("DType.int8", 2, 2, None),
+    "i8vec3": ("DType.int8", 3, 4, "0"),
+    "i8vec4": ("DType.int8", 4, 4, None),
+    "i16vec2": ("DType.int16", 2, 2, None),
+    "i16vec3": ("DType.int16", 3, 4, "0"),
+    "i16vec4": ("DType.int16", 4, 4, None),
+    "min16int2": ("DType.int16", 2, 2, None),
+    "min16int3": ("DType.int16", 3, 4, "0"),
+    "min16int4": ("DType.int16", 4, 4, None),
+    "min12int2": ("DType.int16", 2, 2, None),
+    "min12int3": ("DType.int16", 3, 4, "0"),
+    "min12int4": ("DType.int16", 4, 4, None),
+    "vec2<u32>": ("DType.uint32", 2, 2, None),
+    "vec3<u32>": ("DType.uint32", 3, 4, "0"),
+    "vec4<u32>": ("DType.uint32", 4, 4, None),
+    "vec2<u16>": ("DType.uint16", 2, 2, None),
+    "vec3<u16>": ("DType.uint16", 3, 4, "0"),
+    "vec4<u16>": ("DType.uint16", 4, 4, None),
+    "vec2<u8>": ("DType.uint8", 2, 2, None),
+    "vec3<u8>": ("DType.uint8", 3, 4, "0"),
+    "vec4<u8>": ("DType.uint8", 4, 4, None),
+    "uint2": ("DType.uint32", 2, 2, None),
+    "uint3": ("DType.uint32", 3, 4, "0"),
+    "uint4": ("DType.uint32", 4, 4, None),
+    "packed_uint2": ("DType.uint32", 2, 2, None),
+    "packed_uint3": ("DType.uint32", 3, 4, "0"),
+    "packed_uint4": ("DType.uint32", 4, 4, None),
+    "simd_uint2": ("DType.uint32", 2, 2, None),
+    "simd_uint3": ("DType.uint32", 3, 4, "0"),
+    "simd_uint4": ("DType.uint32", 4, 4, None),
+    "ushort2": ("DType.uint16", 2, 2, None),
+    "ushort3": ("DType.uint16", 3, 4, "0"),
+    "ushort4": ("DType.uint16", 4, 4, None),
+    "packed_ushort2": ("DType.uint16", 2, 2, None),
+    "packed_ushort3": ("DType.uint16", 3, 4, "0"),
+    "packed_ushort4": ("DType.uint16", 4, 4, None),
+    "simd_ushort2": ("DType.uint16", 2, 2, None),
+    "simd_ushort3": ("DType.uint16", 3, 4, "0"),
+    "simd_ushort4": ("DType.uint16", 4, 4, None),
+    "u8vec2": ("DType.uint8", 2, 2, None),
+    "u8vec3": ("DType.uint8", 3, 4, "0"),
+    "u8vec4": ("DType.uint8", 4, 4, None),
+    "u16vec2": ("DType.uint16", 2, 2, None),
+    "u16vec3": ("DType.uint16", 3, 4, "0"),
+    "u16vec4": ("DType.uint16", 4, 4, None),
+    "min16uint2": ("DType.uint16", 2, 2, None),
+    "min16uint3": ("DType.uint16", 3, 4, "0"),
+    "min16uint4": ("DType.uint16", 4, 4, None),
+    "vec2<bool>": ("DType.bool", 2, 2, None),
+    "vec3<bool>": ("DType.bool", 3, 4, "False"),
+    "vec4<bool>": ("DType.bool", 4, 4, None),
+    "ivec2": ("DType.int32", 2, 2, None),
+    "ivec3": ("DType.int32", 3, 4, "0"),
+    "ivec4": ("DType.int32", 4, 4, None),
+    "uvec2": ("DType.uint32", 2, 2, None),
+    "uvec3": ("DType.uint32", 3, 4, "0"),
+    "uvec4": ("DType.uint32", 4, 4, None),
+    "dvec2": ("DType.float64", 2, 2, None),
+    "dvec3": ("DType.float64", 3, 4, "0.0"),
+    "dvec4": ("DType.float64", 4, 4, None),
+    "bvec2": ("DType.bool", 2, 2, None),
+    "bvec3": ("DType.bool", 3, 4, "False"),
+    "bvec4": ("DType.bool", 4, 4, None),
+    "bool2": ("DType.bool", 2, 2, None),
+    "bool3": ("DType.bool", 3, 4, "False"),
+    "bool4": ("DType.bool", 4, 4, None),
+}
+
+MOJO_MATRIX_TYPES = {
+    "mat2": ("DType.float32", 2, 2),
+    "mat3": ("DType.float32", 3, 3),
+    "mat4": ("DType.float32", 4, 4),
+    "mat2x2": ("DType.float32", 2, 2),
+    "mat2x3": ("DType.float32", 2, 3),
+    "mat2x4": ("DType.float32", 2, 4),
+    "mat3x2": ("DType.float32", 3, 2),
+    "mat3x3": ("DType.float32", 3, 3),
+    "mat3x4": ("DType.float32", 3, 4),
+    "mat4x2": ("DType.float32", 4, 2),
+    "mat4x3": ("DType.float32", 4, 3),
+    "mat4x4": ("DType.float32", 4, 4),
+    "dmat2": ("DType.float64", 2, 2),
+    "dmat3": ("DType.float64", 3, 3),
+    "dmat4": ("DType.float64", 4, 4),
+    "dmat2x2": ("DType.float64", 2, 2),
+    "dmat2x3": ("DType.float64", 2, 3),
+    "dmat2x4": ("DType.float64", 2, 4),
+    "dmat3x2": ("DType.float64", 3, 2),
+    "dmat3x3": ("DType.float64", 3, 3),
+    "dmat3x4": ("DType.float64", 3, 4),
+    "dmat4x2": ("DType.float64", 4, 2),
+    "dmat4x3": ("DType.float64", 4, 3),
+    "dmat4x4": ("DType.float64", 4, 4),
+    **_matrix_aliases("float", "DType.float32", rows_first=True),
+    **_matrix_aliases("simd_float", "DType.float32", rows_first=True),
+    **_matrix_aliases("double", "DType.float64", rows_first=True),
+    **_matrix_aliases("simd_double", "DType.float64", rows_first=True),
+    **_matrix_aliases("half", "DType.float16", rows_first=True),
+    **_matrix_aliases("simd_half", "DType.float16", rows_first=True),
+    **_matrix_aliases("min16float", "DType.float16", rows_first=True),
+    **_matrix_aliases("min10float", "DType.float16", rows_first=True),
+    **_matrix_aliases("int", "DType.int32", rows_first=True),
+    **_matrix_aliases("simd_int", "DType.int32", rows_first=True),
+    **_matrix_aliases("uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("simd_uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("short", "DType.int16", rows_first=True),
+    **_matrix_aliases("simd_short", "DType.int16", rows_first=True),
+    **_matrix_aliases("min16int", "DType.int16", rows_first=True),
+    **_matrix_aliases("min12int", "DType.int16", rows_first=True),
+    **_matrix_aliases("ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("simd_ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("min16uint", "DType.uint16", rows_first=True),
+    **_square_matrix_aliases("f16mat", "DType.float16"),
+    **_matrix_aliases("f16mat", "DType.float16", rows_first=False),
+}
+
+SWIZZLE_SETS = {
+    "xyzw": {"x": 0, "y": 1, "z": 2, "w": 3},
+    "rgba": {"r": 0, "g": 1, "b": 2, "a": 3},
+}
+
+MOJO_DTYPE_INFO = {
+    "DType.float16": ("half", "half", "0.0"),
+    "DType.float32": ("float", "vec", "0.0"),
+    "DType.float64": ("double", "dvec", "0.0"),
+    "DType.int8": ("char", "i8vec", "0"),
+    "DType.int16": ("short", "i16vec", "0"),
+    "DType.int32": ("int", "ivec", "0"),
+    "DType.uint8": ("uchar", "u8vec", "0"),
+    "DType.uint16": ("ushort", "u16vec", "0"),
+    "DType.uint32": ("uint", "uvec", "0"),
+    "DType.bool": ("bool", "bvec", "False"),
+}
+
+MOJO_DTYPE_SUFFIX = {
+    "DType.float16": "f16",
+    "DType.float32": "f32",
+    "DType.float64": "f64",
+    "DType.int8": "i8",
+    "DType.int16": "i16",
+    "DType.int32": "i32",
+    "DType.uint8": "u8",
+    "DType.uint16": "u16",
+    "DType.uint32": "u32",
+    "DType.bool": "bool",
+}
+
+MOJO_SCALAR_DTYPES = {
+    "f16": "DType.float16",
+    "half": "DType.float16",
+    "min10float": "DType.float16",
+    "min16float": "DType.float16",
+    "float": "DType.float32",
+    "double": "DType.float64",
+    "i8": "DType.int8",
+    "i16": "DType.int16",
+    "i32": "DType.int32",
+    "int8": "DType.int8",
+    "int8_t": "DType.int8",
+    "int16": "DType.int16",
+    "int16_t": "DType.int16",
+    "int": "DType.int32",
+    "min12int": "DType.int16",
+    "min16int": "DType.int16",
+    "short": "DType.int16",
+    "u8": "DType.uint8",
+    "u16": "DType.uint16",
+    "u32": "DType.uint32",
+    "uint": "DType.uint32",
+    "uint8": "DType.uint8",
+    "uint8_t": "DType.uint8",
+    "uint16": "DType.uint16",
+    "uint16_t": "DType.uint16",
+    "min16uint": "DType.uint16",
+    "ushort": "DType.uint16",
+    "bool": "DType.bool",
+}
+
+MOJO_RESOURCE_TYPE_MAPPING = {
+    "sampler1D": "Texture1D",
+    "sampler1DArray": "Texture1DArray",
+    "sampler1DArrayShadow": "Texture1DArrayShadow",
+    "sampler1DShadow": "Texture1DShadow",
+    "sampler2D": "Texture2D",
+    "sampler2DArray": "Texture2DArray",
+    "sampler2DArrayShadow": "Texture2DArrayShadow",
+    "sampler2DShadow": "Texture2DShadow",
+    "sampler2DMS": "Texture2DMS",
+    "sampler2DMSArray": "Texture2DMSArray",
+    "sampler3D": "Texture3D",
+    "samplerCube": "TextureCube",
+    "samplerCubeArray": "TextureCubeArray",
+    "samplerCubeArrayShadow": "TextureCubeArrayShadow",
+    "samplerCubeShadow": "TextureCubeShadow",
+    "isampler1D": "Texture1DInt",
+    "isampler1DArray": "Texture1DArrayInt",
+    "isampler2D": "Texture2DInt",
+    "isampler2DArray": "Texture2DArrayInt",
+    "isampler2DMS": "Texture2DMSInt",
+    "isampler2DMSArray": "Texture2DMSArrayInt",
+    "isampler3D": "Texture3DInt",
+    "isamplerCube": "TextureCubeInt",
+    "isamplerCubeArray": "TextureCubeArrayInt",
+    "usampler1D": "Texture1DUInt",
+    "usampler1DArray": "Texture1DArrayUInt",
+    "usampler2D": "Texture2DUInt",
+    "usampler2DArray": "Texture2DArrayUInt",
+    "usampler2DMS": "Texture2DMSUInt",
+    "usampler2DMSArray": "Texture2DMSArrayUInt",
+    "usampler3D": "Texture3DUInt",
+    "usamplerCube": "TextureCubeUInt",
+    "usamplerCubeArray": "TextureCubeArrayUInt",
+    "sampler": "Sampler",
+    "comparison_sampler": "Sampler",
+    "SamplerState": "Sampler",
+    "SamplerComparisonState": "Sampler",
+    "image1D": "Image1D",
+    "image1DArray": "Image1DArray",
+    "image2D": "Image2D",
+    "image2DArray": "Image2DArray",
+    "image2DMS": "Image2DMS",
+    "image2DMSArray": "Image2DMSArray",
+    "image3D": "Image3D",
+    "imageCube": "ImageCube",
+    "iimage1D": "IImage1D",
+    "iimage1DArray": "IImage1DArray",
+    "iimage2D": "IImage2D",
+    "iimage2DArray": "IImage2DArray",
+    "iimage2DMS": "IImage2DMS",
+    "iimage2DMSArray": "IImage2DMSArray",
+    "iimage3D": "IImage3D",
+    "uimage1D": "UImage1D",
+    "uimage1DArray": "UImage1DArray",
+    "uimage2D": "UImage2D",
+    "uimage2DArray": "UImage2DArray",
+    "uimage2DMS": "UImage2DMS",
+    "uimage2DMSArray": "UImage2DMSArray",
+    "uimage3D": "UImage3D",
+    "accelerationStructureEXT": "RayTracingAccelerationStructure",
+    "AccelerationStructure": "RayTracingAccelerationStructure",
+    "acceleration_structure": "RayTracingAccelerationStructure",
+    "RaytracingAccelerationStructure": "RayTracingAccelerationStructure",
+    "RayTracingAccelerationStructure": "RayTracingAccelerationStructure",
+}
+
+MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES = frozenset({"Texture2D"})
+MOJO_CONCRETE_RESOURCE_TYPES = frozenset(
+    {"Sampler", *MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES}
+)
+
+
+MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
+    "RWTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
+    "RWTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RWTexture2DArray": ("Image2DArray", "IImage2DArray", "UImage2DArray"),
+    "RWTexture2DMS": ("Image2DMS", "IImage2DMS", "UImage2DMS"),
+    "RWTexture2DMSArray": (
+        "Image2DMSArray",
+        "IImage2DMSArray",
+        "UImage2DMSArray",
+    ),
+    "RWTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+    "RasterizerOrderedTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RasterizerOrderedTexture1DArray": (
+        "Image1DArray",
+        "IImage1DArray",
+        "UImage1DArray",
+    ),
+    "RasterizerOrderedTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RasterizerOrderedTexture2DArray": (
+        "Image2DArray",
+        "IImage2DArray",
+        "UImage2DArray",
+    ),
+    "RasterizerOrderedTexture2DMS": ("Image2DMS", "IImage2DMS", "UImage2DMS"),
+    "RasterizerOrderedTexture2DMSArray": (
+        "Image2DMSArray",
+        "IImage2DMSArray",
+        "UImage2DMSArray",
+    ),
+    "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+}
+
+MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = set()
+
+MOJO_TYPED_IMAGE_DTYPE_SUFFIX = {
+    "DType.float16": "Half",
+    "DType.float32": "Float",
+    "DType.float64": "Double",
+    "DType.int16": "Int16",
+    "DType.int32": "Int",
+    "DType.uint16": "UInt16",
+    "DType.uint32": "UInt",
+}
+
+MOJO_TYPED_IMAGE_SUFFIX_INFO = {
+    suffix if width == 1 else f"{suffix}{width}": (dtype, width)
+    for dtype, suffix in MOJO_TYPED_IMAGE_DTYPE_SUFFIX.items()
+    for width in (1, 2, 3, 4)
+}
+
+MOJO_TYPED_TEXTURE_DTYPE_SUFFIX = {
+    "DType.int32": "Int",
+    "DType.uint32": "UInt",
+}
+
+MOJO_TYPED_TEXTURE_SUFFIX_INFO = {
+    suffix if width == 4 else f"{suffix}{width}": (dtype, width)
+    for dtype, suffix in MOJO_TYPED_TEXTURE_DTYPE_SUFFIX.items()
+    for width in (1, 2, 3, 4)
+}
+
+MOJO_IMAGE_RESOURCE_BASE_TYPES = tuple(
+    sorted(
+        {
+            resource_type
+            for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
+            if resource_type.startswith(("Image", "IImage", "UImage"))
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+MOJO_TEXTURE_RESOURCE_BASE_TYPES = tuple(
+    sorted(
+        {
+            resource_type
+            for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
+            if resource_type.startswith("Texture")
+            and not any(
+                resource_type.endswith(suffix)
+                for suffix in MOJO_TYPED_TEXTURE_SUFFIX_INFO
+            )
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+MOJO_RESOURCE_SAMPLE_COORDS = {
+    "Texture1D": "Float32",
+    "Texture1DArray": "SIMD[DType.float32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
+    "Texture2D": "SIMD[DType.float32, 2]",
+    "Texture2DArray": "SIMD[DType.float32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+    "TextureCube": "SIMD[DType.float32, 4]",
+    "TextureCubeArray": "SIMD[DType.float32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_TEXEL_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 4]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 4]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 4]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_OFFSET_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "Int32",
+    "Texture1DArrayShadow": "Int32",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 2]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_COMPARE_COORDS = {
+    "Texture1DArrayShadow": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "Float32",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 2]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_PROJECTED_COORDS = {
+    "Texture1D": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
+    "Texture2D": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_SIZE_RETURNS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 2]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 2]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 2]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_GENERIC_TEXTURE_BUILTINS = {
+    "textureOffset": ("sample_offset", "vec4"),
+    "textureLodOffset": ("sample_lod_offset", "vec4"),
+    "textureGradOffset": ("sample_grad_offset", "vec4"),
+    "textureGather": ("texture_gather", "vec4"),
+    "textureGatherOffset": ("texture_gather_offset", "vec4"),
+    "textureGatherOffsets": ("texture_gather_offsets", "vec4"),
+    "textureProj": ("sample_proj", "vec4"),
+    "textureProjOffset": ("sample_proj_offset", "vec4"),
+    "textureProjLod": ("sample_proj_lod", "vec4"),
+    "textureProjLodOffset": ("sample_proj_lod_offset", "vec4"),
+    "textureProjGrad": ("sample_proj_grad", "vec4"),
+    "textureProjGradOffset": ("sample_proj_grad_offset", "vec4"),
+    "textureQueryLod": ("texture_query_lod", "vec2"),
+    "textureCompare": ("texture_compare", "float"),
+    "textureCompareOffset": ("texture_compare_offset", "float"),
+    "textureCompareLod": ("texture_compare_lod", "float"),
+    "textureCompareLodOffset": ("texture_compare_lod_offset", "float"),
+    "textureCompareGrad": ("texture_compare_grad", "float"),
+    "textureCompareGradOffset": ("texture_compare_grad_offset", "float"),
+    "textureCompareProj": ("texture_compare_proj", "float"),
+    "textureCompareProjOffset": ("texture_compare_proj_offset", "float"),
+    "textureCompareProjLod": ("texture_compare_proj_lod", "float"),
+    "textureCompareProjLodOffset": ("texture_compare_proj_lod_offset", "float"),
+    "textureCompareProjGrad": ("texture_compare_proj_grad", "float"),
+    "textureCompareProjGradOffset": ("texture_compare_proj_grad_offset", "float"),
+    "textureGatherCompare": ("texture_gather_compare", "vec4"),
+    "textureGatherCompareOffset": ("texture_gather_compare_offset", "vec4"),
+    "CalculateLevelOfDetail": ("calculate_level_of_detail", "float"),
+    "CalculateLevelOfDetailUnclamped": (
+        "calculate_level_of_detail_unclamped",
+        "float",
+    ),
+}
+
+MOJO_IMAGE_ATOMIC_BUILTINS = {
+    "imageAtomicAdd": "image_atomic_add",
+    "imageAtomicMin": "image_atomic_min",
+    "imageAtomicMax": "image_atomic_max",
+    "imageAtomicAnd": "image_atomic_and",
+    "imageAtomicOr": "image_atomic_or",
+    "imageAtomicXor": "image_atomic_xor",
+    "imageAtomicExchange": "image_atomic_exchange",
+    "imageAtomicCompSwap": "image_atomic_comp_swap",
+}
+
+MOJO_ATOMIC_OP_ALIASES = {
+    **MOJO_IMAGE_ATOMIC_BUILTINS,
+    "imageAtomicCompareExchange": "image_atomic_comp_swap",
+    "atomicAdd": "image_atomic_add",
+    "atomicMin": "image_atomic_min",
+    "atomicMax": "image_atomic_max",
+    "atomicAnd": "image_atomic_and",
+    "atomicOr": "image_atomic_or",
+    "atomicXor": "image_atomic_xor",
+    "atomicExchange": "image_atomic_exchange",
+    "atomicCompSwap": "image_atomic_comp_swap",
+    "atomicCompareExchange": "image_atomic_comp_swap",
+    "Add": "image_atomic_add",
+    "Min": "image_atomic_min",
+    "Max": "image_atomic_max",
+    "And": "image_atomic_and",
+    "Or": "image_atomic_or",
+    "Xor": "image_atomic_xor",
+    "Exchange": "image_atomic_exchange",
+    "CompareExchange": "image_atomic_comp_swap",
+    "CompSwap": "image_atomic_comp_swap",
+    "InterlockedAdd": "image_atomic_add",
+    "InterlockedMin": "image_atomic_min",
+    "InterlockedMax": "image_atomic_max",
+    "InterlockedAnd": "image_atomic_and",
+    "InterlockedOr": "image_atomic_or",
+    "InterlockedXor": "image_atomic_xor",
+    "InterlockedExchange": "image_atomic_exchange",
+    "InterlockedCompareExchange": "image_atomic_comp_swap",
+}
+
+MOJO_SCALAR_ATOMIC_OPS = {
+    "atomicAdd": "add",
+    "atomicMin": "min",
+    "atomicMax": "max",
+    "atomicAnd": "and",
+    "atomicOr": "or",
+    "atomicXor": "xor",
+    "atomicExchange": "exchange",
+    "atomicCompSwap": "compare_exchange",
+    "atomicCompareExchange": "compare_exchange",
+    "InterlockedAdd": "add",
+    "InterlockedMin": "min",
+    "InterlockedMax": "max",
+    "InterlockedAnd": "and",
+    "InterlockedOr": "or",
+    "InterlockedXor": "xor",
+    "InterlockedExchange": "exchange",
+    "InterlockedCompareExchange": "compare_exchange",
+}
+
+MOJO_SCALAR_ATOMIC_TYPES = {
+    "int",
+    "uint",
+    "short",
+    "ushort",
+    "long",
+    "ulong",
+}
+
+MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "AppendStructuredBuffer",
+    "ConsumeStructuredBuffer",
+}
+
+MOJO_BYTE_ADDRESS_BUFFER_TYPES = {
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_HLSL_BUFFER_TYPE_ALIASES = {
+    "RasterizerOrderedBuffer": "RWBuffer",
+    "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
+    "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
+}
+
+MOJO_BUFFER_RESOURCE_TYPES = (
+    MOJO_TYPED_BUFFER_RESOURCE_TYPES | MOJO_BYTE_ADDRESS_BUFFER_TYPES
+)
+
+MOJO_RESERVED_RESOURCE_TYPE_NAMES = frozenset(
+    set(MOJO_RESOURCE_TYPE_MAPPING)
+    | set(MOJO_RESOURCE_TYPE_MAPPING.values())
+    | set(MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING)
+    | MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES
+    | set(MOJO_HLSL_BUFFER_TYPE_ALIASES)
+    | MOJO_BUFFER_RESOURCE_TYPES
+)
+
+MOJO_BUFFER_STORE_RESOURCE_TYPES = {
+    "RWBuffer",
+    "RWStructuredBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+}
+
+MOJO_REINTERPRET_BUILTINS = {
+    "asfloat": "Float32",
+    "asint": "Int32",
+    "asuint": "UInt32",
+}
+
+MOJO_REINTERPRET_ALIAS_MAP = {
+    "floatBitsToInt": "asint",
+    "floatBitsToUint": "asuint",
+    "intBitsToFloat": "asfloat",
+    "uintBitsToFloat": "asfloat",
+}
+
+MOJO_REINTERPRET_TARGET_TYPES = {
+    "asfloat": ("float", "vec"),
+    "asint": ("int", "ivec"),
+    "asuint": ("uint", "uvec"),
+}
+
+MOJO_BYTE_ADDRESS_LOAD_METHODS = {
+    "Load": 1,
+    "Load2": 2,
+    "Load3": 3,
+    "Load4": 4,
+}
+
+MOJO_BYTE_ADDRESS_STORE_METHODS = {
+    "Store": 1,
+    "Store2": 2,
+    "Store3": 3,
+    "Store4": 4,
+}
+
+MOJO_BYTE_ADDRESS_ATOMIC_METHODS = {
+    "InterlockedAdd",
+    "InterlockedAnd",
+    "InterlockedCompareExchange",
+    "InterlockedCompareStore",
+    "InterlockedExchange",
+    "InterlockedMax",
+    "InterlockedMin",
+    "InterlockedOr",
+    "InterlockedXor",
+}
+
+MOJO_BUFFER_COUNTER_METHODS = {
+    "DecrementCounter",
+    "IncrementCounter",
+}
+
+MOJO_BUFFER_OP_ALIASES = {
+    "Append": "Append",
+    "append": "Append",
+    "buffer_append": "Append",
+    "Consume": "Consume",
+    "consume": "Consume",
+    "buffer_consume": "Consume",
+    "GetDimensions": "GetDimensions",
+    "getDimensions": "GetDimensions",
+    "dimensions": "GetDimensions",
+    "buffer_dimensions": "GetDimensions",
+    "Load": "Load",
+    "load": "Load",
+    "buffer_load": "Load",
+    "Store": "Store",
+    "store": "Store",
+    "buffer_store": "Store",
+    **{name: name for name in MOJO_BYTE_ADDRESS_LOAD_METHODS},
+    **{name: name for name in MOJO_BYTE_ADDRESS_STORE_METHODS},
+}
+
+MOJO_RESOURCE_QUERY_MEMBER_REQUIREMENTS = {
+    "GetDimensions": ("GetDimensions", "texture, image, or buffer resource receiver"),
+    "textureSize": ("texture_size", "texture resource receiver"),
+    "textureQueryLevels": ("texture_query_levels", "texture resource receiver"),
+    "textureSamples": ("texture_samples", "texture resource receiver"),
+    "imageSamples": ("image_samples", "image resource receiver"),
+}
+
+MOJO_RESOURCE_OPERATION_MEMBER_REQUIREMENTS = {
+    "Load": ("Load", "texture, image, or buffer resource receiver"),
+    "Store": ("Store", "image or buffer resource receiver"),
+    **{
+        member: (
+            helper_name,
+            (
+                "image or byte-address buffer resource receiver"
+                if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS
+                else "image resource receiver"
+            ),
+        )
+        for member, helper_name in MOJO_ATOMIC_OP_ALIASES.items()
+    },
+    **{
+        member: (member, "byte-address buffer resource receiver")
+        for member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS
+        if member not in MOJO_ATOMIC_OP_ALIASES
+    },
+}
+
+MOJO_INTEGER_DTYPES = {
+    "DType.int8",
+    "DType.int16",
+    "DType.int32",
+    "DType.uint8",
+    "DType.uint16",
+    "DType.uint32",
+}
+
+MOJO_FLOAT_DTYPES = {
+    "DType.float32",
+    "DType.float64",
+}
+
+MOJO_INTEGER_INDEX_TYPES = {
+    "Int",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "i8",
+    "i16",
+    "i32",
+    "int8",
+    "int8_t",
+    "int",
+    "int16",
+    "int16_t",
+    "long",
+    "min12int",
+    "min16int",
+    "min16uint",
+    "short",
+    "u8",
+    "u16",
+    "u32",
+    "uint",
+    "uint8",
+    "uint8_t",
+    "uint16",
+    "uint16_t",
+    "ulong",
+    "ushort",
+}
+
+MOJO_MAPPED_INTEGER_TYPES = {
+    "Int",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+}
+
+MOJO_RAY_STAGE_TYPES = {
+    "ray_any_hit",
+    "ray_callable",
+    "ray_closest_hit",
+    "ray_generation",
+    "ray_intersection",
+    "ray_miss",
+}
+
+MOJO_MESH_STAGE_TYPES = {"task", "amplification", "object", "mesh"}
+
+MOJO_SUPPORTED_STAGE_TYPES = (
+    {
+        "vertex",
+        "fragment",
+        "compute",
+        "geometry",
+        "tessellation_control",
+        "tessellation_evaluation",
+    }
+    | MOJO_RAY_STAGE_TYPES
+    | MOJO_MESH_STAGE_TYPES
+)
+
+MOJO_SYNC_BUILTINS = {
+    "barrier": "_crossgl_workgroup_barrier",
+    "workgroupBarrier": "_crossgl_workgroup_barrier",
+    "memoryBarrier": "_crossgl_memory_barrier",
+    "memoryBarrierShared": "_crossgl_memory_barrier_shared",
+    "memoryBarrierBuffer": "_crossgl_memory_barrier_buffer",
+    "memoryBarrierImage": "_crossgl_memory_barrier_image",
+    "groupMemoryBarrier": "_crossgl_group_memory_barrier",
+    "allMemoryBarrier": "_crossgl_all_memory_barrier",
+    "deviceMemoryBarrier": "_crossgl_device_memory_barrier",
+}
+
+MOJO_WAVE_OP_ARITIES = {
+    "WaveGetLaneCount": 0,
+    "WaveGetLaneIndex": 0,
+    "WaveIsFirstLane": 0,
+    "WaveActiveSum": 1,
+    "WaveActiveProduct": 1,
+    "WaveActiveBitAnd": 1,
+    "WaveActiveBitOr": 1,
+    "WaveActiveBitXor": 1,
+    "WaveActiveMin": 1,
+    "WaveActiveMax": 1,
+    "WaveActiveAllTrue": 1,
+    "WaveActiveAnyTrue": 1,
+    "WaveActiveAllEqual": 1,
+    "WaveActiveBallot": 1,
+    "WaveActiveCountBits": 1,
+    "WaveReadLaneAt": 2,
+    "WaveReadLaneFirst": 1,
+    "WavePrefixSum": 1,
+    "WavePrefixProduct": 1,
+    "WavePrefixCountBits": 1,
+    "QuadReadAcrossX": 1,
+    "QuadReadAcrossY": 1,
+    "QuadReadAcrossDiagonal": 1,
+    "QuadReadLaneAt": 2,
+    "WaveMatch": 1,
+    "WaveMultiPrefixSum": 2,
+    "WaveMultiPrefixCountBits": 2,
+    "WaveMultiPrefixProduct": 2,
+    "WaveMultiPrefixBitAnd": 2,
+    "WaveMultiPrefixBitOr": 2,
+    "WaveMultiPrefixBitXor": 2,
+}
+
+MOJO_WAVE_HELPERS = {
+    "WaveGetLaneCount": "_crossgl_wave_get_lane_count",
+    "WaveGetLaneIndex": "_crossgl_wave_get_lane_index",
+    "WaveIsFirstLane": "_crossgl_wave_is_first_lane",
+    "WaveActiveSum": "_crossgl_wave_active_sum",
+    "WaveActiveProduct": "_crossgl_wave_active_product",
+    "WaveActiveBitAnd": "_crossgl_wave_active_bit_and",
+    "WaveActiveBitOr": "_crossgl_wave_active_bit_or",
+    "WaveActiveBitXor": "_crossgl_wave_active_bit_xor",
+    "WaveActiveMin": "_crossgl_wave_active_min",
+    "WaveActiveMax": "_crossgl_wave_active_max",
+    "WaveActiveAllTrue": "_crossgl_wave_active_all_true",
+    "WaveActiveAnyTrue": "_crossgl_wave_active_any_true",
+    "WaveActiveAllEqual": "_crossgl_wave_active_all_equal",
+    "WaveActiveBallot": "_crossgl_wave_active_ballot",
+    "WaveActiveCountBits": "_crossgl_wave_active_count_bits",
+    "WaveReadLaneAt": "_crossgl_wave_read_lane_at",
+    "WaveReadLaneFirst": "_crossgl_wave_read_lane_first",
+    "WavePrefixSum": "_crossgl_wave_prefix_sum",
+    "WavePrefixProduct": "_crossgl_wave_prefix_product",
+    "WavePrefixCountBits": "_crossgl_wave_prefix_count_bits",
+    "QuadReadAcrossX": "_crossgl_quad_read_across_x",
+    "QuadReadAcrossY": "_crossgl_quad_read_across_y",
+    "QuadReadAcrossDiagonal": "_crossgl_quad_read_across_diagonal",
+    "QuadReadLaneAt": "_crossgl_quad_read_lane_at",
+    "WaveMatch": "_crossgl_wave_match",
+    "WaveMultiPrefixSum": "_crossgl_wave_multi_prefix_sum",
+    "WaveMultiPrefixCountBits": "_crossgl_wave_multi_prefix_count_bits",
+    "WaveMultiPrefixProduct": "_crossgl_wave_multi_prefix_product",
+    "WaveMultiPrefixBitAnd": "_crossgl_wave_multi_prefix_bit_and",
+    "WaveMultiPrefixBitOr": "_crossgl_wave_multi_prefix_bit_or",
+    "WaveMultiPrefixBitXor": "_crossgl_wave_multi_prefix_bit_xor",
+}
+
+MOJO_WAVE_PREDICATE_ARGUMENT_OPS = {
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveBallot",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+MOJO_WAVE_UINT_RESULT_OPS = {
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+MOJO_WAVE_BOOL_RESULT_OPS = {
+    "WaveIsFirstLane",
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveAllEqual",
+}
+
+MOJO_WAVE_UVEC4_RESULT_OPS = {
+    "WaveActiveBallot",
+    "WaveMatch",
+}
+
+MOJO_RESOURCE_ACCESS_QUALIFIERS = {
+    "access::read": "readonly",
+    "access::read_write": "readwrite",
+    "access::write": "writeonly",
+    "read": "readonly",
+    "read_write": "readwrite",
+    "readonly": "readonly",
+    "readwrite": "readwrite",
+    "write": "writeonly",
+    "writeonly": "writeonly",
+}
+
+MOJO_RESOURCE_MEMORY_QUALIFIERS = {
+    "coherent",
+    "globallycoherent",
+    "restrict",
+    "volatile",
+}
+
+MOJO_NON_SEMANTIC_ATTRIBUTES = {
+    "access",
+    "binding",
+    "buffer",
+    "builtin",
+    "compute",
+    "domain",
+    "fragment",
+    "glsl_buffer_block",
+    "group",
+    "layout",
+    "maxvertexcount",
+    "numthreads",
+    "outputcontrolpoints",
+    "outputtopology",
+    "partitioning",
+    "patchconstantfunc",
+    "register",
+    "sampler",
+    "set",
+    "space",
+    "std140",
+    "std430",
+    "texture",
+    "threadgroup_size",
+    "tessellation_control",
+    "tessellation_evaluation",
+    "uav",
+    "vertex",
+}
+
+MOJO_INPUT_ONLY_RETURN_SEMANTICS = {
+    "gl_fragcoord",
+    "gl_frontfacing",
+    "gl_globalinvocationid",
+    "gl_instanceid",
+    "gl_localinvocationid",
+    "gl_pointcoord",
+    "gl_vertexid",
+    "gl_workgroupid",
+    "sv_dispatchthreadid",
+    "sv_groupid",
+    "sv_groupindex",
+    "sv_groupthreadid",
+    "sv_instanceid",
+    "sv_isfrontface",
+    "sv_vertexid",
+}
+
+MOJO_BUILTIN_PLACEHOLDERS = {
+    "gl_GlobalInvocationID": ("global_invocation_id", "uvec3"),
+    "gl_LocalInvocationID": ("local_invocation_id", "uvec3"),
+    "gl_WorkGroupID": ("workgroup_id", "uvec3"),
+    "gl_NumWorkGroups": ("num_workgroups", "uvec3"),
+    "gl_WorkGroupSize": ("workgroup_size", "uvec3"),
+    "gl_LocalInvocationIndex": ("local_invocation_index", "uint"),
+    "SV_DispatchThreadID": ("global_invocation_id", "uvec3"),
+    "SV_GroupID": ("workgroup_id", "uvec3"),
+    "SV_GroupThreadID": ("local_invocation_id", "uvec3"),
+    "SV_GroupIndex": ("local_invocation_index", "uint"),
+    "SV_VertexID": ("vertex_id", "uint"),
+    "SV_InstanceID": ("instance_id", "uint"),
+    "gl_VertexID": ("vertex_id", "int"),
+    "gl_InstanceID": ("instance_id", "int"),
+    "gl_FrontFacing": ("front_facing", "bool"),
+    "SV_IsFrontFace": ("front_facing", "bool"),
+    "gl_FragCoord": ("position", "vec4"),
+    "gl_PointCoord": ("point_coord", "vec2"),
+}
+
+MOJO_GPU_BUILTIN_ALIASES = {
+    "gl_GlobalInvocationID": ("global_idx_uint", "uvec3"),
+    "SV_DispatchThreadID": ("global_idx_uint", "uvec3"),
+    "gl_LocalInvocationID": ("thread_idx_uint", "uvec3"),
+    "SV_GroupThreadID": ("thread_idx_uint", "uvec3"),
+    "gl_WorkGroupID": ("block_idx_uint", "uvec3"),
+    "SV_GroupID": ("block_idx_uint", "uvec3"),
+    "gl_NumWorkGroups": ("grid_dim_uint", "uvec3"),
+    "gl_WorkGroupSize": ("block_dim_uint", "uvec3"),
+}
+
+MOJO_GPU_BUILTIN_PARAMETER_ORDER = (
+    "global_idx_uint",
+    "thread_idx_uint",
+    "block_idx_uint",
+    "grid_dim_uint",
+    "block_dim_uint",
+)
+
+MOJO_VECTOR_ARITHMETIC_OPS = {
+    "+": "add",
+    "-": "sub",
+    "*": "mul",
+    "/": "div",
+}
+
+MOJO_MATH_HELPERS = {
+    "clamp",
+    "cross_product",
+    "dot_product",
+    "fmod",
+    "lerp",
+    "magnitude",
+    "max",
+    "min",
+    "normalize",
+    "power",
+    "reflect",
+    "refract",
+    "round_even",
+    "smoothstep",
+    "step",
+}
+
+
+class MojoCodeGen:
+    """Emit Mojo-like shader source from the shared CrossGL AST."""
+
+    def __init__(self):
+        """Initialize Mojo type maps and helper-generation state."""
+        self.vector_constructor_info = MOJO_VECTOR_TYPES
+        self.struct_types = {}
+        self.function_return_types = {}
+        self.function_parameter_types = {}
+        self.function_overload_signatures = {}
+        self.function_return_resource_aliases = {}
+        self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
+        self.function_return_resource_static_field_aliases = {}
+        self.stage_local_function_extra_params = {}
+        self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_variant_names = {}
+        self.enum_unit_variant_constructors = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
+        self.generic_struct_type_params = {}
+        self.struct_member_semantics = {}
+        self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
+        self.struct_resource_access_qualifiers = {}
+        self.literal_int_constants = {}
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
+        self.mojo_used_resource_bindings = {}
+        self.mojo_resource_binding_initializers = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
+        self.required_resource_sample_sampler_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_lod_sampler_types = set()
+        self.required_resource_grad_types = set()
+        self.required_resource_grad_sampler_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_size_helpers = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_resource_texel_fetch_offset_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
+        self.required_geometry_stream_helpers = set()
+        self.required_tessellation_patch_helpers = set()
+        self.required_mesh_helpers = set()
+        self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
+        self.required_wave_helpers = set()
+        self.required_ray_helpers = set()
+        self.required_helpers = set()
+        self.required_splat_helpers = set()
+        self.required_swizzle_helpers = set()
+        self.required_constructor_helpers = {}
+        self.required_select_helpers = set()
+        self.required_matrix_types = set()
+        self.required_matrix_constructor_helpers = {}
+        self.required_matrix_diagonal_helpers = set()
+        self.required_math_helpers = set()
+        self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
+        self.required_saturate_helpers = set()
+        self.required_builtin_placeholders = set()
+        self.required_gpu_builtin_placeholders = set()
+        self.current_return_type = None
+        self.current_shader = None
+        self.current_shader_type = None
+        self.current_shader_stage_count = 0
+        self.expression_identifier_replacements = {}
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
+        self.lambda_counter = 0
+        self.match_expression_counter = 0
+        self.match_subject_counter = 0
+        self.dimension_query_counter = 0
+        self.scalar_atomic_counter = 0
+        self.swizzle_assignment_counter = 0
+        self.increment_expression_counter = 0
+        self.expression_prelude_stack = []
+        self.type_mapping = {
+            # Scalar Types
+            "void": "None",
+            "int": "Int32",
+            "i8": "Int8",
+            "i16": "Int16",
+            "i32": "Int32",
+            "int8": "Int8",
+            "int8_t": "Int8",
+            "int16": "Int16",
+            "int16_t": "Int16",
+            "min12int": "Int16",
+            "min16int": "Int16",
+            "short": "Int16",
+            "long": "Int64",
+            "uint": "UInt32",
+            "u8": "UInt8",
+            "u16": "UInt16",
+            "u32": "UInt32",
+            "uint8": "UInt8",
+            "uint8_t": "UInt8",
+            "uint16": "UInt16",
+            "uint16_t": "UInt16",
+            "min16uint": "UInt16",
+            "ushort": "UInt16",
+            "ulong": "UInt64",
+            "f16": "Float16",
+            "float": "Float32",
+            "double": "Float64",
+            "half": "Float16",
+            "min10float": "Float16",
+            "min16float": "Float16",
+            "bool": "Bool",
+            "string": "String",
+            "str": "String",
+            "char": "String",
+            **{
+                name: f"SIMD[{dtype}, {storage_width}]"
+                for name, (dtype, _, storage_width, _) in MOJO_VECTOR_TYPES.items()
+            },
+            **{
+                name: self.matrix_type_name(dtype, columns, rows)
+                for name, (dtype, columns, rows) in MOJO_MATRIX_TYPES.items()
+            },
+            # Texture/resource placeholders for Mojo compile-smoke support.
+            **MOJO_RESOURCE_TYPE_MAPPING,
+            "RayDesc": "RayDesc",
+            "RayQuery": "RayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "BuiltInTriangleIntersectionAttributes"
+            ),
+        }
+        self.scalar_constructor_map = {
+            name: mapped
+            for name, mapped in self.type_mapping.items()
+            if mapped in {
+                "Bool",
+                "Float16",
+                "Float32",
+                "Float64",
+                "Int16",
+                "Int32",
+                "Int64",
+                "String",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+            }
+        }
+
+        self.semantic_map = {
+            # Vertex attributes
+            "gl_VertexID": "vertex_id",
+            "gl_InstanceID": "instance_id",
+            "gl_Position": "position",
+            "gl_PointSize": "point_size",
+            "gl_ClipDistance": "clip_distance",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_WorkGroupID": "workgroup_id",
+            # Fragment attributes
+            "gl_FragColor": "color(0)",
+            "gl_FragColor0": "color(0)",
+            "gl_FragColor1": "color(1)",
+            "gl_FragColor2": "color(2)",
+            "gl_FragColor3": "color(3)",
+            "gl_FragDepth": "depth(any)",
+            "gl_FragCoord": "position",
+            "gl_FrontFacing": "front_facing",
+            "gl_PointCoord": "point_coord",
+            # Standard vertex semantics
+            "POSITION": "position",
+            "NORMAL": "normal",
+            "TANGENT": "tangent",
+            "BINORMAL": "binormal",
+            "TEXCOORD": "texcoord",
+            "TEXCOORD0": "texcoord0",
+            "TEXCOORD1": "texcoord1",
+            "TEXCOORD2": "texcoord2",
+            "TEXCOORD3": "texcoord3",
+            "COLOR": "color",
+            "COLOR0": "color0",
+            "COLOR1": "color1",
+            "SV_Position": "position",
+            "SV_Depth": "depth(any)",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "group_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
+            "SV_Target": "color(0)",
+            "SV_Target0": "color(0)",
+            "SV_Target1": "color(1)",
+            "SV_Target2": "color(2)",
+            "SV_Target3": "color(3)",
+            "SV_VertexID": "vertex_id",
+        }
+
+        # Function mapping for common shader functions
+        self.function_map = {
+            "texture": "sample",
+            "normalize": "normalize",
+            "dot": "dot_product",
+            "cross": "cross_product",
+            "length": "magnitude",
+            "reflect": "reflect",
+            "refract": "refract",
+            "sin": "sin",
+            "cos": "cos",
+            "tan": "tan",
+            "sqrt": "sqrt",
+            "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
+            "pow": "power",
+            "roundEven": "round_even",
+            "abs": "abs",
+            "min": "min",
+            "max": "max",
+            "clamp": "clamp",
+            "mix": "lerp",
+            "smoothstep": "smoothstep",
+            "step": "step",
+            "TraceRay": "trace_ray",
+            "CallShader": "call_shader",
+            "ReportHit": "report_hit",
+            "IgnoreHit": "ignore_hit",
+            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
+        }
+
+    def generate(self, ast):
+        """Generate complete Mojo-like shader source for a CrossGL AST."""
+        # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
+        ast = canonicalize_separate_textures(ast)
+        self.struct_types = {}
+        self.function_return_types = {}
+        self.function_parameter_types = {}
+        self.function_overload_signatures = {}
+        self.function_return_resource_aliases = {}
+        self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
+        self.function_return_resource_static_field_aliases = {}
+        self.stage_local_function_extra_params = {}
+        self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_variant_names = {}
+        self.enum_unit_variant_constructors = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
+        self.generic_struct_type_params = {}
+        self.struct_member_semantics = {}
+        self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
+        self.struct_resource_access_qualifiers = {}
+        self.literal_int_constants = collect_literal_int_constants(
+            getattr(ast, "constants", [])
+        )
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
+        self.mojo_used_resource_bindings = {}
+        self.mojo_resource_binding_initializers = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
+        self.required_resource_sample_sampler_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_lod_sampler_types = set()
+        self.required_resource_grad_types = set()
+        self.required_resource_grad_sampler_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_size_helpers = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_resource_texel_fetch_offset_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
+        self.required_geometry_stream_helpers = set()
+        self.required_tessellation_patch_helpers = set()
+        self.required_mesh_helpers = set()
+        self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
+        self.required_wave_helpers = set()
+        self.required_ray_helpers = set()
+        self.required_helpers = set()
+        self.required_splat_helpers = set()
+        self.required_swizzle_helpers = set()
+        self.required_constructor_helpers = {}
+        self.required_select_helpers = set()
+        self.required_matrix_types = set()
+        self.required_matrix_constructor_helpers = {}
+        self.required_matrix_diagonal_helpers = set()
+        self.required_math_helpers = set()
+        self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
+        self.required_saturate_helpers = set()
+        self.required_builtin_placeholders = set()
+        self.required_gpu_builtin_placeholders = set()
+        self.current_return_type = None
+        self.current_shader_type = None
+        self.current_shader_stage_count = len(getattr(ast, "stages", {}) or {})
+        self.expression_identifier_replacements = {}
+        self.do_while_contexts = []
+        self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
+        self.loop_depth = 0
+        self.do_while_counter = 0
+        self.lambda_counter = 0
+        self.match_expression_counter = 0
+        self.match_subject_counter = 0
+        self.dimension_query_counter = 0
+        self.scalar_atomic_counter = 0
+        self.swizzle_assignment_counter = 0
+        self.increment_expression_counter = 0
+        self.expression_prelude_stack = []
+
+        header = "# Generated Mojo Shader Code\n"
+        header += "from math import *\n"
+        header += "from gpu import *\n"
+        code = ""
+
+        structs = getattr(ast, "structs", [])
+        self.prepare_generic_enum_metadata(ast, structs)
+        self.collect_function_return_types(ast)
+        self.generic_function_definitions = {}
+        self.generic_function_definition_ordinals = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            list(iter_function_nodes(ast)),
+        )
+        for func in generic_function_specializations.values():
+            self.register_function_return_type(func)
+        self.reject_unsupported_generic_functions(ast)
+        self.reject_parameterized_generic_enum_specializations(ast)
+        for node in structs:
+            if isinstance(node, EnumNode):
+                code += self.generate_enum(node)
+        code += self.generate_generic_payload_enum_constants()
+        code += self.generate_generic_payload_enum_structs()
+        code += self.generate_generic_payload_enum_constructors()
+        for node in structs:
+            if isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
+                code += self.generate_struct(node)
+
+        code += self.generate_constants(ast)
+
+        global_vars = getattr(ast, "global_variables", [])
+        for node in global_vars:
+            if isinstance(node, ArrayNode):
+                code += self.generate_array_declaration(node)
+            else:
+                if hasattr(node, "initial_value") and node.initial_value is not None:
+                    vtype = self.variable_declared_type(node)
+                    self.register_variable_type(
+                        node.name,
+                        vtype or self.expression_result_type(node.initial_value),
+                    )
+                    if (
+                        isinstance(node.initial_value, ArrayLiteralNode)
+                        and vtype is not None
+                        and self.is_array_type_name(vtype)
+                    ):
+                        init_expr = self.generate_array_literal_expression(
+                            node.initial_value, vtype
+                        )
+                    else:
+                        self.validate_expression_target_shape(
+                            node.initial_value, vtype, f"global declaration {node.name}"
+                        )
+                        init_expr = self.generate_expression(node.initial_value)
+                    var_name = self.mojo_identifier(node.name)
+                    if vtype is None:
+                        code += f"var {var_name} = {init_expr}\n"
+                        continue
+                    code += f"var {var_name}: {self.map_type(vtype)} = {init_expr}\n"
+                    continue
+
+                # Handle both old and new AST variable structures
+                vtype = self.variable_declared_type(node) or "float"
+                self.register_variable_type(node.name, vtype)
+                resource_comment = self.generate_resource_metadata_comment(node, vtype)
+                var_name = self.mojo_identifier(node.name)
+                if self.is_array_type_name(vtype):
+                    code += resource_comment
+                    code += (
+                        f"var {var_name} = "
+                        f"{self.array_initial_value_for_type(vtype)}\n"
+                    )
+                elif self.is_struct_type_name(vtype):
+                    code += resource_comment
+                    code += f"var {var_name} = {self.zero_value_for_type(vtype)}\n"
+                elif self.is_resource_type_name(vtype):
+                    code += resource_comment
+                    mapped_type = self.map_type(vtype)
+                    init_value = self.resource_binding_initial_value(
+                        node.name, mapped_type, vtype
+                    )
+                    code += f"var {var_name}: {mapped_type} = " f"{init_value}\n"
+                else:
+                    code += (
+                        f"var {var_name}: {self.map_type(vtype)} = "
+                        f"{self.zero_value_for_type(vtype)}\n"
+                    )
+
+        cbuffers = self.get_cbuffer_nodes(ast)
+        if cbuffers:
+            code += "# Constant Buffers\n"
+            code += self.generate_cbuffers(ast)
+
+        self.collect_function_return_types(ast)
+
+        functions = getattr(ast, "functions", [])
+        for func in functions:
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    code += self.generate_function(specialized_func)
+                continue
+            qualifier = self.function_stage_qualifier(func)
+
+            if qualifier == "vertex":
+                code += "# Vertex Shader\n"
+                code += self.generate_function(func, shader_type="vertex")
+            elif qualifier == "fragment":
+                code += "# Fragment Shader\n"
+                code += self.generate_function(func, shader_type="fragment")
+            elif qualifier == "compute":
+                code += "# Compute Shader\n"
+                code += self.generate_function(func, shader_type="compute")
+            elif (
+                qualifier in {
+                    "geometry",
+                    "tessellation_control",
+                    "tessellation_evaluation",
+                } | MOJO_MESH_STAGE_TYPES
+            ):
+                code += f"# {qualifier.title()} Shader\n"
+                code += self.generate_function(func, shader_type=qualifier)
+            else:
+                code += self.generate_function(func)
+
+        # Handle shader stages (new AST structure)
+        if hasattr(ast, "stages") and ast.stages:
+            emitted_stage_local_variables = set()
+            emitted_stage_local_structs = set(self.struct_types)
+            emitted_local_functions = set()
+            for stage_type, stage in ast.stages.items():
+                if hasattr(stage, "entry_point"):
+                    stage_name = self.stage_type_name(stage_type)
+                    self.validate_stage_type(stage_name)
+                    code += f"# {stage_name.title()} Shader\n"
+                    code += self.generate_stage_local_declarations(
+                        stage,
+                        emitted_stage_local_variables,
+                        emitted_stage_local_structs,
+                    )
+                    previous_extra_params = self.stage_local_function_extra_params
+                    self.stage_local_function_extra_params = {
+                        **previous_extra_params,
+                        **self.stage_local_extra_params(stage),
+                    }
+                    for func in self.stage_local_functions_to_emit(stage):
+                        signature = self.function_signature_key(func)
+                        if signature in emitted_local_functions:
+                            continue
+                        if generic_function_parameters(func):
+                            for specialized_func in generic_function_emission_list(
+                                self,
+                                func,
+                            ):
+                                code += self.generate_function(specialized_func)
+                            emitted_local_functions.add(signature)
+                            continue
+                        code += self.generate_function(func)
+                        emitted_local_functions.add(signature)
+                    code += self.generate_function(
+                        stage.entry_point, shader_type=stage_name, stage_node=stage
+                    )
+                    self.stage_local_function_extra_params = previous_extra_params
+        if self.required_reinterpret_helpers:
+            header += "from memory import bitcast\n"
+        header += "\n"
+
+        return header + self.generate_required_helpers() + code
+
+    def function_stage_qualifier(self, func):
+        if hasattr(func, "qualifiers") and func.qualifiers:
+            qualifier = func.qualifiers[0] if func.qualifiers else None
+        else:
+            qualifier = getattr(func, "qualifier", None)
+        if qualifier:
+            value = getattr(qualifier, "value", None)
+            return value if isinstance(value, str) else str(qualifier)
+
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized in MOJO_SUPPORTED_STAGE_TYPES:
+                return normalized
+        return None
+
+    def stage_type_name(self, stage_type):
+        value = getattr(stage_type, "value", None)
+        if isinstance(value, str):
+            return value
+        return str(stage_type).split(".")[-1].lower()
+
+    def validate_stage_type(self, stage_name):
+        if stage_name not in MOJO_SUPPORTED_STAGE_TYPES:
+            supported = ", ".join(sorted(MOJO_SUPPORTED_STAGE_TYPES))
+            raise ValueError(
+                f"Unsupported {stage_name} shader stage for Mojo codegen; "
+                f"supported compile-smoke stages are {supported}"
+            )
+
+    def geometry_stage_attribute_arguments(self, func, attribute_name):
+        requested = str(attribute_name).strip().lower().replace("-", "_")
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized == requested:
+                return getattr(attr, "arguments", getattr(attr, "args", [])) or []
+        return []
+
+    def mojo_stage_attribute_value(self, func, attribute_name, stage_name):
+        arguments = self.geometry_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Mojo {stage_name} stage {attribute_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def geometry_maxvertexcount(self, func):
+        arguments = self.geometry_stage_attribute_arguments(func, "maxvertexcount")
+        if not arguments:
+            raise ValueError("Mojo geometry stage requires maxvertexcount attribute")
+        if len(arguments) != 1:
+            raise ValueError(
+                "Mojo geometry stage maxvertexcount requires exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Mojo geometry stage maxvertexcount ({value}) must be positive"
+            )
+        return value_text
+
+    def geometry_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = getattr(attr, "arguments", getattr(attr, "args", [])) or []
+            if not arguments:
+                continue
+            primitive = self.attribute_value_to_string(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+        return qualifiers
+
+    def geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.geometry_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def geometry_parameter_is_array(self, parameter, param_type):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            return True
+        return bool(param_type and "[" in str(param_type) and "]" in str(param_type))
+
+    def geometry_parameter_array_count(self, parameter, param_type):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            size = getattr(raw_type, "size", None)
+            if size is None:
+                return None
+            if isinstance(size, int):
+                return size
+            return self.literal_int_value(size)
+
+        if not param_type or "[" not in str(param_type) or "]" not in str(param_type):
+            return None
+        _base_type, array_size = self.parse_array_type_name(param_type)
+        return array_size
+
+    def validate_geometry_input_primitive_arity(self, param_infos):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter, param_type in param_infos:
+            primitive = self.geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.geometry_parameter_is_array(parameter, param_type):
+                raise ValueError(
+                    "Mojo geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.geometry_parameter_array_count(parameter, param_type)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "Mojo geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def geometry_stream_info(self, type_name):
+        if type_name is None:
+            return None
+
+        stream_names = {"PointStream", "LineStream", "TriangleStream"}
+        type_text = self.type_name_string(type_name)
+        if not type_text or "<" not in type_text or not type_text.endswith(">"):
+            return None
+
+        stream_name, generic_arg = type_text.split("<", 1)
+        stream_name = stream_name.strip()
+        if stream_name not in stream_names:
+            return None
+
+        output_type = generic_arg[:-1].strip()
+        if not output_type:
+            return None
+        return stream_name, output_type
+
+    def geometry_stream_mapped_type(self, type_name):
+        stream_info = self.geometry_stream_info(type_name)
+        if stream_info is None:
+            return None
+        stream_name, output_type = stream_info
+        self.required_geometry_stream_helpers.add(stream_name)
+        return f"CrossGLMojo{stream_name}[{self.map_type(output_type)}]"
+
+    def tessellation_patch_type_info(self, type_name):
+        type_text = self.type_name_string(type_name)
+        generic = self.parse_generic_type_name(type_text)
+        if generic is None:
+            return None
+        patch_name, generic_args = generic
+        if patch_name not in {"InputPatch", "OutputPatch"}:
+            return None
+        if len(generic_args) != 2:
+            raise ValueError(
+                "Mojo tessellation patch type "
+                f"'{type_text}' must use {patch_name}<T, N>"
+            )
+        element_type, point_count = generic_args
+        if not element_type or not point_count:
+            return None
+        return patch_name, element_type, point_count
+
+    def tessellation_patch_mapped_type(self, type_name):
+        patch_info = self.tessellation_patch_type_info(type_name)
+        if patch_info is None:
+            return None
+        patch_name, element_type, point_count = patch_info
+        self.required_tessellation_patch_helpers.add(patch_name)
+        return f"CrossGLMojo{patch_name}[{self.map_type(element_type)}, {point_count}]"
+
+    def validate_tessellation_patch_signatures(self, param_infos, stage_name):
+        for parameter, param_type in param_infos:
+            patch_info = self.tessellation_patch_type_info(param_type)
+            if patch_info is None:
+                continue
+            patch_name, _element_type, point_count = patch_info
+            value = self.literal_int_value(point_count)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    "Mojo "
+                    f"{stage_name} stage {patch_name} parameter "
+                    f"'{parameter.name}' control point count ({value}) "
+                    "must be positive"
+                )
+
+    def validate_tessellation_output_patch_control_points(self, func, param_infos):
+        output_points = self.literal_int_value(
+            self.tessellation_output_control_points(func)
+        )
+        if output_points is None:
+            return
+
+        for parameter, param_type in param_infos:
+            patch_info = self.tessellation_patch_type_info(param_type)
+            if patch_info is None:
+                continue
+            patch_name, _element_type, point_count = patch_info
+            if patch_name != "OutputPatch":
+                continue
+            patch_points = self.literal_int_value(point_count)
+            if patch_points is None or patch_points == output_points:
+                continue
+            raise ValueError(
+                "Mojo tessellation_control stage OutputPatch parameter "
+                f"'{parameter.name}' control point count ({patch_points}) "
+                "must match outputcontrolpoints "
+                f"({output_points})"
+            )
+
+    def validate_geometry_stage(self, func, param_infos):
+        self.geometry_maxvertexcount(func)
+
+        if not any(
+            self.geometry_stream_info(param_type) for _, param_type in param_infos
+        ):
+            raise ValueError(
+                "Mojo geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+
+        if not any(
+            self.geometry_input_primitive_qualifier(param) for param, _ in param_infos
+        ):
+            raise ValueError(
+                "Mojo geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
+            )
+
+        self.validate_geometry_input_primitive_arity(param_infos)
+
+    def generate_geometry_stage_comments(self, func, param_infos):
+        maxvertexcount = self.geometry_maxvertexcount(func)
+        input_descriptions = []
+        stream_descriptions = []
+
+        for parameter, param_type in param_infos:
+            primitive = self.geometry_input_primitive_qualifier(parameter)
+            if primitive is not None:
+                input_descriptions.append(f"{primitive}:{parameter.name}")
+
+            stream_info = self.geometry_stream_info(param_type)
+            if stream_info is not None:
+                stream_name, output_type = stream_info
+                stream_descriptions.append(
+                    f"{stream_name}:{parameter.name}->{output_type}"
+                )
+
+        lines = [f"# CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
+        if input_descriptions:
+            lines.append(
+                f"# CrossGL geometry input primitive: {', '.join(input_descriptions)}\n"
+            )
+        if stream_descriptions:
+            lines.append(
+                f"# CrossGL geometry output stream: {', '.join(stream_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def tessellation_output_control_points(self, func):
+        arguments = self.geometry_stage_attribute_arguments(func, "outputcontrolpoints")
+        if not arguments:
+            raise ValueError(
+                "Mojo tessellation_control stage requires outputcontrolpoints attribute"
+            )
+        if len(arguments) != 1:
+            raise ValueError(
+                "Mojo tessellation_control stage outputcontrolpoints requires "
+                "exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                "Mojo tessellation_control stage outputcontrolpoints "
+                f"({value}) must be positive"
+            )
+        return value_text
+
+    def canonical_tessellation_domain(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        return {
+            "tri": "tri",
+            "triangle": "tri",
+            "triangles": "tri",
+            "quad": "quad",
+            "quads": "quad",
+            "isoline": "isoline",
+            "isolines": "isoline",
+        }.get(normalized)
+
+    def tessellation_domain(self, func, stage_name, required=False):
+        value = self.mojo_stage_attribute_value(func, "domain", stage_name)
+        if value is None:
+            if required:
+                raise ValueError(f"Mojo {stage_name} stage requires domain attribute")
+            return None
+        canonical = self.canonical_tessellation_domain(value)
+        if canonical is None:
+            raise ValueError(
+                f"Mojo {stage_name} stage domain '{value}' must be tri, quad, "
+                "or isoline"
+            )
+        return canonical
+
+    def tessellation_partitioning(self, func, stage_name):
+        value = self.mojo_stage_attribute_value(func, "partitioning", stage_name)
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        partitioning_aliases = {
+            "integer": "integer",
+            "equal": "integer",
+            "equal_spacing": "integer",
+            "fractional_even": "fractional_even",
+            "fractional_even_spacing": "fractional_even",
+            "fractional_odd": "fractional_odd",
+            "fractional_odd_spacing": "fractional_odd",
+            "pow2": "pow2",
+        }
+        canonical = partitioning_aliases.get(normalized)
+        if canonical is None:
+            valid = ", ".join(["fractional_even", "fractional_odd", "integer", "pow2"])
+            raise ValueError(
+                f"Mojo {stage_name} stage partitioning '{value}' must be one of: "
+                f"{valid}"
+            )
+        return canonical
+
+    def validate_tessellation_stage(self, func, stage_name, param_infos):
+        self.validate_tessellation_patch_signatures(param_infos, stage_name)
+        if stage_name == "tessellation_control":
+            self.tessellation_output_control_points(func)
+            self.tessellation_domain(func, stage_name)
+            self.validate_tessellation_output_patch_control_points(func, param_infos)
+        elif stage_name == "tessellation_evaluation":
+            self.tessellation_domain(func, stage_name, required=True)
+        self.tessellation_partitioning(func, stage_name)
+
+    def generate_tessellation_patch_parameter_comments(self, param_infos):
+        patch_descriptions = []
+        for parameter, param_type in param_infos:
+            patch_info = self.tessellation_patch_type_info(param_type)
+            if patch_info is None:
+                continue
+            patch_name, element_type, point_count = patch_info
+            patch_descriptions.append(
+                f"{patch_name}:{parameter.name}->{element_type}[{point_count}]"
+            )
+        if not patch_descriptions:
+            return ""
+        return (
+            f"# CrossGL tessellation patch parameter: {', '.join(patch_descriptions)}\n"
+        )
+
+    def generate_tessellation_stage_comments(self, func, stage_name, param_infos):
+        lines = []
+        if stage_name == "tessellation_control":
+            output_points = self.tessellation_output_control_points(func)
+            lines.append(
+                "# CrossGL tessellation control stage: "
+                f"outputcontrolpoints={output_points}\n"
+            )
+        else:
+            domain = self.tessellation_domain(func, stage_name, required=True)
+            lines.append(f"# CrossGL tessellation evaluation stage: domain={domain}\n")
+
+        domain = self.tessellation_domain(
+            func, stage_name, required=stage_name == "tessellation_evaluation"
+        )
+        if stage_name == "tessellation_control" and domain is not None:
+            lines.append(f"# CrossGL tessellation domain: {domain}\n")
+
+        partitioning = self.tessellation_partitioning(func, stage_name)
+        if partitioning is not None:
+            lines.append(f"# CrossGL tessellation partitioning: {partitioning}\n")
+
+        output_topology = self.mojo_stage_attribute_value(
+            func, "outputtopology", stage_name
+        )
+        if output_topology is not None:
+            lines.append(f"# CrossGL tessellation output topology: {output_topology}\n")
+
+        patch_constant_function = self.mojo_stage_attribute_value(
+            func, "patchconstantfunc", stage_name
+        )
+        if patch_constant_function is not None:
+            lines.append(
+                "# CrossGL tessellation patch constant function: "
+                f"{patch_constant_function}\n"
+            )
+
+        patch_comments = self.generate_tessellation_patch_parameter_comments(
+            param_infos
+        )
+        if patch_comments:
+            lines.append(patch_comments)
+
+        return "".join(lines)
+
+    def mesh_stage_attribute_arguments(self, func, *attribute_names):
+        for attribute_name in attribute_names:
+            arguments = self.geometry_stage_attribute_arguments(func, attribute_name)
+            if arguments:
+                return arguments
+        return []
+
+    def mesh_stage_attribute_value(self, func, stage_name, *attribute_names):
+        arguments = self.mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Mojo {stage_name} stage {display_name} requires exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def mesh_stage_positive_attribute(self, func, stage_name, *attribute_names):
+        arguments = self.mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Mojo {stage_name} stage {display_name} requires exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Mojo {stage_name} stage {display_name} ({value}) must be positive"
+            )
+        return value_text
+
+    def mesh_stage_numthreads(self, func, stage_name):
+        arguments = self.mesh_stage_attribute_arguments(func, "numthreads")
+        if not arguments:
+            return None
+        if len(arguments) > 3:
+            raise ValueError(
+                f"Mojo {stage_name} stage numthreads requires at most three arguments"
+            )
+        values = [self.attribute_value_to_string(arg) for arg in arguments]
+        for index, argument in enumerate(arguments):
+            value = self.literal_int_value(argument)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"Mojo {stage_name} stage numthreads value {index + 1} "
+                    "must be positive"
+                )
+        while len(values) < 3:
+            values.append("1")
+        return tuple(values[:3])
+
+    def mesh_stage_layout_local_size(self, stage_node):
+        if stage_node is None:
+            return None
+        sizes = {"local_size_x": None, "local_size_y": None, "local_size_z": None}
+        for layout in getattr(stage_node, "layout_qualifiers", []) or []:
+            for entry in getattr(layout, "entries", []) or []:
+                name = getattr(entry, "name", None)
+                if name not in sizes:
+                    continue
+                arguments = (
+                    getattr(entry, "arguments", getattr(entry, "args", [])) or []
+                )
+                if len(arguments) != 1:
+                    continue
+                sizes[name] = self.attribute_value_to_string(arguments[0])
+        if all(value is None for value in sizes.values()):
+            return None
+        return (
+            sizes["local_size_x"] or "1",
+            sizes["local_size_y"] or "1",
+            sizes["local_size_z"] or "1",
+        )
+
+    def canonical_mesh_output_topology(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        return {
+            "point": "point",
+            "points": "point",
+            "line": "line",
+            "lines": "line",
+            "triangle": "triangle",
+            "triangles": "triangle",
+            "triangle_cw": "triangle_cw",
+            "triangle_ccw": "triangle_ccw",
+        }.get(normalized)
+
+    def mesh_output_topology(self, func, stage_name, required=False):
+        value = self.mesh_stage_attribute_value(func, stage_name, "outputtopology")
+        if value is None:
+            if required:
+                raise ValueError(
+                    f"Mojo {stage_name} stage requires outputtopology attribute"
+                )
+            return None
+        canonical = self.canonical_mesh_output_topology(value)
+        if canonical is None:
+            raise ValueError(
+                f"Mojo {stage_name} stage outputtopology '{value}' must be point, "
+                "line, triangle, triangle_cw, or triangle_ccw"
+            )
+        return canonical
+
+    def mesh_parameter_role(self, parameter):
+        role_aliases = {
+            "mesh_payload": "mesh_payload",
+            "meshpayload": "mesh_payload",
+            "payload": "mesh_payload",
+            "vertices": "vertices",
+            "vertex": "vertices",
+            "indices": "indices",
+            "index": "indices",
+            "primitives": "primitives",
+            "primitive": "primitives",
+        }
+        for attr in getattr(parameter, "attributes", []) or []:
+            name = getattr(attr, "name", None)
+            if name is None:
+                continue
+            normalized = str(name).strip().lower().replace("-", "_")
+            role = role_aliases.get(normalized)
+            if role is not None:
+                return role
+        return None
+
+    def mesh_parameter_array_count(self, parameter, param_type):
+        return self.geometry_parameter_array_count(parameter, param_type)
+
+    def mesh_parameter_base_type(self, param_type):
+        if self.is_array_type_name(param_type):
+            base_type, _size = self.parse_array_type_name(param_type)
+            return base_type
+        return param_type
+
+    def validate_mesh_parameter_roles(self, stage_name, param_infos):
+        seen_roles = {}
+        for parameter, param_type in param_infos:
+            role = self.mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            seen_roles.setdefault(role, []).append(parameter.name)
+
+            if role == "mesh_payload" and stage_name != "mesh":
+                raise ValueError(
+                    "Mojo mesh payload parameters are only valid on mesh stages"
+                )
+            if role in {"vertices", "indices", "primitives"}:
+                if stage_name != "mesh":
+                    raise ValueError(
+                        f"Mojo mesh output parameter role {role} is only valid "
+                        "on mesh stages"
+                    )
+                if not self.geometry_parameter_is_array(parameter, param_type):
+                    raise ValueError(
+                        f"Mojo mesh {role} parameter '{parameter.name}' must be "
+                        "an array"
+                    )
+
+        for role, names in seen_roles.items():
+            if role == "mesh_payload" and len(names) > 1:
+                raise ValueError(
+                    "Mojo mesh stage accepts at most one mesh_payload parameter"
+                )
+
+    def validate_mesh_output_parameter_bounds(self, func, stage_name, param_infos):
+        if stage_name != "mesh":
+            return
+        max_vertices = self.literal_int_value(
+            self.mesh_stage_positive_attribute(
+                func, stage_name, "maxvertices", "max_vertices"
+            )
+        )
+        max_primitives = self.literal_int_value(
+            self.mesh_stage_positive_attribute(
+                func, stage_name, "maxprimitives", "max_primitives"
+            )
+        )
+        for parameter, param_type in param_infos:
+            role = self.mesh_parameter_role(parameter)
+            if role not in {"vertices", "indices", "primitives"}:
+                continue
+            array_count = self.mesh_parameter_array_count(parameter, param_type)
+            if array_count is None:
+                continue
+            if role == "vertices" and max_vertices is not None:
+                if array_count > max_vertices:
+                    raise ValueError(
+                        f"Mojo mesh vertices parameter '{parameter.name}' count "
+                        f"({array_count}) exceeds maxvertices ({max_vertices})"
+                    )
+            if role in {"indices", "primitives"} and max_primitives is not None:
+                if array_count > max_primitives:
+                    raise ValueError(
+                        f"Mojo mesh {role} parameter '{parameter.name}' count "
+                        f"({array_count}) exceeds maxprimitives ({max_primitives})"
+                    )
+
+    def walk_mesh_ops(self, node, visited=None):
+        if visited is None:
+            visited = set()
+        if node is None:
+            return
+        if isinstance(node, (str, int, float, bool)):
+            return
+        node_id = id(node)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        if isinstance(node, MeshOpNode):
+            yield node
+            for argument in getattr(node, "arguments", []) or []:
+                yield from self.walk_mesh_ops(argument, visited)
+            return
+
+        if isinstance(node, list):
+            for item in node:
+                yield from self.walk_mesh_ops(item, visited)
+            return
+
+        for attribute_name in (
+            "statements",
+            "body",
+            "expression",
+            "value",
+            "left",
+            "right",
+            "condition",
+            "then_branch",
+            "else_branch",
+            "if_body",
+            "args",
+            "arguments",
+        ):
+            if hasattr(node, attribute_name):
+                yield from self.walk_mesh_ops(getattr(node, attribute_name), visited)
+
+    def validate_mesh_op_stage(self, operation, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if stage_name != "mesh":
+                raise ValueError(
+                    f"Mojo {stage_name or 'function'} stage cannot call "
+                    "SetMeshOutputCounts; SetMeshOutputCounts is only valid in "
+                    "mesh stages"
+                )
+            return
+        if operation == "DispatchMesh":
+            if stage_name not in {"task", "amplification", "object"}:
+                raise ValueError(
+                    f"Mojo {stage_name or 'function'} stage cannot call "
+                    "DispatchMesh; DispatchMesh is only valid in task, "
+                    "amplification, or object stages"
+                )
+            return
+        raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
+
+    def validate_mesh_op_arguments(self, operation, arguments, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if len(arguments) != 2:
+                raise ValueError(
+                    "Mojo mesh SetMeshOutputCounts requires exactly two arguments"
+                )
+            labels = ("vertex count", "primitive count")
+        elif operation == "DispatchMesh":
+            if len(arguments) not in {3, 4}:
+                raise ValueError(
+                    "Mojo mesh DispatchMesh requires three group counts and an "
+                    "optional payload argument"
+                )
+            labels = ("x count", "y count", "z count")
+        else:
+            return
+
+        for label, argument in zip(labels, arguments):
+            if not self.mesh_count_argument_is_integer_scalar(argument):
+                raise ValueError(
+                    f"Mojo {stage_name} {operation} {label} argument must be an "
+                    "integer scalar"
+                )
+            value = self.literal_int_value(argument)
+            if value is not None and value < 0:
+                raise ValueError(
+                    f"Mojo {stage_name} {operation} {label} argument must be "
+                    "non-negative"
+                )
+
+    def mesh_count_argument_is_integer_scalar(self, argument):
+        if isinstance(argument, bool) or isinstance(argument, float):
+            return False
+        if isinstance(argument, int) and not isinstance(argument, bool):
+            return True
+        value = self.literal_int_value(argument)
+        if value is not None:
+            return True
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return True
+        return self.is_scalar_integer_type(argument_type)
+
+    def validate_mesh_stage(self, func, stage_name, param_infos):
+        self.mesh_stage_numthreads(func, stage_name)
+        if stage_name == "mesh":
+            self.mesh_output_topology(func, stage_name, required=True)
+            self.mesh_stage_positive_attribute(
+                func, stage_name, "maxvertices", "max_vertices"
+            )
+            self.mesh_stage_positive_attribute(
+                func, stage_name, "maxprimitives", "max_primitives"
+            )
+        self.validate_mesh_parameter_roles(stage_name, param_infos)
+        self.validate_mesh_output_parameter_bounds(func, stage_name, param_infos)
+
+        for mesh_op in self.walk_mesh_ops(getattr(func, "body", [])):
+            operation = getattr(mesh_op, "operation", None)
+            arguments = list(getattr(mesh_op, "arguments", []) or [])
+            self.validate_mesh_op_stage(operation, stage_name)
+            self.validate_mesh_op_arguments(operation, arguments, stage_name)
+
+    def generate_mesh_parameter_role_comments(self, param_infos):
+        descriptions = []
+        for parameter, param_type in param_infos:
+            role = self.mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            base_type = self.mesh_parameter_base_type(param_type)
+            array_count = self.mesh_parameter_array_count(parameter, param_type)
+            suffix = f"[{array_count}]" if array_count is not None else ""
+            descriptions.append(f"{role}:{parameter.name}->{base_type}{suffix}")
+        if not descriptions:
+            return ""
+        return f"# CrossGL mesh parameter role: {', '.join(descriptions)}\n"
+
+    def generate_mesh_stage_comments(
+        self, func, stage_name, param_infos, stage_node=None
+    ):
+        lines = [f"# CrossGL mesh/task stage: stage={stage_name}\n"]
+        numthreads = self.mesh_stage_numthreads(func, stage_name)
+        if numthreads is not None:
+            lines.append(f"# CrossGL mesh/task numthreads: {', '.join(numthreads)}\n")
+
+        local_size = self.mesh_stage_layout_local_size(stage_node)
+        if local_size is not None:
+            lines.append(f"# CrossGL mesh/task local size: {', '.join(local_size)}\n")
+
+        if stage_name == "mesh":
+            topology = self.mesh_output_topology(func, stage_name, required=True)
+            lines.append(f"# CrossGL mesh output topology: {topology}\n")
+
+        max_vertices = self.mesh_stage_positive_attribute(
+            func, stage_name, "maxvertices", "max_vertices"
+        )
+        if max_vertices is not None:
+            lines.append(f"# CrossGL mesh max vertices: {max_vertices}\n")
+
+        max_primitives = self.mesh_stage_positive_attribute(
+            func, stage_name, "maxprimitives", "max_primitives"
+        )
+        if max_primitives is not None:
+            lines.append(f"# CrossGL mesh max primitives: {max_primitives}\n")
+
+        role_comments = self.generate_mesh_parameter_role_comments(param_infos)
+        if role_comments:
+            lines.append(role_comments)
+        return "".join(lines)
+
+    def generate_stage_local_declarations(
+        self,
+        stage,
+        emitted_stage_local_variables,
+        emitted_stage_local_structs,
+    ):
+        code = ""
+        for node in getattr(stage, "local_structs", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_struct(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_cbuffers", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_resource_metadata_comment(
+                    node, getattr(node, "name", None), kind="cbuffer"
+                )
+                code += self.generate_struct(node)
+                code += self.generate_cbuffer_member_placeholders(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_variables", []) or []:
+            code += self.generate_stage_local_variable_declaration(
+                node, emitted_stage_local_variables
+            )
+        return code
+
+    def generate_stage_local_variable_declaration(
+        self, node, emitted_stage_local_variables
+    ):
+        if self.is_mojo_shared_variable(node):
+            if isinstance(node, ArrayNode):
+                variable_type = self.array_declared_type(node)
+            else:
+                variable_type = self.variable_declared_type(node) or "float"
+            self.register_variable_type(getattr(node, "name", None), variable_type)
+            return ""
+
+        if isinstance(node, ArrayNode):
+            variable_type = self.array_declared_type(node)
+            self.register_variable_type(node.name, variable_type)
+            key = (node.name, variable_type)
+            if key in emitted_stage_local_variables:
+                return ""
+            emitted_stage_local_variables.add(key)
+            return self.generate_array_declaration(node)
+
+        variable_type = self.variable_declared_type(node) or "float"
+        self.register_variable_type(getattr(node, "name", None), variable_type)
+        self.register_resource_access_metadata(node, variable_type)
+        key = (getattr(node, "name", None), variable_type)
+        if key in emitted_stage_local_variables:
+            return ""
+        emitted_stage_local_variables.add(key)
+
+        if getattr(node, "initial_value", None) is not None:
+            self.validate_expression_target_shape(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            init_expr = self.generate_expression(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            var_name = self.mojo_identifier(node.name)
+            return (
+                f"{self.generate_resource_metadata_comment(node, variable_type)}"
+                f"var {var_name}: {self.map_type(variable_type)} = {init_expr}\n"
+            )
+
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        var_name = self.mojo_identifier(node.name)
+        if self.is_array_type_name(variable_type):
+            return (
+                f"{resource_comment}var {var_name} = "
+                f"{self.array_initial_value_for_type(variable_type)}\n"
+            )
+        if self.is_struct_type_name(variable_type):
+            return f"{resource_comment}var {var_name} = {self.zero_value_for_type(variable_type)}\n"
+        if self.is_resource_type_name(variable_type):
+            mapped_type = self.map_type(variable_type)
+            return (
+                f"{resource_comment}var {var_name}: {mapped_type} = "
+                f"{self.zero_value_for_type(variable_type)}\n"
+            )
+        return (
+            f"var {var_name}: {self.map_type(variable_type)} = "
+            f"{self.zero_value_for_type(variable_type)}\n"
+        )
+
+    def is_mojo_shared_variable(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        return bool(
+            qualifiers
+            & {"groupshared", "shared", "threadgroup", "thread_group", "workgroup"}
+        )
+
+    def generate_function_local_shared_declarations(self, stage_node, indent):
+        if stage_node is None:
+            return ""
+        code = ""
+        for node in getattr(stage_node, "local_variables", []) or []:
+            if not self.is_mojo_shared_variable(node):
+                continue
+            code += self.generate_statement(node, indent)
+        return code
+
+    def stage_local_functions_to_emit(self, stage):
+        functions = list(getattr(stage, "local_functions", []) or [])
+        implemented_signatures = {
+            self.function_signature_key(func)
+            for func in functions
+            if not self.is_function_prototype(func)
+        }
+        emitted = []
+        seen = set()
+        for func in functions:
+            signature = self.function_signature_key(func)
+            if signature in seen:
+                continue
+            if self.is_function_prototype(func) and signature in implemented_signatures:
+                continue
+            emitted.append(func)
+            seen.add(signature)
+        return emitted
+
+    def stage_local_extra_params(self, stage):
+        entry_point = getattr(stage, "entry_point", None)
+        if entry_point is None:
+            return {}
+        entry_params = []
+        for param in (
+            getattr(entry_point, "parameters", getattr(entry_point, "params", [])) or []
+        ):
+            param_name = getattr(param, "name", None)
+            if not param_name:
+                continue
+            entry_params.append((param_name, self.function_parameter_type_name(param)))
+
+        extras = {}
+        if not entry_params:
+            return extras
+
+        for func in self.stage_local_functions_to_emit(stage):
+            func_param_names = {
+                getattr(param, "name", None)
+                for param in (
+                    getattr(func, "parameters", getattr(func, "params", [])) or []
+                )
+            }
+            captures = [
+                (name, type_name)
+                for name, type_name in entry_params
+                if name not in func_param_names
+                and self.node_references_identifier(getattr(func, "body", None), name)
+            ]
+            if captures:
+                extras[getattr(func, "name", None)] = captures
+        return extras
+
+    def node_references_identifier(self, node, name):
+        if node is None:
+            return False
+        if isinstance(node, IdentifierNode):
+            return getattr(node, "name", None) == name
+        if isinstance(node, str):
+            return node == name
+        if isinstance(node, (int, float, bool)):
+            return False
+        if isinstance(node, (list, tuple)):
+            return any(self.node_references_identifier(item, name) for item in node)
+        if not hasattr(node, "__dict__"):
+            return False
+
+        for attr, value in node.__dict__.items():
+            if attr in {"annotations", "parent", "source_location"}:
+                continue
+            if attr == "name" and not isinstance(node, IdentifierNode):
+                continue
+            if self.node_references_identifier(value, name):
+                return True
+        return False
+
+    def is_function_prototype(self, func):
+        return not self.body_statements(getattr(func, "body", None))
+
+    def function_signature_key(self, func):
+        params = []
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if hasattr(param, "param_type"):
+                param_type = self.convert_type_node_to_string(param.param_type)
+            elif hasattr(param, "vtype"):
+                param_type = self.type_name(param.vtype)
+            else:
+                param_type = "float"
+            params.append(param_type)
+        return (getattr(func, "name", None), tuple(params))
+
+    def generate_constants(self, ast):
+        code = ""
+        for node in getattr(ast, "constants", []) or []:
+            if not isinstance(node, ConstantNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            const_type = self.convert_type_node_to_string(
+                getattr(node, "const_type", None)
+            )
+            value = getattr(node, "value", None)
+            self.register_variable_type(name, const_type)
+            value_code = self.generate_expression(value, const_type, f"constant {name}")
+            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
+        return f"{code}\n" if code else ""
+
+    def collect_function_return_types(self, ast):
+        functions = list(getattr(ast, "functions", []))
+        stages = getattr(ast, "stages", {})
+        if stages:
+            for stage in stages.values():
+                entry_point = getattr(stage, "entry_point", None)
+                if entry_point is not None:
+                    functions.append(entry_point)
+                functions.extend(self.stage_local_functions_to_emit(stage))
+
+        for func in functions:
+            self.register_function_return_type(func)
+
+        for _ in range(max(1, len(functions))):
+            changed = False
+            for func in functions:
+                changed = (
+                    self.register_function_return_resource_aliases(func) or changed
+                )
+            if not changed:
+                break
+
+    def register_function_return_type(self, func):
+        if not hasattr(func, "name"):
+            return
+
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        parameter_types = [
+            self.function_parameter_type_name(param)
+            for param in getattr(func, "parameters", getattr(func, "params", []))
+        ]
+        self.function_return_types[func.name] = return_type
+        self.function_parameter_types[func.name] = parameter_types
+        signature = {
+            "return_type": return_type,
+            "parameter_types": parameter_types,
+        }
+        overloads = self.function_overload_signatures.setdefault(func.name, [])
+        if not any(
+            existing["return_type"] == return_type
+            and existing["parameter_types"] == parameter_types
+            for existing in overloads
+        ):
+            overloads.append(signature)
+
+    def register_function_return_resource_aliases(self, func):
+        if not hasattr(func, "name"):
+            return False
+
+        return_type = self.function_return_types.get(func.name)
+        if not self.function_return_resource_aliasable_type(return_type):
+            return False
+
+        params = getattr(func, "parameters", getattr(func, "params", []))
+        param_indices = {
+            getattr(param, "name", None): index
+            for index, param in enumerate(params)
+            if getattr(param, "name", None)
+        }
+        aliases = []
+        static_aliases = []
+        field_aliases = []
+        static_field_aliases = {}
+        for return_node in self.return_nodes(getattr(func, "body", [])):
+            value = getattr(return_node, "value", None)
+            for index in self.return_resource_alias_param_indices(
+                value, param_indices, target_type=return_type
+            ):
+                if index not in aliases:
+                    aliases.append(index)
+            for ref in self.return_resource_alias_field_paths(
+                value, param_indices, target_type=return_type
+            ):
+                if ref not in field_aliases:
+                    field_aliases.append(ref)
+            for candidate in self.return_resource_static_alias_candidates(
+                value, param_indices, target_type=return_type
+            ):
+                if candidate not in static_aliases:
+                    static_aliases.append(candidate)
+            static_field_aliases = self.merge_resource_field_alias_maps(
+                static_field_aliases,
+                self.return_resource_static_field_alias_candidates(
+                    value, param_indices, target_type=return_type
+                ),
+            )
+        if (
+            aliases == self.function_return_resource_aliases.get(func.name)
+            and static_aliases == self.function_return_resource_static_aliases.get(
+                func.name
+            )
+            and field_aliases == self.function_return_resource_field_aliases.get(
+                func.name
+            )
+            and static_field_aliases
+            == self.function_return_resource_static_field_aliases.get(func.name)
+        ):
+            return False
+        if aliases:
+            self.function_return_resource_aliases[func.name] = aliases
+        else:
+            self.function_return_resource_aliases.pop(func.name, None)
+        if field_aliases:
+            self.function_return_resource_field_aliases[func.name] = field_aliases
+        else:
+            self.function_return_resource_field_aliases.pop(func.name, None)
+        if static_aliases:
+            self.function_return_resource_static_aliases[func.name] = static_aliases
+        else:
+            self.function_return_resource_static_aliases.pop(func.name, None)
+        if static_field_aliases:
+            self.function_return_resource_static_field_aliases[func.name] = (
+                static_field_aliases
+            )
+        else:
+            self.function_return_resource_static_field_aliases.pop(func.name, None)
+        return True
+
+    def return_nodes(self, body):
+        nodes = []
+        for stmt in self.body_statements(body):
+            self.collect_return_nodes(stmt, nodes)
+        return nodes
+
+    def collect_return_nodes(self, node, nodes):
+        if node is None:
+            return
+        if isinstance(node, ReturnNode):
+            nodes.append(node)
+            return
+        for child in self.node_children(node):
+            self.collect_return_nodes(child, nodes)
+
+    def function_return_resource_aliasable_type(self, return_type):
+        return self.resource_access_aliasable_type(return_type)
+
+    def return_resource_alias_param_indices(
+        self, expr, param_indices, target_type=None
+    ):
+        if isinstance(expr, list):
+            return []
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [param_indices[root_name]]
+
+        if isinstance(expr, TernaryOpNode):
+            indices = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for index in self.return_resource_alias_param_indices(
+                    branch, param_indices, target_type=target_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, MatchNode):
+            indices = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arm_expr, param_indices, target_type=target_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            indices = []
+            for element in getattr(expr, "elements", []) or []:
+                for index in self.return_resource_alias_param_indices(
+                    element, param_indices, target_type=element_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_param_indices_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        return []
+
+    def return_resource_alias_param_indices_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            indices = []
+            for arg, (_field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arg, param_indices, target_type=field_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return []
+
+        indices = []
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            for index in self.return_resource_alias_param_indices(
+                expr.args[alias_index], param_indices
+            ):
+                if index not in indices:
+                    indices.append(index)
+        return indices
+
+    def return_resource_alias_field_paths(self, expr, param_indices, target_type=None):
+        if isinstance(expr, list):
+            return []
+
+        target_type = self.type_name(target_type)
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [
+                (path, param_indices[root_name], path)
+                for path in self.resource_aliasable_field_paths_for_type(target_type)
+            ]
+
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths(
+                    branch, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths(
+                    arm_expr, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            refs = []
+            for element in getattr(expr, "elements", []) or []:
+                for ref in self.return_resource_alias_field_paths(
+                    element, param_indices, target_type=element_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, ConstructorNode):
+            return self.return_constructor_node_resource_field_alias_paths(
+                expr, param_indices, target_type
+            )
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_field_paths_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        return []
+
+    def return_resource_alias_field_paths_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        refs = []
+
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            for arg, (field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for (
+                    return_path,
+                    alias_index,
+                    arg_path,
+                ) in self.return_resource_alias_field_paths(
+                    arg, param_indices, target_type=field_type
+                ):
+                    path = f"{field_name}.{return_path}" if return_path else field_name
+                    ref = (path, alias_index, arg_path)
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        struct_refs = self.return_struct_constructor_resource_field_alias_paths(
+            expr, param_indices, target_type
+        )
+        if struct_refs:
+            return struct_refs
+
+        callee_refs = self.function_return_resource_field_aliases.get(func_name) or []
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, callee_arg_path in callee_refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            for (
+                current_index,
+                current_arg_path,
+            ) in self.return_resource_alias_field_paths_for_relative_path(
+                expr.args[alias_index],
+                param_indices,
+                callee_arg_path,
+                arg_type,
+            ):
+                ref = (return_path, current_index, current_arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_struct_constructor_resource_field_alias_paths(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type = target_base if target_base in self.struct_types else func_name
+        if struct_type not in self.struct_types or func_name != struct_type:
+            return []
+
+        refs = []
+        field_items = list(self.struct_types.get(struct_type, {}).items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            for (
+                return_path,
+                alias_index,
+                arg_path,
+            ) in self.return_resource_alias_field_paths(
+                arg, param_indices, target_type=field_type
+            ):
+                path = f"{field_name}.{return_path}" if return_path else field_name
+                ref = (path, alias_index, arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def constructor_node_struct_type(self, expr, target_type=None):
+        struct_type, _ = self.constructor_node_struct_type_and_fields(expr, target_type)
+        return struct_type
+
+    def constructor_node_field_bindings(self, expr, struct_type, fields=None):
+        fields = (
+            fields if fields is not None else self.struct_types.get(struct_type, {})
+        )
+        field_items = list(fields.items())
+        for index, arg in enumerate(getattr(expr, "arguments", []) or []):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            yield field_name, field_type, arg
+        for field_name, arg in (getattr(expr, "named_arguments", {}) or {}).items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            yield field_name, field_type, arg
+
+    def return_constructor_node_resource_field_alias_paths(
+        self, expr, param_indices, target_type=None
+    ):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return []
+
+        refs = []
+        for field_name, field_type, arg in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            for (
+                return_path,
+                alias_index,
+                arg_path,
+            ) in self.return_resource_alias_field_paths(
+                arg, param_indices, target_type=field_type
+            ):
+                path = f"{field_name}.{return_path}" if return_path else field_name
+                ref = (path, alias_index, arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_resource_alias_field_paths_for_relative_path(
+        self, expr, param_indices, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return [
+                (alias_index, arg_path)
+                for return_path, alias_index, arg_path in (
+                    self.return_resource_alias_field_paths(
+                        expr, param_indices, target_type=target_type
+                    )
+                )
+                if not return_path
+            ]
+
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    branch, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    arm_expr, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            refs = []
+            for element in getattr(expr, "elements", []) or []:
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    element, param_indices, relative_path, element_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [(param_indices[root_name], relative_path)]
+
+        if isinstance(expr, ConstructorNode):
+            struct_type, fields = self.constructor_node_struct_type_and_fields(
+                expr, target_type
+            )
+            if struct_type is not None:
+                first, _, rest = relative_path.partition(".")
+                for field_name, field_type, arg in self.constructor_node_field_bindings(
+                    expr, struct_type, fields
+                ):
+                    if field_name == first:
+                        return self.return_resource_alias_field_paths_for_relative_path(
+                            arg, param_indices, rest, field_type
+                        )
+
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.function_call_name(expr)
+            target_base, _ = self.resource_base_type_and_count(
+                self.type_name(target_type)
+            )
+            struct_type = target_base if target_base in self.struct_types else func_name
+            if struct_type in self.struct_types and func_name == struct_type:
+                first, _, rest = relative_path.partition(".")
+                field_items = list(self.struct_types.get(struct_type, {}).items())
+                for arg, (field_name, field_type) in zip(expr.args, field_items):
+                    if field_name == first:
+                        return self.return_resource_alias_field_paths_for_relative_path(
+                            arg, param_indices, rest, field_type
+                        )
+
+            refs = []
+            callee_refs = self.function_return_resource_field_aliases.get(func_name)
+            parameter_types = self.function_parameter_types.get(func_name, [])
+            for return_path, alias_index, callee_arg_path in callee_refs or []:
+                if alias_index >= len(expr.args):
+                    continue
+
+                if relative_path == return_path:
+                    next_relative_path = callee_arg_path
+                elif return_path and relative_path.startswith(f"{return_path}."):
+                    remaining_path = relative_path[len(return_path) + 1 :]
+                    next_relative_path = (
+                        f"{callee_arg_path}.{remaining_path}"
+                        if callee_arg_path
+                        else remaining_path
+                    )
+                elif not return_path:
+                    next_relative_path = relative_path
+                else:
+                    continue
+
+                arg_type = (
+                    parameter_types[alias_index]
+                    if alias_index < len(parameter_types)
+                    else None
+                )
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    expr.args[alias_index],
+                    param_indices,
+                    next_relative_path,
+                    arg_type,
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            if refs:
+                return refs
+
+        return []
+
+    def return_resource_static_alias_candidates(
+        self, expr, param_indices, target_type=None
+    ):
+        if isinstance(expr, list):
+            return []
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return []
+
+        if isinstance(expr, TernaryOpNode):
+            candidates = []
+            for branch in (expr.true_expr, expr.false_expr):
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        branch, param_indices, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, MatchNode):
+            candidates = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        arm_expr, param_indices, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            candidates = []
+            for element in getattr(expr, "elements", []) or []:
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        element, param_indices, target_type=element_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_static_alias_candidates_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        candidates = []
+        access, resource_name = self.direct_resource_access_qualifier(expr)
+        if access is not None and resource_name is not None:
+            candidates.append((access, resource_name))
+        if root_name is not None:
+            candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def return_resource_static_field_alias_candidates(
+        self, expr, param_indices, target_type=None
+    ):
+        aliases = {}
+        for path, candidates in self.resource_access_field_alias_candidates(
+            expr, target_type=target_type
+        ).items():
+            for candidate in candidates:
+                if self.resource_access_candidate_references_param(
+                    candidate, param_indices
+                ):
+                    continue
+                aliases.setdefault(path, [])
+                if candidate not in aliases[path]:
+                    aliases[path].append(candidate)
+        return aliases
+
+    def resource_access_candidate_references_param(self, candidate, param_indices):
+        _, resource_name = candidate
+        if not isinstance(resource_name, str):
+            return False
+        match = re.match(r"\s*([A-Za-z_]\w*)", resource_name)
+        return match is not None and match.group(1) in param_indices
+
+    def return_resource_static_alias_candidates_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            candidates = []
+            for arg, (_field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        arg, param_indices, target_type=field_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        candidates = list(
+            self.function_return_resource_static_aliases.get(func_name, [])
+        )
+        alias_indices = self.function_return_resource_aliases.get(func_name) or []
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            alias_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            candidates.extend(
+                self.return_resource_static_alias_candidates(
+                    expr.args[alias_index], param_indices, target_type=alias_type
+                )
+            )
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def is_user_defined_function(self, func_name):
+        return isinstance(func_name, str) and func_name in self.function_return_types
+
+    def function_parameter_type_name(self, param):
+        if hasattr(param, "param_type"):
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(param.param_type), param
+            )
+        if hasattr(param, "vtype"):
+            return self.explicit_image_format_resource_type(param.vtype, param)
+        return "float"
+
+    def prepare_generic_enum_metadata(self, ast, structs):
+        self.generic_parameter_names = collect_generic_parameter_names(ast)
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            structs
+        )
+        for node in structs:
+            if isinstance(node, StructNode):
+                self.validate_user_defined_type_name(node.name, "struct")
+                if node.name not in self.generic_enum_struct_definitions:
+                    self.register_generic_struct_type_metadata(node)
+            if (
+                isinstance(node, StructNode)
+                and node.name not in self.generic_enum_struct_definitions
+            ):
+                self.register_struct_type_metadata(node)
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+
+        for name, definition in self.generic_enum_struct_definitions.items():
+            self.enum_variant_names[name] = [
+                variant.name
+                for variant in getattr(definition["enum"], "variants", []) or []
+            ]
+            for variant_name in self.enum_variant_names[name]:
+                alias_name = self.enum_variant_alias_name(name, variant_name)
+                self.register_enum_variant_metadata(
+                    name,
+                    variant_name,
+                    alias_name,
+                    None,
+                )
+
+        for specialization in self.generic_enum_specializations.values():
+            struct_name = specialization["struct_name"]
+            self.struct_types[struct_name] = {"variant": "int"}
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                self.struct_types[struct_name][field_name] = self.type_name(field_type)
+
+    def reject_parameterized_generic_enum_specializations(self, ast):
+        if not self.generic_enum_struct_definitions:
+            return
+        visited = set()
+
+        def visit(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    visit(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            if not hasattr(value, "__dict__"):
+                return
+            name = getattr(value, "name", None)
+            generic_args = getattr(value, "generic_args", None)
+            if name in self.generic_enum_struct_definitions and generic_args:
+                if any(
+                    type_node_contains_generic_parameter(
+                        arg, self.generic_parameter_names
+                    )
+                    for arg in generic_args
+                ):
+                    raise ValueError(
+                        "Mojo generic payload enum specializations must be concrete"
+                    )
+            for child in vars(value).values():
+                visit(child)
+
+        visit(ast)
+
+    def reject_unsupported_generic_functions(self, ast):
+        functions = list(iter_function_nodes(ast)) + list(
+            (self.generic_function_specializations or {}).values()
+        )
+        unresolved = collect_unresolved_generic_function_call_names(self, functions)
+        if unresolved:
+            raise_unresolved_generic_function_call(self, unresolved[0], "Mojo")
+
+    def maybe_register_generic_enum_type(self, type_value, specializations):
+        type_text = self.type_name(type_value)
+        base_name, generic_args = generic_type_parts(type_text)
+        definition = self.generic_enum_struct_definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if self.generic_type_contains_parameter(type_text):
+            return None
+        specialization = build_generic_enum_specialization(type_text, definition)
+        specializations[type_text] = specialization
+        return specialization
+
+    def generic_enum_specialization_for_type(self, type_value, expected_base=None):
+        if type_value is None:
+            return None
+        type_text = self.type_name(type_value)
+        base_name, generic_args = generic_type_parts(type_text)
+        if expected_base is not None and base_name != expected_base:
+            return None
+        definition = self.generic_enum_struct_definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if self.generic_type_contains_parameter(type_text):
+            return None
+        specialization = self.generic_enum_specializations.get(type_text)
+        if specialization is None:
+            specialization = build_generic_enum_specialization(type_text, definition)
+            self.generic_enum_specializations[type_text] = specialization
+        return specialization
+
+    def generic_enum_pattern_specialization_for_type(
+        self, type_value, expected_base=None
+    ):
+        if type_value is None:
+            return None
+        type_text = self.type_name(type_value)
+        base_name, generic_args = generic_type_parts(type_text)
+        if expected_base is not None and base_name != expected_base:
+            return None
+        definition = self.generic_enum_struct_definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        return self.generic_enum_specializations.get(type_text) or (
+            build_generic_enum_specialization(type_text, definition)
+        )
+
+    def generic_type_contains_parameter(self, type_text):
+        base_name, generic_args = generic_type_parts(type_text)
+        if base_name in self.generic_parameter_names and not generic_args:
+            return True
+        return any(self.generic_type_contains_parameter(arg) for arg in generic_args)
+
+    def register_generic_struct_type_metadata(self, node):
+        param_names = [
+            param.name
+            for param in getattr(node, "generic_params", []) or []
+            if getattr(param, "name", None)
+        ]
+        if param_names:
+            self.generic_struct_type_params[node.name] = param_names
+        else:
+            self.generic_struct_type_params.pop(node.name, None)
+
+    def generic_struct_specialization(self, type_value):
+        type_text = self.type_name(type_value)
+        generic = self.parse_generic_type_name(type_text)
+        if generic is None:
+            return None
+
+        base_name, generic_args = generic
+        param_names = self.generic_struct_type_params.get(base_name)
+        if param_names is None or len(param_names) != len(generic_args):
+            return None
+        if base_name not in self.struct_types:
+            return None
+        return base_name, dict(zip(param_names, generic_args))
+
+    def substitute_generic_struct_type_params(self, type_value, substitutions):
+        type_text = self.type_name(type_value)
+        if self.is_array_type_name(type_text):
+            element_type, size = self.parse_array_type_name(type_text)
+            return self.array_type_name(
+                self.substitute_generic_struct_type_params(element_type, substitutions),
+                size,
+            )
+
+        generic = self.parse_generic_type_name(type_text)
+        if generic is not None:
+            base_name, generic_args = generic
+            mapped_args = [
+                self.substitute_generic_struct_type_params(arg, substitutions)
+                for arg in generic_args
+            ]
+            return f"{base_name}<{', '.join(mapped_args)}>"
+
+        return substitutions.get(type_text, type_text)
+
+    def generic_struct_fields_for_type(self, type_value):
+        specialization = self.generic_struct_specialization(type_value)
+        if specialization is None:
+            return None
+
+        base_name, substitutions = specialization
+        return {
+            field_name: self.substitute_generic_struct_type_params(
+                field_type, substitutions
+            )
+            for field_name, field_type in self.struct_types.get(base_name, {}).items()
+        }
+
+    def struct_type_name_and_fields(self, type_value):
+        type_text = self.type_name(type_value)
+        generic_fields = self.generic_struct_fields_for_type(type_text)
+        if generic_fields is not None:
+            base_name, _ = self.generic_struct_specialization(type_text)
+            return base_name, generic_fields
+
+        if type_text in self.struct_types:
+            return type_text, self.struct_types[type_text]
+
+        generic_enum_type = self.generic_enum_mapped_type(type_text)
+        if generic_enum_type in self.struct_types:
+            return generic_enum_type, self.struct_types[generic_enum_type]
+
+        return None, {}
+
+    def generic_struct_mapped_type(self, type_value):
+        specialization = self.generic_struct_specialization(type_value)
+        if specialization is None:
+            return None
+
+        base_name, substitutions = specialization
+        type_args = [
+            self.map_type(substitutions[param_name])
+            for param_name in self.generic_struct_type_params[base_name]
+        ]
+        return f"{base_name}[{', '.join(type_args)}]"
+
+    def constructor_node_struct_type_and_fields(self, expr, target_type=None):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        target_base, _ = self.resource_base_type_and_count(target_name)
+        for candidate in (target_name, target_base, constructor_type):
+            struct_type, fields = self.struct_type_name_and_fields(candidate)
+            if struct_type is not None:
+                return struct_type, fields
+        return None, {}
+
+    def generic_enum_mapped_type(self, type_value):
+        specialization = self.generic_enum_specialization_for_type(type_value)
+        if specialization is None:
+            return None
+        struct_name = specialization["struct_name"]
+        if struct_name not in self.struct_types:
+            self.struct_types[struct_name] = {"variant": "int"}
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                self.struct_types[struct_name][field_name] = self.type_name(field_type)
+        return struct_name
+
+    def generate_generic_payload_enum_constants(self):
+        code = ""
+        for name, definition in sorted(self.generic_enum_struct_definitions.items()):
+            next_value = 0
+            for variant in getattr(definition["enum"], "variants", []) or []:
+                value = getattr(variant, "value", None)
+                if value is None:
+                    value_text = str(next_value)
+                    next_value += 1
+                else:
+                    value_text = self.generate_expression(value)
+                    literal_value = self.literal_int_value(value)
+                    next_value = literal_value + 1 if literal_value is not None else 0
+                code += (
+                    f"alias {enum_constant_name(name, variant.name)} = {value_text}\n"
+                )
+        return code + ("\n" if code else "")
+
+    def generate_generic_payload_enum_structs(self):
+        code = ""
+        for specialization in self.generic_enum_specializations.values():
+            struct_name = specialization["struct_name"]
+            code += f"@value\nstruct {struct_name}:\n"
+            code += "    var variant: Int32\n"
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                code += (
+                    f"    var {self.mojo_identifier(field_name)}: "
+                    f"{self.map_type(field_type)}\n"
+                )
+            code += "\n"
+        return code
+
+    def generate_generic_payload_enum_constructors(self):
+        code = ""
+        for specialization in self.generic_enum_specializations.values():
+            all_fields = generic_enum_specialized_fields(self, specialization)
+            all_field_names = {field_name for field_name, _field_type in all_fields}
+            definition = specialization["definition"]
+            for variant in getattr(definition["enum"], "variants", []) or []:
+                variant_fields = generic_enum_specialized_variant_fields(
+                    self,
+                    specialization,
+                    variant.name,
+                )
+                if variant_fields is None:
+                    continue
+                constructor_name = enum_variant_constructor_name(
+                    specialization["struct_name"], variant.name
+                )
+                params = ", ".join(
+                    f"payload{index}: {self.map_type(field_type)}"
+                    for index, (_field_name, field_type) in enumerate(variant_fields)
+                )
+                code += (
+                    f"fn {constructor_name}({params}) -> "
+                    f"{specialization['struct_name']}:\n"
+                )
+                rendered_fields = {
+                    "variant": self.enum_variant_alias_name(
+                        definition["name"], variant.name
+                    )
+                }
+                active_fields = {field_name for field_name, _ in variant_fields}
+                for field_name, field_type in all_fields:
+                    if field_name in active_fields:
+                        continue
+                    rendered_fields[field_name] = self.zero_value_for_type(field_type)
+                for index, (field_name, _field_type) in enumerate(variant_fields):
+                    if field_name in all_field_names:
+                        rendered_fields[field_name] = f"payload{index}"
+                field_args = [
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
+                    for field_name in self.struct_types[specialization["struct_name"]]
+                ]
+                code += (
+                    f"    return {specialization['struct_name']}"
+                    f"({', '.join(field_args)})\n\n"
+                )
+        return code
+
+    def convert_type_node_to_string(self, type_node) -> str:
+        """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "pointee_type"):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if hasattr(type_node, "referenced_type"):
+            return self.convert_type_node_to_string(type_node.referenced_type)
+        if type_node.__class__.__name__ == "ArrayType":
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = self.format_array_size(type_node.size)
+            return (
+                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+            )
+        if hasattr(type_node, "name"):
+            generic_args = getattr(type_node, "generic_args", [])
+            if generic_args:
+                converted_args = []
+                for arg in generic_args:
+                    if hasattr(arg, "value") and getattr(arg, "name", None) is None:
+                        converted_args.append(str(arg.value))
+                    else:
+                        converted_args.append(self.convert_type_node_to_string(arg))
+                args = ", ".join(converted_args)
+                return f"{type_node.name}<{args}>"
+            return type_node.name
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            size = type_node.size
+            if element_type == "float":
+                return f"vec{size}"
+            elif element_type == "int":
+                return f"ivec{size}"
+            elif element_type == "uint":
+                return f"uvec{size}"
+            elif element_type == "double":
+                return f"dvec{size}"
+            elif element_type == "bool":
+                return f"bvec{size}"
+            dtype = MOJO_SCALAR_DTYPES.get(element_type)
+            if dtype in MOJO_DTYPE_INFO:
+                return self.vector_type_name_for_dtype_width(dtype, size)
+            else:
+                return f"{element_type}{size}"
+        elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
+            element_type = self.convert_type_node_to_string(type_node.element_type)
+            return matrix_type_spelling(type_node, element_type)
+        else:
+            return str(type_node)
+
+    def variable_declared_type(self, node):
+        """Return the explicit type on a variable declaration, if one exists."""
+        var_type = getattr(node, "var_type", None)
+        if var_type is not None:
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(var_type), node
+            )
+
+        member_type = getattr(node, "member_type", None)
+        if member_type is not None:
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(member_type), node
+            )
+
+        vtype = getattr(node, "vtype", None)
+        if vtype is None or vtype == "":
+            return None
+        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(vtype), node
+            )
+        return self.explicit_image_format_resource_type(vtype, node)
+
+    def format_array_size(self, size):
+        if size is None:
+            return None
+        if hasattr(size, "value"):
+            return size.value
+        if hasattr(size, "name"):
+            return size.name
+        return size
+
+    def parse_generic_type_name(self, type_name):
+        if not isinstance(type_name, str) or "<" not in type_name:
+            return None
+        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*<(.+)>\s*", type_name)
+        if match is None:
+            return None
+        return match.group(1), self.split_generic_arguments(match.group(2))
+
+    def split_generic_arguments(self, args_text):
+        args = []
+        depth = 0
+        start = 0
+        for index, char in enumerate(args_text):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append(args_text[start:index].strip())
+                start = index + 1
+        args.append(args_text[start:].strip())
+        return [arg for arg in args if arg]
+
+    def buffer_resource_info(self, type_name):
+        generic = self.parse_generic_type_name(self.type_name(type_name))
+        if generic is None:
+            type_name = self.canonical_buffer_resource_type(type_name)
+            if type_name in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return type_name, None
+            return None
+
+        base_type, generic_args = generic
+        base_type = self.canonical_buffer_resource_type(base_type)
+        if base_type not in MOJO_TYPED_BUFFER_RESOURCE_TYPES or not generic_args:
+            return None
+        return base_type, generic_args[0]
+
+    def canonical_buffer_resource_type(self, base_type):
+        base_name = self.type_name(base_type)
+        return MOJO_HLSL_BUFFER_TYPE_ALIASES.get(base_name, base_name)
+
+    def resource_type_alias(self, type_name):
+        type_name = self.type_name(type_name)
+        rw_alias = self.writable_texture_resource_alias(type_name)
+        if rw_alias is not None:
+            return rw_alias
+
+        mapped_type = MOJO_RESOURCE_TYPE_MAPPING.get(type_name)
+        if mapped_type is not None:
+            return mapped_type
+
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, generic_args = generic
+        rw_alias = self.writable_texture_resource_alias(
+            base_type, generic_args[0] if generic_args else None
+        )
+        if rw_alias is not None:
+            return rw_alias
+
+        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
+        if self.is_mojo_resource_type(
+            mapped_base_type
+        ) and self.is_texture_resource_type(mapped_base_type):
+            if generic_args:
+                element_info = self.resource_element_value_info(generic_args[0])
+                if element_info is not None:
+                    dtype, source_width, _ = element_info
+                    typed_texture = self.typed_texture_resource_type(
+                        mapped_base_type, dtype, source_width
+                    )
+                    if typed_texture != mapped_base_type:
+                        return typed_texture
+            return mapped_base_type
+        return None
+
+    def writable_texture_resource_alias(self, base_type, element_type=None):
+        base_name = self.type_name(base_type)
+        if base_name in MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES:
+            raise ValueError(
+                "Unsupported writable texture resource for Mojo codegen; "
+                f"multisample writable texture alias is not supported: {base_name}"
+            )
+
+        image_aliases = MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING.get(base_name)
+        if image_aliases is None:
+            return None
+
+        element_info = self.resource_element_value_info(element_type)
+        dtype = element_info[0] if element_info is not None else None
+        if dtype in {"DType.uint16", "DType.uint32"}:
+            image_alias = image_aliases[2]
+        elif dtype in {"DType.int16", "DType.int32"}:
+            image_alias = image_aliases[1]
+        else:
+            image_alias = image_aliases[0]
+
+        if element_info is None:
+            return image_alias
+
+        _, source_width, _ = element_info
+        if source_width == 1 and dtype in {"DType.int32", "DType.uint32"}:
+            return image_alias
+        return self.typed_image_resource_type(image_alias, dtype, source_width)
+
+    def resource_element_dtype(self, element_type):
+        element_info = self.resource_element_value_info(element_type)
+        if element_info is not None:
+            return element_info[0]
+        return None
+
+    def resource_element_value_info(self, element_type):
+        if element_type is None:
+            return None
+
+        type_name = self.normalize_generic_vector_type_name(
+            self.type_name(element_type)
+        )
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            dtype, source_width, _, _ = vector_info
+            return dtype, source_width, self.map_type(type_name)
+
+        dtype = MOJO_SCALAR_DTYPES.get(type_name)
+        if dtype is None:
+            return None
+        return dtype, 1, self.map_type(type_name)
+
+    def typed_image_resource_type(self, base_image_type, dtype, source_width):
+        suffix = MOJO_TYPED_IMAGE_DTYPE_SUFFIX.get(dtype)
+        if suffix is None:
+            return base_image_type
+        if source_width != 1:
+            suffix = f"{suffix}{source_width}"
+        return f"{base_image_type}{suffix}"
+
+    def typed_texture_resource_type(self, base_texture_type, dtype, source_width):
+        suffix = MOJO_TYPED_TEXTURE_DTYPE_SUFFIX.get(dtype)
+        if suffix is None:
+            return base_texture_type
+        if source_width != 4:
+            suffix = f"{suffix}{source_width}"
+        return f"{base_texture_type}{suffix}"
+
+    def typed_image_resource_info(self, resource_type):
+        if not isinstance(resource_type, str):
+            return None
+        for base_image_type in MOJO_IMAGE_RESOURCE_BASE_TYPES:
+            if not resource_type.startswith(base_image_type):
+                continue
+            suffix = resource_type[len(base_image_type) :]
+            if not suffix:
+                return None
+            suffix_info = MOJO_TYPED_IMAGE_SUFFIX_INFO.get(suffix)
+            if suffix_info is not None:
+                dtype, source_width = suffix_info
+                return base_image_type, dtype, source_width
+        return None
+
+    def typed_texture_resource_info(self, resource_type):
+        if not isinstance(resource_type, str):
+            return None
+        for base_texture_type in MOJO_TEXTURE_RESOURCE_BASE_TYPES:
+            if not resource_type.startswith(base_texture_type):
+                continue
+            suffix = resource_type[len(base_texture_type) :]
+            if not suffix:
+                return None
+            suffix_info = MOJO_TYPED_TEXTURE_SUFFIX_INFO.get(suffix)
+            if suffix_info is not None:
+                dtype, source_width = suffix_info
+                return base_texture_type, dtype, source_width
+        return None
+
+    def image_resource_base_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            return typed_info[0]
+        return self.texture_resource_base_type(resource_type)
+
+    def texture_resource_base_type(self, resource_type):
+        typed_info = self.typed_texture_resource_info(resource_type)
+        if typed_info is not None:
+            return typed_info[0]
+        return resource_type
+
+    def explicit_image_format_resource_type(self, type_name, node):
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        if image_format is None:
+            return type_name
+
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            element_type, size = self.parse_array_type_name(type_name)
+            formatted_element_type = self.explicit_image_format_resource_type(
+                element_type, node
+            )
+            return self.array_type_name(formatted_element_type, size)
+
+        mapped_type = self.resource_type_alias(type_name) or self.type_mapping.get(
+            type_name, type_name
+        )
+        if not self.is_image_resource_type(mapped_type):
+            return type_name
+
+        component_kind = image_format_component_kind(image_format)
+        dtype = {
+            "float": "DType.float32",
+            "int": "DType.int32",
+            "uint": "DType.uint32",
+        }.get(component_kind)
+        if dtype is None:
+            return type_name
+
+        channel_count = image_format_channel_count(image_format)
+        if channel_count is None:
+            return type_name
+
+        source_width = 4 if channel_count == 1 else channel_count
+        return self.typed_image_resource_type(mapped_type, dtype, source_width)
+
+    def resource_texel_coord_type(self, resource_type):
+        return MOJO_RESOURCE_TEXEL_COORDS.get(
+            self.image_resource_base_type(resource_type)
+        )
+
+    def resource_size_return_type(self, resource_type):
+        return MOJO_RESOURCE_SIZE_RETURNS.get(
+            self.image_resource_base_type(resource_type)
+        )
+
+    def resource_sample_coord_type(self, resource_type):
+        return MOJO_RESOURCE_SAMPLE_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_offset_coord_type(self, resource_type):
+        return MOJO_RESOURCE_OFFSET_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_compare_coord_type(self, resource_type):
+        return MOJO_RESOURCE_COMPARE_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_projected_coord_type(self, resource_type):
+        return MOJO_RESOURCE_PROJECTED_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def mapped_buffer_type(self, buffer_type, element_type=None):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
+            return f"{buffer_type}[{self.map_type(element_type)}]"
+        return buffer_type
+
+    def register_buffer_resource_type(self, buffer_type):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
+        if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
+            self.required_buffer_resource_types.add(buffer_type)
+
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        return str(value)
+
+    def binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def register_space_index_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.register_space_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.register_space_index_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_value_to_string(argument)
+                for argument in getattr(attr, "arguments", []) or []
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def normalized_resource_access_metadata(self, node):
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(
+                        str(self.attribute_value_to_string(arguments[0])).lower()
+                    )
+                    if access is not None:
+                        return access
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def resource_memory_qualifiers(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if str(qualifier).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        }
+        qualifiers.update(
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+            if str(getattr(attr, "name", "")).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        )
+        return sorted(qualifiers)
+
+    def resource_base_type_and_count(self, type_name):
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            base_type, size = self.parse_array_type_name(type_name)
+            return base_type, self.resource_binding_count(size)
+        return type_name, 1
+
+    def resource_binding_count(self, size):
+        if size in (None, ""):
+            return 1
+        count = self.literal_int_value(size)
+        if count is None:
+            raise ValueError(
+                "Mojo resource array binding count must resolve to a "
+                f"compile-time integer, got {size!r}"
+            )
+        if count < 1:
+            raise ValueError(
+                "Mojo resource array binding count must be positive, " f"got {count}"
+            )
+        return count
+
+    def user_defined_type_base(self, type_name):
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        generic = self.parse_generic_type_name(base_type)
+        if generic is not None:
+            return generic[0]
+        return base_type
+
+    def is_user_defined_type_name(self, type_name):
+        base_type = self.user_defined_type_base(type_name)
+        return base_type in self.struct_types or base_type in self.enum_types
+
+    def reserved_resource_type_name(self, type_name):
+        base_type = self.user_defined_type_base(type_name)
+        if (
+            base_type in MOJO_RESERVED_RESOURCE_TYPE_NAMES
+            or self.typed_image_resource_info(base_type) is not None
+        ):
+            return base_type
+        return None
+
+    def validate_user_defined_type_name(self, type_name, declaration_kind):
+        reserved_name = self.reserved_resource_type_name(type_name)
+        if reserved_name is None:
+            return
+        raise ValueError(
+            f"Mojo {declaration_kind} name '{type_name}' conflicts with "
+            f"reserved resource type '{reserved_name}'"
+        )
+
+    def is_glsl_buffer_block_node(self, node):
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "glsl_buffer_block" in attributes:
+            return True
+        return "buffer" in qualifiers and bool(
+            attributes & {"std140", "std430", "scalar"}
+        )
+
+    def glsl_buffer_block_layout(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "glsl_buffer_block":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_value_to_string(arguments[0])
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def mojo_resource_kind(self, type_name, forced_kind=None, node=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_node(node):
+            return "glsl_buffer_block"
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.is_user_defined_type_name(base_type):
+            return None
+        if self.buffer_resource_info(base_type) is not None:
+            return "buffer"
+        mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
+            str(base_type), str(base_type)
+        )
+        if mapped_type == "RayTracingAccelerationStructure":
+            return "acceleration_structure"
+        if mapped_type == "Sampler":
+            return "sampler"
+        if mapped_type.startswith(("Image", "IImage", "UImage")):
+            return "image"
+        if mapped_type.startswith("Texture"):
+            return "texture"
+        return None
+
+    def mojo_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def next_available_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.mojo_resource_binding_cursors.get(key, 0)
+        while self.resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.mojo_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _ in self.mojo_used_resource_bindings.get(key, []):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def reserve_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_used_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+        self.mojo_resource_binding_cursors[key] = max(
+            self.mojo_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def resource_attribute_names(self, node):
+        return {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+
+    def has_resource_qualifier(self, node, qualifier_name):
+        qualifier_name = str(qualifier_name).lower()
+        return qualifier_name in {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+
+    def uses_source_descriptor_array_binding(self, node, count, resource_kind=None):
+        if count <= 1:
+            return False
+        attr_names = self.resource_attribute_names(node)
+        if "binding" not in attr_names or "register" in attr_names:
+            return False
+        return (
+            self.has_resource_qualifier(node, "uniform") or resource_kind == "sampler"
+        )
+
+    def explicit_binding_is_target_native(self, node, count, resource_kind=None):
+        return not self.uses_source_descriptor_array_binding(node, count, resource_kind)
+
+    def reserve_source_resource_binding(
+        self, namespace, set_index, binding, count, name
+    ):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_source_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo source resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_source_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+
+    def generate_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.mojo_resource_kind(type_name, kind, node)
+        if not name or resource_kind is None:
+            return ""
+
+        self.register_resource_access_metadata(node, type_name)
+        _, count = self.resource_base_type_and_count(type_name)
+        namespace = self.mojo_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_resource_set_index(node)
+        binding = self.explicit_resource_binding_index(node)
+        source_binding = None
+        if binding is None:
+            binding = self.next_available_resource_binding(namespace, set_index, count)
+            binding_source = "automatic"
+            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+        else:
+            binding_source = "explicit"
+            source_binding = binding
+            uses_source_descriptor = self.uses_source_descriptor_array_binding(
+                node, count, resource_kind
+            )
+            if self.explicit_binding_is_target_native(node, count, resource_kind):
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            else:
+                self.reserve_source_resource_binding(
+                    namespace, set_index, source_binding, 1, name
+                )
+                key = (namespace, set_index)
+                if self.resource_binding_range_conflicts(key, binding, count):
+                    binding = self.next_available_resource_binding(
+                        namespace, set_index, count
+                    )
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            if not uses_source_descriptor:
+                source_binding = None
+
+        parts = [
+            "# CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+            f"set={set_index}",
+            f"binding={binding}",
+            f"binding_source={binding_source}",
+        ]
+        if count != 1:
+            parts.append(f"count={count}")
+        if source_binding is not None and source_binding != binding:
+            parts.append(f"source_binding={source_binding}")
+        register_metadata = self.resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        layout = self.glsl_buffer_block_layout(node)
+        if layout:
+            parts.append(f"layout={layout}")
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            parts.append(f"access={access}")
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        if memory_qualifiers:
+            parts.append(f"memory={','.join(memory_qualifiers)}")
+        self.mojo_resource_binding_initializers[name] = {
+            "kind": resource_kind,
+            "set": set_index,
+            "binding": binding,
+        }
+        return " ".join(parts) + "\n"
+
+    def register_resource_access_metadata(self, node, type_name):
+        name = getattr(node, "name", None)
+        if not name or self.mojo_resource_kind(type_name, node=node) is None:
+            return
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            self.resource_access_qualifiers[name] = access
+
+    def resource_binding_initial_value(self, name, mapped_type, fallback_type):
+        if mapped_type not in MOJO_CONCRETE_RESOURCE_TYPES:
+            return self.zero_value_for_type(fallback_type)
+
+        initializer = self.mojo_resource_binding_initializers.get(name)
+        if not isinstance(initializer, dict):
+            return self.zero_value_for_type(fallback_type)
+
+        set_index = initializer.get("set", 0)
+        binding = initializer.get("binding", 0)
+        if mapped_type == "Texture2D":
+            return f"Texture2D({set_index}, {binding})"
+        if mapped_type == "Sampler":
+            return f"Sampler({set_index}, {binding})"
+        return self.zero_value_for_type(fallback_type)
+
+    def register_resource_access_alias_metadata(self, name, type_name, initializer):
+        if not name or initializer is None:
+            return
+        type_name = self.type_name(type_name)
+        if not self.resource_access_aliasable_type(type_name):
+            return
+
+        candidates = self.resource_access_qualifier_candidates(
+            initializer, target_type=type_name
+        )
+        if candidates:
+            self.resource_access_qualifier_aliases[name] = candidates
+        else:
+            self.resource_access_qualifier_aliases.pop(name, None)
+
+        self.clear_resource_access_path_aliases(name)
+        for path, path_candidates in self.resource_access_field_alias_candidates(
+            initializer, target_type=type_name
+        ).items():
+            if not path:
+                continue
+            self.resource_access_path_qualifier_aliases[f"{name}.{path}"] = (
+                path_candidates
+            )
+
+    def clear_resource_access_path_aliases(self, name):
+        prefix = f"{name}."
+        for path in list(self.resource_access_path_qualifier_aliases):
+            if path == name or path.startswith(prefix):
+                self.resource_access_path_qualifier_aliases.pop(path, None)
+
+    def register_resource_assignment_alias_metadata(self, target, value, operator):
+        if self.map_operator(operator) != "=":
+            return
+
+        name = self.direct_assignment_target_name(target)
+        if name is None:
+            return
+
+        type_name = self.expression_result_type(target) or self.variable_types.get(name)
+        self.register_resource_access_alias_metadata(name, type_name, value)
+
+    def direct_assignment_target_name(self, target):
+        if isinstance(target, str):
+            return target
+        if isinstance(target, VariableNode) and hasattr(target, "name"):
+            return target.name
+        if hasattr(target, "__class__") and "Identifier" in str(target.__class__):
+            return getattr(target, "name", None)
+        return None
+
+    def register_struct_resource_access_metadata(
+        self, struct_name, member_name, member, member_type
+    ):
+        access = self.normalized_resource_access_metadata(member)
+        if access is None:
+            return
+
+        base_type, _ = self.resource_base_type_and_count(member_type)
+        if self.mojo_resource_kind(base_type, node=member) is None:
+            return
+
+        self.struct_resource_access_qualifiers.setdefault(struct_name, {})[
+            member_name
+        ] = access
+
+    def resource_access_root_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_root_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.resource_access_root_name(expr.object)
+        name = getattr(expr, "name", None)
+        if name is not None:
+            if not isinstance(name, str):
+                return None
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                match = re.match(r"\s*([A-Za-z_]\w*)", replacement)
+                if match is not None:
+                    return match.group(1)
+            return name
+        return None
+
+    def resource_access_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        name = getattr(expr, "name", None)
+        if name is not None:
+            if not isinstance(name, str):
+                return None
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                return replacement.strip()
+            return name
+        return None
+
+    def resource_access_source_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_source_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_source_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        if isinstance(expr, str):
+            return expr
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def resource_access_diagnostic_name(self, expr, resource_name):
+        source_name = self.resource_access_source_path_name(expr)
+        if resource_name and source_name != resource_name:
+            return resource_name
+        return source_name or resource_name
+
+    def struct_field_resource_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.struct_field_resource_access(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            access = self.struct_resource_access_qualifiers.get(obj_type, {}).get(
+                expr.member
+            )
+            if access is not None:
+                return access, self.resource_access_source_path_name(expr)
+            return self.struct_field_resource_access(expr.object)
+        return None
+
+    def direct_resource_access_qualifier(self, expr):
+        root_name = self.resource_access_root_name(expr)
+        if root_name is not None:
+            access = self.resource_access_qualifiers.get(root_name)
+            if access is not None:
+                return access, root_name
+
+        field_access = self.struct_field_resource_access(expr)
+        if field_access is not None:
+            return field_access
+        return None, root_name
+
+    def resource_access_qualifier_candidates(self, expr, target_type=None):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_qualifier_candidates(expr.array)
+
+        if isinstance(expr, TernaryOpNode):
+            candidates = []
+            candidates.extend(
+                self.resource_access_qualifier_candidates(
+                    expr.true_expr, target_type=target_type
+                )
+            )
+            candidates.extend(
+                self.resource_access_qualifier_candidates(
+                    expr.false_expr, target_type=target_type
+                )
+            )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, MatchNode):
+            candidates = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                candidates.extend(
+                    self.resource_access_qualifier_candidates(
+                        arm_expr, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        path_name = self.resource_access_path_name(expr)
+        if path_name is not None:
+            candidates = self.resource_access_path_qualifier_aliases.get(path_name)
+            if candidates:
+                return list(candidates)
+
+        if isinstance(expr, FunctionCallNode):
+            candidates = self.function_return_resource_alias_candidates(expr)
+            if candidates:
+                return candidates
+            candidates = self.generic_enum_resource_alias_candidates(expr, target_type)
+            if candidates:
+                return candidates
+
+        candidates = []
+        access, resource_name = self.direct_resource_access_qualifier(expr)
+        if access is not None and resource_name is not None:
+            candidates.append((access, resource_name))
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name is not None:
+            candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def generic_enum_resource_alias_candidates(self, expr, target_type):
+        if target_type is None:
+            return []
+
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return []
+
+        candidates = []
+        for arg, (_field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            candidates.extend(self.resource_access_qualifier_candidates(arg))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def resource_access_aliasable_type(self, type_name):
+        return self._resource_access_aliasable_type(self.type_name(type_name), set())
+
+    def _resource_access_aliasable_type(self, type_name, seen):
+        if self.is_array_type_name(type_name):
+            base_type, _ = self.parse_array_type_name(type_name)
+            return self._resource_access_aliasable_type(base_type, seen)
+
+        generic_fields = self.generic_struct_fields_for_type(type_name)
+        if generic_fields is not None:
+            if type_name in seen:
+                return False
+            next_seen = {*seen, type_name}
+            return any(
+                self._resource_access_aliasable_type(field_type, next_seen)
+                for field_type in generic_fields.values()
+            )
+
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+
+        if base_type in seen:
+            return False
+
+        if base_type in self.struct_types:
+            next_seen = {*seen, base_type}
+            return any(
+                self._resource_access_aliasable_type(field_type, next_seen)
+                for field_type in self.struct_types.get(base_type, {}).values()
+            )
+
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None:
+            return False
+
+        next_seen = {*seen, type_name}
+        return any(
+            self._resource_access_aliasable_type(field_type, next_seen)
+            for _field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            )
+        )
+
+    def resource_aliasable_field_paths_for_type(self, type_name, seen=None):
+        if seen is None:
+            seen = set()
+
+        type_name = self.type_name(type_name)
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.mojo_resource_kind(base_type) is not None:
+            return [""]
+
+        generic_fields = self.generic_struct_fields_for_type(type_name)
+        if generic_fields is not None:
+            if type_name in seen:
+                return []
+            paths = []
+            next_seen = {*seen, type_name}
+            for field_name, field_type in generic_fields.items():
+                for subpath in self.resource_aliasable_field_paths_for_type(
+                    field_type, next_seen
+                ):
+                    paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+            return paths
+
+        if base_type in seen:
+            return []
+
+        if base_type in self.struct_types:
+            paths = []
+            next_seen = {*seen, base_type}
+            for field_name, field_type in self.struct_types.get(base_type, {}).items():
+                for subpath in self.resource_aliasable_field_paths_for_type(
+                    field_type, next_seen
+                ):
+                    paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+            return paths
+
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None or type_name in seen:
+            return []
+
+        paths = []
+        next_seen = {*seen, type_name}
+        for field_name, field_type in generic_enum_specialized_fields(
+            self, specialization
+        ):
+            for subpath in self.resource_aliasable_field_paths_for_type(
+                field_type, next_seen
+            ):
+                paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+        return paths
+
+    def resource_access_field_alias_candidates(self, expr, target_type=None):
+        target_type = self.type_name(target_type)
+        if not target_type or not self.resource_access_aliasable_type(target_type):
+            return {}
+
+        field_aliases = self.resource_access_path_aliases_for_expression(expr)
+        if field_aliases:
+            return field_aliases
+
+        if isinstance(expr, TernaryOpNode):
+            return self.merge_resource_field_alias_maps(
+                self.resource_access_field_alias_candidates(
+                    expr.true_expr, target_type=target_type
+                ),
+                self.resource_access_field_alias_candidates(
+                    expr.false_expr, target_type=target_type
+                ),
+            )
+
+        if isinstance(expr, MatchNode):
+            merged = {}
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                merged = self.merge_resource_field_alias_maps(
+                    merged,
+                    self.resource_access_field_alias_candidates(
+                        arm_expr, target_type=target_type
+                    ),
+                )
+            return merged
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            merged = {}
+            for element in getattr(expr, "elements", []) or []:
+                merged = self.merge_resource_field_alias_maps(
+                    merged,
+                    self.resource_access_field_alias_candidates(
+                        element, target_type=element_type
+                    ),
+                )
+            return merged
+
+        if isinstance(expr, FunctionCallNode):
+            aliases = self.generic_enum_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            aliases = self.struct_constructor_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            return self.function_return_resource_field_alias_candidates(
+                expr, target_type
+            )
+
+        if isinstance(expr, ConstructorNode):
+            aliases = self.constructor_node_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+
+        candidates = self.resource_access_qualifier_candidates(
+            expr, target_type=target_type
+        )
+        return {"": candidates} if candidates else {}
+
+    def resource_access_path_aliases_for_expression(self, expr):
+        path_name = self.resource_access_path_name(expr)
+        if not path_name:
+            return {}
+
+        aliases = {}
+        exact = self.resource_access_path_qualifier_aliases.get(path_name)
+        if exact:
+            aliases[""] = list(exact)
+
+        prefix = f"{path_name}."
+        for (
+            alias_path,
+            candidates,
+        ) in self.resource_access_path_qualifier_aliases.items():
+            if alias_path.startswith(prefix):
+                aliases[alias_path[len(prefix) :]] = list(candidates)
+        return aliases
+
+    def merge_resource_field_alias_maps(self, *maps):
+        merged = {}
+        for alias_map in maps:
+            for path, candidates in alias_map.items():
+                current = merged.setdefault(path, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
+    def resource_access_alias_state(self):
+        return (
+            {
+                name: list(candidates)
+                for name, candidates in self.resource_access_qualifier_aliases.items()
+            },
+            {
+                path: list(candidates)
+                for path, candidates in (
+                    self.resource_access_path_qualifier_aliases.items()
+                )
+            },
+        )
+
+    def restore_resource_access_alias_state(self, state):
+        qualifier_aliases, path_aliases = state
+        self.resource_access_qualifier_aliases = {
+            name: list(candidates) for name, candidates in qualifier_aliases.items()
+        }
+        self.resource_access_path_qualifier_aliases = {
+            path: list(candidates) for path, candidates in path_aliases.items()
+        }
+
+    def merge_resource_access_alias_states(self, *states):
+        qualifier_maps = [state[0] for state in states]
+        path_maps = [state[1] for state in states]
+        return (
+            self.merge_resource_access_candidate_maps(*qualifier_maps),
+            self.merge_resource_access_candidate_maps(*path_maps),
+        )
+
+    def merge_resource_access_candidate_maps(self, *maps):
+        merged = {}
+        for candidate_map in maps:
+            for name, candidates in candidate_map.items():
+                current = merged.setdefault(name, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
+    def generic_enum_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return {}
+
+        aliases = {}
+        for arg, (field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def struct_constructor_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type, fields = self.struct_type_name_and_fields(target_type)
+        if struct_type is None:
+            struct_type, fields = self.struct_type_name_and_fields(target_base)
+        if struct_type is None:
+            struct_type, fields = self.struct_type_name_and_fields(func_name)
+        if struct_type is None or func_name != struct_type:
+            return {}
+
+        aliases = {}
+        field_items = list(fields.items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def constructor_node_field_alias_candidates(self, expr, target_type):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return {}
+
+        aliases = {}
+        for field_name, field_type, arg in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def function_return_resource_field_alias_candidates(self, expr, target_type=None):
+        func_name = self.function_call_name(expr)
+        refs = self.function_return_resource_field_aliases.get(func_name) or []
+        aliases = {
+            path: list(candidates)
+            for path, candidates in (
+                self.function_return_resource_static_field_aliases.get(func_name) or {}
+            ).items()
+        }
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, arg_path in refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            candidates = self.resource_access_candidates_for_relative_path(
+                expr.args[alias_index], arg_path, arg_type
+            )
+            if candidates:
+                aliases.setdefault(return_path, [])
+                for candidate in candidates:
+                    if candidate not in aliases[return_path]:
+                        aliases[return_path].append(candidate)
+        return aliases
+
+    def resource_access_candidates_for_relative_path(
+        self, expr, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return self.resource_access_qualifier_candidates(
+                expr, target_type=target_type
+            )
+
+        path_name = self.resource_access_path_name(expr)
+        if path_name:
+            exact_path = f"{path_name}.{relative_path}"
+            candidates = self.resource_access_path_qualifier_aliases.get(exact_path)
+            if candidates:
+                return list(candidates)
+
+        field_aliases = self.resource_access_field_alias_candidates(
+            expr, target_type=target_type
+        )
+        return list(field_aliases.get(relative_path, []))
+
+    def function_return_resource_alias_candidates(self, expr):
+        func_name = self.function_call_name(expr)
+        candidates = list(
+            self.function_return_resource_static_aliases.get(func_name, [])
+        )
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return self.unique_resource_access_qualifiers(candidates)
+
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            candidates.extend(
+                self.resource_access_qualifier_candidates(expr.args[alias_index])
+            )
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def unique_resource_access_qualifiers(self, candidates):
+        unique = []
+        seen = set()
+        for access, resource_name in candidates:
+            key = (access, resource_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((access, resource_name))
+        return unique
+
+    def resource_access_qualifier(self, expr):
+        candidates = self.resource_access_qualifier_candidates(expr)
+        if candidates:
+            return candidates[0]
+        return self.direct_resource_access_qualifier(expr)
+
+    def expression_has_resource_type(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return True
+        base_type, _ = self.resource_base_type_and_count(expr_type)
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+        access, _ = self.direct_resource_access_qualifier(expr)
+        return access is not None
+
+    def validate_resource_read_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "writeonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{diagnostic_name}' is writeonly"
+                )
+
+    def validate_resource_write_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "readonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{diagnostic_name}' is readonly"
+                )
+
+    def validate_resource_read_write_access(self, expr, operation):
+        self.validate_resource_read_access(expr, operation)
+        self.validate_resource_write_access(expr, operation)
+
+    def byte_address_buffer_value_type(self, buffer_type):
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            return "uint"
+        return None
+
+    def buffer_helper_element_type(self, buffer_type, element_type):
+        return element_type or self.byte_address_buffer_value_type(buffer_type)
+
+    def validate_buffer_operation(self, operation, info, allowed_buffer_types):
+        if info is None:
+            return
+        buffer_type, _ = info
+        if buffer_type not in allowed_buffer_types:
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"{buffer_type} is not valid for this operation"
+            )
+
+    def byte_address_load_result_type(self, width):
+        if width == 1:
+            return "uint"
+        return f"uvec{width}"
+
+    def byte_address_vector_mojo_type(self, width, dtype="DType.uint32"):
+        source_width = int(width)
+        storage_width = 4 if source_width == 3 else source_width
+        return f"SIMD[{dtype}, {storage_width}]"
+
+    def byte_address_vector_zero_value(self, width, dtype="DType.uint32"):
+        mojo_type = self.byte_address_vector_mojo_type(width, dtype)
+        zero = MOJO_DTYPE_INFO[dtype][2]
+        storage_width = 4 if int(width) == 3 else int(width)
+        return f"{mojo_type}({', '.join([zero] * storage_width)})"
+
+    def extract_semantic_from_attributes(self, attributes):
+        """Extract shader semantic information from AST attributes."""
+        for attr in attributes:
+            name = getattr(attr, "name", None)
+            if self.is_semantic_attribute_name(name):
+                return str(name)
+        return None
+
+    def node_semantic(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        return self.extract_semantic_from_attributes(
+            getattr(node, "attributes", []) or []
+        )
+
+    def function_return_semantic(self, func):
+        return self.extract_semantic_from_attributes(
+            getattr(func, "attributes", []) or []
+        )
+
+    def is_semantic_attribute_name(self, name):
+        if name is None:
+            return False
+
+        semantic = str(name)
+        lower = semantic.lower()
+        upper = semantic.upper()
+        if lower in MOJO_NON_SEMANTIC_ATTRIBUTES:
+            return False
+        if semantic in self.semantic_map:
+            return True
+        if upper in self.semantic_map:
+            return True
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return True
+        if re.fullmatch(r"SV_TARGET\d*", upper):
+            return True
+        if upper in {
+            "SV_DEPTH",
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_VERTEXID",
+        }:
+            return True
+        return lower.startswith("gl_")
+
+    def semantic_output_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+        if lower == "gl_position" or upper == "SV_POSITION":
+            return "position"
+        if re.fullmatch(r"gl_fragcolor\d*", lower) or re.fullmatch(
+            r"SV_TARGET\d*", upper
+        ):
+            return "color"
+        if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+            return "depth"
+        if lower in MOJO_INPUT_ONLY_RETURN_SEMANTICS:
+            return "input_only"
+        return None
+
+    def validate_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected vec4-compatible return type"
+            )
+
+        if kind == "depth" and not self.is_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected float return type"
+            )
+
+    def validate_return_semantic(self, shader_type, return_type, semantic):
+        if self.type_name(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {shader_type or 'function'} {semantic} "
+                "return semantic for Mojo codegen; void return type"
+            )
+
+        kind = self.semantic_output_kind(semantic)
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for Mojo codegen; "
+                "input-only builtin semantics cannot be used as return semantics"
+            )
+
+        self.validate_output_semantic_stage(shader_type, semantic, "return semantic")
+        self.validate_builtin_semantic_type(semantic, return_type, "return semantic")
+
+    def validate_struct_return_semantics(self, shader_type, return_type):
+        if shader_type is None:
+            return
+
+        for member_name, semantic in self.struct_member_semantics.get(
+            self.type_name(return_type), {}
+        ).items():
+            self.validate_output_semantic_stage(
+                shader_type,
+                semantic,
+                f"struct return semantic '{return_type}.{member_name}'",
+            )
+
+    def validate_output_semantic_stage(self, shader_type, semantic, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only" or shader_type is None:
+            return
+
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def is_float_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] == "DType.float32"
+            and vector_info[1] == width
+        )
+
+    def is_float_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.float32"
+
+    def generate_return_semantic_comment(self, shader_type, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return (
+            "# CrossGL return semantic: "
+            f"stage={shader_type or 'function'} "
+            f"semantic={mapped_semantic} source={semantic}\n"
+        )
+
+    def generate_parameter_semantic_comment(self, shader_type, param_name, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return (
+            "# CrossGL parameter semantic: "
+            f"stage={shader_type or 'function'} "
+            f"name={param_name} semantic={mapped_semantic} source={semantic}\n"
+        )
+
+    def semantic_parameter_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+
+        if (
+            lower == "gl_position"
+            or lower == "gl_fragdepth"
+            or re.fullmatch(r"gl_fragcolor\d*", lower)
+            or upper == "SV_DEPTH"
+            or re.fullmatch(r"SV_TARGET\d*", upper)
+        ):
+            return "output_only"
+
+        if lower == "gl_fragcoord" or upper == "SV_POSITION":
+            return ("fragment", "float_vec4")
+        if lower == "gl_frontfacing" or upper == "SV_ISFRONTFACE":
+            return ("fragment", "bool_scalar")
+        if lower == "gl_pointcoord":
+            return ("fragment", "float_vec2")
+
+        if lower in {"gl_vertexid"} or upper == "SV_VERTEXID":
+            return ("vertex", "integer_scalar")
+        if lower in {"gl_instanceid"} or upper == "SV_INSTANCEID":
+            return ("vertex", "integer_scalar")
+
+        if lower in {"gl_globalinvocationid"} or upper == "SV_DISPATCHTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_localinvocationid"} or upper == "SV_GROUPTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_workgroupid"} or upper == "SV_GROUPID":
+            return ("compute", "integer_vec3")
+        if upper == "SV_GROUPINDEX":
+            return ("compute", "integer_scalar")
+
+        if lower == "gl_launchidext" or upper == "SV_DISPATCHRAYSINDEX":
+            return ("ray", "integer_vec3")
+        if lower == "gl_launchsizeext" or upper == "SV_DISPATCHRAYSDIMENSIONS":
+            return ("ray", "integer_vec3")
+        if lower == "gl_hittext":
+            return ("ray_hit", "float_scalar")
+        if lower == "gl_hitkindext":
+            return ("ray_any_hit", "integer_scalar")
+
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return ("vertex_fragment", None)
+        if upper == "POSITION":
+            return ("vertex_fragment", None)
+        return None
+
+    def validate_parameter_semantic(
+        self, shader_type, param_name, param_type, semantic, used_semantics
+    ):
+        if semantic is None:
+            return
+
+        semantic_key = self.normalized_semantic_key(semantic)
+        previous_param = used_semantics.get(semantic_key)
+        if previous_param is not None:
+            raise ValueError(
+                f"Conflicting Mojo {shader_type or 'function'} parameter semantic "
+                f"for '{param_name}': {self.map_semantic(semantic)} overlaps "
+                f"'{previous_param}'"
+            )
+        used_semantics[semantic_key] = param_name
+
+        kind = self.semantic_parameter_kind(semantic)
+        if kind == "output_only" and shader_type == "fragment":
+            semantic_name = str(semantic).lower()
+            if semantic_name == "gl_position":
+                kind = ("fragment", "float_vec4")
+        if kind is None:
+            return
+        if kind == "output_only":
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                "output-only builtin semantics cannot be used as parameters"
+            )
+
+        stage_kind, expected_type = kind
+        if stage_kind == "vertex_fragment":
+            allowed_stages = {"vertex", "fragment"}
+        elif stage_kind == "ray":
+            allowed_stages = MOJO_RAY_STAGE_TYPES
+        elif stage_kind == "ray_hit":
+            allowed_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        else:
+            allowed_stages = {stage_kind}
+        if shader_type is not None and shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo {shader_type} "
+                f"stage; valid stage is {allowed}"
+            )
+
+        if not self.parameter_semantic_type_matches(expected_type, param_type):
+            normalized_semantic = self.normalized_semantic_key(semantic)
+            if (
+                expected_type == "integer_vec3"
+                and normalized_semantic == "global_invocation_id"
+                and (
+                    self.is_scalar_integer_type(param_type)
+                    or self.is_integer_vector_width(param_type, 2)
+                )
+            ):
+                return
+            expected = self.parameter_semantic_expected_type(expected_type)
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                f"expected {expected}"
+            )
+
+    def normalized_semantic_key(self, semantic):
+        return self.map_semantic(semantic).lower()
+
+    def parameter_semantic_type_matches(self, expected_type, param_type):
+        if expected_type is None:
+            return True
+        if expected_type == "bool_scalar":
+            return self.is_bool_scalar_type(param_type)
+        if expected_type == "float_vec2":
+            return self.is_float_vector_width(param_type, 2)
+        if expected_type == "float_vec4":
+            return self.is_float_vector_width(param_type, 4)
+        if expected_type == "float_scalar":
+            return self.is_float_scalar_type(param_type)
+        if expected_type == "integer_scalar":
+            return self.is_scalar_integer_type(param_type)
+        if expected_type == "integer_vec3":
+            return self.is_integer_vector_width(param_type, 3)
+        return True
+
+    def parameter_semantic_expected_type(self, expected_type):
+        return {
+            "bool_scalar": "bool",
+            "float_vec2": "vec2-compatible type",
+            "float_vec4": "vec4-compatible type",
+            "float_scalar": "float scalar type",
+            "integer_scalar": "integer scalar type",
+            "integer_vec3": "integer vec3-compatible type",
+        }.get(expected_type, "compatible type")
+
+    def is_bool_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.bool"
+
+    def is_integer_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] in MOJO_INTEGER_DTYPES
+            and vector_info[1] == width
+        )
+
+    def generate_enum(self, node):
+        """Lower a CrossGL enum to Mojo aliases or a tagged payload struct."""
+        self.validate_user_defined_type_name(node.name, "enum")
+        self.enum_variant_names[node.name] = [
+            variant.name for variant in getattr(node, "variants", []) or []
+        ]
+        if any(
+            getattr(variant, "data", None) or getattr(variant, "fields", None)
+            for variant in getattr(node, "variants", []) or []
+        ):
+            return self.generate_payload_enum(node)
+
+        enum_type = self.map_enum_underlying_type(
+            getattr(node, "underlying_type", None)
+        )
+        self.enum_types[node.name] = enum_type
+
+        code = f"alias {node.name} = {enum_type}\n"
+        next_value = 0
+        local_aliases = {}
+        local_values = {}
+        for variant in getattr(node, "variants", []) or []:
+            payload = getattr(variant, "data", None) or getattr(variant, "fields", None)
+            if payload:
+                raise ValueError(
+                    "Unsupported enum payload for Mojo codegen; only unit/numeric "
+                    f"enum variants are supported: {node.name}.{variant.name}"
+                )
+
+            alias_name = self.enum_variant_alias_name(node.name, variant.name)
+            value = getattr(variant, "value", None)
+            if value is None:
+                value_text = str(next_value)
+                resolved_value = next_value
+            else:
+                value_text = self.generate_enum_value_expression(value, local_aliases)
+                resolved_value = self.evaluate_enum_integer_value(value, local_values)
+
+            self.register_enum_variant_metadata(
+                node.name,
+                variant.name,
+                alias_name,
+                resolved_value,
+            )
+            local_aliases[variant.name] = alias_name
+            local_values[variant.name] = resolved_value
+            code += f"alias {alias_name} = {value_text}\n"
+
+            literal_value = resolved_value
+            if literal_value is None:
+                literal_value = self.literal_int_value(value_text)
+            next_value = (
+                literal_value + 1 if literal_value is not None else next_value + 1
+            )
+
+        return code + "\n"
+
+    def generate_payload_enum(self, node):
+        fields = enum_struct_fields(node)
+        if fields is None:
+            raise ValueError(
+                "Unsupported enum payload for Mojo codegen; payload fields must "
+                f"have stable names and compatible types: {node.name}"
+            )
+
+        self.enum_types[node.name] = node.name
+        self.struct_types[node.name] = {"variant": "int"}
+        for field_name, field_type in fields:
+            self.struct_types[node.name][field_name] = self.type_name(field_type)
+
+        code = f"@value\nstruct {node.name}:\n"
+        code += "    var variant: Int32\n"
+        for field_name, field_type in fields:
+            code += (
+                f"    var {self.mojo_identifier(field_name)}: "
+                f"{self.map_type(field_type)}\n"
+            )
+        code += "\n"
+
+        code += self.generate_payload_enum_constants(node)
+        code += self.generate_payload_enum_constructors(node, fields)
+        return code
+
+    def generate_payload_enum_constants(self, node):
+        code = ""
+        next_value = 0
+        local_aliases = {}
+        local_values = {}
+        for variant in getattr(node, "variants", []) or []:
+            alias_name = self.enum_variant_alias_name(node.name, variant.name)
+            value = getattr(variant, "value", None)
+            if value is None:
+                value_text = str(next_value)
+                resolved_value = next_value
+            else:
+                value_text = self.generate_enum_value_expression(value, local_aliases)
+                resolved_value = self.evaluate_enum_integer_value(value, local_values)
+
+            self.register_enum_variant_metadata(
+                node.name,
+                variant.name,
+                alias_name,
+                resolved_value,
+            )
+            local_aliases[variant.name] = alias_name
+            local_values[variant.name] = resolved_value
+            code += f"alias {alias_name} = {value_text}\n"
+
+            literal_value = resolved_value
+            if literal_value is None:
+                literal_value = self.literal_int_value(value_text)
+            next_value = (
+                literal_value + 1 if literal_value is not None else next_value + 1
+            )
+        return code + "\n"
+
+    def register_enum_variant_metadata(
+        self, enum_name, variant_name, alias_name, resolved_value
+    ):
+        for path in self.enum_variant_paths(enum_name, variant_name):
+            self.enum_variant_aliases[path] = alias_name
+            self.enum_variant_values[path] = resolved_value
+            self.enum_variant_result_types[path] = enum_name
+
+    def enum_variant_paths(self, enum_name, variant_name):
+        return (f"{enum_name}::{variant_name}", f"{enum_name}.{variant_name}")
+
+    def generate_payload_enum_constructors(self, node, fields):
+        code = ""
+        all_field_names = {field_name for field_name, _ in fields}
+        for variant in getattr(node, "variants", []) or []:
+            variant_fields = enum_variant_payload_fields(variant) or []
+            constructor_name = (
+                f"{self.enum_variant_alias_name(node.name, variant.name)}_make"
+            )
+            for path in self.enum_variant_paths(node.name, variant.name):
+                self.enum_variant_constructors[path] = constructor_name
+                self.enum_variant_constructor_fields[path] = variant_fields
+                if not variant_fields:
+                    self.enum_unit_variant_constructors[path] = constructor_name
+
+            params = ", ".join(
+                f"payload{index}: {self.map_type(field_type)}"
+                for index, (_field_name, field_type) in enumerate(variant_fields)
+            )
+            code += f"fn {constructor_name}({params}) -> {node.name}:\n"
+            rendered_fields = {
+                "variant": self.enum_variant_alias_name(node.name, variant.name)
+            }
+            active_fields = {field_name for field_name, _ in variant_fields}
+            for field_name, field_type in fields:
+                if field_name in active_fields:
+                    continue
+                rendered_fields[field_name] = self.zero_value_for_type(field_type)
+            for index, (field_name, _field_type) in enumerate(variant_fields):
+                if field_name not in all_field_names:
+                    continue
+                rendered_fields[field_name] = f"payload{index}"
+            field_args = [
+                f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
+                for field_name in self.struct_types[node.name]
+            ]
+            code += f"    return {node.name}({', '.join(field_args)})\n\n"
+        return code
+
+    def generate_enum_value_expression(self, value, local_aliases):
+        previous_aliases = self.current_enum_value_aliases
+        self.current_enum_value_aliases = local_aliases
+        try:
+            return self.generate_expression(value)
+        finally:
+            self.current_enum_value_aliases = previous_aliases
+
+    def evaluate_enum_integer_value(self, expr, local_values):
+        if expr is None:
+            return None
+        if isinstance(expr, bool):
+            return int(expr)
+        if isinstance(expr, int):
+            return expr
+        if hasattr(expr, "value"):
+            try:
+                return int(expr.value)
+            except (TypeError, ValueError):
+                return None
+        expr_name = getattr(expr, "name", None)
+        if expr_name is not None and not isinstance(expr, VariableNode):
+            return local_values.get(expr_name)
+        if isinstance(expr, MemberAccessNode):
+            reference = self.enum_member_reference_name(expr)
+            if reference is None:
+                return None
+            return self.enum_variant_values.get(reference)
+        if isinstance(expr, UnaryOpNode):
+            operand = self.evaluate_enum_integer_value(expr.operand, local_values)
+            if operand is None:
+                return None
+            op = self.map_operator(expr.op)
+            if op == "+":
+                return operand
+            if op == "-":
+                return -operand
+            if op == "~":
+                return ~operand
+            return None
+        if isinstance(expr, BinaryOpNode):
+            left = self.evaluate_enum_integer_value(expr.left, local_values)
+            right = self.evaluate_enum_integer_value(expr.right, local_values)
+            if left is None or right is None:
+                return None
+            op = self.map_operator(expr.op)
+            try:
+                return self.evaluate_enum_binary_op(left, op, right)
+            except ZeroDivisionError:
+                return None
+        return None
+
+    def evaluate_enum_binary_op(self, left, op, right):
+        if op == "+":
+            return left + right
+        if op == "-":
+            return left - right
+        if op == "*":
+            return left * right
+        if op == "/":
+            return left // right
+        if op == "%":
+            return left % right
+        if op == "<<":
+            return left << right
+        if op == ">>":
+            return left >> right
+        if op == "|":
+            return left | right
+        if op == "&":
+            return left & right
+        if op == "^":
+            return left ^ right
+        return None
+
+    def enum_member_reference_name(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        obj = getattr(expr, "object", None)
+        obj_name = getattr(obj, "name", obj if isinstance(obj, str) else None)
+        if obj_name is None:
+            return None
+        return f"{obj_name}.{expr.member}"
+
+    def map_enum_underlying_type(self, underlying_type):
+        if underlying_type is None:
+            return "Int32"
+        mapped = self.map_type(self.convert_type_node_to_string(underlying_type))
+        if mapped in {"Int", "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64"}:
+            return mapped
+        return "Int32"
+
+    def enum_variant_alias_name(self, enum_name, variant_name):
+        return f"{enum_name}_{variant_name}"
+
+    def map_enum_variant_reference(self, name, target_type=None):
+        if not isinstance(name, str):
+            return name
+        constructor = self.enum_unit_variant_constructors.get(name)
+        if constructor is not None:
+            return f"{constructor}()"
+        generic_constructor = self.generic_enum_unit_variant_constructor(
+            name, target_type
+        )
+        if generic_constructor is not None:
+            return f"{generic_constructor}()"
+        if name in self.current_enum_value_aliases:
+            return self.current_enum_value_aliases[name]
+        return self.enum_variant_aliases.get(name, name)
+
+    def generic_enum_unit_variant_constructor(self, name, target_type):
+        variant_fields = self.generic_enum_variant_fields_for_type(name, target_type)
+        if variant_fields != []:
+            return None
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            name, target_type
+        )
+        if specialization is None:
+            return None
+        return enum_variant_constructor_name(
+            specialization["struct_name"], variant_name
+        )
+
+    def generic_enum_variant_specialization(self, variant_path, subject_type):
+        if "::" in str(variant_path):
+            enum_name, variant_name = str(variant_path).split("::", 1)
+        elif "." in str(variant_path):
+            enum_name, variant_name = str(variant_path).split(".", 1)
+        else:
+            return None, None
+
+        specialization = self.generic_enum_specialization_for_type(
+            subject_type,
+            expected_base=enum_name,
+        )
+        return specialization, variant_name
+
+    def generic_enum_variant_fields_for_type(self, variant_path, subject_type):
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            variant_path, subject_type
+        )
+        if specialization is None:
+            if "::" in str(variant_path):
+                enum_name, variant_name = str(variant_path).split("::", 1)
+            elif "." in str(variant_path):
+                enum_name, variant_name = str(variant_path).split(".", 1)
+            else:
+                return None
+            specialization = self.generic_enum_pattern_specialization_for_type(
+                subject_type,
+                expected_base=enum_name,
+            )
+            if specialization is None:
+                return None
+        return generic_enum_specialized_variant_fields(
+            self,
+            specialization,
+            variant_name,
+        )
+
+    def struct_member_declared_type(self, member):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            element_type = self.explicit_image_format_resource_type(
+                self.type_name(element_type), member
+            )
+            return self.array_type_name(element_type, get_array_size_from_node(member))
+        if hasattr(member, "member_type"):
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(member.member_type), member
+            )
+        if hasattr(member, "vtype"):
+            return self.explicit_image_format_resource_type(member.vtype, member)
+        return "float"
+
+    def array_declared_type(self, node):
+        element_type = getattr(node, "element_type", getattr(node, "vtype", "float"))
+        element_type = self.explicit_image_format_resource_type(
+            self.type_name(element_type), node
+        )
+        return self.array_type_name(element_type, get_array_size_from_node(node))
+
+    def register_struct_type_metadata(self, node):
+        struct_name = getattr(node, "name", None)
+        if not struct_name:
+            return
+        self.validate_user_defined_type_name(struct_name, "struct")
+        self.register_generic_struct_type_metadata(node)
+        self.struct_types[struct_name] = {}
+        self.struct_member_semantics[struct_name] = {}
+
+        for member in getattr(node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_member_declared_type(member)
+            self.struct_types[struct_name][member_name] = member_type
+            self.register_struct_resource_access_metadata(
+                struct_name, member_name, member, member_type
+            )
+            semantic = self.node_semantic(member)
+            if semantic:
+                self.struct_member_semantics[struct_name][member_name] = semantic
+                self.validate_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+
+    def generate_struct(self, node):
+        generic_params = [
+            param.name
+            for param in getattr(node, "generic_params", []) or []
+            if getattr(param, "name", None)
+        ]
+        generic_suffix = ""
+        if generic_params:
+            generic_suffix = (
+                "[" + ", ".join(f"{param}: Copyable" for param in generic_params) + "]"
+            )
+        code = f"@value\nstruct {node.name}{generic_suffix}:\n"
+        self.register_struct_type_metadata(node)
+
+        members = getattr(node, "members", [])
+        for member in members:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_types[node.name][member_name]
+            semantic = self.struct_member_semantics.get(node.name, {}).get(member_name)
+            semantic_comment = f"  # {self.map_semantic(semantic)}" if semantic else ""
+            if self.is_array_type_name(member_type):
+                element_type, size = self.parse_array_type_name(member_type)
+                code += (
+                    f"    var {self.mojo_identifier(member_name)}: "
+                    f"{self.array_storage_type(element_type, size)}"
+                    f"{semantic_comment}\n"
+                )
+            else:
+                code += (
+                    f"    var {self.mojo_identifier(member_name)}: "
+                    f"{self.map_type(member_type)}{semantic_comment}\n"
+                )
+
+        code += "\n"
+        return code
+
+    def get_cbuffer_nodes(self, ast):
+        nodes = []
+        seen = set()
+        for attr in ("cbuffers", "constants"):
+            for node in getattr(ast, attr, None) or []:
+                if attr == "constants" and not getattr(node, "is_cbuffer", False):
+                    continue
+                node_id = id(node)
+                if node_id in seen:
+                    continue
+                nodes.append(node)
+                seen.add(node_id)
+        return nodes
+
+    def generate_cbuffers(self, ast):
+        code = ""
+        cbuffers = self.get_cbuffer_nodes(ast)
+        emitted_member_names = set()
+        for node in cbuffers:
+            code += self.generate_resource_metadata_comment(
+                node, getattr(node, "name", None), kind="cbuffer"
+            )
+            if isinstance(node, StructNode):
+                code += self.generate_struct(node)
+                code += self.generate_cbuffer_member_placeholders(
+                    node, emitted_member_names
+                )
+        return code
+
+    def generate_cbuffer_member_placeholders(self, node, emitted_member_names=None):
+        emitted_member_names = (
+            emitted_member_names if emitted_member_names is not None else set()
+        )
+        code = ""
+        members = getattr(node, "members", []) or []
+        if not members:
+            return code
+
+        for member in members:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in emitted_member_names:
+                continue
+            member_type = self.struct_types.get(node.name, {}).get(member_name)
+            if member_type is None:
+                member_type = self.struct_member_declared_type(member)
+            self.register_variable_type(member_name, member_type)
+            emitted_member_names.add(member_name)
+            code += self.generate_zero_initialized_variable(member_name, member_type)
+        return code
+
+    def generate_zero_initialized_variable(self, name, type_name):
+        emitted_name = self.mojo_identifier(name)
+        if self.is_array_type_name(type_name):
+            return (
+                f"var {emitted_name} = "
+                f"{self.array_initial_value_for_type(type_name)}\n"
+            )
+        if self.is_struct_type_name(type_name):
+            return f"var {emitted_name} = {self.zero_value_for_type(type_name)}\n"
+        mapped_type = self.map_type(type_name)
+        return (
+            f"var {emitted_name}: {mapped_type} = "
+            f"{self.zero_value_for_type(type_name)}\n"
+        )
+
+    def generate_function(self, func, indent=0, shader_type=None, stage_node=None):
+        """Render one CrossGL function or shader entry point as Mojo code."""
+        code = ""
+        "    " * indent
+        previous_variable_types = self.variable_types.copy()
+        previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
+        previous_resource_access_qualifier_aliases = {
+            name: list(candidates)
+            for name, candidates in self.resource_access_qualifier_aliases.items()
+        }
+        previous_resource_access_path_qualifier_aliases = {
+            path: list(candidates)
+            for path, candidates in self.resource_access_path_qualifier_aliases.items()
+        }
+        previous_return_type = self.current_return_type
+        previous_shader_type = self.current_shader_type
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
+        self.current_shader_type = shader_type
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
+
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
+        param_infos = []
+        for p in param_list:
+            param_type = self.function_parameter_type_name(p)
+            param_infos.append((p, param_type))
+            self.register_variable_type(getattr(p, "name", None), param_type)
+
+        extra_param_infos = [
+            (name, type_name)
+            for name, type_name in self.stage_local_function_extra_params.get(
+                getattr(func, "name", None), []
+            )
+            if name not in {getattr(param, "name", None) for param, _ in param_infos}
+        ]
+        for name, type_name in extra_param_infos:
+            self.register_variable_type(name, type_name)
+
+        synthetic_compute_builtin_params = []
+        if shader_type == "compute":
+            existing_param_names = {
+                getattr(param, "name", None) for param, _ in param_infos
+            }
+            existing_param_names.update(name for name, _ in extra_param_infos)
+            synthetic_compute_builtin_params = self.compute_gpu_builtin_parameter_infos(
+                getattr(func, "body", []), existing_param_names
+            )
+            for name, type_name in synthetic_compute_builtin_params:
+                self.register_variable_type(name, type_name)
+
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        return_semantic = self.function_return_semantic(func)
+        fragment_output_info = None
+        if self.type_name(return_type) == "void" and return_semantic is None:
+            for p, param_type in param_infos:
+                semantic = self.node_semantic(p)
+                if is_fragment_output_parameter(shader_type, p, semantic):
+                    fragment_output_info = (p, param_type, semantic)
+                    return_type = param_type
+                    return_semantic = semantic
+                    break
+        if fragment_output_info is not None:
+            output_param = fragment_output_info[0]
+            param_infos = [
+                param_info
+                for param_info in param_infos
+                if param_info[0] is not output_param
+            ]
+
+        if shader_type == "geometry":
+            self.validate_geometry_stage(func, param_infos)
+        if shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            self.validate_tessellation_stage(func, shader_type, param_infos)
+        if shader_type in MOJO_MESH_STAGE_TYPES:
+            self.validate_mesh_stage(func, shader_type, param_infos)
+
+        param_names = {p.name for p, _ in param_infos if hasattr(p, "name")}
+        param_names.update(name for name, _ in extra_param_infos)
+        param_names.update(name for name, _ in synthetic_compute_builtin_params)
+        mutated_params = self.collect_mutated_parameters(
+            getattr(func, "body", []), param_names
+        )
+        params = []
+        local_alias_declarations = []
+        emitted_param_names = set()
+        parameter_semantic_comments = []
+        used_parameter_semantics = {}
+        for p, param_type in param_infos:
+            semantic = self.node_semantic(p)
+            self.validate_parameter_semantic(
+                shader_type,
+                p.name,
+                param_type,
+                semantic,
+                used_parameter_semantics,
+            )
+
+            dispatch_thread_id_bridge = (
+                self.mojo_compute_global_invocation_id_parameter_bridge(
+                    p,
+                    param_type,
+                    semantic,
+                    emitted_param_names,
+                    param_names,
+                )
+                if shader_type == "compute"
+                else None
+            )
+            if dispatch_thread_id_bridge is not None:
+                param_name, native_type, local_alias = dispatch_thread_id_bridge
+                self.register_variable_type(param_name, native_type)
+                self.register_variable_type(p.name, param_type)
+                if semantic:
+                    parameter_semantic_comments.append(
+                        self.generate_parameter_semantic_comment(
+                            shader_type, p.name, semantic
+                        )
+                    )
+                params.append(f"{param_name}: {self.map_type(native_type)}")
+                local_alias_declarations.append(local_alias)
+                emitted_param_names.add(param_name)
+                continue
+
+            self.register_variable_type(p.name, param_type)
+            self.register_resource_access_metadata(p, param_type)
+            if semantic:
+                parameter_semantic_comments.append(
+                    self.generate_parameter_semantic_comment(
+                        shader_type, p.name, semantic
+                    )
+                )
+            ownership = "owned " if p.name in mutated_params else ""
+            params.append(
+                f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
+            )
+        for name, param_type in extra_param_infos:
+            ownership = "owned " if name in mutated_params else ""
+            params.append(
+                f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
+            )
+        for name, param_type in synthetic_compute_builtin_params:
+            params.append(f"{self.mojo_identifier(name)}: {self.map_type(param_type)}")
+
+        params_str = ", ".join(params) if params else ""
+
+        function_name = self.shader_entry_function_name(
+            func,
+            shader_type,
+            [*param_infos, *synthetic_compute_builtin_params],
+            return_type,
+        )
+        self.function_return_types[func.name] = return_type
+        if function_name != func.name:
+            self.function_return_types[function_name] = return_type
+        self.current_return_type = return_type
+        if return_semantic:
+            self.validate_return_semantic(shader_type, return_type, return_semantic)
+        self.validate_struct_return_semantics(shader_type, return_type)
+
+        if shader_type in MOJO_SUPPORTED_STAGE_TYPES:
+            code += f"# CrossGL shader stage: {shader_type}\n"
+        if shader_type == "geometry":
+            code += self.generate_geometry_stage_comments(func, param_infos)
+        if shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            code += self.generate_tessellation_stage_comments(
+                func, shader_type, param_infos
+            )
+        if shader_type in MOJO_MESH_STAGE_TYPES:
+            code += self.generate_mesh_stage_comments(
+                func, shader_type, param_infos, stage_node
+            )
+        for comment in parameter_semantic_comments:
+            code += comment
+        if return_semantic:
+            code += self.generate_return_semantic_comment(shader_type, return_semantic)
+
+        code += (
+            f"fn {self.mojo_identifier(function_name)}({params_str}) -> "
+            f"{self.map_type(return_type)}:\n"
+        )
+        if stage_node is not None:
+            code += self.generate_function_local_shared_declarations(
+                stage_node, indent + 1
+            )
+        if fragment_output_info is not None:
+            output_param, output_type, _semantic = fragment_output_info
+            output_name = getattr(output_param, "name", None)
+            self.register_variable_type(output_name, output_type)
+            code += (
+                f"{'    ' * (indent + 1)}var {self.mojo_identifier(output_name)}: "
+                f"{self.map_type(output_type)}\n"
+            )
+        for declaration in local_alias_declarations:
+            code += "    " * (indent + 1) + declaration + "\n"
+
+        body = getattr(func, "body", [])
+        statements = None
+        if hasattr(body, "statements"):
+            statements = body.statements
+            for stmt in body.statements:
+                code += self.generate_statement(stmt, indent + 1)
+        elif isinstance(body, list):
+            statements = body
+            for stmt in body:
+                code += self.generate_statement(stmt, indent + 1)
+        else:
+            code += "    pass\n"
+
+        if statements is not None and not statements:
+            code += "    pass\n"
+        if (
+            fragment_output_info is not None
+            and statements is not None
+            and not self.statement_body_terminates_inner_loop(statements)
+        ):
+            output_param = fragment_output_info[0]
+            code += (
+                f"{'    ' * (indent + 1)}return "
+                f"{self.mojo_identifier(getattr(output_param, 'name', None))}\n"
+            )
+
+        code += "\n"
+        self.variable_types = previous_variable_types
+        self.resource_access_qualifiers = previous_resource_access_qualifiers
+        self.resource_access_qualifier_aliases = (
+            previous_resource_access_qualifier_aliases
+        )
+        self.resource_access_path_qualifier_aliases = (
+            previous_resource_access_path_qualifier_aliases
+        )
+        self.current_return_type = previous_return_type
+        self.current_shader_type = previous_shader_type
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
+        return code
+
+    def shader_entry_function_name(
+        self, func, shader_type, param_infos=None, return_type=None
+    ):
+        name = getattr(func, "name", "main")
+        if name != "main":
+            return name
+        if shader_type in {"vertex", "fragment"}:
+            return f"{shader_type}_main"
+        if shader_type == "compute" and not self.compute_entry_can_remain_main(
+            param_infos, return_type
+        ):
+            return "compute_main"
+        if shader_type in MOJO_RAY_STAGE_TYPES:
+            return f"{shader_type}_main"
+        if shader_type == "geometry":
+            return "geometry_main"
+        if shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            return f"{shader_type}_main"
+        if shader_type in MOJO_MESH_STAGE_TYPES:
+            return f"{shader_type}_main"
+        return name
+
+    def compute_entry_can_remain_main(self, param_infos, return_type):
+        return (
+            not (param_infos or [])
+            and self.type_name(return_type) == "void"
+            and self.current_shader_stage_count <= 1
+        )
+
+    def compute_gpu_builtin_parameter_infos(self, body, existing_names):
+        required_builtins = self.collect_compute_gpu_builtin_aliases(body)
+        if not required_builtins:
+            return []
+
+        existing_names = {name for name in existing_names if isinstance(name, str)}
+        ordered = []
+        seen_aliases = set()
+        for alias_name in MOJO_GPU_BUILTIN_PARAMETER_ORDER:
+            for candidate_alias, type_name in sorted(required_builtins):
+                if candidate_alias != alias_name or candidate_alias in seen_aliases:
+                    continue
+                seen_aliases.add(candidate_alias)
+                if candidate_alias not in existing_names:
+                    ordered.append((candidate_alias, type_name))
+        for alias_name, type_name in sorted(required_builtins):
+            if alias_name in seen_aliases:
+                continue
+            seen_aliases.add(alias_name)
+            if alias_name not in existing_names:
+                ordered.append((alias_name, type_name))
+        return ordered
+
+    def collect_compute_gpu_builtin_aliases(self, node, required=None, visited=None):
+        if required is None:
+            required = set()
+        if visited is None:
+            visited = set()
+        if node is None or isinstance(node, (int, float, bool)):
+            return required
+        if isinstance(node, str):
+            builtin = MOJO_GPU_BUILTIN_ALIASES.get(node)
+            if builtin is not None:
+                required.add(builtin)
+            return required
+        if isinstance(node, (list, tuple, set)):
+            for item in node:
+                self.collect_compute_gpu_builtin_aliases(item, required, visited)
+            return required
+
+        node_id = id(node)
+        if node_id in visited:
+            return required
+        visited.add(node_id)
+
+        builtin_name = getattr(node, "builtin_name", None)
+        if builtin_name is None and isinstance(node, IdentifierNode):
+            builtin_name = getattr(node, "name", None)
+        builtin = MOJO_GPU_BUILTIN_ALIASES.get(builtin_name)
+        if builtin is not None:
+            required.add(builtin)
+
+        for attr_name in (
+            "statements",
+            "body",
+            "expression",
+            "initial_value",
+            "object",
+            "object_expr",
+            "vector_expr",
+            "array",
+            "index",
+            "left",
+            "right",
+            "condition",
+            "true_expr",
+            "false_expr",
+            "function",
+            "args",
+            "arguments",
+            "then_branch",
+            "else_branch",
+            "if_body",
+            "else_body",
+        ):
+            if not hasattr(node, attr_name):
+                continue
+            self.collect_compute_gpu_builtin_aliases(
+                getattr(node, attr_name), required, visited
+            )
+        return required
+
+    def mojo_compute_global_invocation_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names, parameter_names
+    ):
+        if semantic is None:
+            return None
+        if self.normalized_semantic_key(semantic) != "global_invocation_id":
+            return None
+
+        mapped_type = self.map_type(param_type)
+        if mapped_type not in {"UInt", "UInt32", "SIMD[DType.uint32, 2]"}:
+            return None
+
+        source_name = getattr(parameter, "name", None)
+        if not isinstance(source_name, str) or not source_name:
+            return None
+
+        local_name = self.mojo_identifier(source_name)
+        used_names = set(emitted_param_names)
+        used_names.update(parameter_names)
+        used_names.update(self.variable_types)
+        native_name = self.mojo_unique_local_identifier(
+            f"{local_name}_globalInvocationID", used_names
+        )
+        if mapped_type in {"UInt", "UInt32"}:
+            alias_value = f"{native_name}[0]"
+        else:
+            alias_value = f"SIMD[DType.uint32, 2]({native_name}[0], {native_name}[1])"
+        return native_name, "uint3", f"var {local_name}: {mapped_type} = {alias_value}"
+
+    def mojo_unique_local_identifier(self, candidate, used_names):
+        candidate = self.mojo_identifier(candidate)
+        while candidate in used_names or candidate in self.mojo_reserved_identifiers():
+            candidate = f"{candidate}_"
+        return candidate
+
+    def collect_mutated_parameters(self, body, param_names):
+        mutated = set()
+        for stmt in self.body_statements(body):
+            self.collect_mutated_parameters_from_node(stmt, param_names, mutated)
+        return mutated
+
+    def body_statements(self, body):
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        if body is None:
+            return []
+        return [body]
+
+    def collect_mutated_parameters_from_node(self, node, param_names, mutated):
+        if node is None:
+            return
+
+        if isinstance(node, AssignmentNode):
+            root_name = self.assignment_target_root(node.left)
+            if root_name in param_names:
+                mutated.add(root_name)
+            self.collect_mutated_parameters_from_node(node.right, param_names, mutated)
+            return
+
+        if isinstance(node, UnaryOpNode) and self.map_operator(node.op) in ["++", "--"]:
+            root_name = self.assignment_target_root(node.operand)
+            if root_name in param_names:
+                mutated.add(root_name)
+            return
+
+        dimensions_call = self.get_expression_statement_call(node)
+        if dimensions_call is not None:
+            func_expr = getattr(dimensions_call, "function", None)
+            if func_expr is None:
+                func_expr = getattr(dimensions_call, "name", None)
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and getattr(func_expr, "member", None) == "GetDimensions"
+            ):
+                for arg in self.get_get_dimensions_out_arguments(dimensions_call):
+                    root_name = self.assignment_target_root(arg)
+                    if root_name in param_names:
+                        mutated.add(root_name)
+                return
+
+        for child in self.node_children(node):
+            self.collect_mutated_parameters_from_node(child, param_names, mutated)
+
+    def node_children(self, node):
+        children = []
+        for attr in (
+            "init",
+            "condition",
+            "update",
+            "body",
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+            "value",
+            "expression",
+            "left",
+            "right",
+            "object",
+            "object_expr",
+            "array",
+            "array_expr",
+            "index",
+            "index_expr",
+            "operand",
+            "vector_expr",
+        ):
+            if hasattr(node, attr):
+                children.append(getattr(node, attr))
+
+        for attr in ("statements", "args", "arguments"):
+            if hasattr(node, attr):
+                children.extend(getattr(node, attr))
+        if isinstance(node, ArrayLiteralNode):
+            children.extend(node.elements)
+
+        return children
+
+    def assignment_target_root(self, target):
+        if isinstance(target, str):
+            return target
+        if isinstance(target, VariableNode) and hasattr(target, "name"):
+            return target.name
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_root(target.array)
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_root(target.object)
+        if hasattr(target, "__class__") and "Identifier" in str(target.__class__):
+            return getattr(target, "name", None)
+        if hasattr(target, "__class__") and "Swizzle" in str(target.__class__):
+            return self.assignment_target_root(getattr(target, "vector_expr", None))
+        return None
+
+    def generate_expression_with_prelude(
+        self, expr, indent, target_type=None, target_context=None
+    ):
+        self.expression_prelude_stack.append({"indent": indent, "lines": []})
+        try:
+            expression = self.generate_expression(expr, target_type, target_context)
+            prelude = "".join(self.expression_prelude_stack[-1]["lines"])
+            return prelude, expression
+        finally:
+            self.expression_prelude_stack.pop()
+
+    def generate_assignment_statement(self, node, indent):
+        swizzle_assignment = self.generate_swizzle_assignment_statement(node, indent)
+        if swizzle_assignment is not None:
+            return swizzle_assignment
+
+        indent_str = "    " * indent
+        self.validate_resource_write_access(node.left, "assignment")
+        left = self.generate_expression(node.left)
+        left_type = self.expression_result_type(node.left)
+        self.validate_expression_target_shape(
+            node.right, left_type, "assignment target"
+        )
+        prelude, right = self.generate_expression_with_prelude(
+            node.right, indent, left_type, "assignment target"
+        )
+        op = self.map_operator(node.operator)
+        self.register_resource_assignment_alias_metadata(node.left, node.right, op)
+        return f"{prelude}{indent_str}{left} {op} {right}\n"
+
+    def generate_swizzle_assignment_statement(self, node, indent):
+        target = getattr(node, "left", getattr(node, "target", None))
+        if not isinstance(target, MemberAccessNode):
+            return None
+        swizzle_indices = self.get_swizzle_indices(getattr(target, "member", ""))
+        if swizzle_indices is None or len(swizzle_indices) <= 1:
+            return None
+
+        object_type = self.expression_result_type(target.object)
+        if self.vector_type_info(object_type) is None:
+            return None
+
+        indent_str = "    " * indent
+        self.validate_resource_write_access(target, "assignment")
+        left_type = self.expression_result_type(target)
+        self.validate_expression_target_shape(
+            node.right, left_type, "assignment target"
+        )
+        prelude, right = self.generate_expression_with_prelude(
+            node.right, indent, left_type, "assignment target"
+        )
+        op = self.map_operator(node.operator)
+        object_expr = self.generate_expression(target.object)
+        temp_name = self.next_swizzle_assignment_temp_name()
+        code = f"{prelude}{indent_str}var {temp_name}: {self.map_type(left_type)} = {right}\n"
+        for component_index, source_index in enumerate(swizzle_indices):
+            code += (
+                f"{indent_str}{object_expr}[{source_index}] {op} "
+                f"{temp_name}[{component_index}]\n"
+            )
+        return code
+
+    def generate_get_dimensions_statement(self, stmt, indent):
+        call = self.get_expression_statement_call(stmt)
+        if call is None:
+            return None
+
+        func_expr = getattr(call, "function", None)
+        if func_expr is None:
+            func_expr = getattr(call, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        if getattr(func_expr, "member", None) != "GetDimensions":
+            return None
+
+        args = list(getattr(call, "args", []) or [])
+        if not args:
+            return None
+
+        resource_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        raw_resource_type = self.expression_result_type(resource_expr)
+        resource_type = self.map_type(raw_resource_type)
+        buffer_info = self.buffer_resource_info(raw_resource_type)
+
+        if buffer_info is not None:
+            return self.generate_buffer_get_dimensions_statement(
+                resource_expr, args, buffer_info, indent
+            )
+        if self.is_texture_resource_type(resource_type):
+            return self.generate_texture_get_dimensions_statement(
+                resource_expr, args, resource_type, indent
+            )
+        if self.is_image_resource_type(resource_type):
+            return self.generate_image_get_dimensions_statement(
+                resource_expr, args, resource_type, indent
+            )
+        return None
+
+    def get_get_dimensions_out_arguments(self, call):
+        args = list(getattr(call, "args", []) or [])
+        func_expr = getattr(call, "function", None)
+        if func_expr is None:
+            func_expr = getattr(call, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return args
+        if getattr(func_expr, "member", None) != "GetDimensions":
+            return args
+
+        resource_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        raw_resource_type = self.expression_result_type(resource_expr)
+        resource_type = self.map_type(raw_resource_type)
+
+        if self.buffer_resource_info(raw_resource_type) is not None:
+            return args
+        if self.is_image_resource_type(resource_type):
+            return args
+        if not self.is_texture_resource_type(resource_type):
+            return args
+
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            return args
+        if self.is_multisample_resource_type(resource_type):
+            return args
+        if len(args) == dimension_count + 2:
+            return args[1:]
+        return args
+
+    def get_expression_statement_call(self, stmt):
+        if isinstance(stmt, FunctionCallNode):
+            return stmt
+        if (
+            hasattr(stmt, "__class__")
+            and "ExpressionStatement" in str(stmt.__class__)
+            and isinstance(getattr(stmt, "expression", None), FunctionCallNode)
+        ):
+            return stmt.expression
+        return None
+
+    def generate_buffer_get_dimensions_statement(
+        self, resource_expr, args, buffer_info, indent
+    ):
+        if len(args) not in {1, 2}:
+            buffer_type, _ = buffer_info
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"{buffer_type} expected 1 or 2 out parameter(s), got {len(args)}"
+            )
+
+        buffer_type, _ = buffer_info
+        self.register_buffer_resource_type(buffer_type)
+        self.required_buffer_dimensions_helpers.add(buffer_info)
+
+        obj = self.generate_expression(resource_expr)
+        indent_str = "    " * indent
+        size_temp = self.next_dimension_query_temp_name()
+        code = f"{indent_str}var {size_temp} = buffer_dimensions({obj})\n"
+        for index, target in enumerate(args):
+            value = f"{size_temp}[{index}]"
+            code += self.generate_dimension_target_assignment(target, value, indent)
+        return code
+
+    def generate_texture_get_dimensions_statement(
+        self, resource_expr, args, resource_type, indent
+    ):
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable texture resource required: {resource_type}"
+            )
+
+        if self.is_multisample_resource_type(resource_type):
+            if len(args) not in {dimension_count, dimension_count + 1}:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s) plus optional sample count, got {len(args)}"
+                )
+            dimension_targets = args[:dimension_count]
+            sample_target = (
+                args[dimension_count] if len(args) > dimension_count else None
+            )
+            return self.generate_resource_dimension_assignments(
+                resource_expr,
+                resource_type,
+                "texture_size",
+                dimension_targets,
+                indent,
+                sample_target=sample_target,
+                sample_helper="texture_samples",
+            )
+
+        if len(args) == dimension_count:
+            lod_arg = None
+            dimension_targets = args
+            levels_target = None
+        elif len(args) == dimension_count + 1:
+            lod_arg = None
+            dimension_targets = args[:dimension_count]
+            levels_target = args[dimension_count]
+        elif len(args) == dimension_count + 2:
+            lod_arg = args[0]
+            dimension_targets = args[1 : 1 + dimension_count]
+            levels_target = args[-1]
+        else:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"{resource_type} expected {dimension_count}, "
+                f"{dimension_count + 1}, or {dimension_count + 2} argument(s), "
+                f"got {len(args)}"
+            )
+
+        return self.generate_resource_dimension_assignments(
+            resource_expr,
+            resource_type,
+            "texture_size",
+            dimension_targets,
+            indent,
+            lod_arg=lod_arg,
+            levels_target=levels_target,
+        )
+
+    def generate_image_get_dimensions_statement(
+        self, resource_expr, args, resource_type, indent
+    ):
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable image resource required: {resource_type}"
+            )
+
+        if self.is_multisample_resource_type(resource_type):
+            if len(args) not in {dimension_count, dimension_count + 1}:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s) plus optional sample count, got {len(args)}"
+                )
+            dimension_targets = args[:dimension_count]
+            sample_target = (
+                args[dimension_count] if len(args) > dimension_count else None
+            )
+        else:
+            if len(args) != dimension_count:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s), got {len(args)}"
+                )
+            dimension_targets = args
+            sample_target = None
+
+        return self.generate_resource_dimension_assignments(
+            resource_expr,
+            resource_type,
+            "image_size",
+            dimension_targets,
+            indent,
+            sample_target=sample_target,
+            sample_helper="image_samples",
+        )
+
+    def resource_dimension_component_count(self, resource_type):
+        base_type = self.image_resource_base_type(resource_type)
+        if not isinstance(base_type, str):
+            return None
+        if "1DArray" in base_type:
+            return 2
+        if "1D" in base_type:
+            return 1
+        if "2DMSArray" in base_type:
+            return 3
+        if "2DArray" in base_type:
+            return 3
+        if "2D" in base_type:
+            return 2
+        if "3D" in base_type:
+            return 3
+        if "CubeArray" in base_type:
+            return 3
+        if "Cube" in base_type:
+            return 2
+        return None
+
+    def generate_resource_dimension_assignments(
+        self,
+        resource_expr,
+        resource_type,
+        size_helper,
+        dimension_targets,
+        indent,
+        lod_arg=None,
+        levels_target=None,
+        sample_target=None,
+        sample_helper=None,
+    ):
+        size_type = self.resource_size_return_type(resource_type)
+        if size_type is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable resource required: {resource_type}"
+            )
+
+        size_expr = self.resource_dimension_size_expression(
+            resource_expr, resource_type, size_helper, lod_arg
+        )
+        indent_str = "    " * indent
+        code = ""
+
+        if len(dimension_targets) == 1 and not levels_target and not sample_target:
+            component_values = [size_expr]
+        else:
+            size_temp = self.next_dimension_query_temp_name()
+            code += f"{indent_str}var {size_temp} = {size_expr}\n"
+            component_values = [
+                self.dimension_component_expression(size_temp, size_type, index)
+                for index, _ in enumerate(dimension_targets)
+            ]
+
+        for target, value in zip(dimension_targets, component_values):
+            code += self.generate_dimension_target_assignment(target, value, indent)
+
+        if levels_target is not None:
+            levels_expr = self.generate_resource_query_levels_call([resource_expr])
+            code += self.generate_dimension_target_assignment(
+                levels_target, levels_expr, indent
+            )
+
+        if sample_target is not None:
+            samples_expr = self.generate_resource_sample_count_call(
+                [resource_expr], sample_helper
+            )
+            code += self.generate_dimension_target_assignment(
+                sample_target, samples_expr, indent
+            )
+
+        return code
+
+    def resource_dimension_size_expression(
+        self, resource_expr, resource_type, helper_name, lod_arg=None
+    ):
+        self.required_resource_size_types.add(resource_type)
+        self.required_resource_size_helpers.add((helper_name, resource_type))
+        resource = self.generate_expression(resource_expr)
+        if lod_arg is None:
+            return f"{helper_name}({resource})"
+        lod = self.dimension_lod_expression(lod_arg, resource_type)
+        return f"{helper_name}({resource}, {lod})"
+
+    def dimension_lod_expression(self, lod_arg, resource_type):
+        lod_type = self.expression_result_type(lod_arg)
+        if not self.is_scalar_integer_type(lod_type):
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"lod argument for {resource_type} must be an integer scalar"
+            )
+        lod = self.generate_expression(lod_arg)
+        if self.map_type(lod_type) == "Int32":
+            return lod
+        return f"Int32({lod})"
+
+    def dimension_component_expression(self, size_expr, size_type, index):
+        if size_type == "Int32":
+            if index == 0:
+                return size_expr
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                "dimension component index exceeds scalar size result"
+            )
+        return f"{size_expr}[{index}]"
+
+    def generate_dimension_target_assignment(self, target, value, indent):
+        self.validate_resource_write_access(target, "GetDimensions")
+        target_expr = self.generate_expression(target)
+        assignment_value = self.cast_dimension_assignment_value(target, value)
+        return f"{'    ' * indent}{target_expr} = {assignment_value}\n"
+
+    def cast_dimension_assignment_value(self, target, value):
+        target_type = self.expression_result_type(target)
+        if target_type is None:
+            return value
+        if not self.is_scalar_integer_type(target_type):
+            raise ValueError(
+                "Unsupported GetDimensions out parameter for Mojo codegen; "
+                f"integer scalar target required: {target_type}"
+            )
+        mapped_type = self.map_type(target_type)
+        if mapped_type == "Int32":
+            return value
+        return f"{mapped_type}({value})"
+
+    def next_dimension_query_temp_name(self):
+        name = f"__cgl_dimensions_{self.dimension_query_counter}"
+        self.dimension_query_counter += 1
+        return name
+
+    def next_scalar_atomic_temp_name(self):
+        name = f"__cgl_atomic_{self.scalar_atomic_counter}"
+        self.scalar_atomic_counter += 1
+        return name
+
+    def next_swizzle_assignment_temp_name(self):
+        name = f"__cgl_swizzle_{self.swizzle_assignment_counter}"
+        self.swizzle_assignment_counter += 1
+        return name
+
+    def next_increment_expression_temp_name(self):
+        name = f"__cgl_increment_{self.increment_expression_counter}"
+        self.increment_expression_counter += 1
+        return name
+
+    def is_increment_or_decrement_node(self, node):
+        return isinstance(node, UnaryOpNode) and self.map_operator(
+            getattr(node, "operator", getattr(node, "op", ""))
+        ) in {"++", "--"}
+
+    def increment_assignment_operator(self, node):
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "")))
+        return "+=" if op == "++" else "-="
+
+    def generate_increment_statement(self, node, indent):
+        indent_str = "    " * indent
+        operand = getattr(node, "operand", "")
+        self.validate_resource_write_access(operand, "increment/decrement")
+        target = self.generate_expression(operand)
+        return f"{indent_str}{target} {self.increment_assignment_operator(node)} 1\n"
+
+    def generate_increment_expression(self, expr):
+        if not self.expression_prelude_stack:
+            raise ValueError(
+                "Unsupported increment/decrement expression for Mojo codegen; "
+                "statement prelude context is required"
+            )
+
+        operand = getattr(expr, "operand", "")
+        self.validate_resource_write_access(operand, "increment/decrement")
+        target = self.generate_expression(operand)
+        assignment_op = self.increment_assignment_operator(expr)
+        context = self.expression_prelude_stack[-1]
+        indent_str = "    " * context["indent"]
+        temp_name = self.next_increment_expression_temp_name()
+        target_type = self.expression_result_type(operand) or "int"
+
+        if getattr(expr, "is_postfix", False):
+            context["lines"].append(
+                f"{indent_str}var {temp_name}: {self.map_type(target_type)} = "
+                f"{target}\n"
+            )
+            context["lines"].append(f"{indent_str}{target} {assignment_op} 1\n")
+            return temp_name
+
+        context["lines"].append(f"{indent_str}{target} {assignment_op} 1\n")
+        context["lines"].append(
+            f"{indent_str}var {temp_name}: {self.map_type(target_type)} = {target}\n"
+        )
+        return temp_name
+
+    def generate_statement(self, stmt, indent=0):
+        """Render a single CrossGL statement as Mojo code."""
+        indent_str = "    " * indent
+
+        lowered_get_dimensions = self.generate_get_dimensions_statement(stmt, indent)
+        if lowered_get_dimensions is not None:
+            return lowered_get_dimensions
+
+        if isinstance(stmt, VariableNode):
+            var_type = self.variable_declared_type(stmt)
+            if getattr(stmt, "vtype", None) and var_type is not None:
+                # Old AST structure - check if this is actually an array declaration disguised as a variable
+                vtype_str = str(stmt.vtype)
+                if (
+                    "ArrayAccessNode" in vtype_str
+                    and "array=" in vtype_str
+                    and "index=" in vtype_str
+                ):
+                    # This is likely an array declaration
+                    array_match = re.search(r"array=(\w+).*?index=(\w+)", vtype_str)
+                    if array_match:
+                        array_match.group(1)
+                        size = array_match.group(2)
+                        base_type = "Float32"  # Default, could be improved
+                        return (
+                            f"{indent_str}var {self.mojo_identifier(stmt.name)} = "
+                            f"InlineArray[{base_type}, {size}]"
+                            "(unsafe_uninitialized=True)\n"
+                        )
+
+            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                effective_type = var_type or self.expression_result_type(
+                    stmt.initial_value
+                )
+                self.register_variable_type(
+                    stmt.name,
+                    effective_type,
+                )
+                self.register_resource_access_metadata(stmt, var_type)
+                self.register_resource_access_alias_metadata(
+                    stmt.name, effective_type, stmt.initial_value
+                )
+                increment_init = self.generate_increment_initializer_declaration(
+                    stmt,
+                    stmt.initial_value,
+                    var_type,
+                    indent,
+                )
+                if increment_init is not None:
+                    return increment_init
+                self.validate_expression_target_shape(
+                    stmt.initial_value, var_type, f"declaration {stmt.name}"
+                )
+                prelude, init_expr = self.generate_expression_with_prelude(
+                    stmt.initial_value,
+                    indent,
+                    var_type,
+                    f"declaration {stmt.name}",
+                )
+                var_name = self.mojo_identifier(stmt.name)
+                if var_type is None:
+                    return f"{prelude}{indent_str}var {var_name} = {init_expr}\n"
+                return (
+                    f"{prelude}{indent_str}var {var_name}: "
+                    f"{self.map_type(var_type)} = {init_expr}\n"
+                )
+
+            var_type = var_type or "float"
+            self.register_variable_type(stmt.name, var_type)
+            self.register_resource_access_metadata(stmt, var_type)
+            var_name = self.mojo_identifier(stmt.name)
+            if self.is_array_type_name(var_type):
+                return (
+                    f"{indent_str}var {var_name} = "
+                    f"{self.array_initial_value_for_type(var_type)}\n"
+                )
+            elif self.is_struct_type_name(var_type):
+                return (
+                    f"{indent_str}var {var_name} = "
+                    f"{self.zero_value_for_type(var_type)}\n"
+                )
+            else:
+                return f"{indent_str}var {var_name}: {self.map_type(var_type)}\n"
+        elif isinstance(stmt, ArrayNode):
+            return self.generate_array_declaration(stmt, indent)
+        elif isinstance(stmt, AssignmentNode):
+            return self.generate_assignment_statement(stmt, indent)
+        elif isinstance(stmt, IfNode):
+            return self.generate_if(stmt, indent)
+        elif isinstance(stmt, ForNode):
+            return self.generate_for(stmt, indent)
+        elif isinstance(stmt, ForInNode):
+            return self.generate_for_in(stmt, indent)
+        elif isinstance(stmt, WhileNode):
+            return self.generate_while(stmt, indent)
+        elif isinstance(stmt, LoopNode):
+            return self.generate_loop(stmt, indent)
+        elif isinstance(stmt, DoWhileNode):
+            return self.generate_do_while(stmt, indent)
+        elif isinstance(stmt, MatchNode):
+            return self.generate_match(stmt, indent)
+        elif isinstance(stmt, SwitchNode):
+            return self.generate_switch(stmt, indent)
+        elif isinstance(stmt, ReturnNode):
+            if isinstance(stmt.value, list):
+                # Multiple return values
+                values = ", ".join(self.generate_expression(val) for val in stmt.value)
+                return f"{indent_str}return {values}\n"
+            else:
+                self.validate_expression_target_shape(
+                    stmt.value, self.current_return_type, "return value"
+                )
+                prelude, return_value = self.generate_expression_with_prelude(
+                    stmt.value,
+                    indent,
+                    self.current_return_type,
+                    "return value",
+                )
+                return f"{prelude}{indent_str}return {return_value}\n"
+        elif isinstance(stmt, BreakNode):
+            self.record_loop_exit_alias_state()
+            context = self.active_do_while_context()
+            if context:
+                break_flag = context["break_flag"]
+                return f"{indent_str}{break_flag} = True\n{indent_str}break\n"
+            return f"{indent_str}break\n"
+        elif isinstance(stmt, ContinueNode):
+            if self.active_do_while_context():
+                return f"{indent_str}break\n"
+            context = self.active_for_context()
+            if context:
+                update = self.generate_for_update_statement(context["update"], indent)
+                return f"{update}{indent_str}continue\n"
+            return f"{indent_str}continue\n"
+        elif isinstance(stmt, SyncNode):
+            return self.generate_sync_node(stmt, indent)
+        elif self.is_increment_or_decrement_node(stmt):
+            return self.generate_increment_statement(stmt, indent)
+        elif isinstance(stmt, ArrayAccessNode):
+            # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
+            # Try to handle it gracefully
+            return f"{indent_str}# Unhandled ArrayAccessNode: {stmt}\n"
+        elif isinstance(stmt, ExpressionStatementNode):
+            expr = getattr(stmt, "expression", None)
+            if isinstance(expr, AssignmentNode):
+                return self.generate_assignment_statement(expr, indent)
+            if self.is_increment_or_decrement_node(expr):
+                return self.generate_increment_statement(expr, indent)
+
+            prelude, expr_result = self.generate_expression_with_prelude(expr, indent)
+            if expr_result.strip():
+                return f"{prelude}{indent_str}{expr_result}\n"
+            return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
+        else:
+            # Handle expressions that may be used as statements
+            prelude, expr_result = self.generate_expression_with_prelude(stmt, indent)
+            if expr_result.strip():
+                return f"{prelude}{indent_str}{expr_result}\n"
+            else:
+                return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_increment_initializer_declaration(
+        self,
+        stmt,
+        initial_value,
+        var_type,
+        indent,
+    ):
+        if not isinstance(initial_value, UnaryOpNode):
+            return None
+
+        op = self.map_operator(
+            getattr(initial_value, "operator", getattr(initial_value, "op", ""))
+        )
+        if op not in {"++", "--"}:
+            return None
+
+        operand = self.generate_expression(getattr(initial_value, "operand", ""))
+        assignment_op = "+=" if op == "++" else "-="
+        indent_str = "    " * indent
+        update = f"{indent_str}{operand} {assignment_op} 1\n"
+        var_name = self.mojo_identifier(stmt.name)
+        if var_type is None:
+            declaration = f"{indent_str}var {var_name} = {operand}\n"
+        else:
+            declaration = (
+                f"{indent_str}var {var_name}: {self.map_type(var_type)} = {operand}\n"
+            )
+        is_postfix = getattr(
+            initial_value,
+            "is_postfix",
+            getattr(initial_value, "postfix", False),
+        )
+        if is_postfix:
+            return declaration + update
+        return update + declaration
+
+    def generate_switch(self, node, indent):
+        indent_str = "    " * indent
+        expression = self.generate_expression(getattr(node, "expression", ""))
+        code = ""
+        emitted_condition = False
+        default_body = None
+
+        for case in getattr(node, "cases", []) or []:
+            if not isinstance(case, CaseNode):
+                continue
+            value = getattr(case, "value", None)
+            if value is None:
+                default_body = getattr(case, "statements", [])
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
+            condition = f"{expression} == {self.generate_expression(value)}"
+            code += f"{indent_str}{keyword} {condition}:\n"
+            code += self.generate_switch_case_body(
+                getattr(case, "statements", []), indent + 1
+            )
+            emitted_condition = True
+
+        explicit_default = getattr(node, "default_case", None)
+        if explicit_default is not None:
+            default_body = explicit_default
+
+        if default_body is not None:
+            code += f"{indent_str}else:\n"
+            code += self.generate_switch_case_body(default_body, indent + 1)
+        elif not emitted_condition:
+            code += f"{indent_str}pass\n"
+
+        return code
+
+    def generate_switch_case_body(self, body, indent):
+        statements = self.statement_list(body)
+        code = ""
+        for stmt in statements:
+            if isinstance(stmt, BreakNode):
+                continue
+            code += self.generate_statement(stmt, indent)
+        if not code:
+            code = f"{'    ' * indent}pass\n"
+        return code
+
+    def generate_match(self, node, indent):
+        indent_str = "    " * indent
+        subject_expr = getattr(node, "expression", "")
+        subject_type = self.expression_result_type(subject_expr)
+        expression = self.generate_expression(subject_expr)
+        arms = getattr(node, "arms", []) or []
+        self.validate_match_arms(arms, subject_type)
+        code = ""
+        subject_temp_state = None
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            code += (
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
+            subject_temp_state = self.register_match_subject_temp_metadata(
+                subject_name, subject_type, subject_expr
+            )
+        emitted_condition = False
+
+        try:
+            for arm_index, arm in enumerate(arms):
+                pattern = getattr(arm, "pattern", None)
+                guard = getattr(arm, "guard", None)
+                body = getattr(arm, "body", [])
+                replacements = self.match_arm_identifier_replacements(
+                    pattern, expression, guard, subject_type
+                )
+                if self.is_unconditional_final_match_arm(
+                    arms, arm_index, pattern, guard, subject_type
+                ):
+                    if emitted_condition:
+                        code += f"{indent_str}else:\n"
+                        code += self.generate_match_arm_body(
+                            body, indent + 1, replacements
+                        )
+                    else:
+                        code += self.generate_match_arm_body(body, indent, replacements)
+                    continue
+
+                keyword = "if" if not emitted_condition else "elif"
+                condition = self.match_arm_condition(
+                    pattern, expression, guard, replacements, subject_type
+                )
+                code += f"{indent_str}{keyword} {condition}:\n"
+                code += self.generate_match_arm_body(body, indent + 1, replacements)
+                emitted_condition = True
+        finally:
+            if subject_temp_state is not None:
+                self.restore_match_subject_temp_metadata(
+                    subject_name, subject_temp_state
+                )
+
+        if not code and not emitted_condition:
+            code += f"{indent_str}pass\n"
+
+        return code
+
+    def next_match_expression_temp_name(self):
+        name = f"__cgl_match_value_{self.match_expression_counter}"
+        self.match_expression_counter += 1
+        return name
+
+    def next_match_subject_temp_name(self):
+        name = f"__cgl_match_subject_{self.match_subject_counter}"
+        self.match_subject_counter += 1
+        return name
+
+    def register_match_subject_temp_metadata(self, name, subject_type, subject_expr):
+        path_prefix = f"{name}."
+        state = {
+            "had_type": name in self.variable_types,
+            "type": self.variable_types.get(name),
+            "had_aliases": name in self.resource_access_qualifier_aliases,
+            "aliases": list(self.resource_access_qualifier_aliases.get(name, [])),
+            "path_aliases": {
+                path: list(candidates)
+                for path, candidates in (
+                    self.resource_access_path_qualifier_aliases.items()
+                )
+                if path == name or path.startswith(path_prefix)
+            },
+        }
+        self.register_variable_type(name, subject_type)
+        self.register_resource_access_alias_metadata(name, subject_type, subject_expr)
+        return state
+
+    def restore_match_subject_temp_metadata(self, name, state):
+        if state["had_type"]:
+            self.variable_types[name] = state["type"]
+        else:
+            self.variable_types.pop(name, None)
+
+        self.clear_resource_access_path_aliases(name)
+        self.resource_access_path_qualifier_aliases.update(state["path_aliases"])
+        if state["had_aliases"]:
+            self.resource_access_qualifier_aliases[name] = state["aliases"]
+        else:
+            self.resource_access_qualifier_aliases.pop(name, None)
+
+    def match_subject_needs_temp(self, subject_expr):
+        if isinstance(subject_expr, (str, VariableNode, IdentifierNode)):
+            return False
+        if isinstance(subject_expr, MemberAccessNode):
+            return self.match_subject_needs_temp(subject_expr.object)
+        return True
+
+    def match_arm_error(self, reason=None):
+        detail = reason or "only unguarded literal and wildcard patterns are supported"
+        return ValueError(f"Unsupported match arm for Mojo codegen; {detail}")
+
+    def match_expression_error(self, reason):
+        return ValueError(f"Unsupported match expression for Mojo codegen; {reason}")
+
+    def match_arm_value_expression(self, arm):
+        body = getattr(arm, "body", [])
+        if isinstance(body, ExpressionStatementNode):
+            if getattr(body, "is_tail_expression", False):
+                return body.expression, []
+            raise self.match_expression_error(
+                "every arm must end with a value expression"
+            )
+        if self.is_match_expression_value_node(body):
+            return body, []
+
+        statements = self.statement_list(body)
+        if (
+            statements
+            and isinstance(statements[-1], ExpressionStatementNode)
+            and getattr(statements[-1], "is_tail_expression", False)
+        ):
+            return statements[-1].expression, statements[:-1]
+        if statements and self.is_match_expression_value_node(statements[-1]):
+            return statements[-1], statements[:-1]
+
+        raise self.match_expression_error("every arm must end with a value expression")
+
+    def is_match_expression_value_node(self, node):
+        return isinstance(
+            node,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                AtomicOpNode,
+                BinaryOpNode,
+                BufferOpNode,
+                BuiltinVariableNode,
+                CastNode,
+                ConstructorNode,
+                FunctionCallNode,
+                MatchNode,
+                MemberAccessNode,
+                MeshOpNode,
+                RayQueryOpNode,
+                RayTracingOpNode,
+                SwizzleNode,
+                TernaryOpNode,
+                TextureNode,
+                TextureOpNode,
+                UnaryOpNode,
+                VariableNode,
+                WaveOpNode,
+            ),
+        ) or (
+            isinstance(node, (str, int, float, bool))
+            or (hasattr(node, "__class__") and "Identifier" in str(node.__class__))
+            or (hasattr(node, "__class__") and "Literal" in str(node.__class__))
+        )
+
+    def generate_match_value_expression(self, node, target_type, context):
+        arms = getattr(node, "arms", []) or []
+        subject_expr = getattr(node, "expression", "")
+        subject_type = self.expression_result_type(subject_expr)
+        self.validate_match_expression_arms(arms, subject_type)
+        match_type = self.type_name(target_type or self.expression_result_type(node))
+        if match_type is None:
+            raise self.match_expression_error("target type is required")
+        if not self.expression_prelude_stack:
+            raise self.match_expression_error("expression prelude context is required")
+
+        prelude_context = self.expression_prelude_stack[-1]
+        indent = prelude_context["indent"]
+        indent_str = "    " * indent
+        branch_indent = indent + 1
+        temp_name = self.next_match_expression_temp_name()
+        expression = self.generate_expression(subject_expr)
+        lines = []
+        subject_temp_state = None
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            lines.append(
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
+            subject_temp_state = self.register_match_subject_temp_metadata(
+                subject_name, subject_type, subject_expr
+            )
+        lines.append(
+            f"{indent_str}var {temp_name}: {self.map_type(match_type)} = "
+            f"{self.zero_value_for_type(match_type)}\n"
+        )
+
+        try:
+            emitted_condition = False
+            for arm_index, arm in enumerate(arms, start=1):
+                pattern = getattr(arm, "pattern", None)
+                guard = getattr(arm, "guard", None)
+                replacements = self.match_arm_identifier_replacements(
+                    pattern, expression, guard, subject_type
+                )
+                if self.is_unconditional_final_match_arm(
+                    arms, arm_index - 1, pattern, guard, subject_type
+                ):
+                    if emitted_condition:
+                        lines.append(f"{indent_str}else:\n")
+                        assignment_indent = branch_indent
+                    else:
+                        assignment_indent = indent
+                    lines.append(
+                        self.generate_match_value_arm_assignment(
+                            arm,
+                            match_type,
+                            f"{context} match arm {arm_index}",
+                            temp_name,
+                            assignment_indent,
+                            replacements,
+                        )
+                    )
+                    continue
+
+                keyword = "if" if not emitted_condition else "elif"
+                condition = self.match_arm_condition(
+                    pattern, expression, guard, replacements, subject_type
+                )
+                lines.append(f"{indent_str}{keyword} {condition}:\n")
+                lines.append(
+                    self.generate_match_value_arm_assignment(
+                        arm,
+                        match_type,
+                        f"{context} match arm {arm_index}",
+                        temp_name,
+                        branch_indent,
+                        replacements,
+                    )
+                )
+                emitted_condition = True
+        finally:
+            if subject_temp_state is not None:
+                self.restore_match_subject_temp_metadata(
+                    subject_name, subject_temp_state
+                )
+
+        prelude_context["lines"].extend(lines)
+        return temp_name
+
+    def generate_match_value_arm_assignment(
+        self, arm, target_type, context, temp_name, indent, replacements=None
+    ):
+        def render_assignment():
+            value_expr, prelude_statements = self.match_arm_value_expression(arm)
+            code = ""
+            for stmt in prelude_statements:
+                code += self.generate_statement(stmt, indent)
+
+            self.validate_expression_target_shape(value_expr, target_type, context)
+            value = self.generate_expression(value_expr, target_type, context)
+            return f"{code}{'    ' * indent}{temp_name} = {value}\n"
+
+        return self.generate_with_identifier_replacements(
+            replacements, render_assignment
+        )
+
+    def validate_match_arms(self, arms, subject_type=None):
+        rejection_reason = self.match_arm_rejection_reason(arms, subject_type)
+        if rejection_reason is not None:
+            raise self.match_arm_error(rejection_reason)
+
+    def validate_match_expression_arms(self, arms, subject_type=None):
+        self.validate_match_arms(arms, subject_type)
+        if not arms:
+            raise self.match_expression_error("at least one arm is required")
+        final_pattern = getattr(arms[-1], "pattern", None)
+        final_guard = getattr(arms[-1], "guard", None)
+        if not (
+            isinstance(final_pattern, WildcardPatternNode)
+            or self.is_irrefutable_match_pattern(
+                final_pattern, final_guard, subject_type
+            )
+            or self.match_arms_cover_enum_variants(arms, subject_type)
+        ):
+            raise self.match_expression_error(
+                "match expressions must include a final wildcard arm"
+            )
+        for arm in arms:
+            self.match_arm_value_expression(arm)
+
+    def match_arm_identifier_replacements(
+        self, pattern, expression, guard=None, subject_type=None
+    ):
+        replacements = {}
+        if (
+            guard is not None
+            and isinstance(pattern, IdentifierPatternNode)
+            and not self.is_enum_identifier_pattern(pattern, subject_type)
+        ):
+            replacements[pattern.name] = expression
+            return replacements
+
+        self.collect_match_pattern_bindings(
+            pattern,
+            expression,
+            replacements,
+            top_level=True,
+            subject_type=subject_type,
+        )
+        return replacements
+
+    def generate_match_arm_body(self, body, indent, replacements=None):
+        return self.generate_with_identifier_replacements(
+            replacements, lambda: self.generate_switch_case_body(body, indent)
+        )
+
+    def match_arm_condition(
+        self,
+        pattern,
+        expression,
+        guard=None,
+        replacements=None,
+        subject_type=None,
+    ):
+        replacements = replacements or {}
+        condition = None
+
+        if isinstance(pattern, LiteralPatternNode):
+            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+        elif isinstance(pattern, IdentifierPatternNode):
+            if self.is_enum_identifier_pattern(pattern, subject_type):
+                condition = self.enum_identifier_pattern_condition(
+                    pattern, expression, subject_type
+                )
+        elif isinstance(pattern, ConstructorPatternNode):
+            condition = self.constructor_pattern_condition(
+                pattern, expression, replacements, subject_type
+            )
+        elif isinstance(pattern, StructPatternNode):
+            condition = self.struct_pattern_condition(
+                pattern, expression, replacements, subject_type
+            )
+        elif isinstance(pattern, WildcardPatternNode):
+            condition = "True"
+
+        if guard is not None:
+            guard_expression = self.generate_expression_with_identifier_replacements(
+                guard, replacements
+            )
+            if condition is None:
+                return guard_expression
+            if condition == "True":
+                return guard_expression
+            return f"({condition}) and ({guard_expression})"
+
+        if condition is None:
+            raise self.match_arm_error()
+        return condition
+
+    def is_enum_identifier_pattern(self, pattern, subject_type=None):
+        name = getattr(pattern, "name", None)
+        if not isinstance(name, str):
+            return False
+        return (
+            self.resolve_match_enum_variant_path(name, subject_type)
+            in self.enum_variant_aliases
+        )
+
+    def match_subject_uses_payload_struct(self, enum_type, subject_type=None):
+        return (
+            enum_type in self.struct_types
+            or self.generic_enum_specialization_for_type(
+                subject_type, expected_base=enum_type
+            )
+            or self.generic_enum_pattern_specialization_for_type(
+                subject_type, expected_base=enum_type
+            )
+        )
+
+    def enum_identifier_pattern_condition(self, pattern, expression, subject_type=None):
+        name = self.resolve_match_enum_variant_path(pattern.name, subject_type)
+        alias = self.enum_variant_aliases[name]
+        enum_type = self.enum_variant_result_types.get(name)
+        if self.match_subject_uses_payload_struct(enum_type, subject_type):
+            return f"{expression}.variant == {alias}"
+        return f"{expression} == {alias}"
+
+    def constructor_pattern_condition(
+        self, pattern, expression, replacements, subject_type=None
+    ):
+        variant_path = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            raise self.match_arm_error("constructor patterns cannot be lowered")
+
+        arguments = getattr(pattern, "arguments", []) or []
+        if len(arguments) != len(variant_fields):
+            raise self.match_arm_error(
+                f"constructor pattern {variant_path} expects "
+                f"{len(variant_fields)} fields, got {len(arguments)}"
+            )
+
+        conditions = [
+            self.enum_variant_tag_condition(variant_path, expression, subject_type)
+        ]
+        for argument, (field_name, field_type) in zip(arguments, variant_fields):
+            field_expression = self.match_pattern_field_expression(
+                expression, field_name
+            )
+            conditions.extend(
+                self.match_pattern_field_conditions(
+                    argument,
+                    field_expression,
+                    replacements,
+                    top_level=False,
+                    subject_type=field_type,
+                )
+            )
+        return (
+            " and ".join(condition for condition in conditions if condition) or "True"
+        )
+
+    def struct_pattern_condition(
+        self, pattern, expression, replacements, subject_type=None
+    ):
+        pattern_type = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
+        variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
+        if variant_fields is not None:
+            field_types = dict(variant_fields)
+            conditions = [
+                self.enum_variant_tag_condition(pattern_type, expression, subject_type)
+            ]
+        elif (
+            self.struct_pattern_type_name(pattern_type, subject_type)
+            in self.struct_types
+        ):
+            field_types = self.struct_types[
+                self.struct_pattern_type_name(pattern_type, subject_type)
+            ]
+            conditions = []
+        else:
+            raise self.match_arm_error(
+                "struct destructuring patterns cannot be lowered"
+            )
+
+        field_patterns = getattr(pattern, "field_patterns", {}) or {}
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in field_types:
+                raise self.match_arm_error(
+                    f"struct pattern field {field_name} cannot be lowered"
+                )
+            field_expression = self.match_pattern_field_expression(
+                expression, field_name
+            )
+            conditions.extend(
+                self.match_pattern_field_conditions(
+                    field_pattern,
+                    field_expression,
+                    replacements,
+                    top_level=False,
+                    subject_type=field_types[field_name],
+                )
+            )
+        return (
+            " and ".join(condition for condition in conditions if condition) or "True"
+        )
+
+    def enum_pattern_variant_fields(self, variant_path, subject_type=None):
+        variant_path = self.resolve_match_enum_variant_path(variant_path, subject_type)
+        variant_fields = self.enum_variant_constructor_fields.get(variant_path)
+        if variant_fields is not None:
+            return variant_fields
+        return self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+
+    def enum_variant_tag_condition(self, variant_path, expression, subject_type=None):
+        variant_path = self.resolve_match_enum_variant_path(variant_path, subject_type)
+        alias = self.enum_variant_aliases[variant_path]
+        enum_type = self.enum_variant_result_types.get(variant_path)
+        if self.match_subject_uses_payload_struct(enum_type, subject_type):
+            return f"{expression}.variant == {alias}"
+        return f"{expression} == {alias}"
+
+    def resolve_match_enum_variant_path(self, variant_path, subject_type=None):
+        if not isinstance(variant_path, str):
+            return variant_path
+
+        normalized = variant_path.replace(".", "::")
+        if normalized in self.enum_variant_aliases:
+            return normalized
+        if "::" in normalized:
+            return normalized
+
+        enum_name = self.match_subject_enum_type_name(subject_type)
+        if enum_name is None:
+            return normalized
+        if normalized not in self.enum_variant_names.get(enum_name, []):
+            return normalized
+        return f"{enum_name}::{normalized}"
+
+    def match_subject_enum_type_name(self, subject_type):
+        specialization = self.generic_enum_specialization_for_type(subject_type)
+        if specialization is None:
+            specialization = self.generic_enum_pattern_specialization_for_type(
+                subject_type
+            )
+        if specialization is not None:
+            return specialization["base_name"]
+
+        type_name = self.type_name(subject_type)
+        if type_name in self.enum_variant_names:
+            return type_name
+        return None
+
+    def struct_pattern_type_name(self, pattern_type, subject_type=None):
+        if not isinstance(pattern_type, str):
+            return pattern_type
+        generic_enum_type = self.generic_enum_mapped_type(subject_type)
+        if generic_enum_type is not None and pattern_type == self.type_name(
+            subject_type
+        ):
+            return generic_enum_type
+        return self.type_name(pattern_type)
+
+    def match_pattern_field_expression(self, expression, field_name):
+        if re.match(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$", expression):
+            return f"{expression}.{field_name}"
+        return f"({expression}).{field_name}"
+
+    def collect_match_pattern_bindings(
+        self,
+        pattern,
+        expression,
+        replacements,
+        top_level=False,
+        subject_type=None,
+    ):
+        self.match_pattern_field_conditions(
+            pattern,
+            expression,
+            replacements,
+            top_level=top_level,
+            collect_conditions=False,
+            subject_type=subject_type,
+        )
+
+    def match_pattern_field_conditions(
+        self,
+        pattern,
+        expression,
+        replacements,
+        top_level=False,
+        collect_conditions=True,
+        subject_type=None,
+    ):
+        conditions = []
+        if isinstance(pattern, WildcardPatternNode):
+            return conditions
+        if isinstance(pattern, LiteralPatternNode):
+            binding_name = self.literal_pattern_binding_name(pattern)
+            if binding_name is not None:
+                if not top_level:
+                    replacements[binding_name] = expression
+                return conditions
+            if collect_conditions:
+                conditions.append(
+                    f"{expression} == {self.generate_expression(pattern.literal)}"
+                )
+            return conditions
+        if isinstance(pattern, IdentifierPatternNode):
+            if self.is_enum_identifier_pattern(pattern, subject_type):
+                if collect_conditions:
+                    conditions.append(
+                        self.enum_identifier_pattern_condition(
+                            pattern, expression, subject_type
+                        )
+                    )
+                return conditions
+            if not top_level:
+                replacements[pattern.name] = expression
+            return conditions
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
+            variant_fields = self.enum_pattern_variant_fields(
+                variant_path, subject_type
+            )
+            if variant_fields is None:
+                return conditions
+            if collect_conditions:
+                conditions.append(
+                    self.enum_variant_tag_condition(
+                        variant_path, expression, subject_type
+                    )
+                )
+            for argument, (field_name, field_type) in zip(
+                getattr(pattern, "arguments", []) or [], variant_fields
+            ):
+                conditions.extend(
+                    self.match_pattern_field_conditions(
+                        argument,
+                        self.match_pattern_field_expression(expression, field_name),
+                        replacements,
+                        top_level=False,
+                        collect_conditions=collect_conditions,
+                        subject_type=field_type,
+                    )
+                )
+            return conditions
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
+            variant_fields = self.enum_pattern_variant_fields(
+                pattern_type, subject_type
+            )
+            if variant_fields is not None:
+                if collect_conditions:
+                    conditions.append(
+                        self.enum_variant_tag_condition(
+                            pattern_type, expression, subject_type
+                        )
+                    )
+            field_types = None
+            if variant_fields is not None:
+                field_types = dict(variant_fields)
+            elif (
+                self.struct_pattern_type_name(pattern_type, subject_type)
+                in self.struct_types
+            ):
+                field_types = self.struct_types[
+                    self.struct_pattern_type_name(pattern_type, subject_type)
+                ]
+            for field_name, field_pattern in (
+                getattr(pattern, "field_patterns", {}) or {}
+            ).items():
+                conditions.extend(
+                    self.match_pattern_field_conditions(
+                        field_pattern,
+                        self.match_pattern_field_expression(expression, field_name),
+                        replacements,
+                        top_level=False,
+                        collect_conditions=collect_conditions,
+                        subject_type=(
+                            field_types.get(field_name)
+                            if field_types is not None
+                            else subject_type
+                        ),
+                    )
+                )
+        return conditions
+
+    def literal_pattern_binding_name(self, pattern):
+        literal = getattr(pattern, "literal", None)
+        value = getattr(literal, "value", None)
+        literal_type = getattr(getattr(literal, "literal_type", None), "name", None)
+        if (
+            literal_type == "unknown"
+            and isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z_]\w*", value)
+        ):
+            return value
+        return None
+
+    def match_arm_rejection_reason(self, arms, subject_type=None):
+        wildcard_index = None
+        irrefutable_index = None
+        for index, arm in enumerate(arms):
+            guard = getattr(arm, "guard", None)
+
+            pattern = getattr(arm, "pattern", None)
+            if self.is_range_style_match_pattern(pattern):
+                return "range-style patterns cannot be lowered"
+
+            if isinstance(pattern, WildcardPatternNode):
+                if guard is not None:
+                    return "guarded wildcard arms cannot be lowered"
+                if wildcard_index is not None:
+                    return "multiple wildcard arms cannot be lowered"
+                wildcard_index = index
+                continue
+
+            if isinstance(pattern, LiteralPatternNode):
+                continue
+
+            if isinstance(pattern, IdentifierPatternNode):
+                if self.is_enum_identifier_pattern(pattern, subject_type):
+                    continue
+                if guard is not None:
+                    continue
+                return "identifier binding patterns cannot be lowered"
+
+            if isinstance(pattern, ConstructorPatternNode):
+                reason = self.constructor_pattern_rejection_reason(
+                    pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
+
+            if isinstance(pattern, StructPatternNode):
+                reason = self.struct_pattern_rejection_reason(pattern, subject_type)
+                if reason is not None:
+                    return reason
+                if self.is_irrefutable_match_pattern(pattern, guard, subject_type):
+                    if irrefutable_index is not None:
+                        return "multiple irrefutable patterns cannot be lowered"
+                    irrefutable_index = index
+                continue
+
+            return "only unguarded literal patterns and a final wildcard can be lowered"
+
+        if wildcard_index is not None and wildcard_index != len(arms) - 1:
+            return "wildcard arm must be final"
+        if irrefutable_index is not None and irrefutable_index != len(arms) - 1:
+            return "irrefutable pattern must be final"
+        return None
+
+    def is_irrefutable_match_pattern(self, pattern, guard=None, subject_type=None):
+        if guard is not None:
+            return False
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = getattr(pattern, "type_name", None)
+            if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
+                return False
+            return (
+                self.struct_pattern_type_name(pattern_type, subject_type)
+                in self.struct_types
+            )
+        return False
+
+    def match_arms_cover_enum_variants(self, arms, subject_type=None):
+        enum_type = None
+        patterns_by_variant = {}
+        for arm in arms:
+            if getattr(arm, "guard", None) is not None:
+                continue
+            pattern = getattr(arm, "pattern", None)
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+            if variant_path is None:
+                continue
+            arm_enum_type = self.enum_variant_result_types.get(variant_path)
+            if arm_enum_type is None:
+                continue
+            if enum_type is None:
+                enum_type = arm_enum_type
+            elif enum_type != arm_enum_type:
+                return False
+            variant_name = variant_path.split("::", 1)[1]
+            patterns_by_variant.setdefault(variant_name, []).append(pattern)
+
+        expected_variants = set(self.enum_variant_names.get(enum_type, []))
+        covered_variants = {
+            variant_name
+            for variant_name, patterns in patterns_by_variant.items()
+            if self.match_patterns_cover_enum_variant_group(patterns, subject_type)
+        }
+        return bool(expected_variants) and expected_variants.issubset(covered_variants)
+
+    def match_patterns_cover_enum_variant_group(self, patterns, subject_type=None):
+        if any(
+            self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+            for pattern in patterns
+        ):
+            return True
+
+        variant_path = self.match_pattern_enum_variant_path(patterns[0], subject_type)
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if not variant_fields:
+            return False
+
+        fields_by_name = dict(variant_fields)
+        constrained_fields = {}
+        for pattern in patterns:
+            field_patterns = self.match_pattern_field_pattern_map(pattern, subject_type)
+            if field_patterns is None:
+                return False
+            for field_name in fields_by_name:
+                field_pattern = field_patterns.get(field_name)
+                if field_pattern is None:
+                    continue
+                if self.is_unconstrained_match_pattern(
+                    field_pattern, fields_by_name[field_name]
+                ):
+                    continue
+                constrained_fields.setdefault(field_name, []).append(field_pattern)
+
+        if len(constrained_fields) != 1:
+            return False
+        field_name, nested_patterns = next(iter(constrained_fields.items()))
+        return self.match_patterns_cover_enum_type(
+            nested_patterns,
+            fields_by_name[field_name],
+        )
+
+    def match_pattern_field_pattern_map(self, pattern, subject_type=None):
+        if isinstance(pattern, StructPatternNode):
+            return dict(getattr(pattern, "field_patterns", {}) or {})
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            variant_fields = self.enum_pattern_variant_fields(
+                variant_path, subject_type
+            )
+            if variant_fields is None:
+                return None
+            return {
+                field_name: argument
+                for argument, (field_name, _field_type) in zip(
+                    getattr(pattern, "arguments", []) or [], variant_fields
+                )
+            }
+        return None
+
+    def match_patterns_cover_enum_type(self, patterns, subject_type):
+        enum_type = None
+        covered_variants = set()
+        for pattern in patterns:
+            if not self.match_pattern_covers_entire_enum_variant(pattern, subject_type):
+                return False
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+            if variant_path is None:
+                return False
+            pattern_enum_type = self.enum_variant_result_types.get(variant_path)
+            if pattern_enum_type is None:
+                return False
+            if enum_type is None:
+                enum_type = pattern_enum_type
+            elif enum_type != pattern_enum_type:
+                return False
+            covered_variants.add(variant_path.split("::", 1)[1])
+
+        expected_variants = set(self.enum_variant_names.get(enum_type, []))
+        return bool(expected_variants) and expected_variants.issubset(covered_variants)
+
+    def is_unconditional_final_match_arm(
+        self, arms, index, pattern, guard, subject_type=None
+    ):
+        if guard is not None or index != len(arms) - 1:
+            return False
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if self.is_irrefutable_match_pattern(pattern, guard, subject_type):
+            return True
+        return self.match_arms_cover_enum_variants(
+            arms, subject_type
+        ) and self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+
+    def match_pattern_covers_entire_enum_variant(self, pattern, subject_type=None):
+        variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+        if variant_path is None:
+            return False
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            return False
+        if isinstance(pattern, IdentifierPatternNode):
+            return not variant_fields
+        if isinstance(pattern, ConstructorPatternNode):
+            arguments = getattr(pattern, "arguments", []) or []
+            return len(arguments) == len(variant_fields) and all(
+                self.is_unconstrained_match_pattern(argument, field_type)
+                for argument, (_field_name, field_type) in zip(
+                    arguments, variant_fields
+                )
+            )
+        if isinstance(pattern, StructPatternNode):
+            field_types = dict(variant_fields)
+            return all(
+                self.is_unconstrained_match_pattern(
+                    field_pattern, field_types.get(field_name)
+                )
+                for field_name, field_pattern in (
+                    getattr(pattern, "field_patterns", {}) or {}
+                ).items()
+            )
+        return False
+
+    def is_unconstrained_match_pattern(self, pattern, subject_type=None):
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, LiteralPatternNode):
+            return self.literal_pattern_binding_name(pattern) is not None
+        if isinstance(pattern, IdentifierPatternNode):
+            return not self.is_enum_identifier_pattern(pattern, subject_type)
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
+            if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
+                return False
+            struct_type = self.struct_pattern_type_name(pattern_type, subject_type)
+            field_types = self.struct_types.get(struct_type)
+            if field_types is None:
+                return False
+            for field_name, field_pattern in (
+                getattr(pattern, "field_patterns", {}) or {}
+            ).items():
+                if field_name not in field_types:
+                    return False
+                if not self.is_unconstrained_match_pattern(
+                    field_pattern, field_types[field_name]
+                ):
+                    return False
+            return True
+        return False
+
+    def match_pattern_enum_variant_path(self, pattern, subject_type=None):
+        if isinstance(
+            pattern, IdentifierPatternNode
+        ) and self.is_enum_identifier_pattern(pattern, subject_type):
+            return self.resolve_match_enum_variant_path(pattern.name, subject_type)
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
+                return variant_path.replace(".", "::")
+        if isinstance(pattern, StructPatternNode):
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
+                return variant_path.replace(".", "::")
+        return None
+
+    def constructor_pattern_rejection_reason(self, pattern, subject_type=None):
+        variant_path = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            return "constructor patterns cannot be lowered"
+        arguments = getattr(pattern, "arguments", []) or []
+        if len(arguments) != len(variant_fields):
+            return (
+                f"constructor pattern {variant_path} expects "
+                f"{len(variant_fields)} fields, got {len(arguments)}"
+            )
+        for argument, (_field_name, field_type) in zip(arguments, variant_fields):
+            reason = self.nested_pattern_rejection_reason([argument], field_type)
+            if reason is not None:
+                return reason
+        return None
+
+    def struct_pattern_rejection_reason(self, pattern, subject_type=None):
+        pattern_type = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
+        variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
+        if variant_fields is not None:
+            field_types = dict(variant_fields)
+        elif (
+            self.struct_pattern_type_name(pattern_type, subject_type)
+            in self.struct_types
+        ):
+            field_types = self.struct_types[
+                self.struct_pattern_type_name(pattern_type, subject_type)
+            ]
+        else:
+            return "struct destructuring patterns cannot be lowered"
+
+        field_patterns = getattr(pattern, "field_patterns", {}) or {}
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in field_types:
+                return f"struct pattern field {field_name} cannot be lowered"
+            reason = self.nested_pattern_rejection_reason(
+                [field_pattern], field_types[field_name]
+            )
+            if reason is not None:
+                return reason
+        return None
+
+    def nested_pattern_rejection_reason(self, patterns, subject_type=None):
+        for nested_pattern in patterns:
+            if isinstance(nested_pattern, (WildcardPatternNode, LiteralPatternNode)):
+                continue
+            if isinstance(nested_pattern, IdentifierPatternNode):
+                if self.is_enum_identifier_pattern(nested_pattern, subject_type):
+                    continue
+                continue
+            if isinstance(nested_pattern, ConstructorPatternNode):
+                reason = self.constructor_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
+            if isinstance(nested_pattern, StructPatternNode):
+                reason = self.struct_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
+            if self.is_range_style_match_pattern(nested_pattern):
+                return "range-style patterns cannot be lowered"
+            return "nested pattern cannot be lowered"
+        return None
+
+    def is_range_style_match_pattern(self, pattern):
+        if isinstance(pattern, RangeNode):
+            return True
+        return isinstance(pattern, IdentifierPatternNode) and pattern.name == ".."
+
+    def statement_list(self, body):
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        if body is None:
+            return []
+        return [body]
+
+    def active_do_while_context(self):
+        if not self.do_while_contexts:
+            return None
+        context = self.do_while_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def active_for_context(self):
+        if not self.for_contexts:
+            return None
+        context = self.for_contexts[-1]
+        if context["loop_depth"] == self.loop_depth:
+            return context
+        return None
+
+    def push_loop_exit_alias_state_scope(self):
+        self.loop_exit_alias_state_stack.append(
+            {"loop_depth": self.loop_depth, "states": []}
+        )
+
+    def pop_loop_exit_alias_state_scope(self):
+        if not self.loop_exit_alias_state_stack:
+            return []
+        return self.loop_exit_alias_state_stack.pop()["states"]
+
+    def record_loop_exit_alias_state(self):
+        if not self.loop_exit_alias_state_stack:
+            return
+        scope = self.loop_exit_alias_state_stack[-1]
+        if scope["loop_depth"] != self.loop_depth:
+            return
+        scope["states"].append(self.resource_access_alias_state())
+
+    def statement_body_terminates_inner_loop(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+
+    def generate_array_declaration(self, node, indent=0):
+        indent_str = "    " * indent
+        variable_type = self.array_declared_type(node)
+        self.register_variable_type(node.name, variable_type)
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        return (
+            f"{resource_comment}{indent_str}var {self.mojo_identifier(node.name)} = "
+            f"{self.array_initial_value_for_type(variable_type)}\n"
+        )
+
+    def generate_assignment(self, node):
+        self.validate_resource_write_access(node.left, "assignment")
+        left = self.generate_expression(node.left)
+        left_type = self.expression_result_type(node.left)
+        self.validate_expression_target_shape(
+            node.right, left_type, "assignment target"
+        )
+        right = self.generate_expression(node.right, left_type, "assignment target")
+        op = self.map_operator(node.operator)
+        return f"{left} {op} {right}"
+
+    def generate_branch_statements(self, branch, indent):
+        code = ""
+        if hasattr(branch, "statements"):
+            for stmt in branch.statements:
+                code += self.generate_statement(stmt, indent)
+        elif isinstance(branch, list):
+            for stmt in branch:
+                code += self.generate_statement(stmt, indent)
+        elif branch is not None:
+            code += self.generate_statement(branch, indent)
+        return code
+
+    def generate_if(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(
+            node.condition if hasattr(node, "condition") else node.if_condition
+        )
+        entry_alias_state = self.resource_access_alias_state()
+        code = f"{indent_str}if {condition}:\n"
+
+        if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
+        self.restore_resource_access_alias_state(entry_alias_state)
+        code += self.generate_branch_statements(if_body, indent + 1)
+        then_alias_state = self.resource_access_alias_state()
+
+        else_alias_state = entry_alias_state
+        else_branch = getattr(node, "else_branch", None)
+        if else_branch:
+            self.restore_resource_access_alias_state(entry_alias_state)
+            if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
+                remaining_code = self.generate_if(else_branch, indent)
+                remaining_lines = remaining_code.splitlines(keepends=True)
+                if remaining_lines and remaining_lines[0].strip().startswith("if "):
+                    remaining_lines[0] = remaining_lines[0].replace("if ", "elif ", 1)
+                code += "".join(remaining_lines)
+            else:
+                code += f"{indent_str}else:\n"
+                code += self.generate_branch_statements(else_branch, indent + 1)
+            else_alias_state = self.resource_access_alias_state()
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                then_alias_state,
+                else_alias_state,
+            )
+        )
+        return code
+
+    def generate_for(self, node, indent):
+        indent_str = "    " * indent
+
+        init = self.generate_statement(node.init, 0).strip()
+        condition = self.generate_expression(node.condition)
+        entry_alias_state = self.resource_access_alias_state()
+
+        code = f"{indent_str}{init}\n"
+        code += f"{indent_str}while {condition}:\n"
+
+        self.loop_depth += 1
+        self.for_contexts.append({"loop_depth": self.loop_depth, "update": node.update})
+        self.push_loop_exit_alias_state_scope()
+        loop_exit_alias_states = []
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+        finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
+            self.for_contexts.pop()
+            self.loop_depth -= 1
+
+        code += self.generate_for_update_statement(node.update, indent + 1)
+        update_alias_state = self.resource_access_alias_state()
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                update_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
+
+        return code
+
+    def generate_for_update_statement(self, update, indent):
+        if update is None:
+            return ""
+
+        if isinstance(update, ExpressionStatementNode):
+            update = update.expression
+
+        if isinstance(update, AssignmentNode):
+            return self.generate_assignment_statement(update, indent)
+
+        if self.is_increment_or_decrement_node(update):
+            return self.generate_increment_statement(update, indent)
+
+        indent_str = "    " * indent
+        prelude, expression = self.generate_expression_with_prelude(update, indent)
+        if expression.strip():
+            return f"{prelude}{indent_str}{expression}\n"
+        return prelude
+
+    def generate_for_in(self, node, indent):
+        indent_str = "    " * indent
+        pattern = getattr(node, "pattern", "item")
+        iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
+        entry_alias_state = self.resource_access_alias_state()
+
+        code = f"{indent_str}for {self.mojo_identifier(pattern)} in {iterable}:\n"
+
+        self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
+        try:
+            body_code = ""
+            for stmt in self.statement_list(getattr(node, "body", [])):
+                body_code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
+        finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
+            self.loop_depth -= 1
+
+        if body_code:
+            code += body_code
+        else:
+            code += f"{indent_str}    pass\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
+
+        return code
+
+    def generate_for_in_iterable(self, iterable_node):
+        if isinstance(iterable_node, RangeNode):
+            start = self.generate_expression(iterable_node.start)
+            end = self.generate_expression(iterable_node.end)
+            if iterable_node.inclusive:
+                end = f"({end} + 1)"
+            return f"range({start}, {end})"
+
+        iterable = self.generate_expression(iterable_node)
+        return f"range({iterable})"
+
+    def generate_while(self, node, indent):
+        indent_str = "    " * indent
+        condition = self.generate_expression(node.condition)
+        entry_alias_state = self.resource_access_alias_state()
+
+        code = f"{indent_str}while {condition}:\n"
+
+        self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
+        finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
+            self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
+
+        return code
+
+    def generate_loop(self, node, indent):
+        indent_str = "    " * indent
+        code = f"{indent_str}while True:\n"
+
+        self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
+        finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
+            self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                *(loop_exit_alias_states or [body_alias_state])
+            )
+        )
+
+        return code
+
+    def generate_do_while(self, node, indent):
+        indent_str = "    " * indent
+        break_flag = f"__cgl_do_break_{self.do_while_counter}"
+        self.do_while_counter += 1
+        condition = self.generate_expression(node.condition)
+
+        code = f"{indent_str}var {break_flag}: Bool = False\n"
+        code += f"{indent_str}while True:\n"
+        code += f"{indent_str}    while True:\n"
+
+        self.loop_depth += 1
+        self.do_while_contexts.append(
+            {"loop_depth": self.loop_depth, "break_flag": break_flag}
+        )
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
+        try:
+            for stmt in self.statement_list(node.body):
+                code += self.generate_statement(stmt, indent + 2)
+            body_alias_state = self.resource_access_alias_state()
+        finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
+            self.do_while_contexts.pop()
+            self.loop_depth -= 1
+
+        if not self.statement_body_terminates_inner_loop(node.body):
+            code += f"{indent_str}        break\n"
+        code += f"{indent_str}    if {break_flag}:\n"
+        code += f"{indent_str}        break\n"
+        code += f"{indent_str}    if not {condition}:\n"
+        code += f"{indent_str}        break\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
+
+        return code
+
+    def generate_lambda_expression(self, args):
+        """Materialize supported CrossGL pseudo-lambdas as local Mojo functions."""
+        if not args or not self.expression_prelude_stack:
+            return None
+
+        params = []
+        param_types = {}
+        for arg in args[:-1]:
+            param = self.generate_lambda_parameter(arg)
+            if param is None:
+                return None
+            type_name, param_name, mapped_type = param
+            params.append((type_name, param_name, mapped_type))
+            param_types[param_name] = type_name
+
+        body_arg = args[-1]
+        return_expr = self.lambda_return_expression(body_arg)
+        return_type = self.infer_lambda_return_type(return_expr, param_types)
+        if return_type is None:
+            return None
+
+        helper_name = self.next_lambda_helper_name()
+        signature_params = ", ".join(
+            f"{param_name}: {mapped_type}" for _, param_name, mapped_type in params
+        )
+        return_type_mapped = self.map_type(return_type)
+
+        context = self.expression_prelude_stack[-1]
+        indent = context["indent"]
+        indent_str = "    " * indent
+        body = self.generate_lambda_function_body(body_arg, indent + 1)
+        if body is None:
+            return None
+
+        context["lines"].append(
+            f"{indent_str}fn {helper_name}({signature_params}) -> "
+            f"{return_type_mapped}:\n{body}"
+        )
+        return helper_name
+
+    def generate_lambda_parameter(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        typed_param = self.split_lambda_typed_parameter(raw)
+        if typed_param is None:
+            return None
+
+        type_name, param_name = typed_param
+        mapped_type = self.lambda_parameter_type(type_name)
+        if mapped_type is None:
+            return None
+        return type_name, param_name, mapped_type
+
+    def generate_lambda_function_body(self, arg, indent):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if not raw:
+            return None
+
+        indent_str = "    " * indent
+        if raw.startswith("{") and raw.endswith("}"):
+            inner = raw[1:-1].strip()
+            if not inner:
+                return None
+            lines = []
+            for statement in inner.split(";"):
+                statement = statement.strip()
+                if not statement:
+                    continue
+                if statement.startswith("return "):
+                    value = self.translate_lambda_raw_expression(
+                        statement[len("return ") :].strip()
+                    )
+                    lines.append(f"{indent_str}return {value}\n")
+                else:
+                    lines.append(
+                        f"{indent_str}{self.translate_lambda_raw_expression(statement)}\n"
+                    )
+            return "".join(lines) if lines else None
+
+        expression = self.translate_lambda_raw_expression(raw)
+        return f"{indent_str}return {expression}\n"
+
+    def lambda_raw_argument_text(self, arg):
+        if hasattr(arg, "name"):
+            return arg.name
+        if isinstance(arg, str):
+            return arg
+        return self.generate_expression(arg)
+
+    def split_lambda_typed_parameter(self, raw):
+        if not raw or ":" in raw:
+            return None
+        if any(char in raw for char in "{}()"):
+            return None
+
+        parts = raw.rsplit(None, 1)
+        if len(parts) != 2:
+            return None
+
+        type_name, param_name = parts
+        type_name = self.canonical_lambda_type(type_name)
+        if not param_name.isidentifier():
+            return None
+        if not type_name:
+            return None
+        return type_name, param_name
+
+    def canonical_lambda_type(self, type_name):
+        if "<" in type_name or ">" in type_name:
+            return "".join(type_name.split())
+        return type_name
+
+    def lambda_parameter_type(self, type_name):
+        if any(char.isspace() for char in type_name):
+            return None
+        if any(char in type_name for char in "{},;[]()"):
+            return None
+
+        mapped_type = self.map_type(type_name)
+        if "<" in type_name or ">" in type_name:
+            if mapped_type == type_name:
+                return None
+        return mapped_type
+
+    def lambda_return_expression(self, arg):
+        raw = self.lambda_raw_argument_text(arg).strip()
+        if not raw:
+            return None
+        if raw.startswith("{") and raw.endswith("}"):
+            inner = raw[1:-1].strip()
+            for statement in inner.split(";"):
+                statement = statement.strip()
+                if statement.startswith("return "):
+                    return statement[len("return ") :].strip()
+            return None
+        return raw
+
+    def infer_lambda_return_type(self, return_expr, param_types):
+        if not return_expr:
+            return None
+
+        stripped = self.strip_wrapping_parentheses(return_expr.strip())
+        literal_type = self.lambda_literal_type(stripped)
+        if literal_type is not None:
+            return literal_type
+
+        if re.fullmatch(r"[A-Za-z_]\w*", stripped):
+            return param_types.get(stripped) or self.variable_types.get(stripped)
+
+        referenced_types = {
+            type_name
+            for name, type_name in param_types.items()
+            if re.search(rf"\b{re.escape(name)}\b", stripped)
+        }
+        if len(referenced_types) == 1:
+            return next(iter(referenced_types))
+        return None
+
+    def lambda_literal_type(self, value):
+        if value in {"true", "false", "True", "False"}:
+            return "bool"
+        if re.fullmatch(r"[+-]?\d+", value):
+            return "int"
+        if re.fullmatch(r"[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?", value):
+            return "float"
+        return None
+
+    def strip_wrapping_parentheses(self, expression):
+        while expression.startswith("(") and expression.endswith(")"):
+            inner = expression[1:-1].strip()
+            if not inner:
+                break
+            depth = 0
+            wraps = True
+            for index, char in enumerate(expression):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0 and index != len(expression) - 1:
+                        wraps = False
+                        break
+            if not wraps:
+                break
+            expression = inner
+        return expression
+
+    def translate_lambda_raw_expression(self, expression):
+        translated = expression.strip()
+        translated = re.sub(r"\btrue\b", "True", translated)
+        translated = re.sub(r"\bfalse\b", "False", translated)
+        translated = translated.replace("&&", " and ")
+        translated = translated.replace("||", " or ")
+        return translated
+
+    def next_lambda_helper_name(self):
+        while True:
+            helper_name = f"_crossgl_lambda_{self.lambda_counter}"
+            self.lambda_counter += 1
+            if helper_name not in self.function_return_types:
+                return helper_name
+
+    def generate_with_identifier_replacements(self, replacements, callback):
+        previous_replacements = self.expression_identifier_replacements
+        self.expression_identifier_replacements = {
+            **previous_replacements,
+            **(replacements or {}),
+        }
+        try:
+            return callback()
+        finally:
+            self.expression_identifier_replacements = previous_replacements
+
+    def generate_expression_with_identifier_replacements(self, expr, replacements):
+        return self.generate_with_identifier_replacements(
+            replacements, lambda: self.generate_expression(expr)
+        )
+
+    def generate_expression_with_expected(self, expr, expected_type):
+        return self.generate_expression(expr, expected_type)
+
+    def generate_expression(self, expr, target_type=None, target_context=None):
+        """Render a CrossGL expression as Mojo expression syntax."""
+        if isinstance(expr, str):
+            if expr in self.expression_identifier_replacements:
+                return self.expression_identifier_replacements[expr]
+            ray_builtin = self.mojo_ray_builtin_expression(expr)
+            if ray_builtin is not None and expr not in self.variable_types:
+                return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(expr)
+            if gpu_builtin is not None:
+                return gpu_builtin
+            builtin = self.mojo_builtin_placeholder_expression(expr)
+            if builtin is not None:
+                return builtin
+            mapped_reference = self.map_enum_variant_reference(expr, target_type)
+            if mapped_reference != expr:
+                return mapped_reference
+            return self.mojo_identifier(expr)
+        elif isinstance(expr, (int, float, bool)):
+            return self.format_literal(expr)
+        elif isinstance(expr, VariableNode):
+            if hasattr(expr, "vtype") and expr.vtype and expr.name:
+                if expr.name in self.expression_identifier_replacements:
+                    return self.expression_identifier_replacements[expr.name]
+                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
+                if ray_builtin is not None and expr.name not in self.variable_types:
+                    return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
+                builtin = self.mojo_builtin_placeholder_expression(expr.name)
+                if builtin is not None:
+                    return builtin
+                return self.mojo_identifier(expr.name)
+            elif hasattr(expr, "name"):
+                if expr.name in self.expression_identifier_replacements:
+                    return self.expression_identifier_replacements[expr.name]
+                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
+                if ray_builtin is not None and expr.name not in self.variable_types:
+                    return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
+                builtin = self.mojo_builtin_placeholder_expression(expr.name)
+                if builtin is not None:
+                    return builtin
+                return self.mojo_identifier(expr.name)
+            else:
+                return str(expr)
+        elif isinstance(expr, BinaryOpNode):
+            vector_binary = self.generate_vector_binary_op(expr)
+            if vector_binary is not None:
+                return vector_binary
+            numeric_vector_binary = self.generate_numeric_vector_binary_op(
+                expr, target_type, target_context
+            )
+            if numeric_vector_binary is not None:
+                return numeric_vector_binary
+            left = self.generate_expression(expr.left)
+            right = self.generate_expression(expr.right)
+            op = self.map_operator(expr.op)
+            return f"({left} {op} {right})"
+        elif isinstance(expr, AssignmentNode):
+            return self.generate_assignment(expr)
+        elif isinstance(expr, ArrayLiteralNode):
+            if target_type is not None and self.is_array_type_name(target_type):
+                return self.generate_array_literal_expression(expr, target_type)
+            return self.generate_array_literal_expression(expr)
+        elif isinstance(expr, MatchNode):
+            return self.generate_match_value_expression(
+                expr, target_type, target_context or "match expression"
+            )
+        elif isinstance(expr, ConstructorNode):
+            return self.generate_constructor_node(expr, target_type, target_context)
+        elif isinstance(expr, CastNode):
+            return self.generate_cast_node(expr)
+        elif isinstance(expr, SwizzleNode):
+            return self.generate_swizzle_node(expr)
+        elif isinstance(expr, BuiltinVariableNode):
+            return self.generate_builtin_variable_node(expr)
+        elif isinstance(expr, TextureNode):
+            return self.generate_texture_node(expr)
+        elif isinstance(expr, TextureOpNode):
+            return self.generate_texture_op_node(expr)
+        elif isinstance(expr, AtomicOpNode):
+            return self.generate_atomic_op_node(expr)
+        elif isinstance(expr, BufferOpNode):
+            return self.generate_buffer_op_node(expr)
+        elif isinstance(expr, UnaryOpNode):
+            op = self.map_operator(expr.op)
+            if op in ["++", "--"]:
+                return self.generate_increment_expression(expr)
+            operand = self.generate_expression(expr.operand)
+            if op == "not":
+                return f"(not {operand})"
+            return f"({op}{operand})"
+        elif isinstance(expr, ArrayAccessNode):
+            # Handle array access properly
+            if hasattr(expr, "array") and hasattr(expr, "index"):
+                return self.generate_array_access_expression(expr)
+            else:
+                # Fallback for malformed ArrayAccessNode
+                return str(expr)
+        elif isinstance(expr, WaveOpNode):
+            return self.generate_wave_op(expr)
+        elif isinstance(expr, RayTracingOpNode):
+            return self.generate_ray_tracing_op(expr)
+        elif isinstance(expr, RayQueryOpNode):
+            return self.generate_ray_query_op(expr)
+        elif isinstance(expr, MeshOpNode):
+            return self.generate_mesh_op(expr)
+        elif isinstance(expr, FunctionCallNode):
+            # Extract function name properly (might be IdentifierNode)
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = expr.name
+            func_name = None
+            if isinstance(func_expr, MemberAccessNode):
+                member_call = self.generate_member_function_call(func_expr, expr.args)
+                if member_call is not None:
+                    return member_call
+                callee = self.generate_expression(func_expr)
+            elif hasattr(func_expr, "name") and getattr(func_expr, "name", None):
+                # It's an IdentifierNode, extract the name
+                func_name = func_expr.name
+                callee = func_name
+            elif isinstance(func_expr, str):
+                func_name = func_expr
+                callee = func_expr
+            else:
+                callee = self.generate_expression(func_expr)
+
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
+            static_generic_call = generate_static_generic_numeric_call(self, func_name)
+            if static_generic_call is not None:
+                return static_generic_call
+
+            if func_name == "lambda":
+                lambda_expr = self.generate_lambda_expression(expr.args)
+                if lambda_expr is not None:
+                    return lambda_expr
+
+            enum_constructor = self.generate_enum_variant_constructor_call(
+                func_name, expr.args, target_type
+            )
+            if enum_constructor is not None:
+                return enum_constructor
+
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            if specialized_func_name is not None:
+                func_name = specialized_func_name
+                callee = specialized_func_name
+            else:
+                raise_unresolved_generic_function_call(self, func_name, "Mojo")
+
+            if self.is_user_defined_function(func_name):
+                args = self.generate_user_function_call_arguments(func_name, expr.args)
+                call_name = (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+                return f"{call_name}({args})"
+
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name, expr.args
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
+
+            if func_name in {"fract", "frac"}:
+                return self.generate_fract_call(expr.args)
+            if func_name == "mod":
+                return self.generate_mod_call(expr.args)
+            if func_name == "saturate":
+                saturate_call = self.generate_saturate_call(expr.args)
+                if saturate_call is not None:
+                    return saturate_call
+            if func_name in {"degrees", "radians"}:
+                return self.generate_angle_conversion_call(func_name, expr.args)
+            if func_name == "mix":
+                bool_mix_call = self.generate_bool_mix_call(expr.args)
+                if bool_mix_call is not None:
+                    return bool_mix_call
+            if func_name == "clamp":
+                clamp_call = self.generate_clamp_call(expr.args)
+                if clamp_call is not None:
+                    return clamp_call
+            if func_name in {"min", "max"}:
+                min_max_call = self.generate_min_max_call(
+                    func_name, expr.args, target_type
+                )
+                if min_max_call is not None:
+                    return min_max_call
+            if func_name == "smoothstep":
+                smoothstep_call = self.generate_smoothstep_call(expr.args, target_type)
+                if smoothstep_call is not None:
+                    return smoothstep_call
+            if func_name == "atan" and len(expr.args) == 2:
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"atan2({args})"
+            if func_name == "texture":
+                return self.generate_texture_call(expr.args, "sample")
+            if func_name == "textureLod":
+                return self.generate_texture_call(expr.args, "sample_lod")
+            if func_name == "textureGrad":
+                return self.generate_texture_call(expr.args, "sample_grad")
+            if func_name == "textureSize":
+                return self.generate_resource_size_call(expr.args, "texture_size")
+            if func_name == "textureQueryLevels":
+                return self.generate_resource_query_levels_call(expr.args)
+            if func_name == "textureSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "texture_samples"
+                )
+            if func_name == "imageSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "image_samples"
+                )
+            if func_name == "texelFetch":
+                return self.generate_texel_fetch_call(expr.args)
+            if func_name == "texelFetchOffset":
+                return self.generate_texel_fetch_call(expr.args, with_offset=True)
+            if func_name == "imageSize":
+                return self.generate_resource_size_call(expr.args, "image_size")
+            if func_name == "imageLoad":
+                return self.generate_image_load_call(expr.args)
+            if func_name == "imageStore":
+                return self.generate_image_store_call(expr.args)
+            if func_name == "buffer_load":
+                return self.generate_buffer_load_call(expr.args)
+            if func_name == "buffer_store":
+                return self.generate_buffer_store_call(expr.args)
+            if func_name == "buffer_append":
+                return self.generate_buffer_append_call(expr.args)
+            if func_name == "buffer_consume":
+                return self.generate_buffer_consume_call(expr.args)
+            if func_name == "buffer_dimensions":
+                return self.generate_buffer_dimensions_call(expr.args)
+            if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+                raise ValueError(
+                    f"Unsupported Mojo buffer counter call {func_name}; "
+                    "structured-buffer counters are not available in the Mojo "
+                    "placeholder backend"
+                )
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
+                return self.generate_reinterpret_call(reinterpret_name, expr.args)
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                return self.generate_resource_builtin_call(
+                    expr.args, helper_base, return_kind
+                )
+            scalar_atomic = self.generate_scalar_atomic_call(func_name, expr.args)
+            if scalar_atomic is not None:
+                return scalar_atomic
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS:
+                return self.generate_image_atomic_call(
+                    expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
+                )
+            if (
+                func_name in MOJO_SYNC_BUILTINS
+                and not expr.args
+                and not self.is_user_defined_function(func_name)
+            ):
+                helper_name = MOJO_SYNC_BUILTINS[func_name]
+                self.required_sync_helpers.add(helper_name)
+                return f"{helper_name}()"
+            if func_name == "__shfl_down_sync":
+                return self.generate_cuda_shuffle_down_call(expr.args)
+
+            func_name = self.function_map.get(func_name, func_name)
+            if func_name in MOJO_MATH_HELPERS:
+                self.required_math_helpers.add(func_name)
+            if func_name in self.scalar_constructor_map:
+                scalar_constructor_name = func_name
+                mapped_constructor_name = self.scalar_constructor_map[func_name]
+                target_dtype = MOJO_SCALAR_DTYPES.get(
+                    self.type_name(scalar_constructor_name)
+                )
+                if target_dtype is not None and len(expr.args) == 1:
+                    arg = self.generate_scalar_constructor_argument(
+                        expr.args[0],
+                        target_dtype,
+                        f"scalar constructor {scalar_constructor_name} argument 1",
+                    )
+                    return f"{mapped_constructor_name}({arg})"
+                func_name = mapped_constructor_name
+
+            vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_constructor_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(
+                    vector_constructor_name, expr.args
+                )
+
+            if func_name in MOJO_MATRIX_TYPES:
+                return self.generate_matrix_constructor(func_name, expr.args)
+
+            if self.generic_struct_mapped_type(func_name) is not None:
+                return self.generate_struct_function_constructor_call(
+                    expr, func_name, target_context, target_type
+                )
+
+            if func_name in self.struct_types:
+                return self.generate_struct_function_constructor_call(
+                    expr, func_name, target_context, target_type
+                )
+
+            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+            call_name = (
+                "lambda"
+                if func_name == "lambda"
+                else (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+            )
+            return f"{call_name}({args})"
+        elif isinstance(expr, MemberAccessNode):
+            builtin_member = self.generate_builtin_member_access(expr)
+            if builtin_member is not None:
+                return builtin_member
+            obj = self.generate_expression(expr.object)
+            enum_variant = self.map_enum_variant_reference(f"{obj}.{expr.member}")
+            if enum_variant != f"{obj}.{expr.member}":
+                return enum_variant
+            obj_type = self.expression_result_type(expr.object)
+            obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
+            if obj_struct_type is not None and expr.member in obj_fields:
+                return f"{obj}.{self.mojo_identifier(expr.member)}"
+            swizzle_indices = self.get_swizzle_indices(expr.member)
+            if swizzle_indices is not None:
+                return self.generate_swizzle(
+                    expr.object, obj, obj_type, expr.member, swizzle_indices
+                )
+            return f"{obj}.{self.mojo_identifier(expr.member)}"
+        elif isinstance(expr, TernaryOpNode):
+            bool_vector_select = self.generate_bool_vector_select_expression(
+                expr.condition, expr.true_expr, expr.false_expr
+            )
+            if bool_vector_select is not None:
+                return bool_vector_select
+            branch_context = target_context or "ternary expression"
+            condition = self.generate_expression(expr.condition)
+            true_expr = self.generate_expression(
+                expr.true_expr, target_type, f"{branch_context} true branch"
+            )
+            false_expr = self.generate_expression(
+                expr.false_expr, target_type, f"{branch_context} false branch"
+            )
+            return f"({true_expr} if {condition} else {false_expr})"
+        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            if hasattr(expr, "value"):
+                literal_type = getattr(
+                    getattr(expr, "literal_type", None), "name", None
+                )
+                return self.format_literal(expr.value, literal_type)
+            return str(expr)
+        elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            name = getattr(expr, "name", str(expr))
+            if name in self.expression_identifier_replacements:
+                return self.expression_identifier_replacements[name]
+            ray_builtin = self.mojo_ray_builtin_expression(name)
+            if ray_builtin is not None and name not in self.variable_types:
+                return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(name)
+            if gpu_builtin is not None:
+                return gpu_builtin
+            builtin = self.mojo_builtin_placeholder_expression(name)
+            if builtin is not None:
+                return builtin
+            mapped_reference = self.map_enum_variant_reference(name, target_type)
+            if mapped_reference != name:
+                return mapped_reference
+            return self.mojo_identifier(name)
+        elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
+            expr.__class__
+        ):
+            if hasattr(expr, "expression"):
+                return self.generate_expression(expr.expression)
+            else:
+                return self.generate_expression(expr)
+        else:
+            # For unknown expression types, handle special cases
+            expr_str = str(expr)
+            # Check if this looks like an array declaration being misinterpreted
+            if (
+                "ArrayAccessNode" in expr_str
+                and "array=" in expr_str
+                and "index=" in expr_str
+            ):
+                # Try to extract array name and size for array declarations
+                import re
+
+                array_match = re.search(r"array=(\w+).*?index=(\w+)", expr_str)
+                if array_match:
+                    array_name = array_match.group(1)
+                    array_match.group(2)
+                    return f"{array_name}"  # Just return the array name for now
+            return expr_str
+
+    def generate_enum_variant_constructor_call(self, func_name, args, target_type=None):
+        constructor = self.enum_variant_constructors.get(func_name)
+        if constructor is None:
+            return self.generate_generic_enum_variant_constructor_call(
+                func_name, args, target_type
+            )
+
+        fields = self.enum_variant_constructor_fields.get(func_name, [])
+        if len(args) != len(fields):
+            raise ValueError(
+                f"Enum constructor {func_name} expects {len(fields)} arguments, "
+                f"got {len(args)}"
+            )
+
+        rendered_args = []
+        for index, arg in enumerate(args):
+            expected_type = fields[index][1] if index < len(fields) else None
+            rendered_args.append(
+                self.generate_expression(
+                    arg,
+                    expected_type,
+                    f"enum constructor {func_name} argument {index + 1}",
+                )
+            )
+        return f"{constructor}({', '.join(rendered_args)})"
+
+    def generate_generic_enum_variant_constructor_call(
+        self, func_name, args, target_type=None
+    ):
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None:
+            return None
+        if len(args) != len(fields):
+            raise ValueError(
+                f"Enum constructor {func_name} expects {len(fields)} arguments, "
+                f"got {len(args)}"
+            )
+
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            func_name, target_type
+        )
+        if specialization is None:
+            return None
+
+        rendered_args = []
+        for index, arg in enumerate(args):
+            rendered_args.append(
+                self.generate_expression(
+                    arg,
+                    fields[index][1],
+                    f"enum constructor {func_name} argument {index + 1}",
+                )
+            )
+        constructor = enum_variant_constructor_name(
+            specialization["struct_name"], variant_name
+        )
+        return f"{constructor}({', '.join(rendered_args)})"
+
+    def generate_constructor_node(self, expr, target_type=None, target_context=None):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        mapped_type = self.map_type(type_name)
+        target_name = self.type_name(target_type)
+        target_struct_type, target_fields = self.struct_type_name_and_fields(
+            target_name
+        )
+        constructor_struct_type, constructor_fields = self.struct_type_name_and_fields(
+            type_name
+        )
+        if target_struct_type is not None:
+            struct_type, fields = target_struct_type, target_fields
+        elif constructor_struct_type is not None:
+            struct_type, fields = constructor_struct_type, constructor_fields
+        else:
+            struct_type, fields = type_name, {}
+        field_items = list(fields.items())
+        base_context = target_context or f"constructor {type_name}"
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        if struct_type in self.struct_types:
+            self.validate_struct_constructor_field_bindings(
+                struct_type,
+                field_items,
+                len(expr.arguments),
+                named_arguments,
+                base_context,
+            )
+        positional_args = []
+        rendered_fields = {}
+        for index, argument in enumerate(expr.arguments):
+            field_type = None
+            field_name = None
+            if index < len(field_items):
+                field_name, field_type = field_items[index]
+                field_context = f"{base_context} field {struct_type}.{field_name}"
+            else:
+                field_context = f"{base_context} field {index + 1}"
+            self.validate_expression_target_shape(argument, field_type, field_context)
+            rendered_argument = self.generate_expression(
+                argument, field_type, field_context
+            )
+            positional_args.append(rendered_argument)
+            if field_name is not None:
+                rendered_fields[field_name] = rendered_argument
+        named_args = []
+        for name, value in named_arguments.items():
+            field_type = fields.get(name)
+            field_context = (
+                f"{base_context} field {struct_type}.{name}"
+                if field_type is not None
+                else f"{base_context} field {name}"
+            )
+            self.validate_expression_target_shape(value, field_type, field_context)
+            rendered_value = self.generate_expression(value, field_type, field_context)
+            named_args.append(f"{self.mojo_identifier(name)}={rendered_value}")
+            if field_type is not None:
+                rendered_fields[name] = rendered_value
+
+        if struct_type in self.struct_types:
+            missing_fields = [
+                (field_name, field_type)
+                for field_name, field_type in field_items
+                if field_name not in rendered_fields
+            ]
+            if missing_fields:
+                for field_name, field_type in missing_fields:
+                    rendered_fields[field_name] = self.zero_value_for_type(field_type)
+                field_args = [
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
+                    for field_name, _ in field_items
+                ]
+                return f"{mapped_type}({', '.join(field_args)})"
+
+        return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
+
+    def validate_struct_constructor_field_bindings(
+        self,
+        struct_type,
+        field_items,
+        positional_count,
+        named_arguments,
+        base_context,
+        constructor_style="braced",
+        require_all_fields=False,
+    ):
+        fields = dict(field_items)
+        expected = ", ".join(fields) or "no fields"
+        initialized_fields = set()
+        for index in range(positional_count):
+            if index >= len(field_items):
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"too many positional fields in {base_context}: field "
+                    f"{index + 1} has no matching field in {struct_type}"
+                )
+            field_name, _ = field_items[index]
+            initialized_fields.add(field_name)
+
+        for field_name in named_arguments:
+            if field_name not in fields:
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"unknown field {struct_type}.{field_name} in {base_context}; "
+                    f"expected one of: {expected}"
+                )
+            if field_name in initialized_fields:
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"duplicate field {struct_type}.{field_name} in {base_context}"
+                )
+            initialized_fields.add(field_name)
+
+        if require_all_fields:
+            for field_name, _ in field_items:
+                if field_name not in initialized_fields:
+                    raise ValueError(
+                        f"Invalid {constructor_style} struct constructor for Mojo "
+                        "codegen; "
+                        f"missing field {struct_type}.{field_name} in "
+                        f"{base_context}; expected fields: {expected}"
+                    )
+
+    def generate_struct_function_constructor_call(
+        self, expr, type_name, context, target_type=None
+    ):
+        struct_type, fields = self.struct_type_name_and_fields(target_type)
+        if struct_type is None or struct_type != type_name:
+            struct_type, fields = self.struct_type_name_and_fields(type_name)
+        mapped_type = (
+            self.map_type(target_type) if target_type else self.map_type(type_name)
+        )
+        field_items = list(fields.items())
+        context_type = self.type_name(target_type) if target_type else type_name
+        base_context = context or f"constructor {context_type}"
+        self.validate_struct_constructor_field_bindings(
+            struct_type or type_name,
+            field_items,
+            len(expr.args),
+            {},
+            base_context,
+            "function-style",
+            True,
+        )
+        positional_args = []
+        for index, argument in enumerate(expr.args):
+            field_type = None
+            if index < len(field_items):
+                field_name, field_type = field_items[index]
+                field_context = (
+                    f"{base_context} field {struct_type or type_name}.{field_name}"
+                )
+            else:
+                field_context = f"{base_context} field {index + 1}"
+            self.validate_expression_target_shape(
+                argument,
+                field_type,
+                field_context,
+            )
+            positional_args.append(
+                self.generate_expression(argument, field_type, field_context)
+            )
+        return f"{mapped_type}({', '.join(positional_args)})"
+
+    def generate_cast_node(self, expr):
+        target_type = self.convert_type_node_to_string(expr.target_type)
+        target_vector = self.vector_type_info(target_type)
+        if target_vector is not None:
+            source_vector = self.vector_type_info(
+                self.expression_result_type(expr.expression)
+            )
+            target_dtype, target_width, target_storage_width, _ = target_vector
+            if source_vector is not None:
+                _, source_width, source_storage_width, _ = source_vector
+                if (
+                    source_width == target_width
+                    and source_storage_width == target_storage_width
+                ):
+                    value = self.generate_expression(expr.expression)
+                    return f"{value}.cast[{target_dtype}]()"
+            target_name = self.normalize_generic_vector_type_name(target_type)
+            if target_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(target_name, [expr.expression])
+
+        target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(target_type))
+        if target_dtype is not None:
+            value = self.generate_scalar_constructor_argument(
+                expr.expression, target_dtype, f"cast to {self.type_name(target_type)}"
+            )
+            return f"{self.map_type(target_type)}({value})"
+
+        value = self.generate_expression(expr.expression)
+        return f"{self.map_type(target_type)}({value})"
+
+    def generate_swizzle_node(self, expr):
+        member = expr.components
+        swizzle_indices = self.get_swizzle_indices(member)
+        if swizzle_indices is None:
+            raise ValueError(f"Unsupported Mojo swizzle '{member}'")
+        obj = self.generate_expression(expr.vector_expr)
+        obj_type = self.expression_result_type(expr.vector_expr)
+        return self.generate_swizzle(
+            expr.vector_expr, obj, obj_type, member, swizzle_indices
+        )
+
+    def generate_builtin_variable_node(self, expr):
+        ray_builtin = self.mojo_ray_builtin_expression(expr.builtin_name)
+        if ray_builtin is not None:
+            return ray_builtin
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            expr.builtin_name, getattr(expr, "component", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
+        name = self.mojo_builtin_placeholder_expression(expr.builtin_name)
+        if name is None:
+            name = self.map_semantic(expr.builtin_name)
+        component = getattr(expr, "component", None)
+        if not component:
+            return name
+
+        swizzle_indices = self.get_swizzle_indices(component)
+        if swizzle_indices is None:
+            return f"{name}.{component}"
+        obj_type = self.variable_types.get(name, "vec4")
+        return self.generate_swizzle(expr, name, obj_type, component, swizzle_indices)
+
+    def mojo_builtin_placeholder_expression(self, name):
+        placeholder = MOJO_BUILTIN_PLACEHOLDERS.get(name)
+        if placeholder is None or name in self.variable_types:
+            return None
+        placeholder_name, placeholder_type = placeholder
+        self.required_builtin_placeholders.add((placeholder_name, placeholder_type))
+        return placeholder_name
+
+    def mojo_gpu_builtin_expression(self, name, component=None):
+        builtin = MOJO_GPU_BUILTIN_ALIASES.get(name)
+        if builtin is None or name in self.variable_types:
+            return None
+        alias_name, type_name = builtin
+        if alias_name not in self.variable_types:
+            self.required_gpu_builtin_placeholders.add((alias_name, type_name))
+        if component:
+            swizzle_indices = self.get_swizzle_indices(component)
+            if swizzle_indices is None:
+                return f"{alias_name}.{component}"
+            return self.generate_gpu_builtin_swizzle(
+                alias_name, type_name, swizzle_indices
+            )
+        return self.generate_gpu_builtin_vector(alias_name, type_name)
+
+    def generate_gpu_builtin_vector(self, alias_name, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is None:
+            return alias_name
+        dtype, width, storage_width, pad_literal = vector_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, dtype)
+            for index in range(width)
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+    def generate_gpu_builtin_swizzle(self, alias_name, type_name, swizzle_indices):
+        vector_info = self.vector_type_info(type_name)
+        dtype = vector_info[0] if vector_info is not None else "DType.uint32"
+        if len(swizzle_indices) == 1:
+            return self.gpu_builtin_component_expression(
+                alias_name, swizzle_indices[0], dtype
+            )
+
+        result_type = self.swizzle_result_type(type_name, len(swizzle_indices))
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return alias_name
+        result_dtype, _, storage_width, pad_literal = result_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, result_dtype)
+            for index in swizzle_indices
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{result_dtype}, {storage_width}]({', '.join(components)})"
+
+    def gpu_builtin_component_expression(self, alias_name, index, dtype):
+        component_names = ("x", "y", "z")
+        if 0 <= index < len(component_names):
+            if alias_name in self.variable_types:
+                return f"{self.mojo_identifier(alias_name)}[{index}]"
+            return f"{alias_name}.{component_names[index]}"
+        return MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.uint32"])[2]
+
+    def generate_builtin_member_access(self, expr):
+        obj_name = self.identifier_expression_name(getattr(expr, "object", None))
+        if obj_name is None:
+            return None
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            obj_name, getattr(expr, "member", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
+        obj = self.mojo_builtin_placeholder_expression(obj_name)
+        if obj is None:
+            return None
+        member = getattr(expr, "member", None)
+        swizzle_indices = self.get_swizzle_indices(member)
+        if swizzle_indices is None:
+            return f"{obj}.{member}"
+        obj_type = MOJO_BUILTIN_PLACEHOLDERS[obj_name][1]
+        return self.generate_swizzle(expr, obj, obj_type, member, swizzle_indices)
+
+    def identifier_expression_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, VariableNode):
+            return getattr(expr, "name", None)
+        if isinstance(expr, BuiltinVariableNode):
+            return getattr(expr, "builtin_name", None)
+        if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            return getattr(expr, "name", None)
+        return None
+
+    def mojo_ray_builtin_expression(self, name):
+        helper = {
+            "gl_LaunchIDEXT": "ray_launch_id",
+            "gl_LaunchSizeEXT": "ray_launch_size",
+            "gl_HitTEXT": "ray_hit_t",
+            "gl_HitKindEXT": "ray_hit_kind",
+            "gl_WorldRayOriginEXT": "ray_world_origin",
+            "gl_WorldRayDirectionEXT": "ray_world_direction",
+            "gl_ObjectRayOriginEXT": "ray_object_origin",
+            "gl_ObjectRayDirectionEXT": "ray_object_direction",
+            "gl_RayTminEXT": "ray_t_min",
+            "gl_IncomingRayFlagsEXT": "ray_incoming_flags",
+            "gl_InstanceCustomIndexEXT": "ray_instance_custom_index",
+            "gl_GeometryIndexEXT": "ray_geometry_index",
+        }.get(str(name))
+        if helper is None:
+            return None
+        self.required_ray_helpers.add(helper)
+        return f"{helper}()"
+
+    def generate_texture_node(self, expr):
+        args = [expr.texture_expr]
+        if expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.append(expr.coordinates)
+
+        if expr.level is not None and expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.level, expr.offset], "sample_lod_offset", "vec4"
+            )
+        if expr.level is not None:
+            return self.generate_texture_call([*args, expr.level], "sample_lod")
+        if expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.offset], "sample_offset", "vec4"
+            )
+        return self.generate_texture_call(args, "sample")
+
+    def texture_op_args(self, expr, include_sampler=True):
+        args = [expr.texture_expr]
+        if include_sampler and expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.extend(expr.arguments)
+        return args
+
+    def generate_texture_operation_call(
+        self, operation, args, argument_count, fetch_args=None
+    ):
+        resource_args = list(fetch_args if fetch_args is not None else args)
+
+        if operation in {"Sample", "sample", "texture"}:
+            if argument_count >= 2:
+                return self.generate_resource_builtin_call(
+                    args, "sample_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample")
+        if operation in {"SampleLevel", "SampleLOD", "sample_lod", "textureLod"}:
+            if argument_count >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_lod_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_lod")
+        if operation in {"SampleGrad", "sample_grad", "textureGrad"}:
+            if argument_count >= 4:
+                return self.generate_resource_builtin_call(
+                    args, "sample_grad_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_grad")
+        if operation in {"SampleBias", "sample_bias"}:
+            if argument_count >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_bias_offset", "vec4"
+                )
+            return self.generate_resource_builtin_call(args, "sample_bias", "vec4")
+
+        resource_builtin = {
+            "SampleCmp": (
+                (
+                    "texture_compare_offset"
+                    if argument_count >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpLevel": (
+                (
+                    "texture_compare_lod_offset"
+                    if argument_count >= 4
+                    else "texture_compare_lod"
+                ),
+                "float",
+            ),
+            "SampleCmpLevelZero": (
+                (
+                    "texture_compare_offset"
+                    if argument_count >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpGrad": (
+                (
+                    "texture_compare_grad_offset"
+                    if argument_count >= 5
+                    else "texture_compare_grad"
+                ),
+                "float",
+            ),
+            "Gather": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherRed": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherGreen": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherBlue": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherAlpha": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherCmp": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpRed": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpGreen": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpBlue": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpAlpha": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+        }.get(operation)
+        if resource_builtin is not None:
+            helper_base, return_kind = resource_builtin
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+
+        if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+            helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+        atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if atomic_helper is not None and resource_args:
+            resource_type = self.map_type(self.expression_result_type(resource_args[0]))
+            if self.is_image_resource_type(resource_type):
+                return self.generate_image_atomic_call(resource_args, atomic_helper)
+        if operation == "texelFetchOffset":
+            return self.generate_texel_fetch_call(resource_args, with_offset=True)
+        if operation in {"Load", "texelFetch"}:
+            fetch_args = list(resource_args)
+            if fetch_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(fetch_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    return self.generate_image_load_call(fetch_args)
+            if len(fetch_args) == 2:
+                fetch_args.append(0)
+            return self.generate_texel_fetch_call(fetch_args)
+        if operation in {"Store", "imageStore"}:
+            return self.generate_image_store_call(resource_args)
+        if operation in {"GetDimensions", "textureSize"}:
+            helper_name = "texture_size"
+            if resource_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(resource_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    helper_name = "image_size"
+            return self.generate_resource_size_call(resource_args, helper_name)
+        if operation == "textureQueryLevels":
+            return self.generate_resource_query_levels_call(resource_args)
+        if operation == "textureSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "texture_samples"
+            )
+        if operation == "imageSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "image_samples"
+            )
+
+        raise ValueError(f"Unsupported Mojo texture operation {operation}")
+
+    def generate_texture_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        args = self.texture_op_args(expr)
+        return self.generate_texture_operation_call(
+            operation,
+            args,
+            len(expr.arguments),
+            fetch_args=self.texture_op_args(expr, include_sampler=False),
+        )
+
+    def generate_sync_node(self, stmt, indent):
+        sync_type = getattr(stmt, "sync_type", "")
+        if getattr(stmt, "arguments", None):
+            raise ValueError(
+                "Invalid Mojo synchronization operation "
+                f"{sync_type}; arguments are not supported"
+            )
+
+        helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
+        if helper_name is None:
+            raise ValueError(f"Invalid Mojo synchronization operation {sync_type}")
+        self.required_sync_helpers.add(helper_name)
+        indent_str = "    " * indent
+        return f"{indent_str}{helper_name}()\n"
+
+    def generate_atomic_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        helper_base = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if helper_base is None:
+            raise ValueError(f"Unsupported Mojo atomic operation {operation}")
+        scalar_atomic = self.generate_scalar_atomic_call(
+            operation, [expr.target, *getattr(expr, "arguments", [])]
+        )
+        if scalar_atomic is not None:
+            return scalar_atomic
+        return self.generate_image_atomic_call(
+            [expr.target, *getattr(expr, "arguments", [])], helper_base
+        )
+
+    def generate_scalar_atomic_call(self, func_name, args):
+        operation = MOJO_SCALAR_ATOMIC_OPS.get(func_name)
+        if operation is None or not args:
+            return None
+
+        target = args[0]
+        target_type = self.type_name(self.expression_result_type(target))
+        if target_type is None:
+            return None
+        if self.buffer_resource_info(target_type) is not None:
+            return None
+        mapped_target_type = self.map_type(target_type)
+        if self.is_image_resource_type(mapped_target_type):
+            return None
+        if self.is_texture_resource_type(mapped_target_type):
+            return None
+        if target_type not in MOJO_SCALAR_ATOMIC_TYPES:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; "
+                f"scalar integer target required: {target_type}"
+            )
+        if not self.is_assignable_atomic_target(target):
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; assignable target required"
+            )
+        expected_args = 3 if operation == "compare_exchange" else 2
+        if len(args) != expected_args:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; expected "
+                f"{expected_args} argument(s), got {len(args)}"
+            )
+        if not self.expression_prelude_stack:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; "
+                "scalar atomic lowering requires statement context"
+            )
+
+        self.validate_resource_read_write_access(target, func_name)
+        target_expr = self.generate_expression(target)
+        temp_name = self.next_scalar_atomic_temp_name()
+        mojo_type = self.map_type(target_type)
+        context = self.expression_prelude_stack[-1]
+        indent_str = "    " * context["indent"]
+        context["lines"].append(
+            f"{indent_str}var {temp_name}: {mojo_type} = {target_expr}\n"
+        )
+
+        if operation == "compare_exchange":
+            compare_expr = self.generate_expression(
+                args[1], target_type, f"{func_name} compare"
+            )
+            value_expr = self.generate_expression(
+                args[2], target_type, f"{func_name} value"
+            )
+            context["lines"].append(f"{indent_str}if {temp_name} == {compare_expr}:\n")
+            context["lines"].append(f"{indent_str}    {target_expr} = {value_expr}\n")
+            return temp_name
+
+        value_expr = self.generate_expression(
+            args[1], target_type, f"{func_name} value"
+        )
+        if operation == "exchange":
+            update_expr = value_expr
+        elif operation == "add":
+            update_expr = f"({temp_name} + {value_expr})"
+        elif operation == "min":
+            update_expr = f"min({temp_name}, {value_expr})"
+        elif operation == "max":
+            update_expr = f"max({temp_name}, {value_expr})"
+        elif operation == "and":
+            update_expr = f"({temp_name} & {value_expr})"
+        elif operation == "or":
+            update_expr = f"({temp_name} | {value_expr})"
+        elif operation == "xor":
+            update_expr = f"({temp_name} ^ {value_expr})"
+        else:
+            raise ValueError(f"Unsupported Mojo scalar atomic operation {func_name}")
+
+        context["lines"].append(f"{indent_str}{target_expr} = {update_expr}\n")
+        return temp_name
+
+    def is_assignable_atomic_target(self, target):
+        return isinstance(
+            target, (ArrayAccessNode, MemberAccessNode, VariableNode)
+        ) or (hasattr(target, "__class__") and "Identifier" in str(target.__class__))
+
+    def builtin_variable_result_type(self, name):
+        if name in {
+            "SV_DispatchThreadID",
+            "SV_GroupID",
+            "SV_GroupThreadID",
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+            "gl_NumWorkGroups",
+            "gl_WorkGroupSize",
+        }:
+            return "uvec3"
+        if name in {"SV_GroupIndex", "SV_InstanceID", "SV_VertexID"}:
+            return "uint"
+        if name == "gl_LocalInvocationIndex":
+            return "uint"
+        if name in {"gl_InstanceID", "gl_VertexID"}:
+            return "int"
+        if name in {"SV_IsFrontFace", "gl_FrontFacing"}:
+            return "bool"
+        if name in {"SV_Depth", "gl_FragDepth"}:
+            return "float"
+        return self.variable_types.get(self.map_semantic(name), "vec4")
+
+    def generate_wave_op(self, expr):
+        operation = getattr(expr, "operation", "wave intrinsic")
+        args = list(getattr(expr, "arguments", []) or [])
+        expected_count = MOJO_WAVE_OP_ARITIES.get(operation)
+        if expected_count is None:
+            raise ValueError(f"Unsupported Mojo wave intrinsic {operation}")
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Mojo wave intrinsic {operation} requires {expected_count} "
+                f"argument{'s' if expected_count != 1 else ''}, got {len(args)}"
+            )
+
+        helper_name = MOJO_WAVE_HELPERS[operation]
+        arg_types = tuple(
+            self.mojo_wave_argument_mojo_type(operation, index, arg)
+            for index, arg in enumerate(args)
+        )
+        return_type = self.map_type(self.mojo_wave_result_type(operation, args))
+        self.required_wave_helpers.add((helper_name, arg_types, return_type, operation))
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_cuda_shuffle_down_call(self, args):
+        if len(args) != 3:
+            raise ValueError(
+                f"Mojo __shfl_down_sync requires 3 arguments, got {len(args)}"
+            )
+
+        value_type = self.map_type(self.expression_result_type(args[1]) or "float")
+        offset_type = self.map_type(self.expression_result_type(args[2]) or "int")
+        helper_name = "_crossgl_cuda_shfl_down_sync"
+        self.required_wave_helpers.add(
+            (
+                helper_name,
+                ("Int", value_type, offset_type),
+                value_type,
+                "__shfl_down_sync",
+            )
+        )
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def mojo_wave_result_type(self, operation, args):
+        if operation in MOJO_WAVE_UINT_RESULT_OPS:
+            return "uint"
+        if operation in MOJO_WAVE_BOOL_RESULT_OPS:
+            return "bool"
+        if operation in MOJO_WAVE_UVEC4_RESULT_OPS:
+            return "uvec4"
+        if args:
+            return self.expression_result_type(args[0]) or "uint"
+        return "uint"
+
+    def mojo_wave_argument_mojo_type(self, operation, index, arg):
+        if index == 0 and operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
+            return self.map_type("bool")
+        if index == 1 and operation.startswith("WaveMultiPrefix"):
+            return self.map_type("uvec4")
+        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            arg_type = self.expression_result_type(arg)
+            if self.type_name(arg_type) in MOJO_INTEGER_INDEX_TYPES:
+                return self.map_type(arg_type)
+            return self.map_type("uint")
+        return self.map_type(self.expression_result_type(arg) or "uint")
+
+    def generate_ray_tracing_op(self, expr):
+        return self.generate_ray_tracing_call_expression(
+            getattr(expr, "operation", "ray tracing intrinsic"),
+            getattr(expr, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, args):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        helper_name = self.function_map.get(operation, operation)
+        self.required_ray_helpers.add(helper_name)
+        generated_args = [self.generate_expression(arg) for arg in args or []]
+        if operation == "TraceRay" and len(generated_args) == 11:
+            ray_desc = (
+                "RayDesc("
+                f"{generated_args[6]}, {generated_args[7]}, "
+                f"{generated_args[8]}, {generated_args[9]}"
+                ")"
+            )
+            generated_args = generated_args[:6] + [ray_desc, generated_args[10]]
+        elif operation == "ReportHit" and len(generated_args) == 2:
+            generated_args.append("False")
+        return f"{helper_name}({', '.join(generated_args)})"
+
+    def generate_ray_query_op(self, expr):
+        operation = getattr(expr, "operation", "ray query method")
+        helper_name = f"ray_query_{self.mojo_snake_case_name(operation)}"
+        self.required_ray_helpers.add(helper_name)
+        args = [self.generate_expression(getattr(expr, "query_expr", None))]
+        args.extend(
+            self.generate_expression(arg)
+            for arg in getattr(expr, "arguments", []) or []
+        )
+        return f"{helper_name}({', '.join(args)})"
+
+    def mojo_snake_case_name(self, name):
+        name = str(name)
+        name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        return name.replace("__", "_").strip("_").lower()
+
+    def generate_mesh_op(self, expr):
+        operation = getattr(expr, "operation", "mesh intrinsic")
+        arguments = list(getattr(expr, "arguments", []) or [])
+        stage_name = self.current_shader_type
+        self.validate_mesh_op_stage(operation, stage_name)
+        self.validate_mesh_op_arguments(operation, arguments, stage_name)
+
+        args = [self.generate_expression(argument) for argument in arguments]
+        if operation == "SetMeshOutputCounts":
+            self.required_mesh_helpers.add("set_mesh_output_counts")
+            return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
+        if operation == "DispatchMesh":
+            self.required_mesh_helpers.add("dispatch_mesh")
+            return f"_crossgl_dispatch_mesh({', '.join(args)})"
+
+        raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
+
+    def generate_vector_constructor(self, func_name, args):
+        if len(args) == 1:
+            self.validate_image_result_target_shape(
+                args[0], func_name, f"vector constructor {func_name} argument 1"
+            )
+
+        helper_call = self.generate_constructor_helper_call(func_name, args)
+        if helper_call is not None:
+            return helper_call
+
+        dtype, source_width, storage_width, pad_literal = self.vector_constructor_info[
+            func_name
+        ]
+        mojo_type = f"SIMD[{dtype}, {storage_width}]"
+        emitted_args = []
+        uses_scalar_splat_constructor = False
+
+        if len(args) == 1:
+            arg = args[0]
+            arg_components = self.vector_components_for_expression(arg, dtype)
+            if arg_components is not None:
+                emitted_args.extend(arg_components[:source_width])
+            elif source_width == 3:
+                arg_expr = self.generate_constructor_scalar_expression(
+                    arg, dtype, f"vector constructor {func_name} argument 1"
+                )
+                if self.is_duplicate_sensitive_expression(arg):
+                    helper_name = self.vec3_splat_helper_name(dtype)
+                    self.required_splat_helpers.add(dtype)
+                    return f"{helper_name}({arg_expr})"
+                emitted_args.extend([arg_expr] * source_width)
+            else:
+                emitted_args.append(
+                    self.generate_constructor_scalar_expression(
+                        arg, dtype, f"vector constructor {func_name} argument 1"
+                    )
+                )
+                uses_scalar_splat_constructor = True
+        else:
+            for index, arg in enumerate(args, start=1):
+                arg_components = self.vector_components_for_expression(arg, dtype)
+                if arg_components is not None:
+                    emitted_args.extend(arg_components)
+                else:
+                    emitted_args.append(
+                        self.generate_constructor_scalar_expression(
+                            arg,
+                            dtype,
+                            f"vector constructor {func_name} argument {index}",
+                        )
+                    )
+
+        if len(emitted_args) > source_width:
+            emitted_args = emitted_args[:source_width]
+        elif len(emitted_args) < source_width and not uses_scalar_splat_constructor:
+            emitted_args.extend(
+                MOJO_DTYPE_INFO[dtype][2]
+                for _ in range(source_width - len(emitted_args))
+            )
+
+        if source_width == 3 and len(emitted_args) == 3:
+            emitted_args.append(pad_literal)
+
+        return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def generate_matrix_constructor(self, func_name, args):
+        dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
+        matrix_key = (dtype, columns, rows)
+        self.required_matrix_types.add(matrix_key)
+
+        if len(args) == 1:
+            source_matrix_info = self.matrix_type_info(
+                self.expression_result_type(args[0])
+            )
+            if source_matrix_info is not None:
+                source_dtype, source_columns, source_rows = source_matrix_info
+                if (
+                    source_dtype == dtype
+                    and source_columns >= columns
+                    and source_rows >= rows
+                ):
+                    source = self.generate_expression(args[0])
+                    if source_matrix_info == matrix_key:
+                        return source
+                    matrix_type = self.matrix_type_name(dtype, columns, rows)
+                    storage_rows = self.matrix_storage_rows(rows)
+                    column_type = f"SIMD[{dtype}, {storage_rows}]"
+                    pad_literal = self.matrix_zero_literal(dtype)
+                    column_args = []
+                    for column in range(columns):
+                        components = [
+                            f"{source}.c{column}[{row}]" for row in range(rows)
+                        ]
+                        if rows == 3:
+                            components.append(pad_literal)
+                        column_args.append(f"{column_type}({', '.join(components)})")
+                    return f"{matrix_type}({', '.join(column_args)})"
+
+        helper_call = self.generate_matrix_constructor_helper_call(
+            dtype, columns, rows, args
+        )
+        if helper_call is not None:
+            return helper_call
+
+        if len(args) == 1 and self.is_duplicate_sensitive_expression(args[0]):
+            arg_type = self.constructor_scalar_expression_target_type(args[0], dtype)
+            if self.vector_type_info(arg_type) is None:
+                scalar = self.generate_constructor_scalar_expression(
+                    args[0], dtype, f"matrix constructor {func_name} argument 1"
+                )
+                key = (dtype, columns, rows)
+                self.required_matrix_diagonal_helpers.add(key)
+                return f"{self.matrix_diagonal_helper_name(*key)}({scalar})"
+
+        component_count = columns * rows
+        components = []
+        for index, arg in enumerate(args, start=1):
+            arg_components = self.vector_components_for_expression(arg, dtype)
+            if arg_components is not None:
+                components.extend(arg_components)
+            else:
+                components.append(
+                    self.generate_constructor_scalar_expression(
+                        arg, dtype, f"matrix constructor {func_name} argument {index}"
+                    )
+                )
+
+        if len(args) == 1 and len(components) == 1:
+            scalar = components[0]
+            components = [
+                scalar if column == row else self.matrix_zero_literal(dtype)
+                for column in range(columns)
+                for row in range(rows)
+            ]
+
+        if len(components) > component_count:
+            components = components[:component_count]
+        elif len(components) < component_count:
+            components.extend(
+                self.matrix_zero_literal(dtype)
+                for _ in range(component_count - len(components))
+            )
+
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        column_args = []
+        storage_rows = self.matrix_storage_rows(rows)
+        pad_literal = self.matrix_zero_literal(dtype)
+        for column in range(columns):
+            start = column * rows
+            column_components = components[start : start + rows]
+            if rows == 3:
+                column_components.append(pad_literal)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            column_args.append(f"{column_type}({', '.join(column_components)})")
+
+        return f"{matrix_type}({', '.join(column_args)})"
+
+    def generate_fract_call(self, args):
+        if not args:
+            return "fract()"
+
+        arg = args[0]
+        arg_expr = self.generate_expression(arg)
+        arg_type = self.expression_result_type(arg)
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            dtype, source_width, storage_width, _ = vector_info
+            if dtype in supported_float_dtypes:
+                self.required_fract_helpers.add(
+                    ("vector", dtype, source_width, storage_width)
+                )
+                helper_name = self.fract_vector_helper_name(
+                    dtype, source_width, storage_width
+                )
+                return f"{helper_name}({arg_expr})"
+
+        dtype = self.expression_mojo_dtype(arg) or "DType.float32"
+        if dtype not in supported_float_dtypes:
+            dtype = "DType.float32"
+        self.required_fract_helpers.add(("scalar", dtype, 1, 1))
+        return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
+
+    def generate_mod_call(self, args):
+        generated_args = [self.generate_expression(arg) for arg in args]
+        if len(generated_args) != 2:
+            self.required_math_helpers.add("fmod")
+            return f"fmod({', '.join(generated_args)})"
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        if self.is_scalar_integer_type(left_type) and (
+            right_type is None or self.is_scalar_integer_type(right_type)
+        ):
+            return f"({generated_args[0]} % {generated_args[1]})"
+
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None or right_info is not None:
+            mod_call = self.generate_vector_mod_call(
+                generated_args, left_info, right_info
+            )
+            if mod_call is not None:
+                return mod_call
+
+        left_dtype = self.expression_mojo_dtype(args[0])
+        right_dtype = self.expression_mojo_dtype(args[1])
+        dtype = left_dtype if left_dtype in MOJO_FLOAT_DTYPES else right_dtype
+        if dtype in MOJO_FLOAT_DTYPES:
+            self.required_mod_helpers.add((dtype, "ss", 1, 1))
+            helper_name = self.mod_helper_name(dtype, "ss", 1, 1)
+            return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
+
+        self.required_math_helpers.add("fmod")
+        return f"fmod({generated_args[0]}, {generated_args[1]})"
+
+    def generate_vector_mod_call(self, generated_args, left_info, right_info):
+        if left_info is not None and right_info is not None:
+            if left_info[:3] != right_info[:3]:
+                return None
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vv"
+        elif left_info is not None:
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vs"
+        else:
+            dtype, source_width, storage_width, _ = right_info
+            kind = "sv"
+
+        if dtype not in MOJO_FLOAT_DTYPES:
+            return None
+
+        self.required_mod_helpers.add((dtype, "ss", 1, 1))
+        self.required_mod_helpers.add((dtype, kind, source_width, storage_width))
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+        return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
+
+    def generate_saturate_call(self, args):
+        if len(args) != 1:
+            return None
+
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
+        arg_type = self.expression_result_type(args[0])
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            dtype, source_width, storage_width, _ = vector_info
+            if dtype not in supported_float_dtypes:
+                return None
+            arg_expr = self.generate_expression(args[0])
+            self.required_saturate_helpers.add(
+                ("vector", dtype, source_width, storage_width)
+            )
+            helper_name = self.saturate_vector_helper_name(
+                dtype, source_width, storage_width
+            )
+            return f"{helper_name}({arg_expr})"
+
+        matrix_info = self.matrix_type_info(arg_type)
+        if matrix_info is not None:
+            dtype, columns, rows = matrix_info
+            if dtype not in supported_float_dtypes:
+                return None
+            arg_expr = self.generate_expression(args[0])
+            self.required_matrix_types.add((dtype, columns, rows))
+            self.required_saturate_helpers.add(("matrix", dtype, columns, rows))
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            return f"{helper_name}({arg_expr})"
+
+        arg_dtype = self.expression_mojo_dtype(args[0])
+        if arg_dtype not in supported_float_dtypes:
+            return None
+
+        arg_expr = self.generate_expression(args[0])
+        self.required_saturate_helpers.add(("scalar", arg_dtype, 1, 1))
+        return f"{self.saturate_scalar_helper_name(arg_dtype)}({arg_expr})"
+
+    def generate_angle_conversion_call(self, func_name, args):
+        if len(args) != 1:
+            generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{func_name}({generated_args})"
+
+        factor = {
+            "degrees": "57.29577951308232",
+            "radians": "0.017453292519943295",
+        }[func_name]
+        arg_expr = self.generate_expression(args[0])
+        return f"({arg_expr} * {factor})"
+
+    def generate_bool_mix_call(self, args):
+        if len(args) != 3:
+            return None
+
+        factor_type = self.expression_result_type(args[2])
+        factor_info = self.vector_type_info(factor_type)
+        if factor_info is not None:
+            if factor_info[0] != "DType.bool":
+                return None
+            return self.generate_bool_vector_select_expression(
+                args[2], args[1], args[0]
+            )
+
+        if self.expression_mojo_dtype(args[2]) != "DType.bool":
+            return None
+
+        condition = self.generate_expression(args[2])
+        true_value = self.generate_expression(args[1])
+        false_value = self.generate_expression(args[0])
+        return f"({true_value} if {condition} else {false_value})"
+
+    def generate_min_max_call(self, func_name, args, target_type=None):
+        if len(args) != 2:
+            return None
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return self.generate_scalar_min_max_call(
+                func_name, args, target_type, left_type, right_type
+            )
+        if left_info is not None and left_info[0] != "DType.float32":
+            return None
+        if right_info is not None and right_info[0] != "DType.float32":
+            return None
+
+        self.required_math_helpers.add(func_name)
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        if left_info is not None and right_info is None:
+            right = f"Float32({right})"
+        elif left_info is None and right_info is not None:
+            left = f"Float32({left})"
+        return f"{func_name}({left}, {right})"
+
+    def generate_scalar_min_max_call(
+        self, func_name, args, target_type, left_type, right_type
+    ):
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        comparator = ">=" if func_name == "max" else "<="
+
+        if self.is_scalar_integer_type(target_type) or (
+            self.is_scalar_integer_type(left_type)
+            and self.is_scalar_integer_type(right_type)
+        ):
+            scalar_type = self.scalar_integer_mojo_type(
+                target_type, left_type, right_type
+            )
+            self.required_math_helpers.add(func_name)
+            return f"{func_name}({scalar_type}({left}), {scalar_type}({right}))"
+
+        if (
+            self.is_float_scalar_type(target_type)
+            or self.is_float_scalar_type(left_type)
+            or self.is_float_scalar_type(right_type)
+        ):
+            self.required_math_helpers.add(func_name)
+            return f"{func_name}(Float32({left}), Float32({right}))"
+
+        return None
+
+    def scalar_integer_mojo_type(self, *type_names):
+        for type_name in type_names:
+            if not self.is_scalar_integer_type(type_name):
+                continue
+            mapped_type = self.map_type(type_name)
+            if mapped_type in MOJO_MAPPED_INTEGER_TYPES:
+                return mapped_type
+        return "Int32"
+
+    def generate_clamp_call(self, args):
+        if len(args) != 3:
+            return None
+
+        value_type = self.expression_result_type(args[0])
+        value_info = self.vector_type_info(value_type)
+        if value_info is None:
+            return None
+        if value_info[0] != "DType.float32":
+            return None
+
+        min_type = self.expression_result_type(args[1])
+        max_type = self.expression_result_type(args[2])
+        min_info = self.vector_type_info(min_type)
+        max_info = self.vector_type_info(max_type)
+        if min_info is not None and min_info[:3] != value_info[:3]:
+            return None
+        if max_info is not None and max_info[:3] != value_info[:3]:
+            return None
+        if (min_info is None) != (max_info is None):
+            return None
+
+        self.required_math_helpers.add("clamp")
+        value = self.generate_expression(args[0])
+        min_value = self.generate_expression(args[1])
+        max_value = self.generate_expression(args[2])
+        if min_info is None and max_info is None:
+            min_value = f"Float32({min_value})"
+            max_value = f"Float32({max_value})"
+        return f"clamp({value}, {min_value}, {max_value})"
+
+    def generate_smoothstep_call(self, args, target_type=None):
+        if len(args) != 3:
+            return None
+
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        if any(self.vector_type_info(arg_type) is not None for arg_type in arg_types):
+            return None
+        if not (
+            self.is_float_scalar_type(target_type)
+            or any(self.is_float_scalar_type(arg_type) for arg_type in arg_types)
+        ):
+            return None
+
+        self.required_math_helpers.add("smoothstep")
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        return "smoothstep({})".format(
+            ", ".join(f"Float32({arg})" for arg in rendered_args)
+        )
+
+    def generate_texture_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        validation_args, sampler_arg = self.split_sampler_arg(args)
+        texture_type = self.expression_result_type(validation_args[0])
+        mapped_type = self.map_type(texture_type)
+        self.validate_texture_sample_args(validation_args, helper_name, mapped_type)
+        if self.resource_sample_coord_type(mapped_type) is not None:
+            if sampler_arg is None:
+                if helper_name == "sample":
+                    self.required_resource_sample_types.add(mapped_type)
+                elif helper_name == "sample_lod":
+                    self.required_resource_lod_types.add(mapped_type)
+                elif helper_name == "sample_grad":
+                    self.required_resource_grad_types.add(mapped_type)
+            elif helper_name == "sample":
+                self.required_resource_sample_sampler_types.add(mapped_type)
+            elif helper_name == "sample_lod":
+                self.required_resource_lod_sampler_types.add(mapped_type)
+            elif helper_name == "sample_grad":
+                self.required_resource_grad_sampler_types.add(mapped_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        if sampler_arg is not None:
+            helper_name = f"{helper_name}_sampler"
+        return f"{helper_name}({generated_args})"
+
+    def validate_texture_sample_args(self, args, helper_name, resource_type):
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.resource_sample_coord_type(resource_type) is None:
+            required = (
+                "non-multisample texture required"
+                if self.is_multisample_resource_type(resource_type)
+                else "sampleable texture required"
+            )
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required}: {resource_type}"
+            )
+
+        expected_counts = {"sample": 2, "sample_lod": 3, "sample_grad": 4}
+        expected_count = expected_counts.get(helper_name)
+        if expected_count is not None and len(args) != expected_count:
+            argument_count = expected_count - 1
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{argument_count} argument(s) after texture resource, got "
+                f"{len(args) - 1}"
+            )
+
+        expected_coord_type = self.resource_sample_coord_type(resource_type)
+        if len(args) >= 2:
+            self.validate_resource_argument_type(
+                args[1], expected_coord_type, helper_name, resource_type, "coordinate"
+            )
+        if helper_name == "sample_lod" and len(args) >= 3:
+            self.validate_resource_argument_type(
+                args[2], "Float32", helper_name, resource_type, "lod"
+            )
+        if helper_name == "sample_grad":
+            if len(args) >= 3:
+                self.validate_resource_argument_type(
+                    args[2],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddx",
+                )
+            if len(args) >= 4:
+                self.validate_resource_argument_type(
+                    args[3],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddy",
+                )
+
+    def strip_split_sampler_arg(self, args):
+        stripped_args, _ = self.split_sampler_arg(args)
+        return stripped_args
+
+    def split_sampler_arg(self, args):
+        if len(args) < 3:
+            return args, None
+        sampler_type = self.map_type(self.expression_result_type(args[1]))
+        if sampler_type == "Sampler":
+            return [args[0], *args[2:]], args[1]
+        return args, None
+
+    def generate_user_function_call_arguments(self, func_name, args):
+        parameter_types = self.selected_function_parameter_types(func_name, args)
+        generated_args = []
+        for index, arg in enumerate(args):
+            target_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            self.validate_expression_target_shape(
+                arg,
+                target_type,
+                f"argument {index + 1} for {func_name}",
+            )
+            generated_args.append(
+                self.generate_expression(
+                    arg,
+                    target_type,
+                    f"argument {index + 1} for {func_name}",
+                )
+            )
+        for extra_name, _extra_type in self.stage_local_function_extra_params.get(
+            func_name, []
+        ):
+            if extra_name in self.variable_types:
+                generated_args.append(extra_name)
+        return ", ".join(generated_args)
+
+    def validate_expression_target_shape(self, expr, target_type, context):
+        self.validate_resource_size_target_shape(expr, target_type, context)
+        self.validate_image_result_target_shape(expr, target_type, context)
+        self.validate_buffer_result_target_shape(expr, target_type, context)
+        self.validate_reinterpret_result_target_shape(expr, target_type, context)
+        self.validate_aggregate_target_shape(expr, target_type, context)
+
+    def validate_aggregate_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_aggregate_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_aggregate_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_aggregate_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_aggregate_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        target_name = self.type_name(target_type)
+        source_type = self.expression_result_type(expr)
+        if source_type is None:
+            return
+
+        target_vector = self.vector_type_info(target_name)
+        target_matrix = self.matrix_type_info(target_name)
+        if target_vector is None and target_matrix is None:
+            return
+
+        source_vector = self.vector_type_info(source_type)
+        source_matrix = self.matrix_type_info(source_type)
+        if source_vector is None and source_matrix is None:
+            return
+
+        if target_vector is not None and source_vector is not None:
+            if source_vector[:2] == target_vector[:2]:
+                return
+            if self.compatible_numeric_vector_target(source_vector, target_vector):
+                return
+        elif target_matrix is not None and source_matrix is not None:
+            if source_matrix == target_matrix:
+                return
+
+        raise ValueError(
+            f"Invalid aggregate target for Mojo codegen; {context} "
+            f"expects {target_name}, got {self.type_name(source_type)}"
+        )
+
+    def validate_resource_size_target_shape(self, expr, target_type, context):
+        if expr is None:
+            return
+
+        if target_type is None:
+            if isinstance(expr, ConstructorNode):
+                self.validate_constructor_resource_size_target_shapes(
+                    expr, None, context
+                )
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_resource_size_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_resource_size_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_resource_size_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_resource_size_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_resource_size_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        size_info = self.resource_size_expression_info(expr)
+        if size_info is None:
+            return
+
+        helper_name, resource_type, expected_type = size_info
+        if expected_type is None:
+            return
+        if self.resource_size_target_matches(expected_type, target_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {expected_type} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_image_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_image_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_image_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_image_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_image_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_image_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        image_info = self.image_result_expression_info(expr)
+        if image_info is None:
+            return
+
+        helper_name, resource_type, expected_type = image_info
+        if expected_type is None:
+            return
+        if self.image_result_target_matches(expected_type, target_type):
+            return
+        if self.explicit_scalar_conversion_context(context) and (
+            self.is_scalar_type_name(expected_type)
+            and self.is_scalar_type_name(target_type)
+        ):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {expected_type} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_buffer_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_buffer_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_buffer_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_buffer_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_buffer_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_buffer_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        buffer_info = self.buffer_result_expression_info(expr)
+        if buffer_info is None:
+            return
+
+        helper_name, resource_type, expected_type = buffer_info
+        if expected_type is None or self.result_shape_target_matches(
+            expected_type, target_type
+        ):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {self.type_name(expected_type)} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_reinterpret_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_reinterpret_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_reinterpret_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_reinterpret_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_reinterpret_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_reinterpret_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        reinterpret_info = self.reinterpret_result_expression_info(expr)
+        if reinterpret_info is None:
+            return
+
+        helper_name, expected_type = reinterpret_info
+        if self.result_shape_target_matches(expected_type, target_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {self.type_name(expected_type)}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_constructor_image_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return
+
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            self.validate_image_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_buffer_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return
+
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            self.validate_buffer_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_reinterpret_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return
+
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            self.validate_reinterpret_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_resource_size_target_shapes(
+        self, expr, target_type, context
+    ):
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
+            return
+
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
+            self.validate_resource_size_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def resource_size_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode) and getattr(
+                func_expr, "member", None
+            ) in {"GetDimensions", "textureSize"}:
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                return self.resource_size_expression_info_for_resource(
+                    resource_expr, "resource_size"
+                )
+
+            func_name = self.function_call_name(expr)
+            if func_name == "textureSize" and args:
+                return self.resource_size_expression_info_for_resource(
+                    args[0], "texture_size"
+                )
+            if func_name == "imageSize" and args:
+                return self.resource_size_expression_info_for_resource(
+                    args[0], "image_size"
+                )
+
+        if isinstance(expr, TextureOpNode) and getattr(expr, "operation", "") in {
+            "GetDimensions",
+            "textureSize",
+        }:
+            texture_expr = getattr(expr, "texture_expr", None)
+            resource_type = self.map_type(self.expression_result_type(texture_expr))
+            helper_name = (
+                "image_size"
+                if self.is_image_resource_type(resource_type)
+                else "texture_size"
+            )
+            expected_type = self.resource_size_result_type_name(resource_type)
+            return helper_name, resource_type, expected_type
+
+        return None
+
+    def resource_size_expression_info_for_resource(self, resource_expr, helper_name):
+        resource_type = self.map_type(self.expression_result_type(resource_expr))
+        if helper_name == "resource_size":
+            helper_name = (
+                "image_size"
+                if self.is_image_resource_type(resource_type)
+                else "texture_size"
+            )
+        expected_type = self.resource_size_result_type_name(resource_type)
+        return helper_name, resource_type, expected_type
+
+    def image_result_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode):
+                member = getattr(func_expr, "member", None)
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(member)
+                if member == "Load":
+                    return self.image_result_expression_info_for_resource(
+                        resource_expr, "image_load"
+                    )
+                if atomic_helper is not None:
+                    return self.image_result_expression_info_for_resource(
+                        resource_expr, atomic_helper
+                    )
+
+            func_name = self.function_call_name(expr)
+            if func_name == "imageLoad" and args:
+                return self.image_result_expression_info_for_resource(
+                    args[0], "image_load"
+                )
+            atomic_helper = MOJO_IMAGE_ATOMIC_BUILTINS.get(func_name)
+            if atomic_helper is not None and args:
+                return self.image_result_expression_info_for_resource(
+                    args[0], atomic_helper
+                )
+
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            args = self.texture_op_args(expr, include_sampler=False)
+            if args:
+                if operation in {"Load", "texelFetch"}:
+                    return self.image_result_expression_info_for_resource(
+                        args[0], "image_load"
+                    )
+                atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(operation)
+                if atomic_helper is not None:
+                    return self.image_result_expression_info_for_resource(
+                        args[0], atomic_helper
+                    )
+
+        if isinstance(expr, AtomicOpNode):
+            helper_base = MOJO_ATOMIC_OP_ALIASES.get(getattr(expr, "operation", ""))
+            if helper_base is not None:
+                return self.image_result_expression_info_for_resource(
+                    expr.target, helper_base
+                )
+
+        return None
+
+    def buffer_result_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode):
+                member = getattr(func_expr, "member", None)
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                info = self.buffer_resource_info(
+                    self.expression_result_type(resource_expr)
+                )
+                return self.buffer_result_info_for_operation(member, info)
+
+            func_name = self.function_call_name(expr)
+            if func_name == "buffer_load" and args:
+                info = self.buffer_resource_info(self.expression_result_type(args[0]))
+                return self.buffer_result_info_for_operation("Load", info)
+            if func_name == "buffer_consume" and args:
+                info = self.buffer_resource_info(self.expression_result_type(args[0]))
+                return self.buffer_result_info_for_operation("Consume", info)
+
+        if isinstance(expr, BufferOpNode):
+            operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
+            info = self.buffer_resource_info(
+                self.expression_result_type(getattr(expr, "buffer_expr", None))
+            )
+            return self.buffer_result_info_for_operation(operation, info)
+
+        return None
+
+    def buffer_result_info_for_operation(self, operation, info):
+        if operation is None or info is None:
+            return None
+
+        buffer_type, element_type = info
+        if operation == "Load":
+            expected_type = self.buffer_helper_element_type(buffer_type, element_type)
+            return "buffer_load", self.mapped_buffer_type(*info), expected_type
+
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            width = MOJO_BYTE_ADDRESS_LOAD_METHODS[operation]
+            helper_name = "buffer_load" if width == 1 else f"buffer_load{width}"
+            return helper_name, buffer_type, self.byte_address_load_result_type(width)
+
+        if operation == "Consume":
+            return "buffer_consume", self.mapped_buffer_type(*info), element_type
+
+        return None
+
+    def reinterpret_result_expression_info(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_name = self.function_call_name(expr)
+        reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+        if reinterpret_name is None:
+            return None
+
+        source_type = self.expression_result_type(expr.args[0]) if expr.args else None
+        return (
+            reinterpret_name,
+            self.reinterpret_return_type_name(reinterpret_name, source_type),
+        )
+
+    def image_result_expression_info_for_resource(self, resource_expr, helper_name):
+        resource_type = self.map_type(self.expression_result_type(resource_expr))
+        if not self.is_image_resource_type(resource_type):
+            return None
+
+        if helper_name == "image_load":
+            return (
+                helper_name,
+                resource_type,
+                self.image_result_type_name(resource_type),
+            )
+
+        expected_type = self.image_atomic_result_type_name(resource_type)
+        return helper_name, resource_type, expected_type
+
+    def image_atomic_result_type_name(self, resource_type):
+        value_type = self.image_value_type(resource_type)
+        if value_type == "Int32":
+            return "int"
+        if value_type == "UInt32":
+            return "uint"
+        return None
+
+    def resource_size_target_matches(self, expected_type, target_type):
+        if expected_type == "int":
+            return self.map_type(target_type) == "Int32"
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is None or target_info is None:
+            return False
+        return expected_info[0] == target_info[0] and expected_info[1] == target_info[1]
+
+    def image_result_target_matches(self, expected_type, target_type):
+        if self.map_type(expected_type) == self.map_type(target_type):
+            return True
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is not None or target_info is not None:
+            if expected_info is None or target_info is None:
+                return False
+            return (
+                expected_info[0] == target_info[0]
+                and expected_info[1] == target_info[1]
+            )
+
+        return False
+
+    def result_shape_target_matches(self, expected_type, target_type):
+        if self.map_type(expected_type) == self.map_type(target_type):
+            return True
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is not None or target_info is not None:
+            return (
+                expected_info is not None
+                and target_info is not None
+                and expected_info[1] == target_info[1]
+            )
+
+        return self.is_scalar_type_name(expected_type) and self.is_scalar_type_name(
+            target_type
+        )
+
+    def explicit_scalar_conversion_context(self, context):
+        if context is None:
+            return False
+        return context.startswith("cast to ") or context.startswith(
+            "scalar constructor "
+        )
+
+    def is_scalar_type_name(self, type_name):
+        if type_name is None:
+            return False
+        if self.vector_type_info(type_name) is not None:
+            return False
+        return self.map_type(type_name) in {
+            "Float16",
+            "Float32",
+            "Float64",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+            "Bool",
+        }
+
+    def generate_resource_size_call(self, args, helper_name):
+        if helper_name == "texture_size":
+            required_kind = "texture"
+            is_valid_kind = self.is_texture_resource_type
+            expected_args = {1, 2}
+        else:
+            required_kind = "image"
+            is_valid_kind = self.is_image_resource_type
+            expected_args = {1}
+
+        if not args:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: <missing>"
+            )
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+
+        if not is_valid_kind(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: {resource_type}"
+            )
+        if len(args) not in expected_args:
+            expected_counts = sorted(count - 1 for count in expected_args)
+            expected_text = " or ".join(str(count) for count in expected_counts)
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{expected_text} argument(s) after {required_kind} resource, "
+                f"got {len(args) - 1}"
+            )
+        if len(args) == 2:
+            self.validate_resource_argument_type(
+                args[1], "Int32", helper_name, resource_type, "lod"
+            )
+
+        if self.resource_size_return_type(resource_type) is None:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"sizable {required_kind} resource required: {resource_type}"
+            )
+        self.required_resource_size_types.add(resource_type)
+        self.required_resource_size_helpers.add((helper_name, resource_type))
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_resource_query_levels_call(self, args):
+        if not args:
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                "texture resource required: <missing>"
+            )
+        if len(args) != 1:
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; expected "
+                f"0 argument(s) after texture resource, got {len(args) - 1}"
+            )
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                f"non-multisample texture required: {resource_type}"
+            )
+        self.required_resource_query_level_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"texture_query_levels({generated_args})"
+
+    def generate_resource_sample_count_call(self, args, helper_name):
+        if not args:
+            required_kind = "texture" if helper_name == "texture_samples" else "image"
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: <missing>"
+            )
+        if len(args) != 1:
+            required_kind = "texture" if helper_name == "texture_samples" else "image"
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"0 argument(s) after {required_kind} resource, got {len(args) - 1}"
+            )
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if helper_name == "texture_samples":
+            required_kind = "texture"
+            is_valid_kind = self.is_texture_resource_type(resource_type)
+        else:
+            required_kind = "image"
+            is_valid_kind = self.is_image_resource_type(resource_type)
+
+        if not is_valid_kind:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: {resource_type}"
+            )
+        if not self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"multisample {required_kind} required: {resource_type}"
+            )
+
+        self.required_resource_sample_count_helpers.add((helper_name, resource_type))
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_texel_fetch_call(self, args, *, with_offset=False):
+        helper_name = "texel_fetch_offset" if with_offset else "texel_fetch"
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_texel_fetch_args(args, resource_type, with_offset=with_offset)
+            if (
+                with_offset
+                and self.resource_offset_coord_type(resource_type) is not None
+            ):
+                self.required_resource_texel_fetch_offset_types.add(resource_type)
+            elif self.resource_texel_coord_type(resource_type) is not None:
+                self.required_resource_texel_fetch_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def validate_texel_fetch_args(self, args, resource_type, *, with_offset=False):
+        helper_name = "texel_fetch_offset" if with_offset else "texel_fetch"
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"non-shadow texture required: {resource_type}"
+            )
+        if self.resource_texel_coord_type(resource_type) is None or (
+            with_offset and self.resource_offset_coord_type(resource_type) is None
+        ):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texel-fetch{'-offset' if with_offset else ''} texture required: "
+                f"{resource_type}"
+            )
+        expected_count = 4 if with_offset else 3
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after texture resource, "
+                f"got {len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            self.resource_texel_coord_type(resource_type),
+            helper_name,
+            resource_type,
+            "coordinate",
+        )
+        self.validate_resource_argument_type(
+            args[2], "Int32", helper_name, resource_type, "lod_or_sample"
+        )
+        if with_offset:
+            self.validate_resource_argument_type(
+                args[3],
+                self.resource_offset_coord_type(resource_type),
+                helper_name,
+                resource_type,
+                "offset",
+            )
+
+    def generate_image_load_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "imageLoad")
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_load_args(args, resource_type)
+            if self.resource_texel_coord_type(resource_type) is not None:
+                self.required_image_load_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_load({generated_args})"
+
+    def generate_image_store_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "imageStore")
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_store_args(args, resource_type)
+            if self.resource_texel_coord_type(resource_type) is not None:
+                self.required_image_store_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_store({generated_args})"
+
+    def validate_image_load_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"loadable image resource required: {resource_type}"
+            )
+
+        expected_count = 3 if self.is_multisample_resource_type(resource_type) else 2
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            coord_type,
+            "image_load",
+            resource_type,
+            "coordinate",
+        )
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_load", resource_type, "sample"
+            )
+
+    def validate_image_store_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"storable image resource required: {resource_type}"
+            )
+
+        expected_count = 4 if self.is_multisample_resource_type(resource_type) else 3
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            coord_type,
+            "image_store",
+            resource_type,
+            "coordinate",
+        )
+        value_index = 2
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_store", resource_type, "sample"
+            )
+            value_index = 3
+        self.validate_image_store_value_type(args[value_index], resource_type)
+
+    def validate_image_store_value_type(self, value_arg, resource_type):
+        expected_type = self.image_value_type(resource_type)
+        actual_type = self.resource_builtin_arg_type(value_arg)
+        if actual_type != expected_type:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; value for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
+
+    def generate_buffer_load_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "buffer_load")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            self.validate_buffer_operation(
+                "buffer_load", info, MOJO_BUFFER_LOAD_RESOURCE_TYPES
+            )
+            if info is not None and self.buffer_helper_element_type(*info) is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_load_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_load({generated_args})"
+
+    def generate_buffer_store_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "buffer_store")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            self.validate_buffer_operation(
+                "buffer_store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+            )
+            if info is not None and self.buffer_helper_element_type(*info) is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_store_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_store({generated_args})"
+
+    def generate_buffer_append_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "buffer_append")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[0] != "AppendStructuredBuffer":
+                raise ValueError(
+                    "Unsupported buffer_append for Mojo codegen; "
+                    f"{info[0]} is not an append buffer"
+                )
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_append_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_append({generated_args})"
+
+    def generate_buffer_consume_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "buffer_consume")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[0] != "ConsumeStructuredBuffer":
+                raise ValueError(
+                    "Unsupported buffer_consume for Mojo codegen; "
+                    f"{info[0]} is not a consume buffer"
+                )
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_consume_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_consume({generated_args})"
+
+    def generate_buffer_dimensions_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None:
+                if len(args) not in {2, 3}:
+                    raise ValueError(
+                        "Unsupported buffer_dimensions for Mojo codegen; "
+                        f"expected 1 or 2 dimension argument(s), got {len(args) - 1}"
+                    )
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_dimensions_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_dimensions({generated_args})"
+
+    def generate_buffer_op_node(self, expr):
+        raw_operation = getattr(expr, "operation", "")
+        operation = MOJO_BUFFER_OP_ALIASES.get(raw_operation)
+        if operation is None:
+            raise ValueError(f"Unsupported Mojo buffer operation {raw_operation}")
+
+        buffer_expr = getattr(expr, "buffer_expr", None)
+        if buffer_expr is None:
+            raise ValueError(
+                f"Invalid Mojo buffer operation {raw_operation}; "
+                "missing buffer expression"
+            )
+
+        arguments = getattr(expr, "arguments", [])
+        args = [buffer_expr, *arguments]
+        if operation == "Load":
+            return self.generate_buffer_load_call(args)
+        if operation == "Store":
+            return self.generate_buffer_store_call(args)
+        if operation == "Append":
+            return self.generate_buffer_append_call(args)
+        if operation == "Consume":
+            return self.generate_buffer_consume_call(args)
+        if operation == "GetDimensions":
+            return self.generate_buffer_dimensions_call(args)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        if operation in MOJO_BYTE_ADDRESS_STORE_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        raise ValueError(f"Invalid Mojo buffer operation {raw_operation}")
+
+    def generate_byte_address_vector_buffer_op(self, buffer_expr, args, operation):
+        info = self.buffer_resource_info(self.expression_result_type(buffer_expr))
+        if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            raise ValueError(
+                f"Invalid {operation} for Mojo codegen; byte-address buffer required"
+            )
+
+        obj = self.generate_expression(buffer_expr)
+        buffer_type, _ = info
+        width = (
+            MOJO_BYTE_ADDRESS_LOAD_METHODS.get(operation)
+            or MOJO_BYTE_ADDRESS_STORE_METHODS[operation]
+        )
+        self.register_buffer_resource_type(buffer_type)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            self.validate_resource_read_access(buffer_expr, operation)
+            self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load{width}({generated_args})"
+
+        self.validate_resource_write_access(buffer_expr, operation)
+        self.validate_buffer_operation(
+            operation, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+        )
+        self.required_byte_address_vector_store_helpers.add((buffer_type, width))
+        generated_args = ", ".join(
+            [obj, *[self.generate_expression(arg) for arg in args]]
+        )
+        return f"buffer_store{width}({generated_args})"
+
+    def generate_member_function_call(self, func_expr, args):
+        texture_call = self.generate_texture_member_function_call(func_expr, args)
+        if texture_call is not None:
+            return texture_call
+
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        obj_type = self.expression_result_type(obj_expr)
+        info = self.buffer_resource_info(obj_type)
+        if info is None:
+            self.reject_invalid_resource_query_member_receiver(member, obj_type)
+            self.reject_invalid_resource_operation_member_receiver(member, obj_type)
+            return None
+
+        obj = self.generate_expression(obj_expr)
+        buffer_type, element_type = info
+
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                self.validate_resource_read_access(obj_expr, member)
+                width = MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_load_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_load({generated_args})"
+                self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_load{width}({generated_args})"
+
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS:
+                self.validate_resource_write_access(obj_expr, member)
+                self.validate_buffer_operation(
+                    member, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+                )
+                width = MOJO_BYTE_ADDRESS_STORE_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_store_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_store({generated_args})"
+                self.required_byte_address_vector_store_helpers.add(
+                    (buffer_type, width)
+                )
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_store{width}({generated_args})"
+
+            if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS:
+                self.validate_resource_read_write_access(obj_expr, member)
+                raise ValueError(
+                    "Unsupported Mojo byte-address buffer atomic method "
+                    f"{member}; byte-address atomics are not available in "
+                    "the Mojo placeholder backend"
+                )
+
+        if member == "Load" and element_type is not None:
+            self.validate_resource_read_access(obj_expr, "Load")
+            self.validate_buffer_operation(
+                "Load", info, MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES
+            )
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_load_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load({generated_args})"
+
+        if member == "Store" and element_type is not None:
+            self.validate_resource_write_access(obj_expr, "Store")
+            self.validate_buffer_operation(
+                "Store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+            )
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_store_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_store({generated_args})"
+
+        if member == "Append":
+            if buffer_type != "AppendStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Append for Mojo codegen; "
+                    f"{buffer_type} is not an append buffer"
+                )
+            self.validate_resource_write_access(obj_expr, "Append")
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_append_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_append({generated_args})"
+
+        if member == "Consume":
+            if buffer_type != "ConsumeStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Consume for Mojo codegen; "
+                    f"{buffer_type} is not a consume buffer"
+                )
+            self.validate_resource_read_access(obj_expr, "Consume")
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_consume_helpers.add(info)
+            return f"buffer_consume({obj})"
+
+        if member == "GetDimensions":
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_dimensions_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_dimensions({generated_args})"
+
+        if member in MOJO_BUFFER_COUNTER_METHODS:
+            self.validate_resource_read_write_access(obj_expr, member)
+            raise ValueError(
+                "Unsupported Mojo buffer counter method "
+                f"{member}; structured-buffer counters are not available "
+                "in the Mojo placeholder backend"
+            )
+
+        return None
+
+    def reject_invalid_resource_query_member_receiver(self, member, obj_type):
+        requirement = MOJO_RESOURCE_QUERY_MEMBER_REQUIREMENTS.get(member)
+        if requirement is None:
+            return
+
+        helper_name, required_receiver = requirement
+        mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
+        raise ValueError(
+            f"Unsupported {helper_name} for Mojo codegen; "
+            f"{required_receiver} required: {mapped_type}"
+        )
+
+    def reject_invalid_resource_operation_member_receiver(self, member, obj_type):
+        requirement = MOJO_RESOURCE_OPERATION_MEMBER_REQUIREMENTS.get(member)
+        if requirement is None:
+            return
+
+        helper_name, required_receiver = requirement
+        mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
+        raise ValueError(
+            f"Unsupported {helper_name} for Mojo codegen; "
+            f"{required_receiver} required: {mapped_type}"
+        )
+
+    def generate_texture_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not (
+            self.is_texture_resource_type(resource_type)
+            or self.is_image_resource_type(resource_type)
+        ):
+            return None
+
+        call_args = [obj_expr, *args]
+        stripped_arg_count = max(len(self.strip_split_sampler_arg(call_args)) - 1, 0)
+        return self.generate_texture_operation_call(
+            member, call_args, stripped_arg_count, fetch_args=[obj_expr, *args]
+        )
+
+    def generate_reinterpret_call(self, func_name, args):
+        if not args:
+            return f"{func_name}()"
+
+        source_type = self.expression_result_type(args[0])
+        return_type_name = self.reinterpret_return_type_name(func_name, source_type)
+        return_type = self.map_type(return_type_name)
+        arg_type = self.reinterpret_argument_type(source_type)
+        self.required_reinterpret_helpers.add((func_name, arg_type, return_type))
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{func_name}({generated_args})"
+
+    def mojo_reinterpret_builtin_name(self, func_name):
+        if not func_name or self.is_user_defined_function(func_name):
+            return None
+        if func_name in MOJO_REINTERPRET_BUILTINS:
+            return func_name
+        return MOJO_REINTERPRET_ALIAS_MAP.get(func_name)
+
+    def reinterpret_argument_type(self, source_type):
+        if source_type is None:
+            return "UInt32"
+        arg_type = self.map_type(source_type)
+        if arg_type in {"Float32", "Int32", "UInt32"}:
+            return arg_type
+        if self.vector_type_info(source_type) is not None:
+            return arg_type
+        return "UInt32"
+
+    def reinterpret_return_type_name(self, func_name, source_type):
+        scalar_type, vector_prefix = MOJO_REINTERPRET_TARGET_TYPES[func_name]
+        vector_info = self.vector_type_info(source_type)
+        if vector_info is not None:
+            return f"{vector_prefix}{vector_info[1]}"
+        return scalar_type
+
+    def generate_resource_builtin_call(self, args, helper_base, return_kind):
+        if not args:
+            return f"{helper_base}()"
+
+        validation_args, sampler_arg = self.split_sampler_arg(args)
+        self.validate_texture_builtin_resource(validation_args, helper_base)
+        helper_base = (
+            f"{helper_base}_sampler" if sampler_arg is not None else helper_base
+        )
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": self.resource_builtin_return_type(return_kind, args),
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def validate_texture_builtin_resource(self, args, helper_base):
+        if not args:
+            return
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-multisample texture required: {resource_type}"
+            )
+        if (
+            helper_base.startswith("texture_compare")
+            or helper_base.startswith("texture_gather_compare")
+        ) and not self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"shadow texture required: {resource_type}"
+            )
+        if helper_base in {
+            "texture_query_lod",
+            "calculate_level_of_detail",
+            "calculate_level_of_detail_unclamped",
+        } and self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-shadow texture required: {resource_type}"
+            )
+        self.validate_texture_builtin_args(args, helper_base, resource_type)
+
+    def validate_texture_builtin_args(self, args, helper_base, resource_type):
+        argument_specs = self.texture_builtin_argument_specs(helper_base, resource_type)
+        if argument_specs is None:
+            return
+
+        allowed_counts = {
+            len(specs)
+            for specs in argument_specs
+            if self.texture_arg_specs_known(specs)
+        }
+        if allowed_counts and len(args) - 1 not in allowed_counts:
+            expected = " or ".join(str(count) for count in sorted(allowed_counts))
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; expected {expected} "
+                f"argument(s) after texture resource, got {len(args) - 1}"
+            )
+
+        for specs in argument_specs:
+            if len(args) - 1 != len(specs):
+                continue
+            if not self.texture_arg_specs_known(specs):
+                return
+            for index, (label, expected_type) in enumerate(specs, start=1):
+                self.validate_resource_argument_type(
+                    args[index], expected_type, helper_base, resource_type, label
+                )
+            return
+
+    def texture_builtin_argument_specs(self, helper_base, resource_type):
+        sample_coord = self.resource_sample_coord_type(resource_type)
+        compare_coord = self.resource_compare_coord_type(resource_type)
+        offset_coord = self.resource_offset_coord_type(resource_type)
+        projected_coord = self.resource_projected_coord_type(resource_type)
+
+        if helper_base in {
+            "sample_offset",
+            "sample_lod_offset",
+            "sample_grad_offset",
+        } and None in {sample_coord, offset_coord}:
+            return None
+        if helper_base in {"sample_proj", "sample_proj_offset"} and (
+            projected_coord is None
+        ):
+            return None
+        if (
+            helper_base in {
+                "sample_proj_lod",
+                "sample_proj_lod_offset",
+                "sample_proj_grad",
+                "sample_proj_grad_offset",
+            }
+            and projected_coord is None
+        ):
+            return None
+        if (
+            helper_base in {
+                "texture_compare",
+                "texture_compare_offset",
+                "texture_compare_lod",
+                "texture_compare_lod_offset",
+                "texture_compare_grad",
+                "texture_compare_grad_offset",
+                "texture_compare_proj",
+                "texture_compare_proj_offset",
+                "texture_compare_proj_lod",
+                "texture_compare_proj_lod_offset",
+                "texture_compare_proj_grad",
+                "texture_compare_proj_grad_offset",
+                "texture_gather_compare",
+                "texture_gather_compare_offset",
+            }
+            and compare_coord is None
+        ):
+            return None
+
+        specs = {
+            "sample_offset": [[("coordinate", sample_coord), ("offset", offset_coord)]],
+            "sample_lod_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_grad_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_bias": [[("coordinate", sample_coord), ("bias", "Float32")]],
+            "sample_bias_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("bias", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj": [[("coordinate", projected_coord)]],
+            "sample_proj_offset": [
+                [("coordinate", projected_coord), ("offset", offset_coord)]
+            ],
+            "sample_proj_lod": [[("coordinate", projected_coord), ("lod", "Float32")]],
+            "sample_proj_lod_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj_grad": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                ]
+            ],
+            "sample_proj_grad_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_query_lod": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail_unclamped": [[("coordinate", sample_coord)]],
+            "texture_gather": [
+                [("coordinate", sample_coord)],
+                [("coordinate", sample_coord), ("component", "Int32")],
+            ],
+            "texture_gather_offset": [
+                [("coordinate", sample_coord), ("offset", offset_coord)],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_gather_offsets": [
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                ],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_compare": [[("coordinate", compare_coord), ("depth", "Float32")]],
+            "texture_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_compare_proj_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_proj_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_proj_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_gather_compare": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_gather_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+        }
+        return specs.get(helper_base)
+
+    def texture_arg_specs_known(self, specs):
+        return all(expected_type is not None for _, expected_type in specs)
+
+    def generate_image_atomic_call(self, args, helper_base):
+        if not args:
+            return f"{helper_base}()"
+
+        self.validate_resource_read_write_access(args[0], helper_base)
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        return_type = self.image_atomic_value_type(resource_type)
+        if return_type not in {"Int32", "UInt32"}:
+            raise ValueError(
+                "Unsupported image atomic for Mojo codegen; "
+                f"scalar integer image required: {resource_type}"
+            )
+        if self.typed_image_atomic_has_vector_value_arg(
+            args, helper_base, resource_type
+        ):
+            raise ValueError(
+                "Unsup"
+                "ported image atomic for Mojo codegen; "
+                f"scalar integer image required: {resource_type}"
+            )
+        self.validate_image_atomic_args(args, helper_base, resource_type, return_type)
+
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": return_type,
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def validate_image_atomic_args(self, args, helper_base, resource_type, value_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"atomic image resource required: {resource_type}"
+            )
+
+        value_count = 2 if helper_base == "image_atomic_comp_swap" else 1
+        sample_count = 1 if self.is_multisample_resource_type(resource_type) else 0
+        expected_count = 2 + sample_count + value_count
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, "
+                f"got {len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1], coord_type, helper_base, resource_type, "coordinate"
+        )
+        value_index = 2
+        if sample_count:
+            self.validate_resource_argument_type(
+                args[2], "Int32", helper_base, resource_type, "sample"
+            )
+            value_index = 3
+
+        labels = ("compare", "value") if value_count == 2 else ("value",)
+        for label, arg in zip(labels, args[value_index:]):
+            self.validate_resource_argument_type(
+                arg, value_type, helper_base, resource_type, label
+            )
+
+    def typed_image_atomic_has_vector_value_arg(self, args, helper_base, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is None:
+            return False
+        _, dtype, source_width = typed_info
+        if source_width != 4 or dtype not in {"DType.int32", "DType.uint32"}:
+            return False
+        value_count = 2 if helper_base == "image_atomic_comp_swap" else 1
+        sample_count = 1 if self.is_multisample_resource_type(resource_type) else 0
+        value_index = 2 + sample_count
+        for arg in args[value_index : value_index + value_count]:
+            if self.resource_builtin_arg_type(arg) not in {"Int32", "UInt32"}:
+                return True
+        return False
+
+    def resource_builtin_arg_type(self, arg):
+        if isinstance(arg, bool):
+            return "Bool"
+        if isinstance(arg, int):
+            return "Int32"
+        if isinstance(arg, float):
+            return "Float32"
+
+        type_name = self.expression_result_type(arg)
+        mapped_type = self.map_type(type_name)
+        if mapped_type not in {"Float32", None}:
+            return mapped_type
+
+        dtype = self.expression_mojo_dtype(arg)
+        if dtype is not None:
+            scalar_type = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[
+                0
+            ]
+            return self.map_type(scalar_type)
+
+        return "Float32"
+
+    def validate_resource_argument_type(
+        self, arg, expected_type, helper_name, resource_type, label
+    ):
+        actual_type = self.resource_builtin_arg_type(arg)
+        if actual_type != expected_type:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; {label} for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
+
+    def resource_builtin_return_type(self, return_kind, args=None):
+        if return_kind == "float":
+            return "Float32"
+        if return_kind == "vec2":
+            return "SIMD[DType.float32, 2]"
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if self.is_texture_resource_type(resource_type):
+                return self.resource_sample_return_type(resource_type)
+        return "SIMD[DType.float32, 4]"
+
+    def resource_builtin_helper_name(self, helper_base, arg_types):
+        parts = [helper_base]
+        for arg_type in arg_types:
+            safe_type = re.sub(r"[^0-9A-Za-z]+", "_", arg_type).strip("_")
+            parts.append(safe_type)
+        return "_crossgl_" + "_".join(parts)
+
+    def generate_bool_vector_select_expression(
+        self, condition_expr, true_expr, false_expr
+    ):
+        condition_info = self.vector_type_info(
+            self.expression_result_type(condition_expr)
+        )
+        if condition_info is None or condition_info[0] != "DType.bool":
+            return None
+
+        true_info = self.vector_type_info(self.expression_result_type(true_expr))
+        false_info = self.vector_type_info(self.expression_result_type(false_expr))
+        if (
+            true_info is None
+            or false_info is None
+            or true_info[:3] != false_info[:3]
+            or condition_info[1] != true_info[1]
+        ):
+            return None
+
+        dtype, source_width, storage_width, _ = true_info
+        helper_name = self.select_helper_name(dtype, source_width, storage_width)
+        self.required_select_helpers.add((dtype, source_width, storage_width))
+        condition = self.generate_expression(condition_expr)
+        true_value = self.generate_expression(true_expr)
+        false_value = self.generate_expression(false_expr)
+        return f"{helper_name}({condition}, {true_value}, {false_value})"
+
+    def is_scalar_integer_type(self, type_name):
+        if type_name is None or self.vector_type_info(type_name) is not None:
+            return False
+        type_name = self.type_name(type_name)
+        if type_name in MOJO_INTEGER_INDEX_TYPES:
+            return True
+        if MOJO_SCALAR_DTYPES.get(type_name) in MOJO_INTEGER_DTYPES:
+            return True
+        return self.type_mapping.get(type_name, type_name) in MOJO_MAPPED_INTEGER_TYPES
+
+    def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
+        component_count = columns * rows
+        pieces = []
+
+        for arg in args:
+            piece = self.constructor_piece_for_expression(arg, dtype)
+            if piece is None:
+                return None
+            pieces.append(piece)
+
+        if len(args) == 1 and pieces and pieces[0]["kind"] == "scalar":
+            return None
+
+        pieces = self.select_constructor_pieces(pieces, component_count)
+        if pieces is None:
+            return None
+
+        has_duplicate_sensitive_vector = any(
+            piece["kind"] == "vector" and piece["duplicate_sensitive"]
+            for piece in pieces
+        )
+        if not has_duplicate_sensitive_vector:
+            return None
+
+        key = self.matrix_constructor_helper_key(dtype, columns, rows, pieces)
+        helper_name = self.matrix_constructor_helper_name(key)
+        self.required_matrix_constructor_helpers[key] = {
+            "key": key,
+            "dtype": dtype,
+            "columns": columns,
+            "rows": rows,
+            "pieces": pieces,
+        }
+
+        call_args = [
+            self.generate_constructor_helper_argument(
+                piece, dtype, f"matrix constructor helper argument {index}"
+            )
+            for index, piece in enumerate(pieces, start=1)
+        ]
+        return f"{helper_name}({', '.join(call_args)})"
+
+    def matrix_constructor_helper_key(self, dtype, columns, rows, pieces):
+        signature = self.constructor_helper_key(dtype, columns * rows, columns, pieces)
+        return (dtype, columns, rows, signature[3])
+
+    def matrix_constructor_helper_name(self, key):
+        dtype, columns, rows, signature = key
+        vector_key = (dtype, columns * rows, columns, signature)
+        suffix = self.constructor_helper_name(vector_key).split("_", 4)[4]
+        return (
+            f"_crossgl_construct_matrix_{MOJO_DTYPE_SUFFIX[dtype]}_"
+            f"c{columns}_r{rows}_{suffix}"
+        )
+
+    def matrix_diagonal_helper_name(self, dtype, columns, rows):
+        return f"_crossgl_matrix_diagonal_{MOJO_DTYPE_SUFFIX[dtype]}_c{columns}_r{rows}"
+
+    def matrix_type_name(self, dtype, columns, rows):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype].upper()
+        return f"CrossGLMatrix{dtype_suffix}C{columns}R{rows}"
+
+    def matrix_storage_rows(self, rows):
+        return 4 if rows == 3 else rows
+
+    def matrix_zero_literal(self, dtype):
+        return MOJO_DTYPE_INFO[dtype][2]
+
+    def generate_matrix_type(self, key):
+        dtype, columns, rows = key
+        name = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        code = f"@value\nstruct {name}:\n"
+        for column in range(columns):
+            code += f"    var c{column}: {column_type}\n"
+        code += "\n"
+        for index_type in ("Int", "Int32", "UInt32"):
+            code += f"    fn __getitem__(self, index: {index_type}) -> {column_type}:\n"
+            for column in range(columns - 1):
+                code += f"        if index == {column}:\n"
+                code += f"            return self.c{column}\n"
+            code += f"        return self.c{columns - 1}\n\n"
+
+            code += (
+                f"    fn __setitem__(inout self, index: {index_type}, "
+                f"value: {column_type}):\n"
+            )
+            for column in range(columns - 1):
+                code += f"        if index == {column}:\n"
+                code += f"            self.c{column} = value\n"
+                code += "            return\n"
+            code += f"        self.c{columns - 1} = value\n\n"
+        if columns == rows:
+            vector_terms = [
+                f"self.c{column} * value[{column}]" for column in range(columns)
+            ]
+            code += f"    fn __mul__(self, value: {column_type}) -> {column_type}:\n"
+            code += f"        return {' + '.join(vector_terms)}\n\n"
+            matrix_args = ", ".join(
+                f"self * other.c{column}" for column in range(columns)
+            )
+            code += f"    fn __mul__(self, other: {name}) -> {name}:\n"
+            code += f"        return {name}({matrix_args})\n\n"
+
+            transpose_args = []
+            zero = self.matrix_zero_literal(dtype)
+            for column in range(columns):
+                components = [f"m.c{row}[{column}]" for row in range(rows)]
+                if rows == 3:
+                    components.append(zero)
+                transpose_args.append(f"{column_type}({', '.join(components)})")
+            code += f"fn transpose(m: {name}) -> {name}:\n"
+            code += f"    return {name}({', '.join(transpose_args)})\n\n"
+            code += f"fn inverse(m: {name}) -> {name}:\n"
+            code += "    return m\n\n"
+        return code + "\n"
+
+    def generate_matrix_constructor_helper(self, helper):
+        dtype = helper["dtype"]
+        columns = helper["columns"]
+        rows = helper["rows"]
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        scalar_type, _, _ = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        params = []
+        components = []
+        prelude = []
+
+        for index, piece in enumerate(helper["pieces"]):
+            if piece["kind"] == "vector":
+                param_name = f"v{index}"
+                vector_type = f"SIMD[{piece['dtype']}, {piece['storage_width']}]"
+                params.append(f"{param_name}: {vector_type}")
+                vector_expr = param_name
+                if piece["dtype"] != dtype:
+                    vector_expr = f"{param_name}_cast"
+                    prelude.append(
+                        f"    var {vector_expr} = {param_name}.cast[{dtype}]()\n"
+                    )
+                components.extend(
+                    f"{vector_expr}[{component_index}]"
+                    for component_index in piece["indices"]
+                )
+            else:
+                param_name = f"s{index}"
+                piece_dtype = piece.get("dtype")
+                param_scalar_type = mojo_scalar_type
+                if piece_dtype is not None and piece_dtype != dtype:
+                    scalar_type = MOJO_DTYPE_INFO[piece_dtype][0]
+                    param_scalar_type = self.map_type(scalar_type)
+                params.append(f"{param_name}: {param_scalar_type}")
+                components.append(
+                    self.cast_scalar_text(param_name, piece_dtype, dtype)
+                    if piece_dtype is not None
+                    else param_name
+                )
+
+        column_args = []
+        storage_rows = self.matrix_storage_rows(rows)
+        pad_literal = self.matrix_zero_literal(dtype)
+        for column in range(columns):
+            start = column * rows
+            column_components = components[start : start + rows]
+            if rows == 3:
+                column_components.append(pad_literal)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            column_args.append(f"{column_type}({', '.join(column_components)})")
+
+        helper_name = self.matrix_constructor_helper_name(helper["key"])
+        code = f"fn {helper_name}({', '.join(params)}) -> {matrix_type}:\n"
+        code += "".join(prelude)
+        code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+        return code
+
+    def generate_matrix_diagonal_helper(self, dtype, columns, rows):
+        scalar_type, _, _ = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        zero = self.matrix_zero_literal(dtype)
+        column_args = []
+
+        for column in range(columns):
+            components = ["s" if column == row else zero for row in range(rows)]
+            if rows == 3:
+                components.append(zero)
+            column_args.append(f"{column_type}({', '.join(components)})")
+
+        helper_name = self.matrix_diagonal_helper_name(dtype, columns, rows)
+        code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {matrix_type}:\n"
+        code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+        return code
+
+    def generate_vector_binary_op(self, expr):
+        op = self.map_operator(expr.op)
+        if op not in MOJO_VECTOR_ARITHMETIC_OPS:
+            return None
+
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        left_is_vec3 = left_info is not None and left_info[1] == 3
+        right_is_vec3 = right_info is not None and right_info[1] == 3
+
+        if not left_is_vec3 and not right_is_vec3:
+            return None
+
+        if left_is_vec3 and right_is_vec3:
+            if left_info[0] != right_info[0]:
+                return None
+            dtype = left_info[0]
+            helper_kind = "vv"
+        elif left_is_vec3:
+            if right_info is not None or self.matrix_type_info(right_type) is not None:
+                return None
+            dtype = left_info[0]
+            helper_kind = "vs"
+        else:
+            if left_info is not None or self.matrix_type_info(left_type) is not None:
+                return None
+            dtype = right_info[0]
+            helper_kind = "sv"
+
+        if dtype == "DType.bool" or dtype not in MOJO_DTYPE_SUFFIX:
+            return None
+
+        left = self.generate_expression(expr.left)
+        right = self.generate_expression(expr.right)
+        helper_name = self.vector_binary_helper_name(dtype, op, helper_kind)
+        self.required_helpers.add((dtype, op, helper_kind))
+        return f"{helper_name}({left}, {right})"
+
+    def generate_required_helpers(self):
+        self.required_math_helpers = self.expanded_math_helpers(
+            self.required_math_helpers
+        )
+        if (
+            not self.required_helpers
+            and not self.required_splat_helpers
+            and not self.required_swizzle_helpers
+            and not self.required_constructor_helpers
+            and not self.required_select_helpers
+            and not self.required_matrix_types
+            and not self.required_matrix_constructor_helpers
+            and not self.required_matrix_diagonal_helpers
+            and not self.required_math_helpers
+            and not self.required_fract_helpers
+            and not self.required_mod_helpers
+            and not self.required_saturate_helpers
+            and not self.required_resource_types
+            and not self.required_resource_sample_types
+            and not self.required_resource_sample_sampler_types
+            and not self.required_resource_lod_types
+            and not self.required_resource_lod_sampler_types
+            and not self.required_resource_grad_types
+            and not self.required_resource_grad_sampler_types
+            and not self.required_resource_size_types
+            and not self.required_resource_query_level_types
+            and not self.required_resource_sample_count_helpers
+            and not self.required_resource_texel_fetch_types
+            and not self.required_resource_texel_fetch_offset_types
+            and not self.required_image_load_types
+            and not self.required_image_store_types
+            and not self.required_resource_builtin_helpers
+            and not self.required_buffer_resource_types
+            and not self.required_buffer_load_helpers
+            and not self.required_buffer_store_helpers
+            and not self.required_buffer_append_helpers
+            and not self.required_buffer_consume_helpers
+            and not self.required_buffer_dimensions_helpers
+            and not self.required_byte_address_vector_load_helpers
+            and not self.required_byte_address_vector_store_helpers
+            and not self.required_geometry_stream_helpers
+            and not self.required_tessellation_patch_helpers
+            and not self.required_mesh_helpers
+            and not self.required_reinterpret_helpers
+            and not self.required_sync_helpers
+            and not self.required_wave_helpers
+            and not self.required_ray_helpers
+            and not self.required_builtin_placeholders
+            and not self.required_gpu_builtin_placeholders
+        ):
+            return ""
+
+        code = ""
+        if self.required_builtin_placeholders:
+            code += "# CrossGL builtin placeholders\n"
+            for name, type_name in sorted(self.required_builtin_placeholders):
+                code += self.generate_builtin_placeholder(name, type_name)
+            code += "\n"
+
+        if self.required_gpu_builtin_placeholders:
+            code += "# CrossGL GPU builtin placeholders\n"
+            emitted_placeholder_types = set()
+            for name, type_name in sorted(self.required_gpu_builtin_placeholders):
+                code += self.generate_gpu_builtin_placeholder(
+                    name, type_name, emitted_placeholder_types
+                )
+            code += "\n"
+
+        resource_sampled_types = (
+            self.required_resource_sample_types
+            | self.required_resource_sample_sampler_types
+            | self.required_resource_lod_types
+            | self.required_resource_lod_sampler_types
+            | self.required_resource_grad_types
+            | self.required_resource_grad_sampler_types
+            | self.required_resource_size_types
+            | self.required_resource_query_level_types
+            | {
+                resource_type
+                for _, resource_type in self.required_resource_sample_count_helpers
+            }
+            | self.required_resource_texel_fetch_types
+            | self.required_resource_texel_fetch_offset_types
+            | self.required_image_load_types
+            | self.required_image_store_types
+        )
+        resource_builtin_sampler_required = any(
+            "Sampler" in helper["arg_types"]
+            for helper in self.required_resource_builtin_helpers.values()
+        )
+        resource_types = self.required_resource_types | resource_sampled_types
+        if (
+            self.required_resource_sample_sampler_types
+            or self.required_resource_lod_sampler_types
+            or self.required_resource_grad_sampler_types
+            or resource_builtin_sampler_required
+        ):
+            resource_types.add("Sampler")
+        if (
+            self.required_resource_types
+            or resource_sampled_types
+            or self.required_resource_builtin_helpers
+            or self.required_buffer_resource_types
+            or self.required_buffer_load_helpers
+            or self.required_buffer_store_helpers
+            or self.required_buffer_append_helpers
+            or self.required_buffer_consume_helpers
+            or self.required_buffer_dimensions_helpers
+            or self.required_byte_address_vector_load_helpers
+            or self.required_byte_address_vector_store_helpers
+        ):
+            if self.resource_requirements_use_concrete_bindings(resource_types):
+                code += "# CrossGL resource bindings\n"
+                for resource_type in sorted(resource_types):
+                    code += self.generate_concrete_resource_type(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
+                    code += self.generate_concrete_resource_sample_sampler_helper(
+                        resource_type
+                    )
+            else:
+                code += "# CrossGL resource placeholders\n"
+                for resource_type in sorted(resource_types):
+                    code += self.generate_resource_type(resource_type)
+                for buffer_type in sorted(self.required_buffer_resource_types):
+                    code += self.generate_buffer_resource_type(buffer_type)
+                for resource_type in sorted(self.required_resource_sample_types):
+                    code += self.generate_resource_sample_helper(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_sample_sampler_types
+                ):
+                    code += self.generate_resource_sample_sampler_helper(resource_type)
+                for resource_type in sorted(self.required_resource_lod_types):
+                    code += self.generate_resource_lod_helper(resource_type)
+                for resource_type in sorted(self.required_resource_lod_sampler_types):
+                    code += self.generate_resource_lod_sampler_helper(resource_type)
+                for resource_type in sorted(self.required_resource_grad_types):
+                    code += self.generate_resource_grad_helper(resource_type)
+                for resource_type in sorted(self.required_resource_grad_sampler_types):
+                    code += self.generate_resource_grad_sampler_helper(resource_type)
+                if any(
+                    helper_name == "texture_size"
+                    for helper_name, _resource_type in (
+                        self.required_resource_size_helpers
+                    )
+                ):
+                    code += self.generate_mip_dimension_helper()
+                for helper_name, resource_type in sorted(
+                    self.required_resource_size_helpers
+                ):
+                    code += self.generate_resource_size_helper(
+                        helper_name, resource_type
+                    )
+                for resource_type in sorted(self.required_resource_query_level_types):
+                    code += self.generate_resource_query_levels_helper(resource_type)
+                for helper_name, resource_type in sorted(
+                    self.required_resource_sample_count_helpers
+                ):
+                    code += self.generate_resource_sample_count_helper(
+                        helper_name, resource_type
+                    )
+                for resource_type in sorted(self.required_resource_texel_fetch_types):
+                    code += self.generate_texel_fetch_helper(resource_type)
+                for resource_type in sorted(
+                    self.required_resource_texel_fetch_offset_types
+                ):
+                    code += self.generate_texel_fetch_offset_helper(resource_type)
+                for resource_type in sorted(self.required_image_load_types):
+                    code += self.generate_image_load_helper(resource_type)
+                for resource_type in sorted(self.required_image_store_types):
+                    code += self.generate_image_store_helper(resource_type)
+                for key in sorted(self.required_resource_builtin_helpers):
+                    code += self.generate_resource_builtin_helper(
+                        self.required_resource_builtin_helpers[key]
+                    )
+                for key in sorted(self.required_buffer_load_helpers):
+                    code += self.generate_buffer_load_helper(*key)
+                for key in sorted(self.required_buffer_store_helpers):
+                    code += self.generate_buffer_store_helper(*key)
+                for key in sorted(self.required_buffer_append_helpers):
+                    code += self.generate_buffer_append_helper(*key)
+                for key in sorted(self.required_buffer_consume_helpers):
+                    code += self.generate_buffer_consume_helper(*key)
+                for key in sorted(self.required_buffer_dimensions_helpers):
+                    code += self.generate_buffer_dimensions_helper(*key)
+                for key in sorted(self.required_byte_address_vector_load_helpers):
+                    code += self.generate_byte_address_vector_load_helper(*key)
+                for key in sorted(self.required_byte_address_vector_store_helpers):
+                    code += self.generate_byte_address_vector_store_helper(*key)
+            code += "\n"
+
+        if self.required_geometry_stream_helpers:
+            code += "# CrossGL geometry stream placeholders\n"
+            for stream_name in sorted(self.required_geometry_stream_helpers):
+                code += self.generate_geometry_stream_helper(stream_name)
+            code += "\n"
+
+        if self.required_tessellation_patch_helpers:
+            code += "# CrossGL tessellation patch placeholders\n"
+            for patch_name in sorted(self.required_tessellation_patch_helpers):
+                code += self.generate_tessellation_patch_helper(patch_name)
+            code += "\n"
+
+        if self.required_mesh_helpers:
+            code += "# CrossGL mesh/task placeholders\n"
+            if "set_mesh_output_counts" in self.required_mesh_helpers:
+                code += self.generate_set_mesh_output_counts_helper()
+            if "dispatch_mesh" in self.required_mesh_helpers:
+                code += self.generate_dispatch_mesh_helper()
+            code += "\n"
+
+        if self.required_reinterpret_helpers:
+            code += "# CrossGL reinterpret helpers\n"
+            for key in sorted(self.required_reinterpret_helpers):
+                code += self.generate_reinterpret_helper(*key)
+            code += "\n"
+
+        if self.required_sync_helpers:
+            code += "# CrossGL synchronization placeholders\n"
+            for helper_name in sorted(self.required_sync_helpers):
+                code += self.generate_sync_helper(helper_name)
+            code += "\n"
+
+        if self.required_wave_helpers:
+            code += "# CrossGL wave/subgroup placeholders\n"
+            for helper in sorted(self.required_wave_helpers):
+                code += self.generate_wave_helper(helper)
+            code += "\n"
+
+        if self.required_ray_helpers:
+            code += self.generate_ray_helpers()
+
+        non_matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] != "matrix"
+        }
+        matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] == "matrix"
+        }
+
+        if (
+            self.required_math_helpers
+            or self.required_fract_helpers
+            or self.required_mod_helpers
+            or non_matrix_saturate_helpers
+        ):
+            code += "# CrossGL math helpers\n"
+            for helper_name in sorted(self.required_math_helpers):
+                code += self.generate_math_helper(helper_name)
+            for key in sorted(self.required_fract_helpers):
+                code += self.generate_fract_helper(key)
+            for key in sorted(self.required_mod_helpers):
+                code += self.generate_mod_helper(key)
+            for key in sorted(non_matrix_saturate_helpers):
+                code += self.generate_saturate_helper(key)
+            code += "\n"
+
+        if self.required_matrix_types:
+            code += "# CrossGL matrix types\n"
+            for key in sorted(self.required_matrix_types):
+                code += self.generate_matrix_type(key)
+            code += "\n"
+
+        if matrix_saturate_helpers:
+            code += "# CrossGL matrix math helpers\n"
+            for key in sorted(matrix_saturate_helpers):
+                code += self.generate_saturate_helper(key)
+            code += "\n"
+
+        if (
+            self.required_helpers
+            or self.required_splat_helpers
+            or self.required_swizzle_helpers
+            or self.required_constructor_helpers
+            or self.required_select_helpers
+            or self.required_matrix_constructor_helpers
+            or self.required_matrix_diagonal_helpers
+        ):
+            code += "# CrossGL vector helpers\n"
+        for dtype, op, helper_kind in sorted(self.required_helpers):
+            code += self.generate_vector_binary_helper(dtype, op, helper_kind)
+        for dtype in sorted(self.required_splat_helpers):
+            code += self.generate_vec3_splat_helper(dtype)
+        for dtype, source_width, member in sorted(self.required_swizzle_helpers):
+            code += self.generate_swizzle_helper(dtype, source_width, member)
+        for key in sorted(self.required_constructor_helpers):
+            code += self.generate_constructor_helper(
+                self.required_constructor_helpers[key]
+            )
+        for key in sorted(self.required_select_helpers):
+            code += self.generate_select_helper(key)
+        for key in sorted(self.required_matrix_constructor_helpers):
+            code += self.generate_matrix_constructor_helper(
+                self.required_matrix_constructor_helpers[key]
+            )
+        for key in sorted(self.required_matrix_diagonal_helpers):
+            code += self.generate_matrix_diagonal_helper(*key)
+        return code + "\n"
+
+    def expanded_math_helpers(self, helpers):
+        expanded = set(helpers)
+        if {"magnitude", "normalize", "reflect", "refract"} & expanded:
+            expanded.add("dot_product")
+        if "normalize" in expanded:
+            expanded.add("magnitude")
+        if "smoothstep" in expanded:
+            expanded.add("clamp")
+        if "clamp" in expanded:
+            expanded.update({"min", "max"})
+        return expanded
+
+    def generate_builtin_placeholder(self, name, type_name):
+        return self.generate_zero_initialized_variable(name, type_name)
+
+    def generate_gpu_builtin_placeholder(self, name, type_name, emitted_types):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is None:
+            return self.generate_builtin_placeholder(name, type_name)
+
+        dtype, source_width, _, _ = vector_info
+        if source_width > 3:
+            return self.generate_builtin_placeholder(name, type_name)
+
+        scalar_type = self.map_type(MOJO_DTYPE_INFO[dtype][0])
+        zero = MOJO_DTYPE_INFO[dtype][2]
+        struct_name = (
+            f"_CrossGLGpuBuiltin{MOJO_DTYPE_SUFFIX[dtype].upper()}Vec{source_width}"
+        )
+        code = ""
+        if struct_name not in emitted_types:
+            emitted_types.add(struct_name)
+            fields = ("x", "y", "z")[:source_width]
+            code += "@value\n"
+            code += f"struct {struct_name}:\n"
+            for field in fields:
+                code += f"    var {field}: {scalar_type}\n"
+            code += "\n"
+
+        values = ", ".join(zero for _ in range(source_width))
+        code += f"var {self.mojo_identifier(name)} = {struct_name}({values})\n"
+        return code
+
+    def generate_ray_helpers(self):
+        code = "# CrossGL ray tracing placeholders\n"
+        if "RayDesc" not in self.struct_types:
+            code += (
+                "@value\n"
+                "struct RayDesc:\n"
+                "    var origin: SIMD[DType.float32, 4]\n"
+                "    var t_min: Float32\n"
+                "    var direction: SIMD[DType.float32, 4]\n"
+                "    var t_max: Float32\n\n"
+            )
+        if "RayQuery" not in self.struct_types:
+            code += "@value\nstruct RayQuery:\n    pass\n\n"
+        if "BuiltInTriangleIntersectionAttributes" not in self.struct_types:
+            code += (
+                "@value\n"
+                "struct BuiltInTriangleIntersectionAttributes:\n"
+                "    var barycentrics: SIMD[DType.float32, 2]\n\n"
+            )
+
+        if "ray_launch_id" in self.required_ray_helpers:
+            code += (
+                "fn ray_launch_id() -> SIMD[DType.uint32, 4]:\n"
+                "    return SIMD[DType.uint32, 4](0, 0, 0, 0)\n\n"
+            )
+        if "ray_launch_size" in self.required_ray_helpers:
+            code += (
+                "fn ray_launch_size() -> SIMD[DType.uint32, 4]:\n"
+                "    return SIMD[DType.uint32, 4](0, 0, 0, 0)\n\n"
+            )
+        for helper_name, return_type, return_value in [
+            ("ray_hit_t", "Float32", "0.0"),
+            ("ray_hit_kind", "UInt32", "0"),
+            ("ray_t_min", "Float32", "0.0"),
+            ("ray_incoming_flags", "UInt32", "0"),
+            ("ray_instance_custom_index", "UInt32", "0"),
+            ("ray_geometry_index", "UInt32", "0"),
+        ]:
+            if helper_name in self.required_ray_helpers:
+                code += f"fn {helper_name}() -> {return_type}:\n"
+                code += f"    return {return_value}\n\n"
+        for helper_name in [
+            "ray_world_origin",
+            "ray_world_direction",
+            "ray_object_origin",
+            "ray_object_direction",
+        ]:
+            if helper_name in self.required_ray_helpers:
+                code += f"fn {helper_name}() -> SIMD[DType.float32, 4]:\n"
+                code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n\n"
+
+        if "trace_ray" in self.required_ray_helpers:
+            code += (
+                "fn trace_ray[AS: AnyType, Flags: AnyType, Mask: AnyType, "
+                "HitGroup: AnyType, Multiplier: AnyType, Miss: AnyType, "
+                "Ray: AnyType, Payload: AnyType](scene: AS, flags: Flags, "
+                "mask: Mask, hit_group: HitGroup, multiplier: Multiplier, "
+                "miss: Miss, ray: Ray, payload: Payload):\n"
+                "    pass\n\n"
+            )
+        if "call_shader" in self.required_ray_helpers:
+            code += (
+                "fn call_shader[Index: AnyType, Data: AnyType](index: Index, "
+                "data: Data):\n"
+                "    pass\n\n"
+            )
+        if "report_hit" in self.required_ray_helpers:
+            code += (
+                "fn report_hit[Distance: AnyType, Kind: AnyType, Attributes: AnyType]"
+                "(distance: Distance, kind: Kind, attributes: Attributes) -> Bool:\n"
+                "    return False\n\n"
+            )
+        if "ignore_hit" in self.required_ray_helpers:
+            code += "fn ignore_hit():\n    pass\n\n"
+        if "accept_hit_and_end_search" in self.required_ray_helpers:
+            code += "fn accept_hit_and_end_search():\n    pass\n\n"
+
+        for helper_name in sorted(self.required_ray_helpers):
+            if not helper_name.startswith("ray_query_"):
+                continue
+            return_type = "Bool" if helper_name == "ray_query_proceed" else "UInt32"
+            return_value = "False" if return_type == "Bool" else "0"
+            code += (
+                f"fn {helper_name}[Query: AnyType](query: Query) -> {return_type}:\n"
+                f"    return {return_value}\n\n"
+            )
+        return code + "\n"
+
+    def generate_sync_helper(self, helper_name):
+        return f"fn {helper_name}():\n    pass\n\n"
+
+    def generate_wave_helper(self, helper):
+        helper_name, arg_types, return_type, operation = helper
+        parameter_names = self.wave_helper_parameter_names(operation, len(arg_types))
+        params = [
+            f"{parameter_name}: {arg_type}"
+            for parameter_name, arg_type in zip(parameter_names, arg_types)
+        ]
+        code = f"fn {helper_name}({', '.join(params)}) -> {return_type}:\n"
+        code += f"    return {self.wave_helper_return_expression(operation, return_type)}\n\n"
+        return code
+
+    def wave_helper_parameter_names(self, operation, arg_count):
+        if arg_count == 0:
+            return []
+        if operation == "__shfl_down_sync":
+            return ["mask", "value", "delta"]
+        if arg_count == 1:
+            if operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
+                return ["predicate"]
+            return ["value"]
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return ["value", "lane"]
+        if operation == "WaveMultiPrefixCountBits":
+            return ["predicate", "mask"]
+        return ["value", "mask"]
+
+    def wave_helper_return_expression(self, operation, return_type):
+        if operation == "WaveGetLaneCount":
+            return "1"
+        if operation == "WaveGetLaneIndex":
+            return "0"
+        if operation == "WaveIsFirstLane":
+            return "True"
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "predicate"
+        if operation == "WaveActiveAllEqual":
+            return "True"
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+            "WaveActiveBallot",
+            "WaveMatch",
+        }:
+            return self.zero_mojo_value(return_type)
+        return "value"
+
+    def resource_requirements_use_concrete_bindings(self, resource_types):
+        if not set(resource_types).issubset(MOJO_CONCRETE_RESOURCE_TYPES):
+            return False
+        if not self.required_resource_sample_sampler_types.issubset(
+            MOJO_CONCRETE_SAMPLED_TEXTURE_TYPES
+        ):
+            return False
+        unsupported_resource_requirements = (
+            self.required_resource_sample_types
+            or self.required_resource_lod_types
+            or self.required_resource_lod_sampler_types
+            or self.required_resource_grad_types
+            or self.required_resource_grad_sampler_types
+            or self.required_resource_size_types
+            or self.required_resource_query_level_types
+            or self.required_resource_sample_count_helpers
+            or self.required_resource_texel_fetch_types
+            or self.required_resource_texel_fetch_offset_types
+            or self.required_image_load_types
+            or self.required_image_store_types
+            or self.required_resource_builtin_helpers
+            or self.required_buffer_resource_types
+            or self.required_buffer_load_helpers
+            or self.required_buffer_store_helpers
+            or self.required_buffer_append_helpers
+            or self.required_buffer_consume_helpers
+            or self.required_buffer_dimensions_helpers
+            or self.required_byte_address_vector_load_helpers
+            or self.required_byte_address_vector_store_helpers
+        )
+        return not unsupported_resource_requirements
+
+    def generate_concrete_resource_type(self, resource_type):
+        if resource_type == "Sampler":
+            return (
+                "@value\n"
+                "struct Sampler:\n"
+                "    var set: Int32\n"
+                "    var binding: Int32\n"
+                "    var linear_filter: Bool\n"
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, linear_filter: Bool = False):\n"
+                "        self.set = set\n"
+                "        self.binding = binding\n"
+                "        self.linear_filter = linear_filter\n\n"
+            )
+        if resource_type == "Texture2D":
+            return (
+                "fn _crossgl_texture_coord_index(coord: Float32, extent: Int32) "
+                "-> Int:\n"
+                "    if int(extent) <= 1:\n"
+                "        return 0\n"
+                "    var clamped = coord\n"
+                "    if clamped < 0.0:\n"
+                "        clamped = 0.0\n"
+                "    if clamped >= 1.0:\n"
+                "        clamped = 0.999999\n"
+                "    var index = int(Int32(floor(clamped * Float32(int(extent)))))\n"
+                "    if index < 0:\n"
+                "        return 0\n"
+                "    if index >= int(extent):\n"
+                "        return int(extent) - 1\n"
+                "    return index\n\n"
+                "@value\n"
+                "struct Texture2D:\n"
+                "    var set: Int32\n"
+                "    var binding: Int32\n"
+                "    var width: Int32\n"
+                "    var height: Int32\n"
+                "    var texels: List[SIMD[DType.float32, 4]]\n"
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, width: Int32 = 0, height: Int32 = 0, "
+                "owned texels: List[SIMD[DType.float32, 4]] = "
+                "List[SIMD[DType.float32, 4]]()):\n"
+                "        self.set = set\n"
+                "        self.binding = binding\n"
+                "        self.width = width\n"
+                "        self.height = height\n"
+                "        self.texels = texels\n\n"
+                "    fn sample(self, coord: SIMD[DType.float32, 2], "
+                "sampler: Sampler) -> SIMD[DType.float32, 4]:\n"
+                "        if int(self.width) <= 0 or int(self.height) <= 0 "
+                "or self.texels.size == 0:\n"
+                "            return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n"
+                "        var x = _crossgl_texture_coord_index(coord[0], self.width)\n"
+                "        var y = _crossgl_texture_coord_index(coord[1], self.height)\n"
+                "        var index = y * int(self.width) + x\n"
+                "        if index < 0 or index >= self.texels.size:\n"
+                "            return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n"
+                "        return self.texels[index]\n\n"
+            )
+        return self.generate_resource_type(resource_type)
+
+    def generate_concrete_resource_sample_sampler_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += "    return tex.sample(coord, sampler)\n\n"
+        return code
+
+    def generate_resource_type(self, resource_type):
+        code = f"@value\nstruct {resource_type}:\n"
+        if resource_type == "Sampler":
+            code += "    var set: Int32\n"
+            code += "    var binding: Int32\n"
+            code += (
+                "    fn __init__(inout self, set: Int32 = 0, " "binding: Int32 = 0):\n"
+            )
+            code += "        self.set = set\n"
+            code += "        self.binding = binding\n\n"
+            return code
+        if self.resource_size_return_type(resource_type) is not None:
+            code += "    var set: Int32\n"
+            code += "    var binding: Int32\n"
+            code += "    var width: Int32\n"
+            code += "    var height: Int32\n"
+            code += "    var depth_or_layers: Int32\n"
+            code += "    var levels: Int32\n"
+            code += "    var samples: Int32\n"
+            code += (
+                "    fn __init__(inout self, set: Int32 = 0, "
+                "binding: Int32 = 0, width: Int32 = 0, height: Int32 = 0, "
+                "depth_or_layers: Int32 = 0, levels: Int32 = 1, "
+                "samples: Int32 = 1):\n"
+            )
+            code += "        self.set = set\n"
+            code += "        self.binding = binding\n"
+            code += "        self.width = width\n"
+            code += "        self.height = height\n"
+            code += "        self.depth_or_layers = depth_or_layers\n"
+            code += "        self.levels = levels\n"
+            code += "        self.samples = samples\n\n"
+            return code
+        code += "    pass\n\n"
+        return code
+
+    def generate_buffer_resource_type(self, buffer_type):
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES:
+            return f"@value\nstruct {buffer_type}[T: AnyType]:\n    pass\n\n"
+        return f"@value\nstruct {buffer_type}:\n    pass\n\n"
+
+    def generate_geometry_stream_helper(self, stream_name):
+        return (
+            f"@value\n"
+            f"struct CrossGLMojo{stream_name}[T: AnyType]:\n"
+            f"    fn Append(self, value: T):\n"
+            f"        pass\n"
+            f"    fn RestartStrip(self):\n"
+            f"        pass\n\n"
+        )
+
+    def generate_tessellation_patch_helper(self, patch_name):
+        return (
+            f"@value\n"
+            f"struct CrossGLMojo{patch_name}[T: CollectionElement, N: Int]:\n"
+            f"    var data: InlineArray[T, N]\n"
+            f"    fn __getitem__(self, index: Int) -> T:\n"
+            f"        return self.data[index]\n"
+            f"    fn __getitem__(self, index: Int32) -> T:\n"
+            f"        return self.data[int(index)]\n"
+            f"    fn __getitem__(self, index: UInt32) -> T:\n"
+            f"        return self.data[int(index)]\n"
+            f"    fn __setitem__(inout self, index: Int, value: T):\n"
+            f"        self.data[index] = value\n\n"
+            f"    fn __setitem__(inout self, index: Int32, value: T):\n"
+            f"        self.data[int(index)] = value\n"
+            f"    fn __setitem__(inout self, index: UInt32, value: T):\n"
+            f"        self.data[int(index)] = value\n\n"
+        )
+
+    def generate_set_mesh_output_counts_helper(self):
+        return (
+            "fn _crossgl_set_mesh_output_counts[Vertices: AnyType, "
+            "Primitives: AnyType](vertices: Vertices, primitives: Primitives):\n"
+            "    pass\n\n"
+        )
+
+    def generate_dispatch_mesh_helper(self):
+        return (
+            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
+            "x: X, y: Y, z: Z):\n"
+            "    pass\n\n"
+            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
+            "Payload: AnyType](x: X, y: Y, z: Z, payload: Payload):\n"
+            "    pass\n\n"
+        )
+
+    def generate_buffer_load_helper(self, buffer_type, element_type):
+        element_type = self.buffer_helper_element_type(buffer_type, element_type)
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        zero_value = self.zero_value_for_type(element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}) -> {element_mojo_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_buffer_store_helper(self, buffer_type, element_type):
+        element_type = self.buffer_helper_element_type(buffer_type, element_type)
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}, value: {element_mojo_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_buffer_append_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = f"fn buffer_append(buffer: {buffer_mojo_type}, value: {element_mojo_type}):\n"
+        code += "    pass\n\n"
+        return code
+
+    def generate_buffer_consume_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = (
+            f"fn buffer_consume(buffer: {buffer_mojo_type}) -> {element_mojo_type}:\n"
+        )
+        code += f"    return {self.zero_value_for_type(element_type)}\n\n"
+        return code
+
+    def generate_buffer_dimensions_helper(self, buffer_type, element_type):
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = f"fn buffer_dimensions(buffer: {buffer_mojo_type}) -> SIMD[DType.int32, 2]:\n"
+        code += "    return SIMD[DType.int32, 2](0, 0)\n\n"
+        for dimensions_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
+                f"dimensions: {dimensions_type}):\n"
+            )
+            code += "    pass\n\n"
+            code += (
+                f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
+                f"dimensions: {dimensions_type}, stride: {dimensions_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_byte_address_vector_load_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        zero_value = self.byte_address_vector_zero_value(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load{width}(buffer: {buffer_type}, "
+                f"index: {index_type}) -> {vector_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_byte_address_vector_store_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store{width}(buffer: {buffer_type}, "
+                f"index: {index_type}, value: {vector_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_reinterpret_helper(self, func_name, arg_type, return_type):
+        code = f"fn {func_name}(value: {arg_type}) -> {return_type}:\n"
+        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", return_type)
+        if arg_type.startswith("SIMD[") and return_match is not None:
+            code += (
+                f"    return bitcast[{return_match.group(1)}, "
+                f"{return_match.group(2)}](value)\n\n"
+            )
+            return code
+        scalar_dtype = {
+            "Float32": "DType.float32",
+            "Int32": "DType.int32",
+            "UInt32": "DType.uint32",
+        }.get(return_type)
+        if scalar_dtype is not None:
+            code += f"    return bitcast[{scalar_dtype}](value)\n\n"
+            return code
+        code += f"    return {return_type}(value)\n\n"
+        return code
+
+    def generate_resource_sample_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample(tex: {resource_type}, coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_sample_sampler_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_lod_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_lod(tex: {resource_type}, coord: {coord_type}, "
+            f"lod: Float32) -> {return_type}:\n"
+        )
+        if return_type == "SIMD[DType.float32, 4]":
+            code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        else:
+            code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_lod_sampler_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_lod_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}, lod: Float32) -> {return_type}:\n"
+        )
+        if return_type == "SIMD[DType.float32, 4]":
+            code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        else:
+            code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_grad_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
+            f"ddx: {coord_type}, ddy: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_grad_sampler_helper(self, resource_type):
+        coord_type = self.resource_sample_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_grad_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}, ddx: {coord_type}, ddy: {coord_type}) "
+            f"-> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_size_helper(self, helper_name, resource_type):
+        return_type = self.resource_size_return_type(resource_type)
+        size_value = self.resource_size_expression(resource_type)
+        if helper_name == "texture_size":
+            lod_size_value = self.resource_size_expression(resource_type, lod="lod")
+            code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
+            code += f"    return {size_value}\n\n"
+            code += (
+                f"fn texture_size(tex: {resource_type}, lod: Int32) -> {return_type}:\n"
+            )
+            code += f"    return {lod_size_value}\n\n"
+            return code
+
+        code = f"fn image_size(image: {resource_type}) -> {return_type}:\n"
+        code += (
+            f"    return {self.resource_size_expression(resource_type, 'image')}\n\n"
+        )
+        return code
+
+    def generate_mip_dimension_helper(self):
+        return (
+            "fn _crossgl_mip_dimension(value: Int32, lod: Int32) -> Int32:\n"
+            "    if value <= 0:\n"
+            "        return 0\n"
+            "    var scaled = value\n"
+            "    var level = lod\n"
+            "    while level > 0:\n"
+            "        if scaled > 1:\n"
+            "            scaled = scaled >> 1\n"
+            "        level -= 1\n"
+            "    return scaled\n\n"
+        )
+
+    def resource_size_expression(self, resource_type, parameter_name="tex", lod=None):
+        return_type = self.resource_size_return_type(resource_type)
+        base_type = self.image_resource_base_type(resource_type)
+
+        def component(field_name, mip_scaled=False):
+            value = f"{parameter_name}.{field_name}"
+            if lod is not None and mip_scaled:
+                return f"_crossgl_mip_dimension({value}, {lod})"
+            return value
+
+        if return_type == "Int32":
+            return component("width", mip_scaled=True)
+
+        vector_match = re.fullmatch(r"SIMD\[DType\.int32, (\d+)\]", return_type)
+        if not vector_match:
+            return self.zero_mojo_value(return_type)
+
+        width = int(vector_match.group(1))
+        if width == 2:
+            if "1DArray" in base_type:
+                components = [
+                    component("width", mip_scaled=True),
+                    component("depth_or_layers"),
+                ]
+            else:
+                components = [
+                    component("width", mip_scaled=True),
+                    component("height", mip_scaled=True),
+                ]
+        else:
+            depth_is_mip_dimension = base_type == "Texture3D"
+            components = [
+                component("width", mip_scaled=True),
+                component("height", mip_scaled=True),
+                component("depth_or_layers", mip_scaled=depth_is_mip_dimension),
+                "0",
+            ]
+        return f"{return_type}({', '.join(components)})"
+
+    def generate_resource_query_levels_helper(self, resource_type):
+        code = f"fn texture_query_levels(tex: {resource_type}) -> Int32:\n"
+        code += "    return tex.levels\n\n"
+        return code
+
+    def generate_resource_sample_count_helper(self, helper_name, resource_type):
+        parameter_name = "image" if helper_name == "image_samples" else "tex"
+        code = f"fn {helper_name}({parameter_name}: {resource_type}) -> Int32:\n"
+        code += f"    return {parameter_name}.samples\n\n"
+        return code
+
+    def generate_texel_fetch_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn texel_fetch(tex: {resource_type}, coord: {coord_type}, "
+            f"lod: Int32) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_texel_fetch_offset_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        offset_type = self.resource_offset_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn texel_fetch_offset(tex: {resource_type}, coord: {coord_type}, "
+            f"lod: Int32, offset: {offset_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_image_load_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32) -> {value_type}:\n"
+            )
+        else:
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}) -> "
+                f"{value_type}:\n"
+            )
+        code += f"    return {self.zero_mojo_value(value_type)}\n\n"
+        return code
+
+    def generate_image_store_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32, value: {value_type}):\n"
+            )
+        else:
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"value: {value_type}):\n"
+            )
+        code += "    pass\n\n"
+        return code
+
+    def generate_resource_builtin_helper(self, helper):
+        params = [
+            f"arg{index}: {arg_type}"
+            for index, arg_type in enumerate(helper["arg_types"])
+        ]
+        code = f"fn {helper['name']}({', '.join(params)}) -> {helper['return_type']}:\n"
+        code += f"    return {self.zero_mojo_value(helper['return_type'])}\n\n"
+        return code
+
+    def is_multisample_resource_type(self, resource_type):
+        return "MS" in resource_type
+
+    def is_shadow_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.endswith("Shadow")
+
+    def is_texture_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith("Texture")
+
+    def is_image_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith(
+            ("Image", "IImage", "UImage")
+        )
+
+    def resource_sample_return_type(self, resource_type):
+        return self.map_type(self.texture_result_type_name(resource_type))
+
+    def texture_result_type_name(self, resource_type):
+        if self.is_shadow_resource_type(resource_type):
+            return "float"
+        typed_info = self.typed_texture_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return MOJO_DTYPE_INFO[dtype][0]
+            return self.vector_type_name_for_dtype_width(dtype, source_width)
+        return "vec4"
+
+    def image_value_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return self.map_type(MOJO_DTYPE_INFO[dtype][0])
+            return self.map_type(
+                self.vector_type_name_for_dtype_width(dtype, source_width)
+            )
+        if resource_type.startswith("IImage"):
+            return "Int32"
+        if resource_type.startswith("UImage"):
+            return "UInt32"
+        return "SIMD[DType.float32, 4]"
+
+    def image_atomic_value_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width in {1, 4} and dtype in {"DType.int32", "DType.uint32"}:
+                return self.map_type(MOJO_DTYPE_INFO[dtype][0])
+            return self.image_value_type(resource_type)
+        return self.image_value_type(resource_type)
+
+    def zero_mojo_value(self, mojo_type):
+        if mojo_type in {
+            "Int",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        }:
+            return "0"
+        if mojo_type in {"Float16", "Float32", "Float64"}:
+            return "0.0"
+        if mojo_type == "Bool":
+            return "False"
+
+        vector_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", mojo_type)
+        if vector_match:
+            dtype = vector_match.group(1)
+            width = int(vector_match.group(2))
+            zero = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[2]
+            return f"{mojo_type}({', '.join([zero] * width)})"
+
+        return f"{mojo_type}()"
+
+    def generate_math_helper(self, helper_name):
+        if helper_name == "clamp":
+            return (
+                "fn clamp(value: Float32, min_value: Float32, max_value: Float32) -> Float32:\n"
+                "    return min(max(value, min_value), max_value)\n\n"
+                "fn clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value))\n\n"
+                "fn clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]))\n\n"
+                "fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
+                "fn clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]), clamp(value[2], min_value[2], max_value[2]), clamp(value[3], min_value[3], max_value[3]))\n\n"
+            )
+        if helper_name == "max":
+            return self.generate_min_max_helper("max", ">=")
+        if helper_name == "min":
+            return self.generate_min_max_helper("min", "<=")
+        if helper_name == "dot_product":
+            return (
+                "fn dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
+                "    return a[0] * b[0] + a[1] * b[1]\n\n"
+                "fn dot_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> Float32:\n"
+                "    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]\n\n"
+            )
+        if helper_name == "magnitude":
+            return (
+                "fn magnitude(v: SIMD[DType.float32, 2]) -> Float32:\n"
+                "    return sqrt(dot_product(v, v))\n\n"
+                "fn magnitude(v: SIMD[DType.float32, 4]) -> Float32:\n"
+                "    return sqrt(dot_product(v, v))\n\n"
+            )
+        if helper_name == "normalize":
+            return (
+                "fn normalize(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    var len = magnitude(v)\n"
+                "    if len == 0.0:\n"
+                "        return v\n"
+                "    return v / len\n\n"
+                "fn normalize(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    var len = magnitude(v)\n"
+                "    if len == 0.0:\n"
+                "        return v\n"
+                "    return v / len\n\n"
+            )
+        if helper_name == "lerp":
+            return (
+                "fn lerp(a: Float32, b: Float32, t: Float32) -> Float32:\n"
+                "    return a + (b - a) * t\n\n"
+                "fn lerp(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2], t: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return a + (b - a) * t\n\n"
+                "fn lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], t: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return a + (b - a) * t\n\n"
+            )
+        if helper_name == "power":
+            return (
+                "fn power(a: Float32, b: Float32) -> Float32:\n"
+                "    return pow(a, b)\n\n"
+                "fn power(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](pow(a[0], b[0]), pow(a[1], b[1]))\n\n"
+                "fn power(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](pow(a[0], b[0]), pow(a[1], b[1]), pow(a[2], b[2]), pow(a[3], b[3]))\n\n"
+            )
+        if helper_name == "fmod":
+            return (
+                "fn fmod(a: Float32, b: Float32) -> Float32:\n"
+                "    return a - floor(a / b) * b\n\n"
+                "fn fmod(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](fmod(a[0], b[0]), fmod(a[1], b[1]))\n\n"
+                "fn fmod(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
+            )
+        if helper_name == "round_even":
+            return (
+                "fn round_even(x: Float32) -> Float32:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
+                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
+            )
+        if helper_name == "cross_product":
+            return (
+                "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0], 0.0)\n\n"
+            )
+        if helper_name == "reflect":
+            return (
+                "fn reflect(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return i - n * (2.0 * dot_product(n, i))\n\n"
+            )
+        if helper_name == "refract":
+            return (
+                "fn refract(i: SIMD[DType.float32, 4], n: SIMD[DType.float32, 4], eta: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    var ndoti = dot_product(n, i)\n"
+                "    var k = 1.0 - eta * eta * (1.0 - ndoti * ndoti)\n"
+                "    if k < 0.0:\n"
+                "        return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n"
+                "    return i * eta - n * (eta * ndoti + sqrt(k))\n\n"
+            )
+        if helper_name == "step":
+            return (
+                "fn step(edge: Float32, x: Float32) -> Float32:\n"
+                "    return 0.0 if x < edge else 1.0\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge, x[0]), step(edge, x[1]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x), step(edge[1], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x[0]), step(edge[1], x[1]))\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge, x[0]), step(edge, x[1]), step(edge, x[2]), step(edge, x[3]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x), step(edge[1], x), step(edge[2], x), step(edge[3], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x[0]), step(edge[1], x[1]), step(edge[2], x[2]), step(edge[3], x[3]))\n\n"
+            )
+        if helper_name == "smoothstep":
+            return (
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
+                "    var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)\n"
+                "    return t * t * (3.0 - 2.0 * t)\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]))\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]), smoothstep(edge0, edge1, x[2]), smoothstep(edge0, edge1, x[3]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x), smoothstep(edge0[2], edge1[2], x), smoothstep(edge0[3], edge1[3], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
+            )
+        return ""
+
+    def generate_min_max_helper(self, helper_name, comparator):
+        selector = f"a if a {comparator} b else b"
+
+        def lane_selector(left, right):
+            return f"{left} if {left} {comparator} {right} else {right}"
+
+        code = (
+            f"fn {helper_name}(a: Float32, b: Float32) -> Float32:\n"
+            f"    return {selector}\n\n"
+        )
+        for scalar_type in (
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        ):
+            code += (
+                f"fn {helper_name}(a: {scalar_type}, b: {scalar_type}) -> "
+                f"{scalar_type}:\n"
+                f"    return {selector}\n\n"
+            )
+        for width in (2, 4):
+            vector_type = f"SIMD[DType.float32, {width}]"
+            components = ", ".join(
+                lane_selector(f"a[{index}]", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector(f"a[{index}]", "b") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: Float32) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector("a", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: Float32, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+        return code
+
+    def generate_fract_helper(self, key):
+        kind, dtype, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+
+        if kind == "scalar":
+            helper_name = self.fract_scalar_helper_name(dtype)
+            code = f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+            code += "    return x - floor(x)\n\n"
+            return code
+
+        helper_name = self.fract_vector_helper_name(dtype, source_width, storage_width)
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        components = [
+            f"v[{index}] - floor(v[{index}])" for index in range(source_width)
+        ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def fract_scalar_helper_name(self, dtype):
+        return f"_crossgl_fract_{MOJO_DTYPE_SUFFIX[dtype]}"
+
+    def fract_vector_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_fract_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def generate_mod_helper(self, key):
+        dtype, kind, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+
+        if kind == "ss":
+            return (
+                f"fn {helper_name}(a: {mojo_scalar_type}, "
+                f"b: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                "    return a - floor(a / b) * b\n\n"
+            )
+
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        if kind == "vv":
+            params = f"a: {vector_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b[{index}])"
+                for index in range(source_width)
+            ]
+        elif kind == "vs":
+            params = f"a: {vector_type}, b: {mojo_scalar_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b)"
+                for index in range(source_width)
+            ]
+        else:
+            params = f"a: {mojo_scalar_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a, b[{index}])"
+                for index in range(source_width)
+            ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        return (
+            f"fn {helper_name}({params}) -> {vector_type}:\n"
+            f"    return {vector_type}({', '.join(components)})\n\n"
+        )
+
+    def mod_helper_name(self, dtype, kind, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        if kind == "ss":
+            return f"_crossgl_mod_{dtype_suffix}"
+        return f"_crossgl_mod_{dtype_suffix}_{source_width}_{storage_width}_{kind}"
+
+    def generate_saturate_helper(self, key):
+        kind, dtype, width_or_columns, storage_width_or_rows = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+
+        if kind == "scalar":
+            mojo_scalar_type = self.map_type(scalar_type)
+            helper_name = self.saturate_scalar_helper_name(dtype)
+            value = self.saturate_value_expression("x")
+            return (
+                f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                f"    return {value}\n\n"
+            )
+
+        if kind == "matrix":
+            columns = width_or_columns
+            rows = storage_width_or_rows
+            matrix_type = self.matrix_type_name(dtype, columns, rows)
+            storage_rows = self.matrix_storage_rows(rows)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            pad_literal = self.matrix_zero_literal(dtype)
+            column_args = []
+            for column in range(columns):
+                components = [
+                    self.saturate_value_expression(f"m.c{column}[{row}]")
+                    for row in range(rows)
+                ]
+                if rows == 3:
+                    components.append(pad_literal)
+                column_args.append(f"{column_type}({', '.join(components)})")
+
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            code = f"fn {helper_name}(m: {matrix_type}) -> {matrix_type}:\n"
+            code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+            return code
+
+        source_width = width_or_columns
+        storage_width = storage_width_or_rows
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        components = [
+            self.saturate_value_expression(f"v[{index}]")
+            for index in range(source_width)
+        ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        helper_name = self.saturate_vector_helper_name(
+            dtype, source_width, storage_width
+        )
+        code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def saturate_value_expression(self, value):
+        return f"0.0 if {value} < 0.0 else (1.0 if {value} > 1.0 else {value})"
+
+    def saturate_scalar_helper_name(self, dtype):
+        return f"_crossgl_saturate_{MOJO_DTYPE_SUFFIX[dtype]}"
+
+    def saturate_vector_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_saturate_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def saturate_matrix_helper_name(self, dtype, columns, rows):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_saturate_{dtype_suffix}_c{columns}_r{rows}"
+
+    def generate_vector_binary_helper(self, dtype, op, helper_kind):
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        vector_type = f"SIMD[{dtype}, 4]"
+        helper_name = self.vector_binary_helper_name(dtype, op, helper_kind)
+
+        if helper_kind == "vv":
+            params = f"a: {vector_type}, b: {vector_type}"
+            components = [f"a[{index}] {op} b[{index}]" for index in range(3)]
+        elif helper_kind == "vs":
+            params = f"v: {vector_type}, s: {mojo_scalar_type}"
+            components = [f"v[{index}] {op} s" for index in range(3)]
+        else:
+            params = f"s: {mojo_scalar_type}, v: {vector_type}"
+            components = [f"s {op} v[{index}]" for index in range(3)]
+
+        components.append(pad_literal)
+        args = ", ".join(components)
+        code = f"fn {helper_name}({params}) -> {vector_type}:\n"
+        code += f"    return {vector_type}({args})\n\n"
+        return code
+
+    def vector_binary_helper_name(self, dtype, op, helper_kind):
+        op_name = MOJO_VECTOR_ARITHMETIC_OPS[op]
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_vec3_{op_name}_{dtype_suffix}_{helper_kind}"
+
+    def generate_select_helper(self, key):
+        dtype, source_width, storage_width = key
+        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        mask_type = f"SIMD[DType.bool, {storage_width}]"
+        components = [
+            f"true_value[{index}] if mask[{index}] else false_value[{index}]"
+            for index in range(source_width)
+        ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        helper_name = self.select_helper_name(dtype, source_width, storage_width)
+        code = (
+            f"fn {helper_name}(mask: {mask_type}, true_value: {vector_type}, "
+            f"false_value: {vector_type}) -> {vector_type}:\n"
+        )
+        code += f"    return {vector_type}({', '.join(components)})\n\n"
+        return code
+
+    def select_helper_name(self, dtype, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_select_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def generate_vec3_splat_helper(self, dtype):
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        vector_type = f"SIMD[{dtype}, 4]"
+        helper_name = self.vec3_splat_helper_name(dtype)
+        code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {vector_type}:\n"
+        code += f"    return {vector_type}(s, s, s, {pad_literal})\n\n"
+        return code
+
+    def vec3_splat_helper_name(self, dtype):
+        return f"_crossgl_vec3_splat_{MOJO_DTYPE_SUFFIX[dtype]}"
+
+    def generate_swizzle_helper(self, dtype, source_width, member):
+        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        swizzle_indices = self.get_swizzle_indices(member)
+        result_width = 2 if len(swizzle_indices) == 2 else 4
+        source_type = f"SIMD[{dtype}, {source_width}]"
+        result_type = f"SIMD[{dtype}, {result_width}]"
+        helper_name = self.swizzle_helper_name(dtype, source_width, member)
+        components = [f"v[{index}]" for index in swizzle_indices]
+        if len(swizzle_indices) == 3:
+            components.append(pad_literal)
+
+        code = f"fn {helper_name}(v: {source_type}) -> {result_type}:\n"
+        code += f"    return {result_type}({', '.join(components)})\n\n"
+        return code
+
+    def swizzle_helper_name(self, dtype, source_width, member):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_swizzle_{dtype_suffix}_{source_width}_{member}"
+
+    def generate_constructor_helper_call(self, func_name, args):
+        dtype, source_width, storage_width, pad_literal = self.vector_constructor_info[
+            func_name
+        ]
+        pieces = []
+
+        for arg in args:
+            piece = self.constructor_piece_for_expression(arg, dtype)
+            if piece is None:
+                return None
+            pieces.append(piece)
+
+        pieces = self.select_constructor_pieces(pieces, source_width, dtype)
+        if pieces is None:
+            return None
+
+        has_duplicate_sensitive_vector = any(
+            piece["kind"] == "vector" and piece["duplicate_sensitive"]
+            for piece in pieces
+        )
+
+        if not has_duplicate_sensitive_vector:
+            return None
+
+        key = self.constructor_helper_key(dtype, source_width, storage_width, pieces)
+        helper_name = self.constructor_helper_name(key)
+        self.required_constructor_helpers[key] = {
+            "key": key,
+            "dtype": dtype,
+            "storage_width": storage_width,
+            "pad_literal": pad_literal,
+            "pieces": pieces,
+        }
+
+        call_args = [
+            self.generate_constructor_helper_argument(
+                piece, dtype, f"constructor helper argument {index}"
+            )
+            for index, piece in enumerate(pieces, start=1)
+        ]
+        return f"{helper_name}({', '.join(call_args)})"
+
+    def select_constructor_pieces(self, pieces, source_width, target_dtype=None):
+        selected = []
+        remaining = source_width
+
+        for piece in pieces:
+            if remaining == 0:
+                break
+            if piece["kind"] == "vector":
+                indices = piece["indices"][:remaining]
+                if indices:
+                    selected.append({**piece, "indices": tuple(indices)})
+                    remaining -= len(indices)
+            else:
+                selected.append(piece)
+                remaining -= 1
+
+        if remaining != 0:
+            if target_dtype is None:
+                return None
+            zero_literal = MOJO_DTYPE_INFO[target_dtype][2]
+            selected.extend(
+                {
+                    "kind": "scalar",
+                    "expr": zero_literal,
+                    "dtype": target_dtype,
+                }
+                for _ in range(remaining)
+            )
+        return selected
+
+    def constructor_piece_for_expression(self, expr, target_dtype):
+        if isinstance(expr, MemberAccessNode):
+            swizzle_indices = self.get_swizzle_indices(expr.member)
+            if swizzle_indices is not None:
+                source_type = self.expression_result_type(expr.object)
+                source_info = self.vector_type_info(source_type)
+                if source_info is None:
+                    return None
+                return {
+                    "kind": "vector",
+                    "dtype": source_info[0],
+                    "storage_width": source_info[2],
+                    "indices": tuple(swizzle_indices),
+                    "expr": expr.object,
+                    "duplicate_sensitive": self.is_duplicate_sensitive_expression(
+                        expr.object
+                    ),
+                }
+
+        expr_type = self.expression_result_type(expr)
+        info = self.vector_type_info(expr_type)
+        if info is not None:
+            _, source_width, storage_width, _ = info
+            return {
+                "kind": "vector",
+                "dtype": info[0],
+                "storage_width": storage_width,
+                "indices": tuple(range(source_width)),
+                "expr": expr,
+                "duplicate_sensitive": self.is_duplicate_sensitive_expression(expr),
+            }
+
+        return {
+            "kind": "scalar",
+            "expr": expr,
+            "dtype": self.expression_mojo_dtype(expr),
+        }
+
+    def generate_constructor_helper_argument(self, piece, target_dtype, context):
+        target_type = self.constructor_helper_argument_target_type(piece, target_dtype)
+        self.validate_expression_target_shape(piece["expr"], target_type, context)
+        return self.generate_expression(piece["expr"], target_type, context)
+
+    def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        target_type = self.constructor_scalar_expression_target_type(
+            expr, target_dtype, force_scalar_target=True
+        )
+        self.validate_expression_target_shape(expr, target_type, context)
+        return self.generate_expression(expr, target_type, context)
+
+    def constructor_helper_argument_target_type(self, piece, target_dtype):
+        if piece["kind"] == "scalar" and self.image_result_target_types_in_expression(
+            piece["expr"]
+        ):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+
+        expr_type = self.expression_result_type(piece["expr"])
+        if expr_type is not None:
+            return expr_type
+
+        if piece["kind"] == "scalar":
+            piece_dtype = piece.get("dtype")
+            return self.constructor_scalar_expression_target_type(
+                piece["expr"], target_dtype, piece_dtype
+            )
+
+        return None
+
+    def constructor_scalar_expression_target_type(
+        self, expr, target_dtype, fallback_dtype=None, force_scalar_target=False
+    ):
+        if self.image_result_target_types_in_expression(expr):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+
+        expr_type = self.expression_result_type(expr)
+        if expr_type is not None:
+            if force_scalar_target and self.vector_type_info(expr_type) is not None:
+                resource_targets = self.expression_target_types_in_expression(expr)
+                if any(
+                    self.vector_type_info(resource_target) is not None
+                    for resource_target in resource_targets
+                ):
+                    return MOJO_DTYPE_INFO[target_dtype][0]
+            return expr_type
+
+        resource_targets = self.expression_target_types_in_expression(expr)
+        if any(
+            self.vector_type_info(resource_target) is not None
+            for resource_target in resource_targets
+        ):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+        if "int" in resource_targets:
+            return "int"
+
+        dtype = fallback_dtype if fallback_dtype is not None else target_dtype
+        return MOJO_DTYPE_INFO[dtype][0]
+
+    def resource_size_target_types_in_expression(self, expr):
+        size_info = self.resource_size_expression_info(expr)
+        if size_info is not None:
+            _, _, expected_type = size_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.resource_size_target_types_in_expression(expr.true_expr),
+                *self.resource_size_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.resource_size_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def image_result_target_types_in_expression(self, expr):
+        image_info = self.image_result_expression_info(expr)
+        if image_info is not None:
+            _, _, expected_type = image_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.image_result_target_types_in_expression(expr.true_expr),
+                *self.image_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.image_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def buffer_result_target_types_in_expression(self, expr):
+        buffer_info = self.buffer_result_expression_info(expr)
+        if buffer_info is not None:
+            _, _, expected_type = buffer_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.buffer_result_target_types_in_expression(expr.true_expr),
+                *self.buffer_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.buffer_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def reinterpret_result_target_types_in_expression(self, expr):
+        reinterpret_info = self.reinterpret_result_expression_info(expr)
+        if reinterpret_info is not None:
+            _, expected_type = reinterpret_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.reinterpret_result_target_types_in_expression(expr.true_expr),
+                *self.reinterpret_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.reinterpret_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def expression_target_types_in_expression(self, expr):
+        return [
+            *self.resource_size_target_types_in_expression(expr),
+            *self.image_result_target_types_in_expression(expr),
+            *self.buffer_result_target_types_in_expression(expr),
+            *self.reinterpret_result_target_types_in_expression(expr),
+        ]
+
+    def constructor_helper_key(self, dtype, source_width, storage_width, pieces):
+        signature = []
+        for piece in pieces:
+            if piece["kind"] == "vector":
+                signature.append(
+                    (
+                        "v",
+                        piece["dtype"],
+                        piece["storage_width"],
+                        piece["indices"],
+                    )
+                )
+            else:
+                piece_dtype = piece.get("dtype")
+                if piece_dtype is not None and piece_dtype != dtype:
+                    signature.append(("s", piece_dtype))
+                else:
+                    signature.append(("s",))
+        return (dtype, source_width, storage_width, tuple(signature))
+
+    def constructor_helper_name(self, key):
+        dtype, _, storage_width, signature = key
+        parts = []
+        for piece in signature:
+            if piece[0] == "v":
+                _, piece_dtype, piece_storage_width, indices = piece
+                index_text = "".join(str(index) for index in indices)
+                parts.append(
+                    f"v{MOJO_DTYPE_SUFFIX[piece_dtype]}{piece_storage_width}_{index_text}"
+                )
+            elif len(piece) > 1:
+                parts.append(f"s{MOJO_DTYPE_SUFFIX[piece[1]]}")
+            else:
+                parts.append("s")
+        suffix = "_".join(parts)
+        return f"_crossgl_construct_{MOJO_DTYPE_SUFFIX[dtype]}_{storage_width}_{suffix}"
+
+    def generate_constructor_helper(self, helper):
+        dtype = helper["dtype"]
+        scalar_type, _, _ = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        result_type = f"SIMD[{dtype}, {helper['storage_width']}]"
+        params = []
+        components = []
+        prelude = []
+
+        for index, piece in enumerate(helper["pieces"]):
+            if piece["kind"] == "vector":
+                param_name = f"v{index}"
+                vector_type = f"SIMD[{piece['dtype']}, {piece['storage_width']}]"
+                params.append(f"{param_name}: {vector_type}")
+                vector_expr = param_name
+                if piece["dtype"] != dtype:
+                    vector_expr = f"{param_name}_cast"
+                    prelude.append(
+                        f"    var {vector_expr} = {param_name}.cast[{dtype}]()\n"
+                    )
+                components.extend(
+                    f"{vector_expr}[{component_index}]"
+                    for component_index in piece["indices"]
+                )
+            else:
+                param_name = f"s{index}"
+                piece_dtype = piece.get("dtype")
+                param_scalar_type = mojo_scalar_type
+                if piece_dtype is not None and piece_dtype != dtype:
+                    scalar_type = MOJO_DTYPE_INFO[piece_dtype][0]
+                    param_scalar_type = self.map_type(scalar_type)
+                params.append(f"{param_name}: {param_scalar_type}")
+                components.append(
+                    self.cast_scalar_text(param_name, piece_dtype, dtype)
+                    if piece_dtype is not None
+                    else param_name
+                )
+
+        if helper["pad_literal"] is not None and len(components) == 3:
+            components.append(helper["pad_literal"])
+
+        helper_name = self.constructor_helper_name(helper["key"])
+        code = f"fn {helper_name}({', '.join(params)}) -> {result_type}:\n"
+        code += "".join(prelude)
+        code += f"    return {result_type}({', '.join(components)})\n\n"
+        return code
+
+    def register_variable_type(self, name, var_type):
+        if name and var_type:
+            self.variable_types[name] = self.type_name(var_type)
+
+    def type_name(self, type_value):
+        if (
+            hasattr(type_value, "name")
+            or hasattr(type_value, "element_type")
+            or hasattr(type_value, "pointee_type")
+            or hasattr(type_value, "referenced_type")
+        ):
+            return self.convert_type_node_to_string(type_value)
+        return str(type_value)
+
+    def type_name_string(self, type_value):
+        if type_value is None:
+            return None
+        return self.type_name(type_value)
+
+    @property
+    def local_variable_types(self):
+        return self.variable_types
+
+    @local_variable_types.setter
+    def local_variable_types(self, value):
+        self.variable_types = value
+
+    def identifier_replacement_result_type(self, name):
+        replacement = self.expression_identifier_replacements.get(name)
+        if replacement is None:
+            return None
+        return self.expression_path_result_type(replacement)
+
+    def expression_path_result_type(self, expression):
+        if not isinstance(expression, str) or not re.fullmatch(
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expression
+        ):
+            return None
+
+        parts = expression.split(".")
+        result_type = self.variable_types.get(parts[0])
+        for member in parts[1:]:
+            _struct_type, fields = self.struct_type_name_and_fields(result_type)
+            if member not in fields:
+                return None
+            result_type = fields[member]
+        return result_type
+
+    def normalize_generic_vector_type_name(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        match = re.fullmatch(r"vec([234])<\s*([^>]+)\s*>", type_name)
+        if match is None:
+            return type_name
+        dtype = MOJO_SCALAR_DTYPES.get(match.group(2).strip())
+        if dtype is None:
+            return type_name
+        canonical = f"vec{match.group(1)}<{MOJO_DTYPE_SUFFIX[dtype]}>"
+        if canonical in self.vector_constructor_info:
+            return canonical
+        return type_name
+
+    def is_array_type_name(self, type_name):
+        return self.array_type_suffix(type_name) is not None
+
+    def array_type_suffix(self, type_name):
+        type_text = str(type_name or "").strip()
+        if not type_text.endswith("]"):
+            return None
+
+        open_bracket = type_text.rfind("[")
+        if open_bracket <= 0:
+            return None
+
+        size_text = type_text[open_bracket + 1 : -1].strip()
+        if (
+            not size_text
+            or re.fullmatch(r"\d+", size_text)
+            or re.fullmatch(r"[A-Z_][A-Z0-9_]*", size_text)
+        ):
+            return open_bracket, size_text
+        return None
+
+    def is_pointer_type_name(self, type_name):
+        type_text = str(type_name or "").strip()
+        return type_text.endswith("*")
+
+    def parse_pointer_type_name(self, type_name):
+        type_text = str(type_name or "").strip()
+        if not self.is_pointer_type_name(type_text):
+            return None
+        return type_text[:-1].strip()
+
+    def parse_array_type_name(self, type_name):
+        type_text = str(type_name)
+        array_suffix = self.array_type_suffix(type_text)
+        if array_suffix is None:
+            return type_text, None
+
+        open_bracket, size_text = array_suffix
+        element_type = type_text[:open_bracket]
+        if not size_text:
+            return element_type, None
+
+        try:
+            return element_type, int(size_text)
+        except ValueError:
+            return element_type, size_text
+
+    def is_struct_type_name(self, type_name):
+        if type_name is None:
+            return False
+        resolved_type = self.type_name(type_name)
+        struct_type, _ = self.struct_type_name_and_fields(resolved_type)
+        if struct_type is not None:
+            return True
+        return False
+
+    def array_type_name(self, element_type, size):
+        element_type_name = self.type_name(element_type)
+        size = self.format_array_size(size)
+        if size is None:
+            return f"{element_type_name}[]"
+        return f"{element_type_name}[{size}]"
+
+    def array_storage_type(self, element_type, size):
+        element_type_name = self.map_type(element_type)
+        size = self.format_array_size(size)
+        if size is None:
+            return f"List[{element_type_name}]"
+        return f"InlineArray[{element_type_name}, {size}]"
+
+    def array_initial_value(self, element_type, size):
+        array_type = self.array_storage_type(element_type, size)
+        if size is None:
+            return f"{array_type}()"
+        if self.should_zero_initialize_array_elements(element_type):
+            return self.zero_array_value(element_type, size)
+        return f"{array_type}(unsafe_uninitialized=True)"
+
+    def array_initial_value_for_type(self, type_name):
+        element_type, size = self.parse_array_type_name(type_name)
+        return self.array_initial_value(element_type, size)
+
+    def should_zero_initialize_array_elements(self, element_type):
+        return self.is_struct_type_name(element_type) or self.is_resource_type_name(
+            element_type
+        )
+
+    def array_element_type(self, type_name):
+        if not self.is_array_type_name(type_name):
+            return None
+        element_type, _ = self.parse_array_type_name(type_name)
+        return element_type
+
+    def pointer_element_type(self, type_name):
+        return self.parse_pointer_type_name(type_name)
+
+    def generate_array_literal_expression(self, expr, target_type=None):
+        if target_type is not None and self.is_array_type_name(target_type):
+            element_type, size = self.parse_array_type_name(target_type)
+        else:
+            element_type = self.infer_array_literal_element_type(expr)
+            size = len(expr.elements)
+
+        array_type = self.array_storage_type(element_type, size)
+        elements = [
+            self.generate_array_literal_element(
+                element, element_type, f"array literal element {index}"
+            )
+            for index, element in enumerate(expr.elements, start=1)
+        ]
+
+        if size is not None:
+            size = int(size)
+            elements = elements[:size]
+            while len(elements) < size:
+                elements.append(self.zero_value_for_type(element_type))
+
+        return f"{array_type}({', '.join(elements)})"
+
+    def infer_array_literal_element_type(self, expr):
+        if not expr.elements:
+            return "float"
+        return self.expression_result_type(expr.elements[0]) or "float"
+
+    def generate_array_literal_element(
+        self, element, element_type, context="array literal element"
+    ):
+        self.validate_expression_target_shape(element, element_type, context)
+        if isinstance(element, ArrayLiteralNode) and self.is_array_type_name(
+            element_type
+        ):
+            return self.generate_array_literal_expression(element, element_type)
+        if isinstance(element, MatchNode):
+            return self.generate_expression(element, element_type, context)
+        target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(element_type))
+        if target_dtype is not None:
+            return self.generate_constructor_scalar_expression(element, target_dtype)
+        return self.generate_expression(element, element_type, context)
+
+    def zero_value_for_type(self, type_name):
+        type_name = self.type_name(type_name)
+        if self.is_pointer_type_name(type_name):
+            return f"{self.map_type(type_name)}()"
+        buffer_info = self.buffer_resource_info(type_name)
+        if buffer_info is not None:
+            return f"{self.mapped_buffer_type(*buffer_info)}()"
+
+        if self.is_array_type_name(type_name):
+            element_type, size = self.parse_array_type_name(type_name)
+            return self.zero_array_value(element_type, size)
+
+        struct_type, fields = self.struct_type_name_and_fields(type_name)
+        if struct_type is not None:
+            return self.zero_struct_value(
+                struct_type, fields=fields, mapped_type=self.map_type(type_name)
+            )
+
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            dtype, source_width, storage_width, pad_literal = vector_info
+            zero = MOJO_DTYPE_INFO[dtype][2]
+            components = [zero] * source_width
+            if pad_literal is not None and len(components) == 3:
+                components.append(pad_literal)
+            return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+        matrix_info = self.matrix_type_info(type_name)
+        if matrix_info is not None:
+            dtype, columns, rows = matrix_info
+            return self.zero_matrix_value(dtype, columns, rows)
+
+        dtype = MOJO_SCALAR_DTYPES.get(type_name)
+        if dtype is not None:
+            return MOJO_DTYPE_INFO[dtype][2]
+        return f"{self.map_type(type_name)}()"
+
+    def zero_array_value(self, element_type, size):
+        array_type = self.array_storage_type(element_type, size)
+        if size is None:
+            return f"{array_type}()"
+
+        try:
+            element_count = int(size)
+        except (TypeError, ValueError):
+            return f"{array_type}(unsafe_uninitialized=True)"
+
+        values = [self.zero_value_for_type(element_type) for _ in range(element_count)]
+        return f"{array_type}({', '.join(values)})"
+
+    def zero_struct_value(self, type_name, fields=None, mapped_type=None):
+        fields = fields if fields is not None else self.struct_types.get(type_name, {})
+        values = [
+            self.zero_value_for_type(field_type) for field_type in fields.values()
+        ]
+        return f"{mapped_type or type_name}({', '.join(values)})"
+
+    def zero_matrix_value(self, dtype, columns, rows):
+        self.required_matrix_types.add((dtype, columns, rows))
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        zero = self.matrix_zero_literal(dtype)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        column_values = []
+        for _ in range(columns):
+            components = [zero] * rows
+            if rows == 3:
+                components.append(zero)
+            column_values.append(f"{column_type}({', '.join(components)})")
+        return f"{matrix_type}({', '.join(column_values)})"
+
+    def generate_array_access_expression(self, expr):
+        array_type = self.expression_result_type(expr.array)
+        matrix_info = self.matrix_type_info(array_type)
+        vector_info = self.vector_type_info(array_type)
+        array_element_type = self.array_element_type(array_type)
+        pointer_element_type = self.pointer_element_type(array_type)
+        array = self.generate_expression(expr.array)
+        index = self.generate_array_index_expression(
+            expr.index,
+            cast_integer_index=matrix_info is not None
+            or vector_info is not None
+            or array_element_type is not None
+            or pointer_element_type is not None,
+            preserve_integer_index_types=(
+                {"int", "i32", "Int32"} if matrix_info is not None else None
+            ),
+        )
+
+        if matrix_info is not None:
+            column_index = self.literal_int_value(expr.index)
+            if column_index is not None:
+                return f"{array}.c{column_index}"
+
+        return f"{array}[{index}]"
+
+    def generate_array_index_expression(
+        self,
+        expr,
+        cast_integer_index=False,
+        preserve_integer_index_types=None,
+    ):
+        index = self.generate_expression(expr)
+        if not cast_integer_index or self.literal_int_value(expr) is not None:
+            return index
+
+        index_type = self.expression_result_type(expr)
+        if preserve_integer_index_types and index_type in preserve_integer_index_types:
+            return index
+        if index_type in MOJO_INTEGER_INDEX_TYPES:
+            return f"int({index})"
+        return index
+
+    def literal_int_value(self, expr):
+        return evaluate_literal_int_expression(
+            expr, getattr(self, "literal_int_constants", {})
+        )
+
+    def expression_result_type(self, expr):
+        if isinstance(expr, str):
+            if expr in MOJO_BUILTIN_PLACEHOLDERS and expr not in self.variable_types:
+                return MOJO_BUILTIN_PLACEHOLDERS[expr][1]
+            return self.identifier_replacement_result_type(
+                expr
+            ) or self.variable_types.get(expr)
+        if isinstance(expr, VariableNode) and hasattr(expr, "name"):
+            if (
+                expr.name in MOJO_BUILTIN_PLACEHOLDERS
+                and expr.name not in self.variable_types
+            ):
+                return MOJO_BUILTIN_PLACEHOLDERS[expr.name][1]
+            return self.identifier_replacement_result_type(
+                expr.name
+            ) or self.variable_types.get(expr.name)
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.infer_array_literal_element_type(expr)
+            return self.array_type_name(element_type, len(expr.elements))
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm in arms:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                arm_type = self.expression_result_type(arm_expr)
+                if arm_type is not None:
+                    return arm_type
+            return None
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.expression_result_type(expr.array)
+            patch_info = self.tessellation_patch_type_info(array_type)
+            if patch_info is not None:
+                _patch_name, element_type, _point_count = patch_info
+                return element_type
+            array_element_type = self.array_element_type(array_type)
+            if array_element_type is not None:
+                return array_element_type
+            pointer_element_type = self.pointer_element_type(array_type)
+            if pointer_element_type is not None:
+                return pointer_element_type
+            matrix_info = self.matrix_type_info(array_type)
+            if matrix_info is not None:
+                dtype, _, rows = matrix_info
+                return self.vector_type_name_for_dtype_width(dtype, rows)
+            vector_info = self.vector_type_info(array_type)
+            if vector_info is not None:
+                return MOJO_DTYPE_INFO[vector_info[0]][0]
+            return None
+        if isinstance(expr, BinaryOpNode):
+            left_type = self.expression_result_type(expr.left)
+            right_type = self.expression_result_type(expr.right)
+            return self.binary_expression_result_type(expr.op, left_type, right_type)
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type == false_type:
+                return true_type
+            if true_type is None:
+                return false_type
+            if false_type is None:
+                return true_type
+            return None
+        if isinstance(expr, FunctionCallNode):
+            member_result_type = self.member_function_result_type(expr)
+            if member_result_type is not None:
+                return member_result_type
+
+            func_name = self.function_call_name(expr)
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type is not None:
+                return numeric_result_type
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            if specialized_func_name in self.function_return_types:
+                return self.selected_function_return_type(
+                    specialized_func_name,
+                    expr.args,
+                )
+            if func_name in self.enum_variant_result_types:
+                return self.enum_variant_result_types[func_name]
+            if func_name in self.struct_types:
+                return func_name
+            if func_name in self.vector_constructor_info:
+                return func_name
+            vector_func_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_func_name in self.vector_constructor_info:
+                return vector_func_name
+            if func_name in MOJO_MATRIX_TYPES:
+                return func_name
+            if func_name in self.function_return_types:
+                return self.selected_function_return_type(func_name, expr.args)
+            if func_name in self.scalar_constructor_map:
+                return func_name
+            if func_name in {"fract", "frac"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"inverse", "transpose"} and expr.args:
+                return self.expression_result_type(expr.args[0])
+            if func_name in {"length", "dot"}:
+                return "float"
+            if func_name == "normalize" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"inversesqrt", "inverseSqrt", "rsqrt"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"mix", "lerp"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"degrees", "radians"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"atan", "atan2"} and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "pow" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "mod" and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"min", "max", "clamp"} and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "saturate" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"texture", "textureLod", "textureGrad"}:
+                args = self.strip_split_sampler_arg(expr.args)
+                if args:
+                    resource_type = self.map_type(self.expression_result_type(args[0]))
+                    return self.texture_result_type_name(resource_type)
+                return "vec4"
+            if func_name in {"texelFetch", "texelFetchOffset"}:
+                if expr.args:
+                    resource_type = self.map_type(
+                        self.expression_result_type(expr.args[0])
+                    )
+                    return self.texture_result_type_name(resource_type)
+                return "vec4"
+            if func_name == "textureQueryLevels":
+                return "int"
+            if func_name in {"imageSamples", "textureSamples"}:
+                return "int"
+            if func_name in {"textureSize", "imageSize"} and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                size_type = self.resource_size_return_type(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            if func_name == "imageLoad" and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                return self.image_result_type_name(resource_type)
+            if func_name == "imageStore":
+                return "void"
+            if func_name == "buffer_load" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return self.buffer_helper_element_type(*info)
+            if func_name == "buffer_consume" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return info[1]
+            if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
+                return "void"
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
+                source_type = (
+                    self.expression_result_type(expr.args[0]) if expr.args else None
+                )
+                return self.reinterpret_return_type_name(reinterpret_name, source_type)
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                if expr.args:
+                    resource_type = self.map_type(
+                        self.expression_result_type(expr.args[0])
+                    )
+                    if self.is_texture_resource_type(resource_type):
+                        return self.texture_result_type_name(resource_type)
+                return "vec4"
+            if func_name in MOJO_SCALAR_ATOMIC_OPS and expr.args:
+                target_type = self.type_name(self.expression_result_type(expr.args[0]))
+                if target_type in MOJO_SCALAR_ATOMIC_TYPES:
+                    return target_type
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
+            if func_name == "__shfl_down_sync" and len(expr.args) >= 2:
+                return self.expression_result_type(expr.args[1])
+            return self.function_return_types.get(func_name)
+        if isinstance(expr, ConstructorNode):
+            return self.convert_type_node_to_string(expr.constructor_type)
+        if isinstance(expr, CastNode):
+            return self.convert_type_node_to_string(expr.target_type)
+        if isinstance(expr, SwizzleNode):
+            return self.swizzle_result_type(
+                self.expression_result_type(expr.vector_expr),
+                len(expr.components),
+            )
+        if isinstance(expr, BuiltinVariableNode):
+            if expr.component:
+                base_type = self.builtin_variable_result_type(expr.builtin_name)
+                vector_info = self.vector_type_info(base_type)
+                if vector_info is not None:
+                    return MOJO_DTYPE_INFO[vector_info[0]][0]
+                return base_type
+            return self.builtin_variable_result_type(expr.builtin_name)
+        if isinstance(expr, WaveOpNode):
+            return self.mojo_wave_result_type(
+                getattr(expr, "operation", ""), getattr(expr, "arguments", []) or []
+            )
+        if isinstance(expr, TextureNode):
+            resource_type = self.map_type(
+                self.expression_result_type(expr.texture_expr)
+            )
+            return self.texture_result_type_name(resource_type)
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            if operation in {
+                "SampleCmp",
+                "SampleCmpLevel",
+                "SampleCmpLevelZero",
+                "SampleCmpGrad",
+                "textureCompare",
+                "textureCompareOffset",
+                "textureCompareLod",
+                "textureCompareLodOffset",
+                "textureCompareGrad",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
+            }:
+                return "float"
+            if operation == "textureQueryLod":
+                return "vec2"
+            if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                if self.is_texture_resource_type(resource_type):
+                    return self.texture_result_type_name(resource_type)
+                return "vec4"
+            if operation == "textureQueryLevels":
+                return "int"
+            if operation in {"imageSamples", "textureSamples"}:
+                return "int"
+            if operation in {"GetDimensions", "textureSize"}:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                size_type = self.resource_size_return_type(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            if operation in MOJO_ATOMIC_OP_ALIASES:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
+            resource_type = self.map_type(
+                self.expression_result_type(expr.texture_expr)
+            )
+            if self.is_texture_resource_type(resource_type):
+                return self.texture_result_type_name(resource_type)
+            return "vec4"
+        if isinstance(expr, AtomicOpNode):
+            target_type = self.type_name(self.expression_result_type(expr.target))
+            if target_type in MOJO_SCALAR_ATOMIC_TYPES:
+                return target_type
+            resource_type = self.map_type(self.expression_result_type(expr.target))
+            value_type = self.image_value_type(resource_type)
+            if value_type == "UInt32":
+                return "uint"
+            return "int"
+        if isinstance(expr, BufferOpNode):
+            return self.buffer_op_result_type(expr)
+        if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
+            if obj_struct_type is not None and expr.member in obj_fields:
+                return obj_fields.get(expr.member)
+            if obj_struct_type is not None:
+                return None
+            swizzle_indices = self.get_swizzle_indices(expr.member)
+            if swizzle_indices is not None:
+                return self.swizzle_result_type(obj_type, len(swizzle_indices))
+        if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            name = getattr(expr, "name", "")
+            if name in MOJO_BUILTIN_PLACEHOLDERS and name not in self.variable_types:
+                return MOJO_BUILTIN_PLACEHOLDERS[name][1]
+            return (
+                self.identifier_replacement_result_type(name)
+                or self.enum_variant_result_types.get(name)
+                or self.variable_types.get(name)
+            )
+        if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if literal_type:
+                return literal_type
+        return None
+
+    def function_call_name(self, expr):
+        func_expr = getattr(expr, "function", None)
+        if func_expr is None:
+            func_expr = expr.name
+        if isinstance(func_expr, MemberAccessNode):
+            return None
+        if hasattr(func_expr, "name"):
+            return func_expr.name
+        if isinstance(func_expr, str):
+            return func_expr
+        return None
+
+    def binary_expression_result_type(self, op, left_type, right_type):
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        mapped_op = self.map_operator(op)
+        if left_info is not None and right_info is not None:
+            if left_info == right_info:
+                return left_type
+            if (
+                mapped_op in MOJO_VECTOR_ARITHMETIC_OPS
+                and left_info[0] == right_info[0]
+                and left_info[2] == right_info[2]
+                and left_info[0] != "DType.bool"
+            ):
+                return self.vector_type_name_for_dtype_width(
+                    left_info[0], max(left_info[1], right_info[1])
+                )
+            return left_type
+        if left_info is not None:
+            return left_type
+        if right_info is not None:
+            return right_type
+        return left_type if left_type == right_type else left_type or right_type
+
+    def selected_function_return_type(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["return_type"]
+        return self.function_return_types.get(func_name)
+
+    def selected_function_parameter_types(self, func_name, args):
+        signature = self.select_function_overload_signature(func_name, args)
+        if signature is not None:
+            return signature["parameter_types"]
+        return self.function_parameter_types.get(func_name, [])
+
+    def select_function_overload_signature(self, func_name, args):
+        overloads = self.function_overload_signatures.get(func_name) or []
+        if not overloads:
+            return None
+
+        indexed = list(enumerate(overloads))
+        matching_arity = [
+            item for item in indexed if len(item[1]["parameter_types"]) == len(args)
+        ]
+        candidates = matching_arity or indexed
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        best = None
+        for index, signature in candidates:
+            score = self.function_overload_match_score(
+                arg_types, signature["parameter_types"]
+            )
+            if score is None:
+                continue
+            key = (score, index)
+            if best is None or key < best[0]:
+                best = (key, signature)
+
+        if best is not None:
+            return best[1]
+        return candidates[-1][1] if candidates else None
+
+    def function_overload_match_score(self, arg_types, parameter_types):
+        score = 0
+        for arg_type, parameter_type in zip(arg_types, parameter_types):
+            part_score = self.function_overload_argument_match_score(
+                arg_type, parameter_type
+            )
+            if part_score is None:
+                return None
+            score += part_score
+        return score + abs(len(arg_types) - len(parameter_types)) * 100
+
+    def function_overload_argument_match_score(self, arg_type, parameter_type):
+        if arg_type is None or parameter_type is None:
+            return 10
+
+        arg_name = self.type_name(arg_type)
+        parameter_name = self.type_name(parameter_type)
+        if arg_name == parameter_name:
+            return 0
+
+        arg_vector = self.vector_type_info(arg_name)
+        parameter_vector = self.vector_type_info(parameter_name)
+        if arg_vector is not None or parameter_vector is not None:
+            if arg_vector is None or parameter_vector is None:
+                return None
+            if arg_vector == parameter_vector:
+                return 0
+            if self.compatible_numeric_vector_target(arg_vector, parameter_vector):
+                return 1
+            if self.compatible_storage_vector_target(arg_vector, parameter_vector):
+                return 2
+            return None
+
+        arg_dtype = MOJO_SCALAR_DTYPES.get(arg_name)
+        parameter_dtype = MOJO_SCALAR_DTYPES.get(parameter_name)
+        if arg_dtype is not None or parameter_dtype is not None:
+            if arg_dtype is None or parameter_dtype is None:
+                return None
+            if "DType.bool" in {arg_dtype, parameter_dtype}:
+                return None
+            return 1
+
+        return None
+
+    def buffer_op_result_type(self, expr):
+        operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
+        if operation is None:
+            return None
+
+        info = self.buffer_resource_info(
+            self.expression_result_type(getattr(expr, "buffer_expr", None))
+        )
+        if operation == "Load":
+            if info is None:
+                return None
+            return self.buffer_helper_element_type(*info)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return None
+            return self.byte_address_load_result_type(
+                MOJO_BYTE_ADDRESS_LOAD_METHODS[operation]
+            )
+        if operation == "Consume":
+            if info is None or info[0] != "ConsumeStructuredBuffer":
+                return None
+            return info[1]
+        if operation in {
+            "Append",
+            "GetDimensions",
+            "Store",
+            *MOJO_BYTE_ADDRESS_STORE_METHODS,
+        }:
+            return "void"
+        return None
+
+    def member_function_result_type(self, expr):
+        func_expr = getattr(expr, "function", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        texture_result_type = self.texture_member_function_result_type(func_expr)
+        if texture_result_type is not None:
+            return texture_result_type
+
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        info = self.buffer_resource_info(self.expression_result_type(obj_expr))
+        if info is None:
+            return None
+
+        buffer_type, element_type = info
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                return self.byte_address_load_result_type(
+                    MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                )
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS or member == "GetDimensions":
+                return "void"
+
+        if member == "Load" and buffer_type in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
+            return element_type
+        if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+            return element_type
+        if member == "Store" and buffer_type in MOJO_BUFFER_STORE_RESOURCE_TYPES:
+            return "void"
+        if member == "Append" and buffer_type == "AppendStructuredBuffer":
+            return "void"
+        if member == "GetDimensions":
+            return "void"
+        return None
+
+    def texture_member_function_result_type(self, func_expr):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not self.is_texture_resource_type(resource_type):
+            if not self.is_image_resource_type(resource_type):
+                return None
+            if member == "Load":
+                return self.image_result_type_name(resource_type)
+            if member == "Store":
+                return "void"
+            if member in {"GetDimensions", "textureSize"}:
+                return self.resource_size_result_type_name(resource_type)
+            if member == "imageSamples":
+                return "int"
+            if member in MOJO_ATOMIC_OP_ALIASES:
+                return self.image_result_type_name(resource_type)
+            return None
+
+        if member in {
+            "SampleCmp",
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+        }:
+            return "float"
+        if member in {"GetDimensions", "textureSize"}:
+            return self.resource_size_result_type_name(resource_type)
+        if member == "textureQueryLod":
+            return "vec2"
+        if member == "textureQueryLevels":
+            return "int"
+        if member == "textureSamples":
+            return "int"
+        if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            return "float"
+        return self.texture_result_type_name(resource_type)
+
+    def resource_size_result_type_name(self, resource_type):
+        size_type = self.resource_size_return_type(resource_type)
+        if size_type == "Int32":
+            return "int"
+        if size_type == "SIMD[DType.int32, 2]":
+            return "ivec2"
+        if size_type == "SIMD[DType.int32, 4]":
+            return "ivec3"
+        return None
+
+    def image_result_type_name(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return MOJO_DTYPE_INFO[dtype][0]
+            return self.vector_type_name_for_dtype_width(dtype, source_width)
+
+        value_type = self.image_value_type(resource_type)
+        if value_type == "Int32":
+            return "int"
+        if value_type == "UInt32":
+            return "uint"
+        return "vec4"
+
+    def vector_type_info(self, type_name):
+        if type_name is None:
+            return None
+        normalized_type = self.normalize_generic_vector_type_name(
+            self.type_name(type_name)
+        )
+        if normalized_type in self.vector_constructor_info:
+            return self.vector_constructor_info[normalized_type]
+        return None
+
+    def matrix_type_info(self, type_name):
+        if type_name in MOJO_MATRIX_TYPES:
+            return MOJO_MATRIX_TYPES[type_name]
+        return None
+
+    def vector_type_name_for_dtype_width(self, dtype, width):
+        _, prefix, _ = MOJO_DTYPE_INFO[dtype]
+        return f"{prefix}{width}"
+
+    def swizzle_result_type(self, obj_type, component_count):
+        info = self.vector_type_info(obj_type)
+        dtype = info[0] if info else "DType.float32"
+        scalar_type, prefix, _ = MOJO_DTYPE_INFO.get(
+            dtype, MOJO_DTYPE_INFO["DType.float32"]
+        )
+        if component_count == 1:
+            return scalar_type
+        return f"{prefix}{component_count}"
+
+    def get_swizzle_indices(self, member):
+        if not member:
+            return None
+        for components in SWIZZLE_SETS.values():
+            if all(component in components for component in member):
+                return [components[component] for component in member]
+        return None
+
+    def expression_mojo_dtype(self, expr):
+        expr_type = self.expression_result_type(expr)
+        info = self.vector_type_info(expr_type)
+        if info is not None:
+            return info[0]
+        return MOJO_SCALAR_DTYPES.get(expr_type)
+
+    def compatible_numeric_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_width != target_width or source_storage_width != target_storage_width:
+            return False
+        if "DType.bool" in {source_dtype, target_dtype}:
+            return False
+        return source_dtype in MOJO_DTYPE_SUFFIX and target_dtype in MOJO_DTYPE_SUFFIX
+
+    def compatible_storage_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_dtype != target_dtype or source_dtype == "DType.bool":
+            return False
+        if source_storage_width != target_storage_width:
+            return False
+        return source_width <= target_width
+
+    def generate_numeric_vector_binary_op(self, expr, target_type, target_context=None):
+        op = self.map_operator(expr.op)
+        if op not in MOJO_VECTOR_ARITHMETIC_OPS or target_type is None:
+            return None
+
+        target_info = self.vector_type_info(target_type)
+        if target_info is None or target_info[0] == "DType.bool":
+            return None
+
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return None
+        if left_info is not None and not self.compatible_numeric_vector_target(
+            left_info, target_info
+        ):
+            return None
+        if right_info is not None and not self.compatible_numeric_vector_target(
+            right_info, target_info
+        ):
+            return None
+
+        target_dtype = target_info[0]
+        context = target_context or "vector binary expression"
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left,
+            target_dtype,
+            context,
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right,
+            target_dtype,
+            context,
+        )
+        return f"({left} {op} {right})"
+
+    def generate_numeric_vector_binary_operand(self, expr, target_dtype, context):
+        expr_info = self.vector_type_info(self.expression_result_type(expr))
+        if expr_info is not None:
+            expr_text = self.generate_expression(expr)
+            source_dtype = expr_info[0]
+            if source_dtype == target_dtype:
+                return expr_text
+            return f"({expr_text}).cast[{target_dtype}]()"
+
+        scalar_type = MOJO_DTYPE_INFO[target_dtype][0]
+        return self.generate_constructor_scalar_expression(
+            expr,
+            target_dtype,
+            f"{context} scalar operand as {scalar_type}",
+        )
+
+    def is_literal_expression(self, expr):
+        return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
+
+    def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
+        if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
+            return expr_text
+        return f"({expr_text}).cast[{target_dtype}]()"
+
+    def cast_vector_component(self, component, source_dtype, target_dtype):
+        if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
+            return component
+        return f"{component}.cast[{target_dtype}]()"
+
+    def generate_constructor_scalar_expression(
+        self, expr, target_dtype, target_context=None
+    ):
+        target_type = self.constructor_scalar_expression_target_type(expr, target_dtype)
+        if target_context is not None:
+            self.validate_expression_target_shape(expr, target_type, target_context)
+            expr_text = self.generate_expression(expr, target_type, target_context)
+        else:
+            expr_text = self.generate_expression(expr)
+        if self.is_literal_expression(expr):
+            return expr_text
+        return self.cast_scalar_text(
+            expr_text, self.expression_mojo_dtype(expr), target_dtype
+        )
+
+    def vector_components_for_expression(self, expr, target_dtype=None):
+        if isinstance(expr, MemberAccessNode):
+            obj = self.generate_expression(expr.object)
+            swizzle_indices = self.get_swizzle_indices(expr.member)
+            if swizzle_indices is not None:
+                source_info = self.vector_type_info(
+                    self.expression_result_type(expr.object)
+                )
+                source_dtype = source_info[0] if source_info is not None else None
+                return [
+                    self.cast_vector_component(
+                        f"{obj}[{index}]", source_dtype, target_dtype
+                    )
+                    for index in swizzle_indices
+                ]
+
+        expr_type = self.expression_result_type(expr)
+        info = self.vector_type_info(expr_type)
+        if info is None:
+            return None
+
+        source_dtype, source_width, _, _ = info
+        if source_width <= 1:
+            return None
+
+        expr_text = self.generate_expression(expr)
+        return [
+            self.cast_vector_component(
+                f"{expr_text}[{index}]", source_dtype, target_dtype
+            )
+            for index in range(source_width)
+        ]
+
+    def generate_swizzle(self, source_expr, obj, obj_type, member, swizzle_indices):
+        if len(swizzle_indices) == 1:
+            return f"{obj}[{swizzle_indices[0]}]"
+
+        info = self.vector_type_info(obj_type)
+        dtype = info[0] if info else "DType.float32"
+        source_width = info[2] if info else 4
+        if info is not None and self.is_duplicate_sensitive_expression(source_expr):
+            helper_name = self.swizzle_helper_name(dtype, source_width, member)
+            self.required_swizzle_helpers.add((dtype, source_width, member))
+            return f"{helper_name}({obj})"
+
+        _, _, pad_literal = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])
+        storage_width = 2 if len(swizzle_indices) == 2 else 4
+        components = [f"{obj}[{index}]" for index in swizzle_indices]
+        if len(swizzle_indices) == 3:
+            components.append(pad_literal)
+
+        return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+    def is_duplicate_sensitive_expression(self, expr):
+        if isinstance(
+            expr,
+            (
+                FunctionCallNode,
+                BinaryOpNode,
+                TernaryOpNode,
+                BufferOpNode,
+                TextureOpNode,
+                AtomicOpNode,
+            ),
+        ):
+            return True
+        if isinstance(expr, CastNode):
+            return self.is_duplicate_sensitive_expression(expr.expression)
+        if isinstance(expr, UnaryOpNode):
+            return self.is_duplicate_sensitive_expression(expr.operand)
+        if isinstance(expr, MemberAccessNode):
+            return self.is_duplicate_sensitive_expression(expr.object)
+        if isinstance(expr, ArrayAccessNode):
+            return self.is_duplicate_sensitive_expression(
+                expr.array
+            ) or self.is_duplicate_sensitive_expression(expr.index)
+        return False
+
+    def format_literal(self, value, literal_type=None):
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        if literal_type == "bool" and isinstance(value, str):
+            lower_value = value.lower()
+            if lower_value == "true":
+                return "True"
+            if lower_value == "false":
+                return "False"
+        if isinstance(value, str):
+            escaped = self.escape_literal(value)
+            return f'"{escaped}"'
+        return str(value)
+
+    def escape_literal(self, value):
+        text = str(value)
+        escaped = []
+        for index, char in enumerate(text):
+            if char == "\n":
+                escaped.append("\\n")
+            elif char == "\r":
+                escaped.append("\\r")
+            elif char == "\t":
+                escaped.append("\\t")
+            elif char == '"' and (index == 0 or text[index - 1] != "\\"):
+                escaped.append('\\"')
+            else:
+                escaped.append(char)
+        return "".join(escaped)
+
+    def mojo_identifier(self, name):
+        """Return a Mojo-safe value or field identifier for source names."""
+        name = str(name)
+        if not name.isidentifier():
+            return name
+        if name in self.mojo_reserved_identifiers():
+            return f"{name}_"
+        return name
+
+    def mojo_reserved_identifiers(self):
+        return {
+            "False",
+            "None",
+            "Self",
+            "True",
+            "alias",
+            "and",
+            "as",
+            "assert",
+            "async",
+            "await",
+            "borrowed",
+            "break",
+            "case",
+            "class",
+            "comptime",
+            "constrained",
+            "continue",
+            "def",
+            "elif",
+            "else",
+            "except",
+            "finally",
+            "fn",
+            "for",
+            "from",
+            "global",
+            "if",
+            "import",
+            "in",
+            "inout",
+            "is",
+            "lambda",
+            "let",
+            "match",
+            "mut",
+            "nonlocal",
+            "not",
+            "or",
+            "owned",
+            "pass",
+            "raise",
+            "raises",
+            "ref",
+            "return",
+            "self",
+            "static",
+            "struct",
+            "trait",
+            "try",
+            "type",
+            "var",
+            "where",
+            "while",
+            "with",
+            "yield",
+        }
+
+    def map_type(self, vtype):
+        """Map a CrossGL type name or type node to a Mojo type string."""
+        if vtype is None:
+            return "Float32"
+
+        if (
+            hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+            or hasattr(vtype, "pointee_type")
+            or hasattr(vtype, "referenced_type")
+        ):
+            vtype_str = self.convert_type_node_to_string(vtype)
+        else:
+            vtype_str = str(vtype)
+
+        pointee_type = self.parse_pointer_type_name(vtype_str)
+        if pointee_type is not None:
+            return f"UnsafePointer[{self.map_type(pointee_type)}]"
+
+        geometry_stream_type = self.geometry_stream_mapped_type(vtype_str)
+        if geometry_stream_type is not None:
+            return geometry_stream_type
+
+        tessellation_patch_type = self.tessellation_patch_mapped_type(vtype_str)
+        if tessellation_patch_type is not None:
+            return tessellation_patch_type
+
+        if self.is_array_type_name(vtype_str):
+            base_type, size = self.parse_array_type_name(vtype_str)
+            base_mapped = self.map_type(base_type)
+            if size:
+                return f"InlineArray[{base_mapped}, {size}]"
+            else:
+                return f"List[{base_mapped}]"
+
+        vtype_str = self.normalize_generic_vector_type_name(vtype_str)
+
+        resource_alias = self.resource_type_alias(vtype_str)
+        if resource_alias is not None:
+            self.required_resource_types.add(resource_alias)
+            return resource_alias
+
+        buffer_info = self.buffer_resource_info(vtype_str)
+        if buffer_info is not None:
+            self.register_buffer_resource_type(buffer_info[0])
+            return self.mapped_buffer_type(*buffer_info)
+
+        if vtype_str in MOJO_MATRIX_TYPES:
+            dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
+            self.required_matrix_types.add((dtype, columns, rows))
+            return self.matrix_type_name(dtype, columns, rows)
+
+        generic_struct_type = self.generic_struct_mapped_type(vtype_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
+        generic_enum_type = self.generic_enum_mapped_type(vtype_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        if vtype_str in self.enum_types:
+            return vtype_str
+
+        mapped_type = self.type_mapping.get(vtype_str)
+        if mapped_type is not None:
+            if self.is_mojo_resource_type(mapped_type):
+                self.required_resource_types.add(mapped_type)
+            return mapped_type
+
+        mojo_generic_type = self.mojo_native_generic_mapped_type(vtype_str)
+        if mojo_generic_type is not None:
+            return mojo_generic_type
+
+        mapped_type = vtype_str
+        if self.is_mojo_resource_type(mapped_type):
+            self.required_resource_types.add(mapped_type)
+        return mapped_type
+
+    def mojo_native_generic_mapped_type(self, type_name):
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, generic_args = generic
+        mapped_args = ", ".join(
+            self.mojo_native_generic_argument(arg) for arg in generic_args
+        )
+        return f"{self.type_mapping.get(base_type, base_type)}[{mapped_args}]"
+
+    def mojo_native_generic_argument(self, arg):
+        arg = str(arg).strip()
+        nested_generic = self.mojo_native_generic_mapped_type(arg)
+        if nested_generic is not None:
+            return nested_generic
+        return self.type_mapping.get(arg, arg)
+
+    def is_resource_type_name(self, type_name):
+        if self.is_array_type_name(type_name):
+            base_type, _ = self.parse_array_type_name(type_name)
+            return self.is_resource_type_name(base_type)
+        if self.buffer_resource_info(type_name) is not None:
+            return True
+        if self.resource_type_alias(type_name) is not None:
+            return True
+        return self.is_mojo_resource_type(
+            self.type_mapping.get(str(type_name), type_name)
+        )
+
+    def is_mojo_resource_type(self, type_name):
+        return (
+            type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
+            or self.typed_image_resource_info(type_name) is not None
+            or self.typed_texture_resource_info(type_name) is not None
+        )
+
+    def map_operator(self, op):
+        op_map = {
+            "PLUS": "+",
+            "MINUS": "-",
+            "MULTIPLY": "*",
+            "DIVIDE": "/",
+            "BITWISE_XOR": "^",
+            "BITWISE_OR": "|",
+            "BITWISE_AND": "&",
+            "LESS_THAN": "<",
+            "GREATER_THAN": ">",
+            "ASSIGN_ADD": "+=",
+            "ASSIGN_SUB": "-=",
+            "ASSIGN_MUL": "*=",
+            "ASSIGN_DIV": "/=",
+            "ASSIGN_MOD": "%=",
+            "ASSIGN_XOR": "^=",
+            "ASSIGN_OR": "|=",
+            "ASSIGN_AND": "&=",
+            "LESS_EQUAL": "<=",
+            "GREATER_EQUAL": ">=",
+            "EQUAL": "==",
+            "NOT_EQUAL": "!=",
+            "AND": "and",
+            "OR": "or",
+            "&&": "and",
+            "||": "or",
+            "EQUALS": "=",
+            "ASSIGN_SHIFT_LEFT": "<<=",
+            "ASSIGN_SHIFT_RIGHT": ">>=",
+            "LOGICAL_AND": "and",
+            "LOGICAL_OR": "or",
+            "BITWISE_SHIFT_RIGHT": ">>",
+            "BITWISE_SHIFT_LEFT": "<<",
+            "MOD": "%",
+            "NOT": "not",
+            "!": "not",
+        }
+        return op_map.get(op, op)
+
+    def map_semantic(self, semantic):
+        """Map a CrossGL semantic to the Mojo backend attribute name."""
+        if semantic:
+            semantic = str(semantic)
+            if semantic in self.semantic_map:
+                return self.semantic_map[semantic]
+            upper = semantic.upper()
+            lower = semantic.lower()
+            if upper in self.semantic_map:
+                return self.semantic_map[upper]
+            target_match = re.fullmatch(r"SV_TARGET(\d*)", upper)
+            if target_match is not None:
+                index = target_match.group(1) or "0"
+                return f"color({index})"
+            color_match = re.fullmatch(r"gl_fragcolor(\d*)", lower)
+            if color_match is not None:
+                index = color_match.group(1) or "0"
+                return f"color({index})"
+            texcoord_match = re.fullmatch(r"TEXCOORD(\d*)", upper)
+            if texcoord_match is not None:
+                index = texcoord_match.group(1)
+                return f"texcoord{index}" if index else "texcoord"
+            color_semantic_match = re.fullmatch(r"COLOR(\d*)", upper)
+            if color_semantic_match is not None:
+                index = color_semantic_match.group(1)
+                return f"color{index}" if index else "color"
+            if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+                return "depth(any)"
+            if lower == "gl_position" or upper == "SV_POSITION":
+                return "position"
+            return semantic
+        return ""
