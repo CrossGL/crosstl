@@ -26771,6 +26771,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_assignment(expr)
         return self.generate_expression(expr)
 
+    def hlsl_helper_invocation_expression(self, expr):
+        """Lower CrossGL's ``gl_HelperInvocation`` to Shader Model 6.6 ``IsHelperLane()``.
+
+        HLSL has no helper-invocation variable; the query is the intrinsic. A local or
+        global that happens to use the name is left alone.
+        """
+        if not isinstance(expr, (IdentifierNode, VariableNode)):
+            return None
+        if getattr(expr, "name", None) != "gl_HelperInvocation":
+            return None
+        for table in ("local_variable_types", "global_variable_types"):
+            if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
+                return None
+        return "IsHelperLane()"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         storage_read = self.hlsl_half_storage.read(expr)
@@ -26782,6 +26797,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         unavailable = hlsl_unavailable_builtin(self, expr)
         if unavailable is not None:
             return unavailable
+        helper_lane = self.hlsl_helper_invocation_expression(expr)
+        if helper_lane is not None:
+            return helper_lane
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
