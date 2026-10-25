@@ -34,7 +34,9 @@ void main(uint3 id : SV_DispatchThreadID)
 def translate(tmp_path, source, backend, suffix):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, source_backend="directx")
+    return crosstl.translate(
+        str(path), backend=backend, source_backend="directx", format_output=False
+    )
 
 
 def _glslang(tmp_path, glsl, stage):
