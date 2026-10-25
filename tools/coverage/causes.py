@@ -53,13 +53,17 @@ def cause(feature: dict, language: str = "") -> str:
     detail = diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
     rest = detail[len(prefix) :]
+    names = {feature.get("name"), feature.get("crossgl")}
+    # A CrossGL IR feature carries the diagnostic of one of its members as ``<language>: <diagnostic>``, and that
+    # diagnostic names the member (``cuda/atomicAdd_block``) by its name in that language.
+    member_language = rest.partition(": ")[0]
+    members = [m.split("/", 1) for m in feature.get("members", ())]
+    member_names = {name for lang, name in members if lang == member_language}
+    if member_names:
+        language = member_language
+        names |= member_names
     # An operator spelling such as spellings.SUBSCRIPT names no function a diagnostic could mention.
-    names = {feature.get("name"), feature.get("crossgl")} - {
-        None,
-        "",
-        spellings.SUBSCRIPT,
-        spellings.ELEMENT,
-    }
+    names -= {None, "", spellings.SUBSCRIPT, spellings.ELEMENT}
     renames = spellings.RENAMES.get(language, {})
     names |= {renames[name] for name in names if name in renames}
     for name in sorted(names, key=lambda n: (-len(n), n)):

@@ -8,13 +8,16 @@ outside the shader instead, in objects the shader only names through a binding:
   descriptor, and Direct3D 11 through a sampler state object (``ID3D11Device::CreateSamplerState``), both bound to
   the shader's ``SamplerState`` register;
 * Vulkan through an immutable sampler of the descriptor set layout (``VkDescriptorSetLayoutBinding::
-  pImmutableSamplers``) or a sampler descriptor at the shader's ``sampler`` binding.
+  pImmutableSamplers``) or a sampler descriptor at the shader's ``sampler`` binding;
+* OpenGL through a sampler object bound to the texture unit of each combined uniform the sampler is read through
+  (OpenGL 4.6 section 8.2), since GLSL combines every texture with the sampler state it is read through.
 
 :func:`bind_fixed_samplers` turns every fixed sampler of a program into a sampler resource the host binds, so the
 shader samples exactly as it would through a bound sampler, and records each one's state in
 ``program.annotations["fixed_samplers"]``. The generators write those records, with the register or binding they
-gave each sampler, in a ``// crosstl-fixed-samplers:`` artifact header (HLSL) or an ``OpSourceExtension
-"crosstl-fixed-samplers: ..."`` debug instruction (SPIR-V); the host creates the sampler from it. The state keeps the CrossGL (MSL) vocabulary of
+gave each sampler (for GLSL, the combined uniforms and texture units it reaches), in a ``// crosstl-fixed-samplers:``
+artifact header (HLSL, GLSL) or an ``OpSourceExtension "crosstl-fixed-samplers: ..."`` debug instruction (SPIR-V);
+the host creates the sampler from it. The state keeps the CrossGL (MSL) vocabulary of
 :class:`.sampler_states.SamplerState`. The host maps it as follows:
 
 * ``clamp_to_zero`` addressing is border addressing with a transparent black border;
@@ -54,7 +57,18 @@ ANNOTATION = "fixed_samplers"
 FIXED_SAMPLER_SCHEMA_VERSION = 1
 # Every spelling of a target whose host binds the sampler state.
 BINDING_TARGETS = frozenset(
-    {"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "vulkan", "spirv"}
+    {
+        "directx",
+        "hlsl",
+        "dx11",
+        "dx12",
+        "d3d11",
+        "d3d12",
+        "vulkan",
+        "spirv",
+        "opengl",
+        "glsl",
+    }
 )
 _FIXED_QUALIFIERS = frozenset({"const", "constexpr"})
 _DROPPED_QUALIFIERS = _FIXED_QUALIFIERS | {"static"}
@@ -209,22 +223,22 @@ class _Binder:
         return name
 
     def bind(self, state, name, label):
-        """The slot attributes of the next fixed sampler: its own Vulkan set, or the next HLSL sampler register."""
+        """The slot attributes of the next fixed sampler: its own Vulkan set, or the next sampler slot.
+
+        The generators read the register, binding or combined uniforms each sampler got back from their output.
+        """
         if state.coord == "pixel":
             raise FixedSamplerCoordinatesUnsupportedError(self.target, label)
-        record = {"name": name, "state": _state_json(state)}
         if self.vulkan:
-            record.update(set=self.slot, binding=self.index)
             attributes = [
                 _integer_attribute("set", self.slot),
                 _integer_attribute("binding", self.index),
             ]
             self.index += 1
         else:
-            record.update(register=f"s{self.slot}", space=0)
             attributes = [_integer_attribute("sampler", self.slot)]
             self.slot += 1
-        self.records.append(record)
+        self.records.append({"name": name, "state": _state_json(state)})
         return attributes
 
     def run(self):

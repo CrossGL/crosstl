@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from tools.coverage import probes, validators
+from tools.coverage.features import metal
 from tools.coverage.features.common import prototype
 from tools.coverage.model import (
     COOP_COLUMNS,
@@ -25,6 +26,26 @@ def test_crossgl_probe_reads_buffers_and_stores_the_result():
     assert "vec3 a2 = vec3(fin[i + 6u], fin[i + 7u], fin[i + 8u]);" in source
     assert "vec3 r = mix(a0, a1, a2);" in source
     assert "outp[i] = r;" in source
+
+
+@pytest.mark.parametrize("language", ["glsl", "hlsl", "metal", "slang", "wgsl", "cuda"])
+def test_a_call_without_arguments_declares_the_input_the_harness_binds(language):
+    # The conformance harness binds an input buffer at slot 0, so where it runs the feature's language, the probe
+    # declares one that the call never reads.
+    lane = Feature(
+        language,
+        "function",
+        "WaveGetLaneIndex",
+        Signature(Type("uint"), ()),
+        crossgl="WaveGetLaneIndex",
+    )
+    native = probes.build(lane, language).source
+    crossgl = probes.build(lane, "crossgl").source
+    if language == "cuda":
+        assert "fin" not in native + crossgl
+        return
+    assert native.count("fin") == 1 and native.index("fin") < native.index("outp")
+    assert "buffer float* fin;\n        buffer uint* outp;" in crossgl
 
 
 def test_probe_binds_inout_parameters_to_the_output_buffer():
@@ -72,6 +93,11 @@ def test_probe_refuses_what_it_cannot_express():
         probes.build(feature("NMin", VEC3, VEC3, VEC3, crossgl=""), "crossgl")
     with pytest.raises(probes.ProbeError, match="double"):
         probes.build(feature("abs", Type("double"), Type("double")), "metal")
+
+
+def test_an_operation_crossgl_writes_as_an_expression_fills_its_holes():
+    clamp = feature("NClamp", VEC3, VEC3, VEC3, VEC3, crossgl="fmin(fmax({}, {}), {})")
+    assert "vec3 r = fmin(fmax(a0, a1), a2);" in probes.build(clamp, "crossgl").source
 
 
 def test_an_interpolant_is_read_straight_from_a_shader_input():
@@ -285,6 +311,15 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
 
 
+def test_a_glsl_probe_passes_a_shadow_sampler_for_a_depth_comparison():
+    shadow = feature(
+        "texture", Type("float"), Type.other("sampler2DShadow"), Type("float", (3,))
+    )
+    source = probes.build(shadow, "glsl").source
+    assert "layout(binding = 8) uniform sampler2DShadow u0;" in source
+    assert "float r = texture(u0, a1);" in source
+
+
 def test_a_subpass_input_names_its_input_attachment():
     subpass = feature("subpassLoad", VEC4, Type.other("subpassInput"), stage="fragment")
     source = probes.build(subpass, "glsl").source
@@ -327,6 +362,16 @@ def test_constant_unsigned_arguments_are_one(language):
     )
     source = probes.build(rotate, language).source
     assert "float r = WaveClusteredRotate(a0, a1, 1u);" in source
+
+
+@pytest.mark.parametrize("language", ["slang", "crossgl"])
+def test_compile_time_conditions_are_true(language):
+    # A false condition would fail the probe however CrossTL translates the call.
+    check = feature(
+        "static_assert", VOID, Param(Type("bool"), "condition"), Param(STRING, "const")
+    )
+    source = probes.build(check, language).source
+    assert 'static_assert(true, "");' in source
 
 
 @pytest.mark.parametrize("language", ["glsl", "crossgl"])
@@ -691,6 +736,29 @@ def test_metal_atomic_probe_passes_the_output_element_and_a_relaxed_order():
     assert "atomic_fetch_add_explicit(&outp[i], a1, memory_order_relaxed);" in source
 
 
+def test_metal_atomic_load_and_store_probes_call_crossgl_load_and_store():
+    load, store = metal.parse(
+        "metal_atomic atomic_load_explicit int(inout int, memory_order)\n"
+        "metal_atomic atomic_store void(inout int, int)\n"
+    )
+    assert "atomic_load_explicit(&outp[i], memory_order_relaxed);" in (
+        probes.build(load, "metal").source
+    )
+    crossgl = probes.build(load, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicLoad(outp[i])" in crossgl
+    assert "atomic_store(&outp[i], a1);" in probes.build(store, "metal").source
+    assert "atomicStore(outp[i], a1);" in probes.build(store, "crossgl").source
+
+
+def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
+    (wide,) = metal.parse("metal_atomic atomic_min void(inout ulong, ulong)\n")
+    assert "atomic_min(&outp[i], a1);" in probes.build(wide, "metal").source
+    crossgl = probes.build(wide, "crossgl").source
+    assert "buffer uint64_t* outp;" in crossgl
+    assert "atomicMin(outp[i], a1);" in crossgl
+
+
 CUDA_SIGNATURES = [
     feature("fmaf", Type("float"), Type("float"), Type("float"), Type("float")),
     feature("frexpf", Type("float"), Type("float"), Param(Type("int"), "out")),
@@ -929,6 +997,7 @@ MOJO_SIGNATURES = [
     feature(
         "divmod", Type.other("Tuple[Float32, Float32]"), Type("float"), Type("float")
     ),
+    feature("mulwide", Type("uint64"), Type("uint"), Type("uint")),
 ]
 
 
@@ -938,6 +1007,8 @@ def test_mojo_probe_spells_the_word_sized_int_and_reads_the_first_of_a_pair():
     assert "    var r: Int = gcd(a0, a1)\n    outp[i] = Int32(r)\n" in source
     source = probes.build(MOJO_SIGNATURES[5], "mojo").source
     assert "    var r: Float32 = frexp(a0)[0]\n    outp[i] = r\n" in source
+    source = probes.build(MOJO_SIGNATURES[7], "mojo").source
+    assert "    var r: UInt64 = mulwide(a0, a1)\n    outp[i] = UInt32(r)\n" in source
     # Only Mojo reads a pair.
     with pytest.raises(probes.ProbeError, match="Tuple"):
         probes.build(MOJO_SIGNATURES[6], "cuda")

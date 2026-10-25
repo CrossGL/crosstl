@@ -25,7 +25,6 @@ on:
       - ".github/actions/install-linux-dxc/**"
       - ".github/actions/install-shader-validators/**"
       - "pyproject.toml"
-      - "requirements.txt"
   # Pull requests always run this workflow, so that its result check can be required; the legs job skips every
   # other job when no path under tests/conformance/ci_plan.py's PATHS changed.
   pull_request:
