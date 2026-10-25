@@ -159,10 +159,13 @@ def test_the_coverage_comment_runs_only_main_code_on_the_report():
         "actions/download-artifact@v8",
     ]
     # main's tools/coverage reads the run's coverage.json as data; nothing is installed or run from the artifact.
+    # The pull request's head reaches it through env.
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    scripts = re.sub(r"\s*\\\n\s*", " ", scripts)
     assert not re.search(r"\bpip\b", scripts)
     assert re.findall(r"\bpython\b.*", scripts) == [
-        'python -m tools.coverage compare published.json "$REPORT" > compare.md'
+        'python -m tools.coverage compare published.json "$REPORT" --repository "$GITHUB_REPOSITORY"'
+        ' --head "$HEAD_SHA" > compare.md'
     ]
 
 

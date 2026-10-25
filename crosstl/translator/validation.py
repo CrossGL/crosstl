@@ -1526,12 +1526,11 @@ def _stage_interface_entries(shader, stage, stage_name, direction):
                 entry_point, struct_map, stage_name
             )
         )
-    else:
-        entries.extend(
-            _function_parameter_stage_interface_entries(
-                entry_point, struct_map, stage_name
-            )
+    entries.extend(
+        _function_parameter_stage_interface_entries(
+            entry_point, struct_map, stage_name, direction
         )
+    )
 
     return [entry for entry in entries if entry["keys"]]
 
@@ -1586,9 +1585,33 @@ def _stream_parameter_stage_interface_entries(function, struct_map, stage_name):
     return entries
 
 
-def _function_parameter_stage_interface_entries(function, struct_map, stage_name):
+_OUTPUT_PARAMETER_QUALIFIERS = frozenset({"out", "inout"})
+_INPUT_PARAMETER_EXCLUDED_QUALIFIERS = frozenset({"out"})
+
+
+def _entry_parameter_has_direction(parameter, direction):
+    """Whether an entry-point parameter carries stage ``direction`` data.
+
+    HLSL-style entry points also return stage outputs through ``out`` and ``inout`` parameters
+    (``out float4 position : SV_Position``); an ``inout`` parameter is both an input and an output.
+    """
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", None) or []
+        if qualifier is not None
+    }
+    if direction == "out":
+        return bool(qualifiers & _OUTPUT_PARAMETER_QUALIFIERS)
+    return not qualifiers & _INPUT_PARAMETER_EXCLUDED_QUALIFIERS
+
+
+def _function_parameter_stage_interface_entries(
+    function, struct_map, stage_name, direction="in"
+):
     entries = []
     for parameter in getattr(function, "parameters", []) or []:
+        if not _entry_parameter_has_direction(parameter, direction):
+            continue
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
