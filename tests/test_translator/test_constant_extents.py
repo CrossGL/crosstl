@@ -1,5 +1,6 @@
 """Array extents that name integer constants are folded to their values for every target."""
 
+import re
 import shutil
 import subprocess
 
@@ -117,11 +118,16 @@ def test_immutable_globals_are_spirv_constants(tmp_path):
     # An initializer that names an earlier constant used to load it at module scope, which spirv-val rejects.
     path = tmp_path / "kernel.metal"
     path.write_text(SPIRV_CONSTANTS)
-    output = crosstl.translate(str(path), backend="vulkan")
-    assert "%Total = OpConstant %uint 12" in output
-    assert "%Half = OpConstant %float 0.25" in output
+    output = crosstl.translate(str(path), backend="vulkan", format_output=False)
+
+    def named(name):
+        (identifier,) = re.findall(rf'OpName (%\w+) "{name}"', output)
+        return re.escape(identifier)
+
+    assert re.search(rf"{named('Total')} = OpConstant %\w+ 12\n", output)
+    assert re.search(rf"{named('Half')} = OpConstant %\w+ 0\.25\n", output)
     # An array stays a variable, which a dynamic index points into.
-    assert "%table = OpVariable" in output
+    assert re.search(rf"{named('table')} = OpVariable ", output)
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
         (tmp_path / "out.spvasm").write_text(output)
         _run(
