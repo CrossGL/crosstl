@@ -1049,7 +1049,13 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         return None
 
     def visit_AtomicOperationNode(self, node):
-        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
+        node_args = list(node.args)
+        if node.operation.endswith("_explicit"):
+            # The *_explicit forms append memory_order (and memory_scope)
+            # arguments to the plain form; CrossGL atomics take no ordering.
+            arity = 3 if "compare_exchange" in node.operation else 2
+            node_args = node_args[:arity]
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node_args)]
         operation = self.OPENCL_ATOMIC_MAP.get(node.operation, node.operation)
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")

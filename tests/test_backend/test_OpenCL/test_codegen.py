@@ -60,6 +60,24 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
 
 
+def test_opencl_explicit_atomics_drop_memory_order_and_scope():
+    crossgl = generate_crossgl("""
+        kernel void probe(global int *iin, global atomic_int *outp) {
+            uint i = get_global_id(0);
+            atomic_fetch_sub_explicit(&outp[i], iin[i], memory_order_relaxed);
+            atomic_fetch_add_explicit(
+                &outp[i], iin[i], memory_order_relaxed, memory_scope_device);
+            atomic_exchange_explicit(&outp[i], iin[i], memory_order_relaxed);
+        }
+        """)
+
+    assert "memory_order" not in crossgl
+    assert "memory_scope" not in crossgl
+    assert "atomicSub(outp[i], iin[i]);" in crossgl
+    assert "atomicAdd(outp[i], iin[i]);" in crossgl
+    assert "atomicExchange(outp[i], iin[i]);" in crossgl
+
+
 def test_opencl_saxpy_signed_global_id_lowers_to_wgsl_casted_local(tmp_path):
     source = """
         kernel void saxpy(global float *out, const global float *x, float a) {
