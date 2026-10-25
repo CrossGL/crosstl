@@ -9,6 +9,7 @@ from crosstl.translator.codegen.texture_lod_clamp import (
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
+from .block_member_names import unqualified_names
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1346,6 +1347,7 @@ class GLSLToCrossGLConverter:
         self.anonymous_ssbo_member_instances = {}
         self.variable_type_scopes = [{}]
         self.flattened_uniform_block_instances = {}
+        self.unqualified_names = unqualified_names(node)
         self.collect_anonymous_ssbo_blocks(node)
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
@@ -2145,6 +2147,9 @@ class GLSLToCrossGLConverter:
     def cbuffer_field_output_names(self, block_name, uniforms, fields):
         output_names = {}
         block_seen = set()
+        # A member of a block with an instance name is read only through the instance, so a function may
+        # use its name for something else; flattened, the member needs a name of its own.
+        instance_named = bool(self.uniform_block_instance_names(block_name, uniforms))
         for field in fields:
             field_name = getattr(field, "name", None)
             if field_name is None:
@@ -2154,6 +2159,10 @@ class GLSLToCrossGLConverter:
             if (
                 output_name in self.emitted_cbuffer_member_names
                 or output_name in block_seen
+                or (
+                    instance_named
+                    and output_name in getattr(self, "unqualified_names", ())
+                )
             ):
                 output_name = self.unique_cbuffer_member_name(block_name, field_name)
             block_seen.add(output_name)
@@ -2164,6 +2173,18 @@ class GLSLToCrossGLConverter:
             block_name, uniforms, fields, output_names
         )
         return output_names
+
+    def uniform_block_instance_names(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        instance_names = set()
+        if block_struct is not None:
+            instance_name = getattr(block_struct, "interface_instance_name", None)
+            if instance_name:
+                instance_names.add(str(instance_name).split("[", 1)[0])
+        for uniform in uniforms or []:
+            if getattr(uniform, "vtype", None) == block_name:
+                instance_names.add(str(uniform.name).split("[", 1)[0])
+        return instance_names
 
     def unique_cbuffer_member_name(self, block_name, field_name):
         safe_block_name = re.sub(r"\W+", "_", str(block_name or "Block")).strip("_")
@@ -2184,18 +2205,7 @@ class GLSLToCrossGLConverter:
         if not field_names:
             return
 
-        block_struct = self.structs_by_name.get(block_name)
-        instance_names = set()
-        if block_struct is not None:
-            instance_name = getattr(block_struct, "interface_instance_name", None)
-            if instance_name:
-                instance_names.add(str(instance_name).split("[", 1)[0])
-
-        for uniform in uniforms:
-            if getattr(uniform, "vtype", None) == block_name:
-                instance_names.add(str(uniform.name).split("[", 1)[0])
-
-        for instance_name in instance_names:
+        for instance_name in self.uniform_block_instance_names(block_name, uniforms):
             if instance_name:
                 self.flattened_uniform_block_instances[instance_name] = field_names
                 renames = {
@@ -2605,6 +2615,7 @@ class GLSLToCrossGLConverter:
         self.local_vars = []
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
+        self.unqualified_names = unqualified_names(node)
         self.emitted_cbuffer_member_names = set()
         self.task_payload_shared_names = {
             var.name
