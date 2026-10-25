@@ -238,7 +238,9 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
+from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin
+from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -2903,6 +2905,7 @@ class GLSLCodeGen(
         self.glsl_raised_version_line = None
         self.glsl_required_version_line = None
         self.current_mesh_output_count_limits = {}
+        self.glsl_program_has_mesh_stage = False
         self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.emit_stage_guards = False
@@ -9243,10 +9246,13 @@ class GLSLCodeGen(
             for stage_type in getattr(ast, "stages", {})
         } | {function_stage_name(func) for func in functions} - {None}
         legacy_vertex_names = not program_stage_names or "vertex" in program_stage_names
+        self.glsl_program_has_mesh_stage = "mesh" in program_stage_names
         legacy_fragment_names = (
             not program_stage_names or "fragment" in program_stage_names
         )
         data_struct_nodes = []
+        # Stage inputs and outputs of structure type name the data structures, so they follow them.
+        stage_io_code = ""
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
@@ -9272,7 +9278,7 @@ class GLSLCodeGen(
                     or node.name in self.vertex_input_struct_names
                 ):
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_stage_input_declarations(node),
                             "vertex",
                         )
@@ -9287,7 +9293,7 @@ class GLSLCodeGen(
                 ):
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9296,7 +9302,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9305,14 +9311,14 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
                         emitted_io = True
                     if not emitted_io:
                         if emit_vertex_io and legacy_vertex_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
                             )
@@ -9329,7 +9335,7 @@ class GLSLCodeGen(
                 elif node.name in self.vertex_output_struct_names:
                     emitted_io = False
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9338,7 +9344,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9347,7 +9353,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9358,7 +9364,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSInput" and legacy_fragment_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9366,12 +9372,12 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_input_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
                         if node.name in self.fragment_output_struct_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_fragment_output_declarations(node),
                                 "fragment",
                             )
@@ -9386,7 +9392,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_output_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9394,7 +9400,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSOutput":
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9406,6 +9412,7 @@ class GLSLCodeGen(
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
+        code += stage_io_code
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -19861,6 +19868,7 @@ class GLSLCodeGen(
     def generate_mesh_output_parameter_declarations(self, mesh_outputs):
         code = ""
         emitted = set()
+        layouts = mesh_output_layouts(self, mesh_outputs)
         for info in mesh_outputs.values():
             role = info["role"]
             if role == "indices":
@@ -19887,12 +19895,14 @@ class GLSLCodeGen(
                     else f"{member_type}[]"
                 )
                 declaration = format_c_style_array_declaration(array_type, output_name)
-                prefix = self.mesh_output_declaration_prefix(member, role)
+                prefix = self.mesh_output_declaration_prefix(
+                    member, role, layouts.get((role, output_name))
+                )
                 code += f"{prefix} {declaration};\n"
         return code
 
-    def mesh_output_declaration_prefix(self, member, role):
-        prefix = self.stage_io_declaration_prefix(member, "out")
+    def mesh_output_declaration_prefix(self, member, role, layout=None):
+        prefix = self.stage_io_declaration_prefix(member, "out", layout=layout)
         if role != "primitives":
             return prefix
 
@@ -23300,6 +23310,7 @@ class GLSLCodeGen(
             if private_distance is not None:
                 code += private_distance
                 continue
+            refuse_nested_stage_builtins(self, member, "vertex", "output")
 
             layout = self.stage_io_layout_for_node(member)
             block = block_declared_stage_io(self, "out", member, output_name)
@@ -23333,12 +23344,27 @@ class GLSLCodeGen(
 
     def generate_fragment_input_declarations(self, node):
         code = ""
+        mesh_layouts = (
+            mesh_fragment_input_layouts(
+                self,
+                [
+                    member
+                    for member in getattr(node, "members", []) or []
+                    if self.fragment_input_member_name(member, node.name) is not None
+                ],
+            )
+            if self.glsl_program_has_mesh_stage
+            else {}
+        )
         for member in getattr(node, "members", []) or []:
             input_name = self.fragment_input_member_name(member, node.name)
             if input_name is None:
                 continue
+            refuse_nested_stage_builtins(self, member, "fragment", "input")
 
-            layout = self.stage_io_layout_for_node(member)
+            layout = mesh_layouts.get(member.name) or self.stage_io_layout_for_node(
+                member
+            )
             member_type = self.member_type_name(member)
             block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
@@ -23361,7 +23387,7 @@ class GLSLCodeGen(
                 # Declared by the input interface block itself.
                 continue
             prefix = self.stage_io_declaration_prefix(
-                member, "in", stage_name="fragment"
+                member, "in", layout=layout, stage_name="fragment"
             )
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, input_name)
