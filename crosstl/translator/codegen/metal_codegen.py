@@ -392,6 +392,7 @@ from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
+from .metal_stage_input_builtins import split_metal_stage_input_builtins
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
     METAL_TEXEL_BUFFER_TYPES,
@@ -2034,6 +2035,7 @@ class MetalCodeGen(
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_metal_keyword_parameters(ast)
+        ast = split_metal_stage_input_builtins(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (
