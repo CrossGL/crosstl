@@ -58,6 +58,7 @@ from .dependent_builtins import (
 )
 from .external_functions import refuse_external_function_calls
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
+from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -12633,6 +12634,8 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
             static_member = self.render_decltype_static_struct_member(expr)
             if static_member is not None:
                 return static_member
+            if matrix_columns_object(self, expr) is not None:
+                raise MetalMatrixColumnsError(getattr(expr, "source_location", None))
             obj = self.generate_postfix_operand(expr.object, is_main)
             constructor_this = (
                 isinstance(expr.object, VariableNode)
@@ -12665,6 +12668,10 @@ class MetalToCrossGLConverter(ImportRefusalMixin, MetalBufferLayoutImport):
                 matrix_text = self.generate_expression(matrix, is_main)
                 index_text = self.generate_expression(element_index, is_main)
                 return f"cooperative_matrix_element({matrix_text}, {index_text})"
+            matrix = matrix_columns_object(self, expr.array)
+            if matrix is not None:
+                matrix_text = self.generate_postfix_operand(matrix, is_main)
+                return f"{matrix_text}[{self.generate_expression(expr.index, is_main)}]"
             component_info = self.small_vector_index_info(expr)
             if component_info is not None:
                 return self.generate_small_vector_component_read(
@@ -22569,6 +22576,9 @@ float {scalar}(float value) {{
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
                 return None
+            if matrix_columns_object(self, expr) is not None:
+                # ``m.columns[i]`` selects the column ``m[i]``.
+                return object_type
             wide_vector = self.wide_vector_type_info(
                 object_type, getattr(expr, "source_location", None)
             )
