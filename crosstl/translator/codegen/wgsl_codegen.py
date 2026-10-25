@@ -3414,21 +3414,22 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         return f"{mapped_name}({args})"
 
     # HLSL 8-bit pack intrinsics and their WGSL builtins (WGSL sections
-    # 17.9.3 and 17.9.8): the WGSL argument type each takes, and the builtin.
-    # pack_clamp_u8 takes signed components, while pack4xU8Clamp takes
-    # unsigned ones, so negative components are clamped to zero first.
+    # 17.9.3 and 17.9.8): the WGSL argument type each takes, the builtin, and
+    # its result type. pack_clamp_u8 takes signed components, while
+    # pack4xU8Clamp takes unsigned ones, so negative components are clamped
+    # to zero first.
     PACKED_8BIT_FUNCTIONS = {
-        "pack_s8": ("vec4<i32>", "pack4xI8"),
-        "pack_u8": ("vec4<u32>", "pack4xU8"),
-        "pack_clamp_s8": ("vec4<i32>", "pack4xI8Clamp"),
-        "pack_clamp_u8": ("vec4<u32>", "pack4xU8Clamp"),
-        "unpack_s8s32": ("u32", "unpack4xI8"),
-        "unpack_u8u32": ("u32", "unpack4xU8"),
+        "pack_s8": ("vec4<i32>", "pack4xI8", "u32"),
+        "pack_u8": ("vec4<u32>", "pack4xU8", "u32"),
+        "pack_clamp_s8": ("vec4<i32>", "pack4xI8Clamp", "u32"),
+        "pack_clamp_u8": ("vec4<u32>", "pack4xU8Clamp", "u32"),
+        "unpack_s8s32": ("u32", "unpack4xI8", "vec4<i32>"),
+        "unpack_u8u32": ("u32", "unpack4xU8", "vec4<u32>"),
     }
 
     def generate_packed_8bit_call(self, node, function_name, mapping):
         """HLSL ``pack_*8``/``unpack_*8*32`` as the WGSL 4x8-bit pack builtins."""
-        argument_type, mapped_name = mapping
+        argument_type, mapped_name, _result_type = mapping
         if len(node.arguments) != 1:
             raise ValueError(
                 f"WGSL target supports {function_name}() with exactly 1 argument; "
@@ -3437,6 +3438,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         argument = node.arguments[0]
         argument_expr = self.generate_expression(argument)
         if argument_type == "u32":
+            # HLSL converts an int to the packed type bit for bit, as u32() does.
+            if self.integer_scalar_type(self.expression_type(argument)) == "i32":
+                argument_expr = f"u32({argument_expr})"
             return f"{mapped_name}({argument_expr})"
         component = self.vector_component_type(self.expression_type(argument))
         if component is not None:
@@ -6146,6 +6150,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return self.type_name_string(function_name)
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
+            packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
+                self.semantic_key(function_name)
+            )
+            if packed_8bit is not None and not self.is_user_function_name(
+                function_name
+            ):
+                return packed_8bit[2]
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"

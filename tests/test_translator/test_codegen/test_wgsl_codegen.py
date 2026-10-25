@@ -3208,6 +3208,32 @@ def test_wgsl_8bit_pack_converts_argument_signedness(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_8bit_pack_converts_int_operands_and_results(tmp_path):
+    source_path = tmp_path / "pack_int.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<int> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int p = iin[id.x];
+            int4 v = unpack_s8s32(p);
+            int r = pack_s8(v);
+            outp[id.x] = pack_clamp_s8(v);
+            outp[id.x + 1u] = r;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "var v: vec4<i32> = unpack4xI8(u32(p));" in generated
+    assert "var r: i32 = i32(pack4xI8(v));" in generated
+    assert "outp[id.x] = i32(pack4xI8Clamp(v));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_8bit_pack_requires_one_argument():
     shader = parse_shader("""
         shader PackedEightBit {
