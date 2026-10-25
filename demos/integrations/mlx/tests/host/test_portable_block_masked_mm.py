@@ -584,7 +584,9 @@ def test_backend_ports_block_masked_mm_eval_gpu():
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
         '#include "mlx/backend/no_gpu/crosstl_scatter.inc"\n'
         "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
-        '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_conv.inc"\n'
+        "// And the port of the fused cross-entropy, which shares the row helpers.\n"
+        '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"'
     )
     start = port.index("void BlockMaskedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]

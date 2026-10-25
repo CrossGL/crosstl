@@ -516,7 +516,8 @@ def test_backend_ports_segmented_mm_eval_gpu():
         backend.rindex('#include "mlx/backend/no_gpu/crosstl_compiled.inc"') :
     ]
     assert tail.index("crosstl_gather_mm.inc") < tail.index("crosstl_segmented_mm.inc")
-    # Only the BlockMaskedMM, general Scatter and Convolution ports follow it.
+    # Only the BlockMaskedMM, general Scatter, Convolution and cross-entropy
+    # ports follow it.
     assert backend.rstrip().endswith(
         '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"\n'
         "// So does the port of BlockMaskedMM's masked products.\n"
@@ -524,7 +525,9 @@ def test_backend_ports_segmented_mm_eval_gpu():
         "// And the port of the general Scatter, which tiles and orders its launches.\n"
         '#include "mlx/backend/no_gpu/crosstl_scatter.inc"\n'
         "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
-        '#include "mlx/backend/no_gpu/crosstl_conv.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_conv.inc"\n'
+        "// And the port of the fused cross-entropy, which shares the row helpers.\n"
+        '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"'
     )
     start = port.index("void SegmentedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
