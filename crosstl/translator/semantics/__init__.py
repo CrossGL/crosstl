@@ -21,6 +21,10 @@ from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_buffer_size import (
+    ConstantBufferTooLargeError,
+    refuse_large_constant_buffers,
+)
 from .constant_extents import fold_constant_extents
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
@@ -135,6 +139,7 @@ __all__ = [
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
+    "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
@@ -331,6 +336,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_texture_residency(program, report.target)
     declare_hlsl_residency_status(program, report.target)
     fold_array_lengths(program, report.target)
+    refuse_large_constant_buffers(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     annotate_hlsl_ray_payloads(program, report.target)
     legalize_opaque_struct_members(program, report.target)

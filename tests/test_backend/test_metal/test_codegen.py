@@ -1242,7 +1242,7 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
-def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
+def test_codegen_uint_vertex_id_keeps_its_unsigned_type():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -1263,12 +1263,13 @@ def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
     """
     crossgl = convert(code)
 
-    assert "int vid @gl_VertexID" in crossgl
-    assert "uint vid @gl_VertexID" not in crossgl
+    # MSL's [[vertex_id]] is uint (MSL 4.1 section 5.2.3.1); reading it as int changed unsigned arithmetic
+    # such as `vid - 1 < n`. GLSL converts its int gl_VertexID once.
+    assert "uint vid @gl_VertexID" in crossgl
     ast = parse_crossgl(crossgl)
     generated = GLSLCodeGen().generate(ast)
 
-    assert "uint vid" not in generated
+    assert "uint vid = uint(gl_VertexID);" in generated
     assert "verticesBuffer" in generated
 
 

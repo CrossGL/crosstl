@@ -302,6 +302,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
+from .glsl_zero_values import zero_array_value
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -2071,12 +2072,37 @@ class GLSLCodeGen(
         "metal::signbit",
         "metal_u3a_u3asignbit",
     }
+    # Built-in functions the generator calls in place of source operations (HLSL methods and intrinsics). A local
+    # of the same name would hide the function in its scope ("can't use function syntax on variable").
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
+        "dFdx",
+        "dFdy",
         "floatBitsToInt",
         "floatBitsToUint",
+        "fract",
+        "imageLoad",
+        "imageSamples",
+        "imageSize",
+        "imageStore",
         "intBitsToFloat",
+        "inversesqrt",
         "mix",
+        "mod",
+        "texelFetch",
+        "texelFetchOffset",
+        "texture",
+        "textureGather",
+        "textureGatherOffset",
+        "textureGrad",
+        "textureLod",
+        "textureLodOffset",
+        "textureOffset",
+        "textureProj",
+        "textureQueryLevels",
+        "textureQueryLod",
+        "textureSamples",
+        "textureSize",
         "uintBitsToFloat",
     }
     GLSL_BITCAST_FUNCTIONS = {"asfloat", "asint", "asuint"}
@@ -24094,6 +24120,7 @@ class GLSLCodeGen(
             return {
                 "name": mapped_semantic,
                 "declaration": "",
+                "type": output_type,
             }
 
         layout = mapped_semantic
@@ -24121,6 +24148,7 @@ class GLSLCodeGen(
         return {
             "name": output_name,
             "declaration": declaration,
+            "type": output_type,
         }
 
     def fragment_stage_output(self, func, shader_type):
@@ -24185,6 +24213,7 @@ class GLSLCodeGen(
         return {
             "name": output_name,
             "declaration": declaration,
+            "type": output_type,
         }
 
     def fragment_direct_output_key(self, mapped_semantic, layout, output_type):
@@ -25596,8 +25625,12 @@ class GLSLCodeGen(
                     )
                     value = values
                 else:
+                    # The entry is void in GLSL; its value converts to the output's type, as the source's
+                    # return converted it to the return type (an HLSL float returned as float4 splats).
                     value = self.generate_expression_with_expected(
-                        stmt.value, self.current_function_return_type
+                        stmt.value,
+                        self.current_stage_output.get("type")
+                        or self.current_function_return_type,
                     )
                 return (
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"
@@ -55719,6 +55752,8 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{code}{indent_str}return {self.zero_value_expression(return_type)};\n"
 
     def zero_value_expression(self, vtype):
+        if isinstance(vtype, ArrayType):
+            return zero_array_value(self, vtype, self.map_type(vtype))
         mapped_type = self.map_type(vtype)
         if mapped_type == "void":
             return ""
@@ -55738,6 +55773,9 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{mapped_type}(0)"
         if mapped_type.startswith(("vec", "dvec", "mat", "dmat")):
             return f"{mapped_type}(0.0)"
+        array = zero_array_value(self, None, mapped_type)
+        if array is not None:
+            return array
         struct = self.glsl_struct_node(mapped_type)
         if struct is not None:
             member_values = []

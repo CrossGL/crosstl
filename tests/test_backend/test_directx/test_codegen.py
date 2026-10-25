@@ -3502,7 +3502,9 @@ def test_codegen_attributes_emitted():
     assert "@ outputtopology" in lowered
     assert "@ outputcontrolpoints" in lowered
     assert "@ patchconstantfunc" in lowered
-    assert "@ earlydepthstencil" in lowered
+    # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, not a function attribute.
+    assert "layout(early_fragment_tests) in;" in lowered
+    assert "@ earlydepthstencil" not in lowered
 
 
 def test_codegen_extra_attributes_emitted():

@@ -427,3 +427,24 @@ def compute_local_size_value(value):
     if hasattr(value, "value"):
         return str(value.value)
     return str(value)
+
+
+EARLY_FRAGMENT_TEST_NAMES = frozenset({"early_fragment_tests", "earlydepthstencil"})
+
+
+def requests_early_fragment_tests(function, stage) -> bool:
+    """Whether a fragment entry asks for depth and stencil tests before it runs.
+
+    CrossGL spells the request as the stage layout ``layout(early_fragment_tests) in;`` (GLSL 4.60 section 4.4.1.3),
+    which the MSL ``[[early_fragment_tests]]`` and HLSL ``[earlydepthstencil]`` imports produce; a function attribute
+    of either name counts as well.
+    """
+    for attribute in getattr(function, "attributes", None) or []:
+        if normalize_layout_entry_name(getattr(attribute, "name", None)) in (
+            EARLY_FRAGMENT_TEST_NAMES
+        ):
+            return True
+    return any(
+        stage_layout_entry(stage, name, "in") is not None
+        for name in EARLY_FRAGMENT_TEST_NAMES
+    )

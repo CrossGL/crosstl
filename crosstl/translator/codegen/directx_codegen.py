@@ -532,6 +532,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_layout_entry_value,
     stage_matches,
@@ -2310,6 +2311,12 @@ class HLSLCodeGen(
         "mad",
         # Software subgroup barriers must retain the target synchronization call.
         "GroupMemoryBarrierWithGroupSync",
+        # Resource queries become helper functions of these names; a local of the same name would hide them.
+        "imageSamples",
+        "imageSize",
+        "textureQueryLevels",
+        "textureSamples",
+        "textureSize",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
@@ -10820,6 +10827,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             semantic = default_member_semantics.get(member.name)
             if semantic is None:
                 semantic = self.hlsl_struct_member_declared_semantic(member)
+            member_type = self.hlsl_unsigned_system_value_type(member_type, semantic)
 
             self.validate_hlsl_struct_member_semantic_type(
                 node.name,
@@ -14495,6 +14503,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ]
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
+            if effective_shader_type == "fragment" and requests_early_fragment_tests(
+                func, stage_node
+            ):
+                code += "[earlydepthstencil]\n"
             function_name = entry_name or shader_map[effective_shader_type]
             code += f"{declaration_return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
@@ -36065,6 +36077,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"got {actual_type}"
             )
 
+    # System values DXIL requires to be uint; Vulkan HLSL and GLSL (gl_Layer, gl_PrimitiveID) also take int.
+    HLSL_UNSIGNED_SYSTEM_VALUES = frozenset(
+        {
+            "SV_RENDERTARGETARRAYINDEX",
+            "SV_VIEWPORTARRAYINDEX",
+            "SV_PRIMITIVEID",
+            "SV_VERTEXID",
+            "SV_INSTANCEID",
+            "SV_SAMPLEINDEX",
+            "SV_GSINSTANCEID",
+        }
+    )
+
+    def hlsl_unsigned_system_value_type(self, declaration_type, semantic):
+        """``uint`` for an ``int`` member carrying a system value that DXIL delivers as ``uint``."""
+        mapped = str(self.hlsl_canonical_semantic(semantic) or "").upper()
+        if mapped in self.HLSL_UNSIGNED_SYSTEM_VALUES and declaration_type == "int":
+            return "uint"
+        return declaration_type
+
     def hlsl_output_builtin_semantic_type(self, mapped_semantic):
         if mapped_semantic is None:
             return None
@@ -38901,16 +38933,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return str(mapped_semantic).lower()
 
     def hlsl_struct_member_declared_semantic(self, member):
-        semantic = self.semantic_from_struct_member(member)
-        if semantic is not None:
-            return semantic
-
-        name_semantics = {
-            "view": "gl_ViewIndex",
-            "layer": "gl_Layer",
-            "viewport": "gl_ViewportIndex",
-        }
-        return name_semantics.get(getattr(member, "name", ""))
+        return self.semantic_from_struct_member(member)
 
     def hlsl_semantic_range_start(self, semantic):
         mapped_semantic = self.hlsl_semantic_name(semantic)
@@ -38924,6 +38947,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return base.lower(), int(suffix) if suffix else 0
 
     def hlsl_struct_member_semantic_slot_count(self, struct_name, member, semantic):
+        count = self.hlsl_struct_member_array_slot_count(struct_name, member, semantic)
+        return count * self.hlsl_matrix_semantic_slot_count(member)
+
+    def hlsl_matrix_semantic_slot_count(self, member):
+        """The semantic indices one element of a matrix member takes: a column-major matrix (HLSL's default)
+        takes one per column and a row-major one one per row; anything else takes one.
+        """
+        raw_type = self.hlsl_struct_member_raw_type(member)
+        element = (
+            getattr(raw_type, "element_type", None)
+            if hasattr(raw_type, "size")
+            else None
+        )
+        type_name = self.map_type(element if element is not None else raw_type)
+        base_type, _suffix = split_array_type_suffix(str(type_name or ""))
+        shape = re.fullmatch(
+            r"(?:float|half|double|int|uint|bool|min16float|float16_t)([1-4])x([1-4])",
+            base_type,
+        )
+        if shape is None:
+            return 1
+        rows, columns = int(shape.group(1)), int(shape.group(2))
+        return (
+            rows
+            if self.hlsl_matrix_orientation_prefix(member).strip() == "row_major"
+            else columns
+        )
+
+    def hlsl_struct_member_array_slot_count(self, struct_name, member, semantic):
         raw_type = self.hlsl_struct_member_raw_type(member)
         size_expr = None
         if isinstance(member, ArrayNode):
@@ -39775,6 +39827,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return str(value)
 
     def generate_hlsl_stage_attributes(self, func, shader_type, stage_node=None):
+        if shader_type == "fragment":
+            if requests_early_fragment_tests(func, stage_node):
+                return "[earlydepthstencil]\n"
+            return ""
         if shader_type not in {
             "geometry",
             "tessellation_control",
@@ -41035,9 +41091,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_parameters = {}
         for parameter in parameters or []:
             semantic = self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
-            if semantic == "SV_Position":
+            if str(semantic or "").lower() == "sv_position":
                 stage_parameters["gl_FragCoord"] = getattr(parameter, "name", None)
+                continue
+            # A stage input structure with an SV_Position member already carries the fragment
+            # coordinate; a second SV_Position parameter would overlap it ("overlapping semantic index").
+            member = self.hlsl_struct_member_with_semantic(parameter, "SV_Position")
+            if member is not None and "gl_FragCoord" not in stage_parameters:
+                stage_parameters["gl_FragCoord"] = f"{parameter.name}.{member}"
         return stage_parameters
+
+    def hlsl_struct_member_with_semantic(self, parameter, semantic):
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        struct = self.structs_by_name.get(
+            str(getattr(raw_type, "name", raw_type) or "")
+        )
+        if struct is None or not getattr(parameter, "name", None):
+            return None
+        for member in getattr(struct, "members", None) or []:
+            member_semantic = self.hlsl_canonical_semantic(
+                self.semantic_from_node(member)
+            )
+            if str(member_semantic or "").lower() == semantic.lower():
+                return getattr(member, "name", None)
+        return None
 
     def used_hlsl_fragment_builtin_names(self, body):
         builtin_names = {"gl_FragCoord", "gl_FragSizeEXT"}
@@ -48107,6 +48184,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 rendered_args = [
                     f"{rendered_args[0]}.{self.hlsl_vector_swizzle(component_count)}"
                 ]
+            elif arg_component_count is None:
+                # HLSL has no one-argument vector constructor for a scalar ("too few elements in vector
+                # initialization"); a cast splats a scalar and keeps a vector of the same width.
+                splat = self.hlsl_scalar_splat_cast(mapped_type, rendered_args[0])
+                return (
+                    self.hlsl_byte_conversion_expression(splat, constructor_type)
+                    or splat
+                )
         if (
             component_count
             and component_count > 1

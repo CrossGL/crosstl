@@ -65,7 +65,9 @@ also runs: `tools/coverage/execution.py` gives the native probe and CrossTL's tr
 harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. The runtime
 harness is not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V
 by the language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or
-whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. CI executes the
+whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. llvmpipe's
+OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a native GLSL probe, or a 4.60
+translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for them on lavapipe. CI executes the
 Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the Linux
 job.
 
