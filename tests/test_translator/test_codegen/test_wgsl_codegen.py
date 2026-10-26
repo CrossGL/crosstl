@@ -2772,6 +2772,115 @@ def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    ("sampler_type", "result_type", "texture_type", "expected"),
+    [
+        (
+            "isampler1D",
+            "int",
+            "texture_1d<i32>",
+            "var r: i32 = i32(textureDimensions(u0, 0));",
+        ),
+        (
+            "usampler1D",
+            "int",
+            "texture_1d<u32>",
+            "var r: i32 = i32(textureDimensions(u0, 0));",
+        ),
+        (
+            "isampler3D",
+            "ivec3",
+            "texture_3d<i32>",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "usampler3D",
+            "ivec3",
+            "texture_3d<u32>",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "isamplerCube",
+            "ivec2",
+            "texture_cube<i32>",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "usamplerCube",
+            "ivec2",
+            "texture_cube<u32>",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "isamplerCubeArray",
+            "ivec3",
+            "texture_cube_array<i32>",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0, 0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "usamplerCubeArray",
+            "ivec3",
+            "texture_cube_array<u32>",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0, 0), "
+            "textureNumLayers(u0)));",
+        ),
+    ],
+)
+def test_wgsl_codegen_maps_integer_samplers_to_typed_textures(
+    sampler_type, result_type, texture_type, expected
+):
+    shader = f"""
+    shader WGSLIntegerSamplers {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer {result_type}* outp;
+            uniform {sampler_type} u0;
+            void main() {{
+                {result_type} r = textureSize(u0, 0);
+                outp[0] = r;
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"var u0: {texture_type};" in generated
+    assert expected in generated
+    assert sampler_type not in generated
+
+
+@pytest.mark.parametrize(
+    "sampler_type",
+    [
+        "sampler2DRect",
+        "sampler2DRectShadow",
+        "samplerBuffer",
+        "isamplerBuffer",
+        "usampler2DRect",
+        "isampler1DArray",
+        "usampler2DMS",
+    ],
+)
+def test_wgsl_codegen_refuses_samplers_without_wgsl_texture_type(sampler_type):
+    shader = f"""
+    shader WGSLUnmappedSamplers {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* outp;
+            uniform {sampler_type} u0;
+            void main() {{
+                outp[0] = 1;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"resource type {sampler_type}"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
     shader = """
     shader WGSLBadShadowLod {
