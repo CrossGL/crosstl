@@ -52052,7 +52052,12 @@ def test_directx_dx11_profile_rejects_mesh_stage(tmp_path, backend):
 @pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
 @pytest.mark.parametrize(
     ("stage", "shader_attribute"),
-    [("task", "amplification"), ("mesh", "mesh")],
+    [
+        ("task", "amplification"),
+        ("amplification", "amplification"),
+        ("object", "amplification"),
+        ("mesh", "mesh"),
+    ],
 )
 def test_directx_legacy_profiles_reject_crossgl_mesh_shading_stages(
     target_profile, stage, shader_attribute
