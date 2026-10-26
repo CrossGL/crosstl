@@ -107,9 +107,11 @@ def test_hlsl_array_written_by_the_callee_is_copied(tmp_path, backend):
     code = crosstl.translate(str(path), backend=backend)
     assert _signature(code, "first") == "float v_crosstl_input[2]"
     assert "float v[2];" in code
+    # crosstl.translate runs clang-format when it is installed (as in CI), which may
+    # break the copy loop over several lines, so whitespace is not significant here.
     assert re.search(
-        r"for \(int crosstl_v_i0 = 0; crosstl_v_i0 < int\(2\); \+\+crosstl_v_i0\) "
-        r"\{ v\[crosstl_v_i0\] = v_crosstl_input\[crosstl_v_i0\]; \}",
+        r"for\s*\(int crosstl_v_i0 = 0; crosstl_v_i0 < int\(2\); \+\+crosstl_v_i0\)\s*"
+        r"\{\s*v\[crosstl_v_i0\] = v_crosstl_input\[crosstl_v_i0\];\s*\}",
         code,
     )
 
