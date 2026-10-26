@@ -15708,6 +15708,17 @@ def _metal_generic_type_parts(
     )
 
 
+def _metal_canonical_generic_base(base: str) -> str:
+    """Spell a generic type name without its global or Metal-library qualifier.
+
+    ``metal::vec<T, 2>``, ``::metal::vec<T, 2>`` and ``vec<T, 2>`` name the same
+    Metal standard-library template, so deduction must not treat a qualified
+    parameter spelling as a different type from an unqualified argument type.
+    Other namespaces stay significant.
+    """
+    return re.sub(r"^(?:::)?(?:metal::)?", "", base.strip())
+
+
 def _metal_merge_template_binding(
     bindings: dict[str, str],
     parameter: str,
@@ -15880,7 +15891,9 @@ def _collect_metal_template_type_bindings(
     actual_base, actual_args = _metal_generic_type_parts(preprocessor, actual)
     if not expected_args:
         return _metal_concrete_parameter_type_compatible(expected, actual)
-    if expected_base != actual_base:
+    if _metal_canonical_generic_base(expected_base) != _metal_canonical_generic_base(
+        actual_base
+    ):
         return not actual_args
     if len(expected_args) > len(actual_args):
         return False
