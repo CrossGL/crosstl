@@ -2421,6 +2421,182 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        "dFdx(values[i])",
+        "dFdy(values[i])",
+        "fwidth(values[i])",
+        "ddx(values[i])",
+        "ddy_fine(values[i])",
+        "dFdxCoarse(values[i])",
+        "fwidthFine(values[i])",
+    ],
+)
+def test_metal_kernel_refuses_derivatives(call):
+    derivative = call.split("(", 1)[0]
+    shader = f"""
+    shader ComputeDerivative {{
+        buffer float values[];
+
+        compute {{
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == derivative
+    assert error.operation == derivative
+    assert error.missing_capabilities == ("metal.kernel-derivatives",)
+    assert f"Metal compute entry point 'main' calls {derivative};" in str(error)
+    assert "only in fragment functions" in str(error)
+
+
+def test_metal_kernel_refuses_derivatives_reached_through_a_helper():
+    shader = """
+    shader ComputeDerivativeHelper {
+        buffer float values[];
+
+        float slope(float x) {
+            return dFdx(x);
+        }
+
+        float twice(float x) {
+            return slope(x) * 2.0;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = twice(values[i]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    assert "calls dFdx through 'slope'" in str(excinfo.value)
+
+
+def test_metal_kernel_allows_user_functions_named_like_derivatives():
+    shader = """
+    shader ComputeUserDerivativeName {
+        buffer float values[];
+
+        float fwidth(float x) {
+            return x * 0.5;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = fwidth(values[i]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+
+
+def test_metal_fragment_derivatives_still_lower_beside_a_kernel():
+    shader = """
+    shader MixedStages {
+        buffer float values[];
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = values[i] * 2.0;
+            }
+        }
+
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(dFdx(uv.x), dFdy(uv.y), fwidth(uv.x), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+    assert "dfdx(uv.x)" in generated_code
+    assert "dfdy(uv.y)" in generated_code
+    assert "fwidth(uv.x)" in generated_code
+
+
+@pytest.mark.parametrize(
+    "stage, function_kind",
+    [
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "object"),
+        ("amplification", "object"),
+    ],
+)
+def test_metal_mesh_and_object_functions_refuse_derivatives(stage, function_kind):
+    shader = f"""
+    shader MeshDerivative {{
+        buffer float values[];
+
+        float slope(float x) {{
+            return dFdx(x);
+        }}
+
+        {stage} {{
+            void main() {{
+                values[0] = slope(values[0]);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == "dFdx"
+    assert error.missing_capabilities == (f"metal.{function_kind}-derivatives",)
+    assert f"Metal {stage} entry point 'main' calls dFdx through 'slope';" in str(error)
+    article = "an" if function_kind == "object" else "a"
+    assert f"so {article} {function_kind} function cannot call dfdx" in str(error)
+
+
+def test_metal_hlsl_mesh_shader_refuses_ddx(tmp_path):
+    source = tmp_path / "m.hlsl"
+    source.write_text(
+        """
+struct V { float4 pos : SV_Position; };
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(uint3 tid : SV_GroupThreadID, out vertices V verts[3], out indices uint3 tris[1]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(ddx((float)tid.x), 0, 0, 1);
+    tris[0] = uint3(0, 1, 2);
+}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        crosstl.translate(str(source), backend="metal", format_output=False)
+
+    assert excinfo.value.missing_capabilities == ("metal.mesh-derivatives",)
+
+
 def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
     # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
     shader = """
