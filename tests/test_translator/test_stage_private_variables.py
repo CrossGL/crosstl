@@ -164,7 +164,7 @@ def _parse(source):
 def _translate(tmp_path, source, backend):
     path = tmp_path / "shader.cgl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _flat(code):
@@ -209,7 +209,7 @@ def test_slang_keeps_static_on_module_scope_values(tmp_path):
 
 def test_metal_passes_the_variable_to_the_helpers(tmp_path):
     code = _flat(_translate(tmp_path, COUNTER, "metal"))
-    assert "void bump(thread float &counter)" in code
+    assert "void bump(thread float& counter)" in code
     assert "bump(counter);" in code
     assert re.search(r"kernel void \w+\(.*\{ .*float counter = 1\.0;", code)
     if shutil.which("xcrun") is not None:
