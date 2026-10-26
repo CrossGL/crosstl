@@ -24926,7 +24926,8 @@ class MetalCodeGen(
         if arity != len(args) or func_name in self.user_function_names:
             return None
         if not all(
-            self.is_scalar_numeric_type(self.expression_result_type(arg)) for arg in args
+            self.is_scalar_numeric_type(self.expression_result_type(arg))
+            for arg in args
         ):
             return None
         operands = [self.generate_expression(arg) for arg in args]

@@ -34640,7 +34640,6 @@ def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
     assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
 
 
-
 def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
     source_path = tmp_path / "scalar_geometric.hlsl"
     source_path.write_text(
@@ -34668,6 +34667,7 @@ def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
     assert "results[0]=abs(x)+((x)*(y))+abs((x)-(y))+sign(x);" in compact
     assert "counts[0]=((a)*(b));" in compact
     assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
+
 
 if __name__ == "__main__":
     pytest.main()
