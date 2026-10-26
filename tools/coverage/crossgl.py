@@ -28,7 +28,7 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
-from .templates.base import NESTED_STRUCTS
+from .templates.base import MAKE_PAIR, NESTED_STRUCTS, PAIR
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -389,7 +389,6 @@ def _scalar(spelling: str, source: str = "iin") -> Template:
     return Template(f"{spelling} v = {spelling}({source}[i]);\noutp[i] = float(v * v);")
 
 
-_PAIR = "struct Pair {\n    float a;\n    float b;\n};"
 _FRAGMENT = (
     "shader Probe {\n    struct FragmentInput {\n        vec2 uv;\n    }\n    struct FragmentOutput {\n"
     "        vec4 color;\n    }\n    fragment {\n        FragmentOutput main(FragmentInput input) {\n"
@@ -498,9 +497,10 @@ _MESH_STAGES = {
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
-    "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
-    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
+    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
+    "struct-return": Template(C_FAMILY["struct-return"].body, MAKE_PAIR, prelude=PAIR),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),
