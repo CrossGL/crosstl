@@ -45,7 +45,10 @@ from crosstl.backend.Metal.template_overloads import (
     declared_type_names,
     select_instantiated_overload,
 )
-from crosstl.backend.Metal.text_scanners import mask_comments_and_literals
+from crosstl.backend.Metal.text_scanners import (
+    brace_block_spans,
+    mask_comments_and_literals,
+)
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -19207,32 +19210,7 @@ def _metal_diagnostic_template_call_noop_replacements(
 
 
 def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    stack: list[int] = []
-    i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        if source[i] == "{":
-            stack.append(i)
-        elif source[i] == "}" and stack:
-            spans.append((stack.pop(), i + 1))
-        i += 1
-    return spans
+    return brace_block_spans(source, preprocessor._read_string)
 
 
 def _metal_enclosing_block_span(
@@ -19874,6 +19852,14 @@ def _metal_matching_angle_end(expression: str, start: int) -> int | None:
     return None
 
 
+_METAL_USING_SCAN_STOPS = re.compile(r"[\"']|//|/\*|using")
+_METAL_USING_NAMESPACE_DIRECTIVE = re.compile(
+    r"using\s+namespace\s+"
+    r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;"
+)
+
+
 def _metal_using_namespace_directives(
     preprocessor: Any,
     source: str,
@@ -19882,35 +19868,34 @@ def _metal_using_namespace_directives(
     known_namespaces: set[str],
 ) -> list[tuple[int, tuple[int, int] | None, str]]:
     directives: list[tuple[int, tuple[int, int] | None, str]] = []
+    search = _METAL_USING_SCAN_STOPS.search
     i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
+    while True:
+        stop = search(source, i)
+        if stop is None:
+            break
+        i = stop.start()
+        token = stop.group()
+        if token == "//":
             end = source.find("\n", i + 2)
             if end == -1:
                 break
             i = end + 1
             continue
-        if source.startswith("/*", i):
+        if token == "/*":
             end = source.find("*/", i + 2)
             if end == -1:
                 break
             i = end + 2
             continue
-        if not source.startswith("using", i) or (
-            i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_")
-        ):
+        if token != "using":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_"):
             i += 1
             continue
-        match = re.match(
-            r"using\s+namespace\s+"
-            r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
-            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;",
-            source[i:],
-        )
+        match = _METAL_USING_NAMESPACE_DIRECTIVE.match(source, i)
         if match is None:
             i += len("using")
             continue
@@ -19932,7 +19917,7 @@ def _metal_using_namespace_directives(
             candidates[-1],
         )
         directives.append((i, directive_scope, resolved))
-        i += match.end()
+        i = match.end()
     return directives
 
 

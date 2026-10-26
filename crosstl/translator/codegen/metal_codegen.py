@@ -364,6 +364,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .metal_array_copies import (
     generate_metal_array_copy,
     generate_metal_array_initializer,
@@ -11044,6 +11045,18 @@ class MetalCodeGen(
             target = node.left
             value = node.right
         op = getattr(node, "operator", "=")
+        # MSL has no *= for two matrices; v *= m keeps its MSL row-vector meaning.
+        matrix_product = matrix_product_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            is_matrix=self.is_matrix_value_type,
+            is_vector=lambda _vtype: False,
+            backend="metal",
+        )
+        if matrix_product is not None:
+            return self.generate_assignment(matrix_product)
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )

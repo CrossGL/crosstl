@@ -1270,9 +1270,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "struct MatrixData {",
             "mat4 m1;",
-            "float2x4 m2;",
-            "float3x2 m3;",
+            "mat4x2 m2;",
+            "mat2x3 m3;",
             "outputBuffer[0] = MatrixData().m1[0][0];",
+            "outputBuffer[1] = MatrixData().m2[3][1];",
         ],
         "not_contains": ["MATRIX_LAYOUT", "row_major", "column_major"],
     },

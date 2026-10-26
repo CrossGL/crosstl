@@ -28,7 +28,7 @@ def test_hazard_inventory_and_oracles():
     # structs with a three-component vector member, and constants
     # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing, HLSL row_major cbuffer
     # matrices and MSL layout.
-    assert len(CASES) == len(BY_ID) == 114
+    assert len(CASES) == len(BY_ID) == 115
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

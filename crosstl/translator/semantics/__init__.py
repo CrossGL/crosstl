@@ -81,6 +81,10 @@ from .intrinsic_named_functions import (
     resolve_intrinsic_named_functions,
 )
 from .lower import Lowerer, RuleInexpressibleError
+from .matrix_spellings import (
+    AmbiguousMatrixSpellingError,
+    refuse_ambiguous_matrix_spellings,
+)
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -113,6 +117,7 @@ from .stage_interface_structs import (
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .stage_private_variables import hoist_stage_private_variables
 from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -143,6 +148,7 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
+    "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
     "BindingIndexUnresolvedError",
     "BuiltinValueUnsupportedError",
@@ -223,6 +229,8 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
+    Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
+    :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
@@ -280,6 +288,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
+    storage at module scope (:mod:`.stage_private_variables`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
     texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
@@ -306,6 +316,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
@@ -314,6 +325,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)

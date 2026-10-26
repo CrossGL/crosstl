@@ -125,6 +125,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
@@ -4837,6 +4838,32 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         return " ".join(qualifiers) + " "
 
+    def slang_static_storage_prefix(self, node, mapped_type=None):
+        """``static`` for a module-scope value with one copy per invocation.
+
+        As in HLSL, a Slang global without ``static`` is a uniform, so CrossGL's module-scope ``static`` values
+        (SPIR-V ``Private`` storage) keep the keyword. Groupshared, uniform and resource declarations do not.
+        """
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "static" not in qualifiers or qualifiers & {
+            "const",
+            "uniform",
+            "groupshared",
+            "shared",
+            "threadgroup",
+            "workgroup",
+        }:
+            return ""
+        if (
+            mapped_type is not None
+            and self.slang_register_prefix_for_type(mapped_type, node, None) is not None
+        ):
+            return ""
+        return "static "
+
     def slang_parameter_qualifier_prefix(self, node):
         qualifiers = []
         seen = set()
@@ -5836,7 +5863,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if self.skip_duplicate_slang_global_variable(node, declaration_type):
                 return ""
-            prefix = self.slang_declaration_qualifier_prefix(node)
+            prefix = self.slang_static_storage_prefix(
+                node
+            ) + self.slang_declaration_qualifier_prefix(node)
             if size is None:
                 return f"{prefix}{element_type} {node.name}[];\n"
             return f"{prefix}{element_type} {node.name}[{size}];\n"
@@ -5849,7 +5878,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         declaration = self.format_declaration(vtype, node.name, node)
         declaration = (
-            self.slang_declaration_qualifier_prefix(node)
+            self.slang_static_storage_prefix(node, mapped_type)
+            + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
         )
@@ -8375,7 +8405,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
         return f"{declaration};"
 
+    def slang_matrix_product_assignment(self, node):
+        # Slang *= on matrices is component-wise; CrossGL's is the product.
+        return matrix_product_assignment(
+            node.left,
+            node.right,
+            node.operator,
+            type_of=self.expression_result_type,
+            is_matrix=self.is_matrix_value_type,
+            is_vector=self.is_vector_value_type,
+            backend="slang",
+        )
+
     def generate_assignment(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
@@ -8399,6 +8444,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment_statement(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
