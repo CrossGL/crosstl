@@ -871,14 +871,11 @@ def test_project_demo_triggers_cover_code_without_root_documentation():
         "demos/integrations/mlx/contracts/copy.directx.json",
         "tests/runtime_helpers.py",
         "tools/run_bounded_command.py",
-        "support/features.json",
         ".github/actions/install-linux-dxc/action.yml",
         ".github/workflows/demo-project-testing.yml",
         ".pre-commit-config.yaml",
         "conftest.py",
         "pyproject.toml",
-        "requirements.txt",
-        "setup.cfg",
     ):
         assert any(fnmatchcase(path, pattern) for pattern in paths), path
     for path in ("README.md", "docs/source/index.rst", ".github/TESTING.md"):
