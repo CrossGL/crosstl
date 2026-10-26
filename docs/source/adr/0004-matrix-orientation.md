@@ -62,4 +62,7 @@ Per target:
   integer counterpart of `mat2x3`. The GLSL and Metal emitters emulate them as structs of columns.
 - MSL takes only whole columns or one scalar per element in a matrix constructor, so the Metal emitter spreads the
   components of a mixed argument list, such as `mat2(vec4)`, through a helper.
-- Still open: Slang keeps its previous spelling until it gets the HLSL lowering.
+- `floatNxM` names a different matrix in MSL (N columns) and HLSL (N rows), so CrossGL refuses the non-square
+  `floatNxM` and `doubleNxM` spellings (`crosstl/translator/semantics/matrix_spellings.py`) and the importers write
+  `matCxR`. Square `floatNxN` and `doubleNxN` are aliases of `matN` and `dmatN`.
+- Still open: Slang keeps its previous spelling until it gets the HLSL lowering; its non-square matrices are refused.
