@@ -1177,7 +1177,8 @@ class SlangToCrossGLConverter:
 
     def generate_function(self, func, indent=1):
         """Render one Slang function node as a CrossGL function."""
-        code = " "
+        code = self.generate_function_attributes(func)
+        code += " "
         code += "  " * indent
         self.push_identifier_scope()
         self.push_variable_type_scope(func.params)
@@ -1211,6 +1212,26 @@ class SlangToCrossGLConverter:
         self.pop_sampleable_resource_scope()
         self.pop_variable_type_scope()
         self.pop_identifier_scope()
+        return code
+
+    def generate_function_attributes(self, func):
+        """Carry the function attributes CrossGL keeps on an entry point.
+
+        ``[WaveSize(...)]`` (the single and the range forms) is written as ``@ WaveSize(...)``, as the HLSL import
+        writes it, so each target generator writes or refuses it instead of the lane count being dropped.
+        """
+        code = ""
+        for attribute in getattr(func, "attributes", []) or []:
+            if str(attribute.get("name", "")).lower() != "wavesize":
+                continue
+            arguments = [
+                str(argument).strip()
+                for argument in attribute.get("arguments", []) or []
+            ]
+            if arguments:
+                code += f"    @ WaveSize({', '.join(arguments)})\n"
+            else:
+                code += "    @ WaveSize\n"
         return code
 
     def collect_unnamed_parameter_names(self, params):
@@ -3046,7 +3067,8 @@ class SlangToCrossGLConverter:
         offset_index = (
             2
             if len(extra_args) > 2
-            and resource_base not in {
+            and resource_base
+            not in {
                 "TextureCube",
                 "TextureCubeArray",
                 "SamplerCube",
