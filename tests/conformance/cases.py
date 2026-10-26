@@ -705,6 +705,12 @@ def o_half_mul(inp):
     )
 
 
+def o_array_values(inp):
+    """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
+    x = inp.astype(np.int64)
+    return (16 * x + 21).astype(np.int32)
+
+
 def o_fib(inp):
     def fib(n):
         a, b = 0, 1
@@ -1602,6 +1608,15 @@ CASES = [
         np.arange(67, dtype=np.int32) * 7,
         np.int32,
         lambda inp: inp[3:67].astype(np.int32),
+    ),
+    Case(
+        "u_array_values",
+        "H17",
+        "local, member and two-dimensional arrays read through const T v[N] parameters",
+        "C++ arrays hold N elements with the first extent outermost",
+        SMALL[:64].copy(),
+        np.int32,
+        o_array_values,
     ),
     Case(
         "m_ptr_arith",
