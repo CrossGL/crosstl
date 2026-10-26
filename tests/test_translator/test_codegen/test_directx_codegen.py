@@ -73,6 +73,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXNative16BitArithmeticError,
     DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
+    DirectXMeshStageProfileError,
     DirectXRayTracingStageProfileError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
@@ -52009,3 +52010,72 @@ def test_directx_dx10_profile_rejects_ray_tracing_stages():
         match="DirectX profile dx10 does not support the 'raygeneration'",
     ):
         HLSLCodeGen(target_profile="dx10").generate(crosstl.translator.parse(code))
+
+
+MESH_STAGE_HLSL = """
+struct VertexOut { float4 pos : SV_Position; };
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(out indices uint3 tris[1], out vertices VertexOut verts[3]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(0.0, 0.0, 0.0, 1.0);
+    verts[1].pos = float4(1.0, 0.0, 0.0, 1.0);
+    verts[2].pos = float4(0.0, 1.0, 0.0, 1.0);
+    tris[0] = uint3(0, 1, 2);
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_mesh_stage(tmp_path, backend):
+    source = tmp_path / "mesh.hlsl"
+    source.write_text(MESH_STAGE_HLSL)
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_type == "mesh"
+    assert error.shader_attribute == "mesh"
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-mesh-stage-unsupported"
+    )
+    assert "Shader Model 6.5" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert '[shader("mesh")]' in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+@pytest.mark.parametrize(
+    ("stage", "shader_attribute"),
+    [("task", "amplification"), ("mesh", "mesh")],
+)
+def test_directx_legacy_profiles_reject_crossgl_mesh_shading_stages(
+    target_profile, stage, shader_attribute
+):
+    code = f"""
+    shader LegacyMeshShading {{
+        {stage} {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    error = exc_info.value
+    assert error.target_profile == target_profile
+    assert error.shader_type == stage
+    assert error.shader_attribute == shader_attribute
+    assert (
+        f"DirectX profile {target_profile} does not support the "
+        f"'{shader_attribute}' stage"
+    ) in str(error)
