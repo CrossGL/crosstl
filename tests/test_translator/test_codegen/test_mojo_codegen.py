@@ -27460,10 +27460,6 @@ def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
     assert "return dot_product(v, v)" in generated
 
 
-if __name__ == "__main__":
-    pytest.main()
-
-
 def test_mojo_boolean_vector_logical_ops_use_bitwise_operators():
     """&& and || on boolean vectors must be lane-wise (& / |) in Mojo.
 
@@ -27474,6 +27470,8 @@ def test_mojo_boolean_vector_logical_ops_use_bitwise_operators():
         bvec2 both(bvec2 a, bvec2 b) { return a && b; }
         bvec2 either(bvec2 a, bvec2 b) { return a || b; }
         bvec3 cmp(vec3 x, vec3 y, vec3 z) { return (x < y) && (y < z); }
+        bvec2 mask_and_scalar(bvec2 a, bool s) { return a && s; }
+        bvec3 scalar_or_mask(bool s, bvec3 a) { return s || a; }
         bool scalar_and(bool a, bool b) { return a && b; }
         bool scalar_or(bool a, bool b) { return a || b; }
     }
@@ -27484,7 +27482,14 @@ def test_mojo_boolean_vector_logical_ops_use_bitwise_operators():
     assert "(a & b)" in generated
     assert "(a | b)" in generated
     # Comparison results are boolean vectors; the && between them should be &
-    assert "&" in generated
+    assert "((x).lt(y) & (y).lt(z))" in generated
+    # A scalar bool operand of a mask is splatted to the mask's storage lanes
+    assert "(a & SIMD[DType.bool, 2](fill=s))" in generated
+    assert "(SIMD[DType.bool, 4](fill=s) | a)" in generated
     # Scalar forms keep logical operators
     assert "(a and b)" in generated
     assert "(a or b)" in generated
+
+
+if __name__ == "__main__":
+    pytest.main()

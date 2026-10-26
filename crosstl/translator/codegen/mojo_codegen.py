@@ -8892,22 +8892,6 @@ class MojoCodeGen:
             )
             if numeric_vector_binary is not None:
                 return numeric_vector_binary
-            # Mojo `and`/`or` are not lane-wise on boolean vectors (SIMD[DType.bool, N]).
-            # Use `&`/`|` for component-wise && / || on boolean masks; keep `and`/`or`
-            # for scalar bool so short-circuit evaluation is preserved.
-            op_raw = expr.op
-            if op_raw in ("&&", "||", "AND", "OR", "LOGICAL_AND", "LOGICAL_OR"):
-                left_type = self.expression_result_type(expr.left)
-                right_type = self.expression_result_type(expr.right)
-                left_info = self.vector_type_info(left_type)
-                right_info = self.vector_type_info(right_type)
-                left_is_bvec = left_info is not None and left_info[0] == "DType.bool"
-                right_is_bvec = right_info is not None and right_info[0] == "DType.bool"
-                if left_is_bvec or right_is_bvec:
-                    left = self.generate_expression(expr.left)
-                    right = self.generate_expression(expr.right)
-                    bit_op = "&" if op_raw in ("&&", "AND", "LOGICAL_AND") else "|"
-                    return f"({left} {bit_op} {right})"
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
@@ -12704,28 +12688,40 @@ class MojoCodeGen:
         return f"({left}).{method}({right})"
 
     def generate_boolean_vector_logical_op(self, expr):
-        """Combine two boolean vector masks per component.
+        """Combine boolean vector masks per component.
 
         Mojo's ``and`` and ``or`` return one whole operand, chosen by whether
         any lane of the left mask is true, so ``&&`` and ``||`` on boolean
-        vectors are written with the lane-wise ``&`` and ``|``. Scalar ``bool``
-        operands keep ``and`` and ``or``, which short-circuit.
+        vectors are written with the lane-wise ``&`` and ``|``. A scalar
+        ``bool`` operand of a mask is splatted to the mask's lanes. Two scalar
+        ``bool`` operands keep ``and`` and ``or``, which short-circuit.
         """
         op = self.map_operator(expr.op)
         if op not in {"and", "or"}:
             return None
-        left_info = self.vector_type_info(self.expression_result_type(expr.left))
-        right_info = self.vector_type_info(self.expression_result_type(expr.right))
-        if left_info is None or right_info is None:
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        left_mask = left_info is not None and left_info[0] == "DType.bool"
+        right_mask = right_info is not None and right_info[0] == "DType.bool"
+        if left_mask and right_mask:
+            if left_info != right_info:
+                raise ValueError(
+                    "Mojo boolean vector && and || require masks of the same width"
+                )
+        elif not (
+            (left_mask and MOJO_SCALAR_DTYPES.get(right_type) == "DType.bool")
+            or (right_mask and MOJO_SCALAR_DTYPES.get(left_type) == "DType.bool")
+        ):
             return None
-        if left_info[0] != "DType.bool" or right_info[0] != "DType.bool":
-            return None
-        if left_info != right_info:
-            raise ValueError(
-                "Mojo boolean vector && and || require masks of the same width"
-            )
         left = self.generate_expression(expr.left)
         right = self.generate_expression(expr.right)
+        # Mojo does not convert a Bool to a mask, so splat it explicitly.
+        if not left_mask:
+            left = f"SIMD[DType.bool, {right_info[2]}](fill={left})"
+        if not right_mask:
+            right = f"SIMD[DType.bool, {left_info[2]}](fill={right})"
         lane_op = "&" if op == "and" else "|"
         return f"({left} {lane_op} {right})"
 
