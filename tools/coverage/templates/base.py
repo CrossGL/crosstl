@@ -31,6 +31,18 @@ SPREAD = "float spread(Pair q) {\n    q.a = q.a * 2.0;\n    return q.a + q.b;\n}
 POSE = "struct Pose {\n    $vec4 v;\n    $vec2 u;\n    int n;\n};"
 # quadruple calls twice above its definition, which the prototype declares.
 QUAD = "float twice(float x);\n\nfloat quadruple(float x) {\n    return twice(twice(x));\n}\n\n"
+# bump and leap change their argument, so a conditional expression that calls both changes it twice.
+STEPS = (
+    "float bump(inout int k) {\n    k = k + 1;\n    return float(k);\n}\n\n"
+    "float leap(inout int k) {\n    k = k + 16;\n    return float(k) * 2.0;\n}"
+)
+# Three paths return from inside the switch; case 2, and the default when a is 8 or less, return after it.
+PICK = (
+    "float pick(int a) {\n    switch (a & 3) {\n        case 0:\n            return 1.0;\n        case 1:\n"
+    "            return float(a) * 2.0;\n        case 2:\n            break;\n        default:\n"
+    "            if (a > 8) {\n                return 64.0;\n            }\n            break;\n    }\n"
+    "    return 4.0 + float(a);\n}"
+)
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -400,6 +412,43 @@ C_FAMILY = {
         "outp[i] = p.v.x + p.v.y * 16.0 + p.v.z * 128.0 + p.v.w * 4096.0 + p.u.x * 16384.0 + p.u.y * 65536.0"
         " + float(p.n) * 1048576.0;",
         POSE,
+    ),
+    # Only the operand that the condition picks is evaluated, so k changes once per conditional expression.
+    "conditional-side-effect": Template(
+        "int k = iin[i];\nfloat r = (k & 1) == 0 ? bump(k) : leap(k);\nfloat s = k > 20 ? leap(k) : 0.5;\n"
+        "outp[i] = r + float(k) * 64.0 + s * 4096.0;",
+        STEPS,
+    ),
+    "switch-return": Template(
+        "outp[i] = pick(iin[i]) + pick(iin[i] + 1) * 128.0;", PICK
+    ),
+    # A break in a loop inside a case leaves only the loop, and a continue there starts its next iteration.
+    "loop-in-switch": Template(
+        "float acc = 0.0;\nint n = iin[i];\nswitch (n & 3) {\n    case 0:\n        for (int k = 0; k < 8; k++) {\n"
+        "            if (k == (n >> 2)) {\n                break;\n            }\n            acc += 2.0;\n        }\n"
+        "        acc += 1.0;\n        break;\n    case 1:\n        while (acc < 20.0) {\n            acc += 3.0;\n"
+        "            if (acc > float(n)) {\n                break;\n            }\n        }\n        acc += 128.0;\n"
+        "        break;\n    default:\n        for (int k = 0; k < n; k++) {\n            if ((k & 1) == 1) {\n"
+        "                continue;\n            }\n            acc += 4.0;\n        }\n        acc += 512.0;\n"
+        "        break;\n}\noutp[i] = acc + fin[i];"
+    ),
+    # The int and uint operands and the integer literals convert to float without a constructor.
+    "implicit-conversion": Template(
+        "int a = iin[i];\nuint u = 3u;\nfloat x = a;\nfloat y = a * 0.5 + 1;\nfloat z = x / 4 + u;\n"
+        "outp[i] = x + y * 16.0 + z * 256.0;"
+    ),
+    # m *= n is the matrix product m * n, and v *= m the row-vector product v * m; neither is element-wise.
+    "matrix-compound-assignment": Template(
+        "float f = float(iin[i]);\n$mat2 m = $mat2(f, 1.0, 2.0, 3.0);\n$mat2 n = $mat2(1.0, 2.0, 0.0, 1.0);\n"
+        "m *= n;\nm *= 2.0;\nm -= n;\n$vec2 v = $vec2(1.0, 1.0);\nv *= m;\n"
+        "outp[i] = m[0][0] + m[0][1] * 16.0 + m[1][0] * 256.0 + m[1][1] * 4096.0 + v.x * 65536.0"
+        " + v.y * 1048576.0;"
+    ),
+    # A matrix built from one scalar has the scalar on its diagonal and zeros elsewhere.
+    "diagonal-matrix": Template(
+        "float f = float(iin[i]);\n$mat2 d = $mat2(f);\n$mat2 e = $mat2(2.0) + d;\n"
+        "outp[i] = d[0][0] + d[0][1] * 16.0 + d[1][0] * 256.0 + d[1][1] * 4096.0 + e[1][1] * 65536.0"
+        " + e[0][1] * 1048576.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,

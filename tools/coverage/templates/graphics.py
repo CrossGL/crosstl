@@ -11,6 +11,7 @@ from . import (
     composites,
     constructors,
     declarations,
+    evaluation,
     functions,
     operators,
     scopes,
@@ -167,6 +168,7 @@ HLSL = {
     **scopes.HLSL,
     **calls.HLSL,
     **shapes.HLSL,
+    **evaluation.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -311,6 +313,7 @@ METAL = {
     **constructors.METAL,
     **scopes.METAL,
     **calls.METAL,
+    **evaluation.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -502,6 +505,7 @@ WGSL = {
     **calls.WGSL,
     **branches.WGSL,
     **shapes.WGSL,
+    **evaluation.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

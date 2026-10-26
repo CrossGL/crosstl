@@ -12,6 +12,7 @@ from .base import ABSENT, C_FAMILY, Template
 from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
+from .evaluation import WEBGL as _EVALUATION
 from .scopes import WEBGL as _SCOPES
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
@@ -53,6 +54,7 @@ WEBGL = {
     **_CONSTRUCTORS,
     **_SCOPES,
     **_CALLS,
+    **_EVALUATION,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),
