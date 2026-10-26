@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.mojo_codegen import MojoScalarConversionError
 from tools.coverage import validators
 
 OPS = [("<", "lt"), ("<=", "le"), (">", "gt"), (">=", "ge"), ("==", "eq"), ("!=", "ne")]
@@ -177,3 +178,81 @@ def test_scalar_boolean_not_remains_logical_not(tmp_path):
     )
     assert "(not a)" in output
     assert "(~a)" not in output
+
+
+@pytest.mark.parametrize(
+    "code,context",
+    [
+        # The second kernel from #3134.
+        (
+            "shader P { bool f(vec3 a, vec3 b) { bool r = !(a == b); return r; } }",
+            "declaration r",
+        ),
+        ("shader P { bool f(bvec2 a) { return !a; } }", "return value"),
+        (
+            "shader P { float f(bvec2 a) { if (!a) { return 1.0; } return 0.0; } }",
+            "if condition",
+        ),
+    ],
+)
+def test_inverted_boolean_vector_in_scalar_context_is_refused(tmp_path, code, context):
+    with pytest.raises(MojoScalarConversionError) as raised:
+        translate(tmp_path, code)
+    assert raised.value.target_type == "bool"
+    assert raised.value.source_type.startswith("bvec")
+    assert context in str(raised.value)
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+def test_boolean_vector_not_runs_with_native_mojo(tmp_path, width):
+    mojo = validators.command("mojo")
+    if not mojo:
+        pytest.skip("Mojo compiler not installed")
+    output = translate(
+        tmp_path,
+        f"""
+shader Probe {{
+    bvec{width} not_eq(vec{width} a, vec{width} b) {{ return !(a == b); }}
+    bool either(vec{width} a, vec{width} b) {{ return any(!(a < b)); }}
+    bool every(vec{width} a, vec{width} b) {{ return all(!(a == b)); }}
+}}
+""",
+    )
+    storage = 4 if width == 3 else width
+    vector = f"SIMD[DType.float32, {storage}]"
+    low = ", ".join(["0.0"] * storage)
+    high = ", ".join(["1.0"] * width + (["0.0"] if width == 3 else []))
+    # As in the reduction test above, compile the generated return expressions
+    # in current-syntax wrappers.
+    expressions = {
+        name: re.search(rf"fn {name}\([^\n]*\n\s+return (.+)", output).group(1)
+        for name in ("not_eq", "either", "every")
+    }
+    program = f"""
+def not_eq(a: {vector}, b: {vector}) -> SIMD[DType.bool, {storage}]:
+    return {expressions["not_eq"]}
+
+def either(a: {vector}, b: {vector}) -> Bool:
+    return {expressions["either"]}
+
+def every(a: {vector}, b: {vector}) -> Bool:
+    return {expressions["every"]}
+
+def main():
+    var low = {vector}({low})
+    var high = {vector}({high})
+    print(not_eq(low, high))
+    print(either(low, high))
+    print(every(low, high))
+"""
+    path = tmp_path / "run-not.mojo"
+    path.write_text(program)
+    result = subprocess.run(
+        [*mojo, "run", str(path)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    # `~` flips the padding lane of a three-lane mask too: it clears the equal
+    # padding lane of `a == b` and sets the false one of `a < b`, which the
+    # reductions must ignore.
+    lanes = ["True"] * width + (["False"] if width == 3 else [])
+    assert result.stdout.splitlines() == [f"[{', '.join(lanes)}]", "False", "True"]

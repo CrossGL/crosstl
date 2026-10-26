@@ -14949,9 +14949,9 @@ class MojoCodeGen:
                 return MOJO_DTYPE_INFO[vector_info[0]][0]
             return None
         if isinstance(expr, UnaryOpNode):
-            op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "")))
+            op = self.map_operator(expr.op)
             operand_type = self.expression_result_type(expr.operand)
-            if op in {"not", "!"}:
+            if op == "not":
                 info = self.vector_type_info(operand_type)
                 if info is not None and info[0] == "DType.bool":
                     return operand_type
