@@ -39,6 +39,9 @@ MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
 # which shapeless compiled graphs use to count reduced elements.
 HOST_EVAL_PRIMITIVES = ("NumberOfElements",)
 COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
+# Slices whose start indices are arrays: a translated offset kernel computes
+# the start, and the dynamic copy kernels move the elements.
+DYNAMIC_SLICE_PRIMITIVES = ("DynamicSlice", "DynamicSliceUpdate")
 CAST_PRIMITIVES = ("AsType",)
 # Unary primitives MLX instantiates only for complex64 operands.
 COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
@@ -96,6 +99,7 @@ def adapted_sources(original, primitives, events):
         *VIEW_PRIMITIVES,
         *HOST_EVAL_PRIMITIVES,
         *COPY_PRIMITIVES,
+        *DYNAMIC_SLICE_PRIMITIVES,
         *BINARY_OPERATIONS,
         "Power",
         "ArcTan2",

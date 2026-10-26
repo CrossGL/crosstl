@@ -39,12 +39,14 @@ from demos.integrations.mlx.portable_host import (
     compiled_layout,
     conv_dispatch,
     copy_dispatch,
+    copy_layout,
     cross_entropy_dispatch,
     cross_entropy_layout,
-    copy_layout,
     divmod_dispatch,
     dot_dispatch,
     dot_layout,
+    dynamic_offset_dispatch,
+    dynamic_offset_packages,
     elementwise_dispatch,
     fp_matmul_layout,
     fp_qmm_layout,
@@ -660,6 +662,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # So do the start-offset kernels MLX generates for dynamic slices.
+        self.dynamic_offsets = (
+            dynamic_offset_packages.DynamicOffsetPackageCache(
+                mlx_root, self.directory / dynamic_offset_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         # So do whole-array reductions of the 8-byte and 16-bit float types.
         self.wide_reductions = (
             wide_reduction_packages.cache(
@@ -816,6 +826,11 @@ class HostRuntime:
             if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
                 return 1
             if name in arange_packages.ENTRIES and self.aranges is not None:
+                return 1
+            if (
+                name in dynamic_offset_packages.ENTRIES
+                and self.dynamic_offsets is not None
+            ):
                 return 1
             if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
                 return 1
@@ -1000,6 +1015,10 @@ class HostRuntime:
             )
         if self.lazy_arange(entry):
             return arange_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in dynamic_offset_packages.ENTRIES:
+            return dynamic_offset_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if entry in arg_reduce_layout.ENTRIES:

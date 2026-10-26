@@ -63,6 +63,8 @@ from demos.integrations.mlx.portable_host import (
     cross_entropy_evidence,
     cross_entropy_layout,
     divmod_evidence,
+    dynamic_offset_evidence,
+    dynamic_offset_packages,
     elementwise_evidence,
     gather_evidence,
     lazy_package_evidence,
@@ -345,6 +347,7 @@ AUTOGRAD_TESTS = (
             "grad_trees",
             "jvp",
             "jvp_through_bitwise_ops",
+            "jvp_with_partly_traced_inputs",
             "logsumexp_grad",
             "matmul_jvps",
             "power_grad",
@@ -543,6 +546,9 @@ UPSTREAM_TESTS = (
             "test_vecdot",
             # This also reaches row_reduce_looped through the on-demand row index.
             "test_sum",
+            # This slices and updates at array start indices, which the
+            # translated offset kernel turns into element offsets.
+            "test_dynamic_slicing",
         )
     ) + (
         # These reach lazily translated arg reductions of every real dtype, and
@@ -1048,6 +1054,19 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         # Derives the cached package again and checks the native modules;
         # integer results are recomputed from their scalars.
         arange_evidence.audit_event(event, aranges)
+        lazy_checked.add(i)
+        owners[i] += 1
+    offsets = dynamic_offset_packages.DynamicOffsetPackageCache(
+        args.mlx_root, args.packages / dynamic_offset_packages.CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in dynamic_offset_packages.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op dynamic offset targets another backend")
+        # Derives the package again from the pinned template, checks the
+        # native modules and recomputes the offset from the start indices.
+        dynamic_offset_evidence.audit_event(event, offsets)
         lazy_checked.add(i)
         owners[i] += 1
     wide = wide_reduction_packages.cache(

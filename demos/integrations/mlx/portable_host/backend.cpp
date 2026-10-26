@@ -284,9 +284,16 @@ void launch_copy_region(
   }
 }
 
-void dispatch_copy_into(
+// Ports copy_gpu_inplace's GeneralGeneral copy: `data_shape` elements of
+// `in`, read from element `src_offset` with `src_strides`, are written to
+// `out` at `dst_offset` with `dst_strides`. Dynamic slices pass the offsets
+// their translated offset kernel computed, so both are checked here.
+void dispatch_strided_copy(
     const mlx::core::array& in,
     mlx::core::array& out,
+    const mlx::core::Shape& data_shape,
+    std::vector<int64_t> src_strides,
+    int64_t src_offset,
     std::vector<int64_t> dst_strides,
     int64_t dst_offset,
     bool preserve) {
@@ -296,17 +303,27 @@ void dispatch_copy_into(
         "CrossTL copying layouts require matching bool, integer, float16, bfloat16, float32 or complex64 arrays.");
   }
   constexpr int64_t max_index = std::numeric_limits<int32_t>::max();
-  if (in.size() > max_index || in.ndim() > 64 ||
-      dst_strides.size() != in.ndim() ||
+  uint64_t count = 1;
+  for (auto extent : data_shape) {
+    if (extent < 0) {
+      throw std::invalid_argument("CrossTL copy shape is negative.");
+    }
+    count = std::min<uint64_t>(count * uint64_t(extent), uint64_t(max_index) + 1);
+  }
+  if (count > uint64_t(max_index) || data_shape.size() > 64 ||
+      src_strides.size() != data_shape.size() ||
+      dst_strides.size() != data_shape.size() ||
       out.size() > max_index) {
     throw std::invalid_argument(
         "CrossTL copy requires signed 32-bit element counts and at most 64 axes.");
   }
-  if (in.size() == 0) {
+  if (count == 0) {
     return;
   }
-  std::vector<int32_t> shape(in.shape().begin(), in.shape().end());
-  std::vector<int64_t> src_strides(in.strides().begin(), in.strides().end());
+  if (src_offset < -max_index || src_offset > max_index) {
+    throw std::invalid_argument("CrossTL copy source offset exceeds signed index bounds.");
+  }
+  std::vector<int32_t> shape(data_shape.begin(), data_shape.end());
   while (shape.size() < 2) {
     shape.insert(shape.begin(), 1);
     src_strides.insert(src_strides.begin(), 0);
@@ -332,10 +349,10 @@ void dispatch_copy_into(
   if (in.offset() < 0 || in.offset() % item_size != 0) {
     throw std::invalid_argument("CrossTL copy source span exceeds its bounds.");
   }
-  const uint64_t origin = in.offset() / item_size;
-  const uint64_t capacity = in.buffer_size() / item_size;
-  if (origin >= capacity || uint64_t(-low) > origin ||
-      uint64_t(high) >= capacity - origin) {
+  const int64_t origin = in.offset() / item_size;
+  const int64_t capacity = in.buffer_size() / item_size;
+  if (origin >= capacity || origin + src_offset + low < 0 ||
+      origin + src_offset + high >= capacity) {
     throw std::invalid_argument("CrossTL copy source view exceeds its allocation.");
   }
   int64_t destination_low = dst_offset, destination_high = dst_offset;
@@ -373,13 +390,26 @@ void dispatch_copy_into(
       width == 8 ? storage_type(in.dtype()) :
       width == 4 ? "uint32" : width == 2 ? "uint16" : "uint8";
   std::vector<CopyRegion> regions;
-  append_copy_regions({shape, 0, dst_offset}, src_strides, dst_strides, regions);
+  append_copy_regions(
+      {shape, src_offset, dst_offset}, src_strides, dst_strides, regions);
   for (size_t index = 0; index < regions.size(); ++index) {
     // Later regions keep the elements that earlier regions already wrote.
     launch_copy_region(
         in, out, regions[index], src_strides, dst_strides, dtype,
         preserve || index > 0 ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1));
   }
+}
+
+void dispatch_copy_into(
+    const mlx::core::array& in,
+    mlx::core::array& out,
+    std::vector<int64_t> dst_strides,
+    int64_t dst_offset,
+    bool preserve) {
+  dispatch_strided_copy(
+      in, out, in.shape(),
+      std::vector<int64_t>(in.strides().begin(), in.strides().end()), 0,
+      std::move(dst_strides), dst_offset, preserve);
 }
 
 void dispatch_copy(const mlx::core::array& in, mlx::core::array& out) {
@@ -2416,6 +2446,111 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   } else {
     dispatch_slice_update(update, out, entry, std::move(destination_strides), offset);
   }
+}
+
+// Ports mlx/backend/metal/slicing.cpp compute_dynamic_offset: the translated
+// compute_dynamic_offset_<type> kernel MLX generates sums each start index
+// times the stride of its axis into one int64 element offset, which the
+// runtime reads back for the dynamic copy that follows.
+int64_t dynamic_offset(
+    const array& indices,
+    const Strides& strides,
+    const std::vector<int>& axes) {
+  require_runtime();
+  const char* type = indices.dtype() == int32 ? "int32"
+      : indices.dtype() == uint32             ? "uint32"
+      : indices.dtype() == int64              ? "int64"
+      : indices.dtype() == uint64             ? "uint64"
+                                              : nullptr;
+  // The kernel reads the indices linearly, as MLX binds them.
+  if (!type || indices.ndim() > 1 || axes.empty() || axes.size() > 64 ||
+      indices.size() != axes.size() || strides.empty() || strides.size() > 64 ||
+      !indices.flags().row_contiguous || indices.offset() < 0 ||
+      uint64_t(indices.offset()) > indices.buffer_size() ||
+      indices.nbytes() > indices.buffer_size() - uint64_t(indices.offset())) {
+    throw std::invalid_argument(
+        "CrossTL dynamic slices require contiguous 32- or 64-bit integer start "
+        "indices, one per sliced axis.");
+  }
+  for (auto axis : axes) {
+    if (axis < 0 || size_t(axis) >= strides.size()) {
+      throw std::invalid_argument("CrossTL dynamic slice axis exceeds the array rank.");
+    }
+  }
+  const std::string entry = std::string("compute_dynamic_offset_") + type;
+  require_entry(entry);
+  std::vector<int64_t> stride_values(strides.begin(), strides.end());
+  std::vector<int32_t> axis_values(axes.begin(), axes.end());
+  int32_t n_axes = static_cast<int32_t>(axes.size());
+  int64_t offset = 0;
+  CrosstlMlxBuffer buffers[] = {
+      {"indices", type, const_cast<void*>(static_cast<const void*>(indices.data<uint8_t>())),
+       indices.size(), 0},
+      {"offset", "int64", &offset, 1, 1},
+      {"strides", "int64", stride_values.data(), uint64_t(stride_values.size()), 0},
+      {"axes", "int32", axis_values.data(), uint64_t(axis_values.size()), 0},
+      {"n_axes", "int32", &n_axes, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{1, 1, 1}, {1, 1, 1}};
+  char error[2048] = {};
+  int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 5, 1, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(
+        std::string("CrossTL native dynamic offset failed: ") + error);
+  }
+  return offset;
+}
+
+// Ports mlx/backend/gpu/primitives.cpp DynamicSlice::eval_gpu.
+void DynamicSlice::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  if (inputs.size() != 2 || inputs[0].dtype() != out.dtype() ||
+      inputs[0].ndim() != out.ndim()) {
+    throw std::invalid_argument("CrossTL dynamic slices require matching arrays.");
+  }
+  const auto& in = inputs[0];
+  const auto& start = inputs[1];
+  out.set_data(allocator::malloc(out.nbytes()));
+  const int64_t in_offset = dynamic_offset(start, in.strides(), axes_);
+  dispatch_strided_copy(
+      in, out, out.shape(),
+      std::vector<int64_t>(in.strides().begin(), in.strides().end()), in_offset,
+      std::vector<int64_t>(out.strides().begin(), out.strides().end()), 0, false);
+}
+
+// Ports mlx/backend/gpu/primitives.cpp DynamicSliceUpdate::eval_gpu.
+void DynamicSliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (out.size() == 0) {
+    out.set_data(allocator::malloc(0));
+    return;
+  }
+  if (inputs.size() != 3 || inputs[0].shape() != out.shape() ||
+      inputs[0].dtype() != out.dtype() || inputs[1].dtype() != out.dtype() ||
+      inputs[1].ndim() != out.ndim()) {
+    throw std::invalid_argument(
+        "CrossTL dynamic slice updates require matching arrays.");
+  }
+  const auto& in = inputs[0];
+  const auto& upd = inputs[1];
+  const auto& start_indices = inputs[2];
+  if (upd.size() == 0) {
+    out.copy_shared_buffer(in);
+    return;
+  }
+  // The host's copy writes a row-contiguous destination, whose strides the
+  // offset kernel then reads, as MLX's copy_gpu output strides are.
+  dispatch_copy(in, out);
+  const int64_t out_offset = dynamic_offset(start_indices, out.strides(), axes_);
+  dispatch_copy_into(
+      upd, out, std::vector<int64_t>(out.strides().begin(), out.strides().end()),
+      out_offset, true);
 }
 
 void Reshape::eval_gpu(const std::vector<array>& inputs, array& out) {

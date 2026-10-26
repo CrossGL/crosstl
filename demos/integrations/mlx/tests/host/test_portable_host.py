@@ -87,6 +87,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.HOST_EVAL_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
+                    *prepare.DYNAMIC_SLICE_PRIMITIVES,
                     *packages.BINARY_OPERATIONS,
                     *prepare.CAST_PRIMITIVES,
                     *prepare.COMPLEX_PRIMITIVES,
@@ -196,7 +197,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
             f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         )
         assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
-    for name in prepare.HOST_EVAL_PRIMITIVES:
+    for name in (*prepare.HOST_EVAL_PRIMITIVES, *prepare.DYNAMIC_SLICE_PRIMITIVES):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     for name in ("Power", "ArcTan2"):

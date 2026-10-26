@@ -3030,6 +3030,27 @@ host build and packages. It retains source hashes, compiler and dispatch identit
 raw readbacks and failed worker logs. The three additional upstream methods do
 not establish full MLX test-suite or backend parity.
 
+### Dynamic Slices
+
+`DynamicSlice` and `DynamicSliceUpdate` take their start indices from arrays.
+As in the pinned `slicing.cpp`, a one-thread kernel formatted from
+`compute_dynamic_offset`'s template sums each start index times its axis stride
+into one int64 element offset. `dynamic_offset_packages.py` formats that
+template from the unchanged pinned file exactly as `fmt::format` does and
+translates one kernel per index dtype (int32, uint32, int64, uint64) into a
+cache keyed by the translator, the recipe, the template hash and the formatted
+source. The host reads the offset back and moves the elements with the
+translated strided copy, which checks the source and destination spans against
+their allocations before submission. NumberOfElements, which shapeless graphs
+use to count reduced elements, runs MLX's shared evaluation, as
+`gpu/primitives.cpp` does.
+
+The upstream op audit derives each offset package again from the pinned
+template, checks the native module hashes and recomputes the offset from the
+recorded start indices modulo 2^64. The unchanged `test_dynamic_slicing` and
+`test_jvp_with_partly_traced_inputs` methods run in the operations and autograd
+groups of `verify_upstream_ops`.
+
 ### Slice Reductions
 
 The optional `slice-update` family instantiates the pinned upstream
