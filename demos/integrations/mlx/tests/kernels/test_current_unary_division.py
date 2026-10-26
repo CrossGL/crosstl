@@ -29,6 +29,7 @@ from demos.integrations.mlx.tests.kernels.test_unary_complete_directx import (
     _project_config,
 )
 from demos.integrations.mlx.tests.pins import check_generated_artifact
+from tests import workflow_text
 from tests.ci_helpers import assert_native_step_prerequisites
 from tests.test_translator.test_bfloat_buffer_runtime import _storage
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
@@ -38,7 +39,6 @@ from tests.test_translator.test_metal_builtin_ownership import _compile
 from tests.test_translator.test_metal_precise_exp import _narrow, _oracle
 from tests.test_translator.test_metal_precise_trig import _float, _round_decimal
 from tests.test_translator.test_software_subgroup_product import _package
-from tools import ci_coverage
 
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_DIVISION"
 ENTRY = "v_Sigmoidbfloat16bfloat16"
@@ -48,14 +48,18 @@ PROFILE = "rne-flush"
 # The DirectX identity includes the explicit `precise` return locals of the
 # exponential/division helpers; removing only those locals reconstructs the
 # previous 11,114-byte source, and both strictly compile with DXC.
+# The OpenGL identity includes the `uint index_copy = index;` local that
+# written_stage_inputs (#2952) adds because the kernel writes its
+# thread-position input; dropping it and renaming `index_copy` back to `index`
+# reconstructs the previous 10,678-byte source.
 ARTIFACTS = {
     "metal": {
         "sha256": "36bf16346124ecb209ccd5acb2ca2fea1b41f966b4128d45600a63f7658bbefa",
         "sizeBytes": 6526,
     },
     "opengl": {
-        "sha256": "30ead42ade86308f13e26a58711178ec8ab4c58c107ff900a4c5a204d0a1faa4",
-        "sizeBytes": 10678,
+        "sha256": "3817bf50664d32406d446ecfc24d0dfe982c17dd8b2d5cadff6f1835194c7bba",
+        "sizeBytes": 10727,
     },
     "directx": {
         "sha256": "d16c5a2ca22282d6445e13d642e80ef0d0e9f75761740a0e3cc125f99bb59169",
@@ -215,7 +219,7 @@ def test_ci_requires_pinned_division_once_per_platform():
         Path(__file__).resolve().parents[5]
         / ".github/workflows/demo-project-testing.yml"
     ).read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "portable-host", "Validate pinned unary arithmetic"
     )
     assert_native_step_prerequisites(step, job="portable-host", pinned=True)

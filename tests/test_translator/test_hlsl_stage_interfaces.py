@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 import crosstl
-from crosstl.translator.semantics import HlslStageInterfaceUnsupportedError
 
 TASK_WITHOUT_PAYLOAD = """#version 450
 #extension GL_EXT_mesh_shader : require
@@ -83,19 +82,16 @@ def test_hlsl_task_payload_is_kept(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("name", "source", "capability"),
+    ("name", "source", "expected"),
     [
-        ("shader.task", TASK_WITH_PAYLOAD, "directx.task-payload-variable"),
-        ("shader.mesh", MESH_GLOBAL_OUTPUTS, "directx.mesh-output-variables"),
+        ("shader.task", TASK_WITH_PAYLOAD, "DispatchMesh(3, 1, 1, task);"),
+        ("shader.mesh", MESH_GLOBAL_OUTPUTS, "out vertices MeshVertex meshVertices[3]"),
     ],
 )
-def test_global_stage_interfaces_are_refused_with_a_typed_diagnostic(
-    tmp_path, name, source, capability
+def test_glsl_mesh_and_task_interfaces_become_entry_parameters(
+    tmp_path, name, source, expected
 ):
-    with pytest.raises(HlslStageInterfaceUnsupportedError) as caught:
-        _translate(tmp_path, name, source)
-    assert caught.value.missing_capabilities == (capability,)
-    assert (
-        caught.value.project_diagnostic_code
-        == "project.translate.directx-stage-interface-unsupported"
-    )
+    # semantics.glsl_mesh_stages raises the GLSL form before this pass would refuse it.
+    hlsl = _translate(tmp_path, name, source)
+    assert expected in hlsl
+    assert "CrossGLMeshPayload" not in hlsl

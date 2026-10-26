@@ -656,6 +656,13 @@ impl Vec3 {
     {
         self
     }
+
+    pub fn all_by<F>(self, f: F) -> bool
+    where
+        F: Fn(f32) -> bool,
+    {
+        true
+    }
 }
 """
 
@@ -663,9 +670,17 @@ impl Vec3 {
 def test_rust_where_clauses_bound_type_parameters():
     found = rust.parse({}, FLOAT, WHERE_VEC3, frozenset())
     features = {f.name: f for f in found}
-    # A closure has no probe: its parameter is neither the payload nor its own argument's scalar.
-    with pytest.raises(probes.ProbeError, match="parameters of type F"):
-        probes.build(features["Vec3::map"], "rust")
+    # A closure parameter keeps its bound, and the probe passes a closure that doubles its argument.
+    mapped = features["Vec3::map"]
+    assert mapped.signature.params[1] == Param(Type.other("Fn(f32) -> f32"))
+    assert "a0.map(|x: f32| x + x)" in probes.build(mapped, "rust").source
+    with pytest.raises(probes.NoSpelling, match="no closures"):
+        probes.build(mapped, "crossgl")
+    # A closure whose result differs from its argument has no probe.
+    with pytest.raises(
+        probes.ProbeError, match=r"parameters of type Fn\(f32\) -> bool"
+    ):
+        probes.build(features["Vec3::all_by"], "rust")
     # A bound in the where clause types its parameter as a bound in the generics would.
     assert features["Vec3::scaled"].signature.params[1] == Param(Type("float"))
 

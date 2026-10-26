@@ -101,7 +101,10 @@ def _slang(offline: bool) -> list[Feature]:
 
 
 def _spirv(offline: bool) -> list[Feature]:
-    return spirv.parse(fetch("spirv", offline=offline), fetch("glsl", offline=offline))
+    glsl_text = fetch("glsl", offline=offline)
+    return spirv.parse(fetch("spirv", offline=offline), glsl_text) + spirv.core(
+        fetch("spirv-core", offline=offline), glsl_text
+    )
 
 
 def _webgl(offline: bool) -> list[Feature]:

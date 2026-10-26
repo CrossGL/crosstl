@@ -2675,7 +2675,7 @@ The current harness verifies:
   `contracts/quantized.metal-roundtrip.json` contract covers 38 normalized
   variants over 17 source templates for three data types, group sizes 32/64/128,
   and bit widths 2/3/4/5/6/8. It pins 14,904 exact materializations and
-  43,106,796 generated Metal bytes without checking transient proof rows into
+  42,976,818 generated Metal bytes without checking transient proof rows into
   git. Thirty deduplicated exact ABI contracts span four- through
   twenty-two-resource interfaces and contain 31,374 reflected resources in
   aggregate, all with host-owned `[1, 1, 1]` workgroups. The original terminal external
@@ -3814,9 +3814,9 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 120,044-byte GLSL artifact with
+The current FFT source now also emits a 124,401-byte GLSL artifact with
 SHA-256
-`ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c`.
+`ce27978c20089f86b6b00955503b1aede87d1ae6f7400e1adfe88961e3be77ef`.
 Resource-aggregate lowering currently retains one file-level source mapping,
 not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
 the original source path but do not yet identify individual rewritten lines.

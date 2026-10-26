@@ -628,9 +628,9 @@ def test_cpp_unsuccessful_or_incomplete_summary_fails_closed(summary, message):
 
 
 def test_workflow_uses_macos_26_arm64_and_uploads_only_report_and_logs():
-    from tools import ci_coverage
+    from tests import workflow_text
 
-    text = ci_coverage.workflow_job_text(
+    text = workflow_text.workflow_job_text(
         WORKFLOW_PATH.read_text(encoding="utf-8"), "native-metal-reference"
     )
 

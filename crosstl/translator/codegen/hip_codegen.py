@@ -10,6 +10,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     ASTNode,
     BreakNode,
     CbufferNode,
@@ -45,6 +46,7 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -94,6 +96,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .hip_refusals import HipLoweringRefused
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -187,6 +190,11 @@ HIP_BITCAST_FUNCTION_TARGETS = {
     "asfloat": "float",
     "asint": "int",
     "asuint": "uint",
+}
+
+HIP_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
 }
 
 HIP_INTEGER_BIT_FUNCTION_ALIASES = {
@@ -3503,9 +3511,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if node is None:
             return
 
-        result = self.visit(node)
+        result = self.visit_discarded_expression(node)
         if isinstance(result, str) and result.strip():
             self.add_line(f"{result};")
+
+    def visit_discarded_expression(self, node):
+        """Render a node whose value is unused, such as a statement."""
+        if isinstance(node, AssignmentNode):
+            return self.format_assignment_expression(node)
+        return self.visit(node)
 
     def emit_body(self, body):
         """Render a list-like or block-like function body."""
@@ -3556,11 +3570,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node.init, VariableNode):
             init = self.format_variable_declaration(node.init)
         elif hasattr(node.init, "expression"):
-            init = self.visit(node.init.expression)
+            init = self.visit_discarded_expression(node.init.expression)
         else:
-            init = self.visit(node.init) if node.init else ""
+            init = self.visit_discarded_expression(node.init) if node.init else ""
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit(node.update) if node.update else ""
+        update = self.visit_discarded_expression(node.update) if node.update else ""
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
@@ -3746,6 +3760,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_AssignmentNode(self, node) -> str:
+        return assignment_value_expression(self.format_assignment_expression(node))
+
+    def format_assignment_expression(self, node) -> str:
         operator = getattr(node, "operator", getattr(node, "op", "="))
         diagnostic = self.glsl_buffer_block_write_diagnostic(node.left, "assignment")
         if diagnostic is not None:
@@ -4337,6 +4354,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return HIP_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def hip_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
+
         target_component = HIP_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -4365,6 +4390,25 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if result_type is None:
             return None
 
+        wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and HIP converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise HipLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
+
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
@@ -4391,6 +4435,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -4399,6 +4444,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -4430,6 +4483,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         operation = self.normalize_hip_integer_bit_function(func_name)
         source_type = self.expression_result_type(raw_args[0])
+        if source_type is None and operation == "countLeadingZeros":
+            # A sized cast such as uint64_t(x) has no inferred type; read its width from the cast
+            # so that __clz does not truncate a 64-bit value.
+            source_type = self.hip_integer_cast_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
         if source_info is not None:
@@ -4456,6 +4513,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             source_type,
             result_type,
         )
+
+    def hip_integer_cast_type(self, node):
+        """The target type of a scalar integer cast such as ``uint64_t(x)``, or None."""
+        if not isinstance(node, FunctionCallNode):
+            return None
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.scalar_component_type(type_name) in {"int", "uint"}:
+            return type_name
+        return None
 
     def require_hip_integer_bit_vector_helper(
         self,
@@ -4517,6 +4586,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            return f"{clz_intrinsic}({value})"
         if operation == "findLSB":
             return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
@@ -6054,6 +6125,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
+
+    def native_vector_component_type(self, type_name):
+        # half2 maps to the native half2 type, which vector_type_info leaves
+        # undescribed; its components are still half
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in {
+            "half2",
+            "f16vec2",
+            "float16vec2",
+            "vec2<f16>",
+            "vec2<float16>",
+            "vec2<half>",
+        }:
+            return "half"
+        return None
 
     def hip_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)
@@ -7760,7 +7849,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Return generic atomic mappings for RWStructuredBuffer element targets."""
         integer_kinds = {"int", "uint"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -7774,6 +7863,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
+        # HIP's system-scoped atomics (atomicAdd_system, atomicCAS_system, ...)
+        # take the same operands as the device-wide intrinsic they are named
+        # after. HIP declares no atomicInc_system or atomicDec_system.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            if intrinsic in {"atomicInc", "atomicDec"}:
+                continue
+            operations.setdefault(
+                f"{intrinsic}_system",
+                (f"{intrinsic}_system", arg_count, kinds, kinds_label),
+            )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to HIP atomics."""
@@ -9000,7 +9100,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return f"{helper_name}()"
 
     def visit_ExpressionStatementNode(self, node) -> str:
-        expr = self.visit(node.expression)
+        expr = self.visit_discarded_expression(node.expression)
         self.add_line(f"{expr};")
         return ""
 
