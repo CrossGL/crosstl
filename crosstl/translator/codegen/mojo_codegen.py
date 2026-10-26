@@ -1271,6 +1271,7 @@ class MojoCodeGen:
     def __init__(self):
         """Initialize Mojo type maps and helper-generation state."""
         self.vector_constructor_info = MOJO_VECTOR_TYPES
+        self._bool_param_names = set()
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
@@ -2895,6 +2896,9 @@ class MojoCodeGen:
         ]
         self.function_return_types[func.name] = return_type
         self.function_parameter_types[func.name] = parameter_types
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            if self.function_parameter_type_name(param) == "bool":
+                self._bool_param_names.add(param.name)
         signature = {
             "return_type": return_type,
             "parameter_types": parameter_types,
@@ -9132,6 +9136,16 @@ class MojoCodeGen:
                     self.type_name(scalar_constructor_name)
                 )
                 if target_dtype is not None and len(expr.args) == 1:
+                    # A bool operand (a bool parameter, a comparison result, or a
+                    # bool literal) must not go through Float32(b)/Float16(b):
+                    # Mojo 1.2.0 rejects it ("constructing from an `Intable`
+                    # value requires an integral dtype"). Scalar[DType.bool](b)
+                    # .cast[dtype]() compiles and yields 1.0 / 0.0 (issue #3148).
+                    if target_dtype in ("DType.float32", "DType.float16") and (
+                        self.expression_is_boolean(expr.args[0])
+                    ):
+                        arg = self.generate_expression(expr.args[0])
+                        return f"Scalar[DType.bool]({arg}).cast[{target_dtype}]()"
                     arg = self.generate_scalar_constructor_argument(
                         expr.args[0],
                         target_dtype,
@@ -9498,6 +9512,16 @@ class MojoCodeGen:
 
         target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(target_type))
         if target_dtype is not None:
+            source_type = self.type_name_string(self.expression_result_type(expr.expression))
+            if source_type == "bool" or (
+                source_type is None and self.expression_is_boolean(expr.expression)
+            ):
+                # Mojo 1.2.0 rejects Float32(b)/Float16(b) for a bool operand
+                # ("constructing from an `Intable` value requires an integral
+                # dtype"), but Scalar[DType.bool](b).cast[...]() compiles and
+                # yields 1.0 / 0.0.
+                value = self.generate_expression(expr.expression)
+                return f"Scalar[DType.bool]({value}).cast[{target_dtype}]()"
             value = self.generate_scalar_constructor_argument(
                 expr.expression, target_dtype, f"cast to {self.type_name(target_type)}"
             )
@@ -14611,6 +14635,30 @@ class MojoCodeGen:
     def register_variable_type(self, name, var_type):
         if name and var_type:
             self.variable_types[name] = self.type_name(var_type)
+
+    COMPARISON_OPERATORS = ("<", ">", "<=", ">=", "==", "!=")
+
+    def expression_is_boolean(self, expr) -> bool:
+        """Whether the expression's value is a bool: a comparison, a bool
+        literal, a variable whose tracked type is bool, or a parameter
+        declared bool by a function in this shader (parameter names are
+        function-scoped; a same-name collision across functions is rare in
+        shader code and a false positive only changes how a cast is spelled,
+        not its result)."""
+        if isinstance(expr, BinaryOpNode) and expr.operator in self.COMPARISON_OPERATORS:
+            return True
+        name = None
+        if isinstance(expr, str):
+            if expr.strip().lower() in ("true", "false"):
+                return True
+            if self.variable_types.get(expr) == "bool":
+                return True
+            name = expr
+        elif hasattr(expr, "name"):
+            name = expr.name
+            if self.variable_types.get(name) == "bool":
+                return True
+        return name is not None and name in self._bool_param_names
 
     def type_name(self, type_value):
         if (
