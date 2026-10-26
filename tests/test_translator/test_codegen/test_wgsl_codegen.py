@@ -3392,3 +3392,84 @@ def test_wgsl_user_function_with_derivative_name_is_not_mapped(tmp_path, name):
     assert f"fn {name}(value: f32) -> f32" in generated
     assert f"var shifted: f32 = {name}(value);" in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_discards_must_use_builtin_call_statements(tmp_path):
+    # WGSL declares these built-ins @must_use, so a bare call statement is rejected (issue #3090).
+    shader = """
+    __kernel __attribute__((reqd_work_group_size(1, 1, 1))) void probe(__global uint* uin, __global uint* outp) {
+        uint i = get_global_id(0);
+        min(uin[i], 4u);
+        outp[i] = 2u;
+    }
+    """
+    shader_path = tmp_path / "probe.cl"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="wgsl",
+        format_output=False,
+    )
+
+    assert "_ = min(uin[i], 4u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
+    shader = """
+    shader MustUse {
+        struct Pair {
+            float a;
+            float b;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void sign(uint i) {
+                outp[i] = 1.0;
+            }
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                sign(i);
+                max(fin[i], 1.0);
+                vec2(fin[i]);
+                clamp(fin[i], 0.0, 1.0);
+                Pair(fin[i], 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "    sign(i);" in generated
+    assert "_ = sign(i);" not in generated
+    assert "_ = max(fin[i], 1.0);" in generated
+    assert "_ = vec2<f32>(fin[i]);" in generated
+    assert "_ = clamp(fin[i], 0.0, 1.0);" in generated
+    assert "_ = Pair(fin[i], 1.0);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("min(a, 4u)", "_ = min(a, 4u)"),
+        ("vec2<f32>(a)", "_ = vec2<f32>(a)"),
+        (
+            "textureLoad(t, vec2<i32>(0, 0), 0)",
+            "_ = textureLoad(t, vec2<i32>(0, 0), 0)",
+        ),
+        ("atomicAdd(&counter, 1u)", "atomicAdd(&counter, 1u)"),
+        ("workgroupBarrier()", "workgroupBarrier()"),
+        ("textureStore(t, vec2<i32>(0, 0), v)", "textureStore(t, vec2<i32>(0, 0), v)"),
+        ("min(a, b) + min(c, d)", "min(a, b) + min(c, d)"),
+        ("helper(min(a, b))", "helper(min(a, b))"),
+    ],
+)
+def test_wgsl_call_statement_phony_assigns_only_must_use_calls(expression, expected):
+    from crosstl.translator.codegen.wgsl_must_use import wgsl_call_statement
+
+    assert wgsl_call_statement(expression) == expected

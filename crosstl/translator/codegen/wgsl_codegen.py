@@ -82,6 +82,7 @@ from .wgsl_integer_operands import (
     wgsl_bitwise_operands,
     wgsl_shift_amount,
 )
+from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -2704,7 +2705,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             expression = self.generate_statement_expression(stmt.expression)
             if self.is_multi_barrier_memory_lowering(stmt.expression):
                 return "\n".join(f"{pad}{call};" for call in expression.split("; "))
-            return f"{pad}{expression};"
+            user_functions = set(self._function_identifier_names.values())
+            user_functions.update(self._function_signature_identifier_names.values())
+            user_functions.update(self._function_overloads_by_name)
+            struct_types = set(self._type_identifier_names.values())
+            statement = wgsl_call_statement(expression, user_functions, struct_types)
+            return f"{pad}{statement};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):
