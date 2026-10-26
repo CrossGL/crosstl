@@ -935,6 +935,13 @@ MOJO_INTEGER_DTYPES = {
     "DType.uint32",
 }
 
+# Element types the round_even helper has overloads for, with their scalar types.
+ROUND_EVEN_FLOAT_DTYPES = {
+    "DType.float16": "Float16",
+    "DType.float32": "Float32",
+    "DType.float64": "Float64",
+}
+
 MOJO_FLOAT_DTYPES = {
     "DType.float32",
     "DType.float64",
@@ -9023,6 +9030,12 @@ class MojoCodeGen:
 
             if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
+            if (
+                func_name == "roundEven"
+                and len(expr.args) == 1
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.generate_round_even_call(expr.args[0])
             if func_name == "mod":
                 return self.generate_mod_call(expr.args)
             if func_name == "saturate":
@@ -10196,7 +10209,21 @@ class MojoCodeGen:
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
 
+        if uses_scalar_splat_constructor and len(emitted_args) == 1:
+            return self.scalar_splat_expression(dtype, storage_width, emitted_args[0])
+
         return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def scalar_splat_expression(self, dtype, storage_width, scalar_expr):
+        """Splat ``scalar_expr`` into every lane of a ``SIMD[dtype, width]``.
+
+        Mojo's one-argument SIMD constructor only splats a ``Scalar[dtype]``.
+        ``Bool`` is not ``Scalar[DType.bool]``, so a boolean splat must use the
+        explicit ``fill`` keyword.
+        """
+        if dtype == "DType.bool":
+            return f"SIMD[{dtype}, {storage_width}](fill={scalar_expr})"
+        return f"SIMD[{dtype}, {storage_width}]({scalar_expr})"
 
     def generate_matrix_constructor(self, func_name, args):
         dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
@@ -10315,6 +10342,62 @@ class MojoCodeGen:
             dtype = "DType.float32"
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
+
+    def round_even_operand_type(self, arg):
+        """Source type of a ``round_even`` operand, including typed buffer elements."""
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None and isinstance(arg, ArrayAccessNode):
+            info = self.buffer_resource_info(self.expression_result_type(arg.array))
+            if info is not None and info[0] in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
+                arg_type = info[1]
+        return arg_type
+
+    def round_even_operand_dtypes(self, arg):
+        """Return ``(source dtype, dtype the helper rounds in, source type)``.
+
+        The helper has overloads for float16, float32 and float64 elements;
+        integer operands round as float32, as HLSL ``round`` converts them.
+        """
+        arg_type = self.round_even_operand_type(arg)
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            source_dtype = vector_info[0]
+        else:
+            source_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(arg_type))
+        if source_dtype is None or source_dtype in ROUND_EVEN_FLOAT_DTYPES:
+            return source_dtype, source_dtype, arg_type
+        return source_dtype, "DType.float32", arg_type
+
+    def is_scalar_literal_operand(self, arg):
+        """A numeric literal, optionally under unary ``+`` or ``-``."""
+        while isinstance(arg, UnaryOpNode) and self.map_operator(arg.op) in {
+            "+",
+            "-",
+        }:
+            arg = arg.operand
+        return self.is_literal_expression(arg) and not isinstance(arg, ArrayLiteralNode)
+
+    def generate_round_even_call(self, arg):
+        self.required_math_helpers.add("round_even")
+        arg_expr = self.generate_expression(arg)
+        source_dtype, target_dtype, _ = self.round_even_operand_dtypes(arg)
+        if self.is_scalar_literal_operand(arg):
+            # A literal converts to every overload, and an integer literal has no
+            # cast method, so it is spelled in the scalar type it rounds in.
+            scalar_type = ROUND_EVEN_FLOAT_DTYPES.get(target_dtype, "Float32")
+            return f"round_even({scalar_type}({arg_expr}))"
+        if source_dtype != target_dtype:
+            arg_expr = f"({arg_expr}).cast[{target_dtype}]()"
+        return f"round_even({arg_expr})"
+
+    def round_even_result_type(self, arg):
+        source_dtype, target_dtype, arg_type = self.round_even_operand_dtypes(arg)
+        if source_dtype == target_dtype:
+            return arg_type or "float"
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            return self.vector_type_name_for_dtype_width(target_dtype, vector_info[1])
+        return "float"
 
     def generate_mod_call(self, args):
         generated_args = [self.generate_expression(arg) for arg in args]
@@ -12683,7 +12766,13 @@ class MojoCodeGen:
             expr.right, info[0], "vector comparison"
         )
         if self.vector_type_info(self.expression_result_type(expr.left)) is None:
-            left = f"SIMD[{info[0]}, {info[2]}]({left})"
+            left = self.scalar_splat_expression(info[0], info[2], left)
+        if (
+            info[0] == "DType.bool"
+            and self.vector_type_info(self.expression_result_type(expr.right)) is None
+        ):
+            # Mojo does not convert a Bool argument to a mask either.
+            right = self.scalar_splat_expression(info[0], info[2], right)
         method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
         return f"({left}).{method}({right})"
 
@@ -13917,23 +14006,7 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
         if helper_name == "round_even":
-            return (
-                "fn round_even(x: Float32) -> Float32:\n"
-                "    var lower = floor(x)\n"
-                "    var fraction = x - lower\n"
-                "    if fraction < 0.5:\n"
-                "        return lower\n"
-                "    if fraction > 0.5:\n"
-                "        return lower + 1.0\n"
-                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
-                "    if parity == 0.0:\n"
-                "        return lower\n"
-                "    return lower + 1.0\n\n"
-                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
-                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
-                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
-                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
-            )
+            return self.generate_round_even_helper()
         if helper_name == "cross_product":
             return (
                 "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
@@ -13989,6 +14062,34 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
+
+    def generate_round_even_helper(self):
+        """Round halfway cases to the nearest even integer, per element type."""
+        code = ""
+        for dtype, scalar_type in ROUND_EVEN_FLOAT_DTYPES.items():
+            code += (
+                f"fn round_even(x: {scalar_type}) -> {scalar_type}:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+            )
+            for width in (2, 4):
+                vector_type = f"SIMD[{dtype}, {width}]"
+                components = ", ".join(
+                    f"round_even(v[{index}])" for index in range(width)
+                )
+                code += (
+                    f"fn round_even(v: {vector_type}) -> {vector_type}:\n"
+                    f"    return {vector_type}({components})\n\n"
+                )
+        return code
 
     def generate_min_max_helper(self, helper_name, comparator):
         selector = f"a if a {comparator} b else b"
@@ -14383,6 +14484,13 @@ class MojoCodeGen:
         return self.generate_expression(piece["expr"], target_type, context)
 
     def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        if target_dtype in {"DType.float16", "DType.float32"} and (
+            self.is_scalar_bool_expression(expr)
+        ):
+            # Mojo's Float16/Float32 constructors do not accept Bool directly.
+            # Converting through Int preserves GLSL's 0/1 numeric cast.
+            return f"Int({self.generate_expression(expr)})"
+
         target_type = self.constructor_scalar_expression_target_type(
             expr, target_dtype, force_scalar_target=True
         )
@@ -15054,8 +15162,8 @@ class MojoCodeGen:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "roundEven" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and len(expr.args) == 1:
+                return self.round_even_result_type(expr.args[0])
             if func_name in {"inverse", "transpose"} and expr.args:
                 return self.expression_result_type(expr.args[0])
             if func_name in {"length", "dot"}:
@@ -15329,6 +15437,10 @@ class MojoCodeGen:
             return left_type
         if right_info is not None:
             return right_type
+        if mapped_op in MOJO_VECTOR_COMPARISON_METHODS or mapped_op in {"and", "or"}:
+            # A comparison or logical operation on scalars yields a ``Bool``,
+            # not a value of its operand type.
+            return "bool"
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
@@ -15587,6 +15699,29 @@ class MojoCodeGen:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
 
+    def is_scalar_bool_expression(self, expr):
+        """Return whether ``expr`` evaluates to a scalar boolean.
+
+        Scalar comparisons and logical expressions are recognized directly as
+        their result type is inferred from their operands on some codegen paths.
+        Vector comparisons and logical operations remain SIMD masks.
+        """
+        expr_type = self.expression_result_type(expr)
+        if self.is_bool_scalar_type(expr_type):
+            return True
+
+        if isinstance(expr, BinaryOpNode):
+            op = self.map_operator(expr.op)
+            if op in MOJO_VECTOR_COMPARISON_METHODS or op in {"and", "or"}:
+                return (
+                    self.vector_type_info(self.expression_result_type(expr.left))
+                    is None
+                    and self.vector_type_info(self.expression_result_type(expr.right))
+                    is None
+                )
+
+        return False
+
     def compatible_numeric_vector_target(self, source_info, target_info):
         if source_info is None or target_info is None:
             return False
@@ -15666,14 +15801,41 @@ class MojoCodeGen:
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
 
+    def bool_cast_text(self, expr_text, target_dtype):
+        # Mojo's Bool has no .cast method, so a bool value going to a numeric
+        # type goes through Int first: Float32(Int(s)). Returns None when the
+        # target has no scalar constructor form here, leaving the old output.
+        constructor = {
+            "DType.float16": "Float16",
+            "DType.float32": "Float32",
+            "DType.float64": "Float64",
+            "DType.int8": "Int8",
+            "DType.int16": "Int16",
+            "DType.int32": "Int32",
+            "DType.uint8": "UInt8",
+            "DType.uint16": "UInt16",
+            "DType.uint32": "UInt32",
+        }.get(target_dtype)
+        if constructor is None:
+            return None
+        return f"{constructor}(Int({expr_text}))"
+
     def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return expr_text
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(expr_text, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"({expr_text}).cast[{target_dtype}]()"
 
     def cast_vector_component(self, component, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return component
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(component, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"{component}.cast[{target_dtype}]()"
 
     def generate_constructor_scalar_expression(

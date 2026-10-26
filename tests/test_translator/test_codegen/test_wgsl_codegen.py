@@ -974,6 +974,88 @@ def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array():
     assert "imageStore" not in generated
 
 
+@pytest.mark.parametrize(
+    ("image_type", "result_type", "coord", "value", "expected"),
+    [
+        (
+            "image1D",
+            "int",
+            "0",
+            "vec4(1.0)",
+            "var r: i32 = i32(textureDimensions(u0));",
+        ),
+        (
+            "image2D",
+            "ivec2",
+            "ivec2(0, 0)",
+            "vec4(1.0)",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
+        ),
+        (
+            "image3D",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0));",
+        ),
+        (
+            "image2DArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "uimage2DArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "uvec4(1u)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "imageCube",
+            "ivec2",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
+        ),
+        (
+            "imageCubeArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0) / 6u));",
+        ),
+    ],
+)
+def test_wgsl_codegen_image_size_follows_glsl_result_shape(
+    image_type, result_type, coord, value, expected
+):
+    image_format = "r32ui" if image_type.startswith("u") else "rgba8"
+    shader = f"""
+    shader WGSLImageSizeShape {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer {result_type}* outp;
+            uniform layout({image_format}) {image_type} u0;
+            void main() {{
+                {result_type} r = imageSize(u0);
+                imageStore(u0, {coord}, {value});
+                outp[0] = r;
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert expected in generated
+    assert "imageSize" not in generated
+
+
 def test_wgsl_codegen_rejects_storage_image_without_representable_format():
     shader = """
     shader WGSLStorageImageMissingFormat {
@@ -2744,6 +2826,115 @@ def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+@pytest.mark.parametrize(
+    ("sampler_type", "result_type", "texture_type", "expected"),
+    [
+        (
+            "isampler1D",
+            "int",
+            "texture_1d<i32>",
+            "var r: i32 = i32(textureDimensions(u0, 0));",
+        ),
+        (
+            "usampler1D",
+            "int",
+            "texture_1d<u32>",
+            "var r: i32 = i32(textureDimensions(u0, 0));",
+        ),
+        (
+            "isampler3D",
+            "ivec3",
+            "texture_3d<i32>",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "usampler3D",
+            "ivec3",
+            "texture_3d<u32>",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "isamplerCube",
+            "ivec2",
+            "texture_cube<i32>",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "usamplerCube",
+            "ivec2",
+            "texture_cube<u32>",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0, 0));",
+        ),
+        (
+            "isamplerCubeArray",
+            "ivec3",
+            "texture_cube_array<i32>",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0, 0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "usamplerCubeArray",
+            "ivec3",
+            "texture_cube_array<u32>",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0, 0), "
+            "textureNumLayers(u0)));",
+        ),
+    ],
+)
+def test_wgsl_codegen_maps_integer_samplers_to_typed_textures(
+    sampler_type, result_type, texture_type, expected
+):
+    shader = f"""
+    shader WGSLIntegerSamplers {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer {result_type}* outp;
+            uniform {sampler_type} u0;
+            void main() {{
+                {result_type} r = textureSize(u0, 0);
+                outp[0] = r;
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"var u0: {texture_type};" in generated
+    assert expected in generated
+    assert sampler_type not in generated
+
+
+@pytest.mark.parametrize(
+    "sampler_type",
+    [
+        "sampler2DRect",
+        "sampler2DRectShadow",
+        "samplerBuffer",
+        "isamplerBuffer",
+        "usampler2DRect",
+        "isampler1DArray",
+        "usampler2DMS",
+    ],
+)
+def test_wgsl_codegen_refuses_samplers_without_wgsl_texture_type(sampler_type):
+    shader = f"""
+    shader WGSLUnmappedSamplers {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* outp;
+            uniform {sampler_type} u0;
+            void main() {{
+                outp[0] = 1;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"resource type {sampler_type}"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
     shader = """
     shader WGSLBadShadowLod {
@@ -3527,3 +3718,81 @@ def test_wgsl_call_statement_phony_assigns_only_must_use_calls(expression, expec
     from crosstl.translator.codegen.wgsl_must_use import wgsl_call_statement
 
     assert wgsl_call_statement(expression) == expected
+
+
+SCALAR_MATRIX_CONSTRUCTOR_SHADER = """
+shader Diag {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int k = int(i);
+            mat2 a = mat2(fin[i]);
+            mat2x3 b = mat2x3(2.0);
+            mat3x2 c = mat3x2(fin[i] + 1.0);
+            mat3 d = mat3(k);
+            mat2 e = mat2(1);
+            mat2 f = mat2(-fin[i]);
+            mat2 g = mat2(-1.0);
+            mat3 h = mat3(-k);
+            mat2 n = mat2(1u);
+            outp[i] = a[1].y + b[1].y + c[2].y + d[1].y + e[0].x + f[1].y + g[0].x
+                + h[2].z + n[1].y;
+        }
+    }
+}
+"""
+
+
+def test_wgsl_codegen_expands_one_scalar_matrix_constructor_to_diagonal(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader(SCALAR_MATRIX_CONSTRUCTOR_SHADER))
+
+    assert (
+        "var a: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(fin[i], 0.0), vec2<f32>(0.0, fin[i]));"
+    ) in generated
+    assert (
+        "var b: mat2x3<f32> = mat2x3<f32>("
+        "vec3<f32>(2.0, 0.0, 0.0), vec3<f32>(0.0, 2.0, 0.0));"
+    ) in generated
+    assert (
+        "var c: mat3x2<f32> = mat3x2<f32>(vec2<f32>((fin[i] + 1.0), 0.0), "
+        "vec2<f32>(0.0, (fin[i] + 1.0)), vec2<f32>(0.0, 0.0));"
+    ) in generated
+    assert "vec3<f32>(f32(k), 0.0, 0.0)" in generated
+    assert "mat2x2<f32>(vec2<f32>(1, 0.0), vec2<f32>(0.0, 1))" in generated
+    assert (
+        "var f: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-fin[i], 0.0), vec2<f32>(0.0, -fin[i]));"
+    ) in generated
+    assert (
+        "var g: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-1.0, 0.0), vec2<f32>(0.0, -1.0));"
+    ) in generated
+    assert "vec3<f32>(0.0, 0.0, f32(-k))" in generated
+    assert "vec2<f32>(f32(1u), 0.0)" in generated
+    assert "mat2x2<f32>(fin[i])" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_one_scalar_matrix_constructor_with_side_effects():
+    shader = """
+    shader Diag {
+        float next(float x) { return x * 2.0; }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 a = mat2(next(fin[i]));
+                outp[i] = a[1].y;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="one-scalar matrix constructor"):
+        WGSLCodeGen().generate(parse_shader(shader))
