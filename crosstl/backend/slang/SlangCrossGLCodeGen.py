@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
+from .slang_matrix_import import SlangMatrixImportMixin
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -31,7 +32,7 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter:
+class SlangToCrossGLConverter(SlangMatrixImportMixin):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -718,6 +719,9 @@ class SlangToCrossGLConverter:
         self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
+        self.reset_matrix_import_state(
+            ast, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.sampleable_resource_scopes = [set(resource_types)]
         self.sampleable_resource_type_scopes = [resource_types]
         self.storage_image_resource_scopes = [set(storage_image_types)]
@@ -754,6 +758,7 @@ class SlangToCrossGLConverter:
             if isinstance(node, StructNode):
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
+                    code += self.matrix_layout_attributes(member, 2)
                     code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
@@ -786,6 +791,11 @@ class SlangToCrossGLConverter:
                 code += self.generate_function(func)
 
         code += "}\n"
+        setters = self.generate_matrix_row_setters()
+        if setters:
+            head = "shader main {\n"
+            start = code.index(head) + len(head)
+            code = code[:start] + setters + code[start:]
         return code
 
     def generate_typedef(self, node):
@@ -1156,6 +1166,7 @@ class SlangToCrossGLConverter:
                 code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
                     member_name = self.format_struct_member_name(node, member.name)
+                    code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
                         f"{self.format_array_suffixes(member)};\n"
@@ -1169,6 +1180,7 @@ class SlangToCrossGLConverter:
     def generate_glsl_storage_block(self, node):
         code = f"    struct {self.format_struct_declaration_name(node)} {{\n"
         for member in node.members:
+            code += self.matrix_layout_attributes(member, 2)
             code += f"        {self.generate_struct_member(node, member)};\n"
         code += "    }\n"
         for instance in getattr(node, "instances", []) or []:
@@ -1587,19 +1599,32 @@ class SlangToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         if isinstance(node.left, VariableNode) and node.left.vtype:
             self.register_identifier_declaration(node.left)
+        self.record_inferred_matrix_type(node)
+        lowered = self.matrix_assignment_expression(node, is_main)
+        if lowered is not None:
+            return lowered
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_global_variable(self, node):
+        declaration = node.left if isinstance(node, AssignmentNode) else node
+        layout = self.matrix_layout_attributes(declaration, 1)
         if isinstance(node, AssignmentNode):
             left = self.generate_variable_declaration(
                 node.left, has_initializer=True, initializer=node.right
             )
-            right = self.generate_expression(node.right, False)
-            return f"    {left} {node.operator} {right};\n"
-        return f"    {self.generate_variable_declaration(node)};\n"
+            right = self.matrix_initializer_expression(
+                node.left.vtype,
+                len(getattr(node.left, "array_sizes", None) or []),
+                node.right,
+                False,
+            )
+            if right is None:
+                right = self.generate_expression(node.right, False)
+            return f"{layout}    {left} {node.operator} {right};\n"
+        return f"{layout}    {self.generate_variable_declaration(node)};\n"
 
     def generate_variable_declaration(
         self, node, has_initializer=False, initializer=None
@@ -1846,6 +1871,9 @@ class SlangToCrossGLConverter:
             left = f"({left})"
         if self.binary_child_needs_parentheses(expr.op, expr.right, True):
             right = f"({right})"
+        product = self.matrix_product_expression(expr, left, right)
+        if product is not None:
+            return product
         return f"{left} {expr.op} {right}"
 
     def maybe_parenthesize_expression(self, expr, rendered):
@@ -1900,13 +1928,20 @@ class SlangToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
+            lowered = self.matrix_assignment_expression(expr, is_main)
+            if lowered is not None:
+                return lowered
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, CastNode):
+            matrix_cast = self.matrix_cast_expression(expr, is_main)
+            if matrix_cast is not None:
+                return matrix_cast
             value = self.generate_expression(expr.expression, is_main)
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
+            self.refuse_matrix_row_update(expr)
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
                 operand = f"({operand})"
@@ -1923,6 +1958,11 @@ class SlangToCrossGLConverter:
             function_name, is_hlsl_namespace_builtin = (
                 self.canonical_function_call_name(expr.name)
             )
+            matrix_value = self.matrix_constructor_expression(
+                function_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
             mul_call = self.generate_hlsl_mul_call(expr, is_main, function_name)
             if mul_call is not None:
                 return mul_call
@@ -2006,6 +2046,9 @@ class SlangToCrossGLConverter:
             qualified_name = self.member_access_qualified_name(expr)
             if qualified_name and self.lookup_variable_type(qualified_name):
                 return self.format_identifier(qualified_name)
+            matrix_member = self.matrix_member_expression(expr, is_main)
+            if matrix_member is not None:
+                return matrix_member
             obj = self.generate_expression(expr.object, is_main)
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
@@ -2013,6 +2056,9 @@ class SlangToCrossGLConverter:
                 obj = f"({obj})"
             return f"{obj}.{self.format_member_access_name(expr)}"
         elif isinstance(expr, ArrayAccessNode):
+            matrix_index = self.matrix_index_expression(expr, is_main)
+            if matrix_index is not None:
+                return matrix_index
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_subscript_index(expr.index, is_main)
             return f"{array}[{index}]"
@@ -2033,6 +2079,11 @@ class SlangToCrossGLConverter:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, VectorConstructorNode):
+            matrix_value = self.matrix_constructor_expression(
+                expr.type_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -2122,6 +2173,9 @@ class SlangToCrossGLConverter:
             differential_type = self.map_associated_differential_type(slang_type)
             if differential_type:
                 return f"{differential_type}{pointer_suffix}"
+            matrix_type = self.map_slang_matrix_type(slang_type)
+            if matrix_type:
+                return f"{matrix_type}{pointer_suffix}"
             generic_vector_or_matrix = self.map_generic_vector_or_matrix_type(
                 slang_type
             )
@@ -2269,6 +2323,9 @@ class SlangToCrossGLConverter:
         return f"{prefix}{vector_size}"
 
     def map_generic_matrix_type(self, slang_type):
+        matrix_type = self.map_slang_matrix_type(slang_type)
+        if matrix_type:
+            return matrix_type
         args = self.generic_type_arguments(slang_type)
         if len(args) != 3:
             return None
@@ -2494,16 +2551,19 @@ class SlangToCrossGLConverter:
             if name is not None and vtype:
                 scope[name] = vtype
         self.variable_type_scopes.append(scope)
+        self.push_matrix_rank_scope(params)
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+        self.pop_matrix_rank_scope()
 
     def register_variable_type(self, node):
         name = getattr(node, "name", None)
         vtype = getattr(node, "vtype", None)
         if name is not None and vtype:
             self.variable_type_scopes[-1][name] = vtype
+            self.record_matrix_rank(node)
 
     def push_sampleable_resource_scope(self, params):
         scope = set()
