@@ -4456,7 +4456,34 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             raise ValueError(
                 "WGSL target requires imageSize() to use a storage image resource"
             )
-        return f"vec2<i32>(textureDimensions({self.generate_expression(image)}))"
+        image_expr = self.generate_expression(image)
+        dimensions = f"textureDimensions({image_expr})"
+
+        # GLSL's imageSize returns int for 1D images, ivec2 for 2D and cube
+        # images, and ivec3 for 3D and array images with the array size last.
+        # Cube images are lowered to 2D array storage textures with six layers
+        # per cube, so a cube array's last component is the number of cubes.
+        image_type = self.resource_type_name(self.expression_type(image)) or ""
+        base_type = (
+            image_type[1:]
+            if image_type.startswith(("iimage", "uimage"))
+            else image_type
+        )
+        if base_type == "image1d":
+            return f"i32({dimensions})"
+        if base_type == "image3d":
+            return f"vec3<i32>({dimensions})"
+        if base_type == "image2darray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr})))"
+            )
+        if base_type == "imagecubearray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr}) / 6u))"
+            )
+        return f"vec2<i32>({dimensions})"
 
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
