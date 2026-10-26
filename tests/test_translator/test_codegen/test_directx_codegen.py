@@ -73,6 +73,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXNative16BitArithmeticError,
     DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
+    DirectXRayTracingStageProfileError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
@@ -51957,3 +51958,54 @@ def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
     assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
     assert "fwidth_fine(" not in generated_code
     assert "fwidth_coarse(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "shader_attribute",
+    ["raygeneration", "intersection", "anyhit", "closesthit", "miss", "callable"],
+)
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_ray_tracing_stages(
+    tmp_path, backend, shader_attribute
+):
+    source = tmp_path / "stage.hlsl"
+    source.write_text(f"""
+RWStructuredBuffer<uint> outp : register(u0);
+[shader("{shader_attribute}")]
+void main() {{
+    uint index = 3u;
+    outp[0] = index;
+}}
+""")
+
+    with pytest.raises(DirectXRayTracingStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_attribute == shader_attribute
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-ray-tracing-stage-unsupported"
+    )
+    assert "Shader Model 6.3" in str(error)
+
+    if shader_attribute == "raygeneration":
+        generated = crosstl.translate(str(source), backend="directx")
+        assert '[shader("raygeneration")]' in generated
+
+
+def test_directx_dx10_profile_rejects_ray_tracing_stages():
+    code = """
+    shader Dx10RayGeneration {
+        ray_generation {
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXRayTracingStageProfileError,
+        match="DirectX profile dx10 does not support the 'raygeneration'",
+    ):
+        HLSLCodeGen(target_profile="dx10").generate(crosstl.translator.parse(code))

@@ -247,7 +247,9 @@ class VectorArithmeticMixin:
             if func_name in self.scalar_float_math_functions() and raw_args:
                 return self.expression_result_type(raw_args[0])
             if isinstance(func_name, str):
-                return self.function_return_types.get(func_name)
+                return self.function_return_types.get(
+                    func_name
+                ) or self.scalar_cast_result_type(node)
             return None
         if isinstance(node, BinaryOpNode):
             left_type = self.expression_result_type(node.left)

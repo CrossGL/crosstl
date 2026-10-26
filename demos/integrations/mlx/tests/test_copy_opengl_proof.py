@@ -314,6 +314,76 @@ def test_copy_opengl_artifact_and_projection_drift_fail_closed(tmp_path):
         module._validate_real_projection(artifact_path)
 
 
+_COPIED_INDEX_PRELUDE = (
+    "    uint index = uint(gl_GlobalInvocationID.x);\n"
+    "    uint index_copy = index;\n"
+    "    index_copy = (index_copy * 1);\n"
+)
+_COPIED_INDEX_STORE = "dst[(index_copy + uint(i))] = (src[0]).real;"
+
+
+def _write_projection_artifact(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#version 450 core\n"
+        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+        "void main() {\n" + _COPIED_INDEX_PRELUDE + body + "}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_copy_opengl_projection_accepts_copied_thread_index(tmp_path):
+    # GLSL inputs are read-only, so `index *= N` in copy_s makes the generator
+    # copy the thread index into a local (#2952); the store keeps one projection.
+    module = _load_proof()
+    artifact_path = _write_projection_artifact(
+        tmp_path / "copy.glsl",
+        "    for (int i = 0; (i < 1); (++i)) {\n"
+        f"        {_COPIED_INDEX_STORE}\n"
+        "    }\n",
+    )
+
+    projection = module._validate_real_projection(artifact_path)
+
+    assert projection["store"] == _COPIED_INDEX_STORE
+    assert projection["singleEvaluation"] is True
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        pytest.param("", r"projection of src\[0\]\.real", id="missing-store"),
+        pytest.param(
+            f"    {_COPIED_INDEX_STORE}\n    {_COPIED_INDEX_STORE}\n",
+            r"projection of src\[0\]\.real",
+            id="duplicate-store",
+        ),
+        pytest.param(
+            "    dst[(index_copy + uint(i))] = (src[0]).imag;\n",
+            r"projection of src\[0\]\.real",
+            id="imaginary-projection",
+        ),
+        pytest.param(
+            "    dst[(size + uint(i))] = (src[0]).real;\n",
+            "index dst by the thread position",
+            id="unrelated-index",
+        ),
+        pytest.param(
+            f"    float imag = (src[0]).imag;\n    {_COPIED_INDEX_STORE}\n",
+            r"evaluate src\[0\] exactly once",
+            id="second-source-read",
+        ),
+    ],
+)
+def test_copy_opengl_projection_rejects_store_drift(tmp_path, body, message):
+    module = _load_proof()
+    artifact_path = _write_projection_artifact(tmp_path / "copy.glsl", body)
+
+    with pytest.raises(module.MlxCopyOpenGLProofError, match=message):
+        module._validate_real_projection(artifact_path)
+
+
 def test_copy_opengl_artifact_requires_exactly_one_selected_specialization(tmp_path):
     module = _load_proof()
     mlx_root = tmp_path / "mlx"

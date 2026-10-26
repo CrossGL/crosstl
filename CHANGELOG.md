@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Breaking Changes
 
+- Mojo output refuses a vector where a scalar is expected, such as `return v;` from a function returning `float` or `if (a == b)` on two vectors, with `MojoScalarConversionError`. It used to write the vector unchanged, which Mojo either rejects or, as an `if`, `while` or `?:` condition, reads as true when any lane is true. Use `all`, `any` or a component access to reduce the vector first.
 - A type name that is neither built in nor declared by the program, as a structure, enumeration, alias, constant block or generic parameter, is refused with a typed error. Every generator used to copy it into the output.
 - WGSL output refuses 64-bit integers, doubles and bfloat16, the vectors and matrices built on them and conversions such as `double(x)`, with `WGSLNumericTypeUnsupportedError`. It used to narrow `double` to `f32` and `long` to `i32`, which changed host buffer layouts, or copy the type unchanged.
 - `buffer T name[]` and `buffer T name[N]` declare one storage buffer of `T` elements for every `T`, structures included, as Metal's `device T*` does. GLSL buffer block arrays (`buffer B { ... } name[N];`) keep their meaning as arrays of descriptors.
@@ -15,6 +16,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - HLSL output refuses a constant buffer larger than Direct3D's 64 KiB limit, such as a large Metal `constant T&` argument or GLSL uniform block, with `ConstantBufferTooLargeError`, and matrix varyings whose semantic indices overlap with `InterfaceLocationConflictError`. DXC used to reject the generated shader.
 - The GLSL importer refuses `tensorARM` uniforms with `GLSLTypeUnsupportedError`. It used to drop them, so every target referenced an undeclared name. GLSL output refuses string literals outside `#include`, `#line` and `debugPrintfEXT` formats.
 - The Metal importer refuses ray-tracing functions, and the uses of mesh and object functions it cannot import, such as `set_indices`, with `MetalImportRefused`. They used to be printed as plain helpers that still called Metal methods.
+- HLSL output for the `dx10` and `dx11` profiles, as selected by `backend="dx11"`, `"d3d11"` or `"directx-11"`, refuses ray generation, intersection, any-hit, closest-hit, miss and callable stages with `DirectXRayTracingStageProfileError`, because DirectX Raytracing needs Direct3D 12 and Shader Model 6.3. They used to be written unchanged, as `[shader("raygeneration")]` entry points that Direct3D 11 cannot run. The default `dx12` profile is unchanged.
 
 ### Added
 
@@ -51,6 +53,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 ### Fixed
 
 - Mojo output writes `~` instead of `not` for component-wise `!` inversion of a boolean vector mask, such as `!a` or `!(a == b)`. Mojo's `not` keyword only accepts scalar `Bool`.
+- CUDA and HIP output combine a vector with a scalar constructor operand such as `float(i)` or `int(x)` under `+`, `-`, `*`, `/` and `%` through the existing vector-scalar helpers, as in `cgl_float3_mul_scalar(v, float(i))`. They used to keep the native operator, as in `(v * float(i))`, which does not compile because `float3` and the other vector types define no arithmetic operators. Scalar constructor calls now have the type they construct.
 - CUDA and HIP output combine a half vector with a `half` scalar under `+`, `-`, `*` and `/` through the existing vector-scalar helpers, such as `cgl_cgl_half3_mul_scalar(v, h)`. They used to keep the native operator, as in `(v * h)`, which does not compile because the generated `cgl_half3` and `cgl_half4` structures define no arithmetic operators.
 - CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
 - WGSL output discards the value of a call statement to a `@must_use` built-in such as `min(a, 4u);` or a structure constructor such as `Pair(a, b);` with a phony assignment, `_ = min(a, 4u);`. The call used to be written as a statement, which WGSL rejects. Atomics, barriers, `textureStore` and functions the shader declares are written unchanged.
