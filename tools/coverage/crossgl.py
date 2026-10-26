@@ -28,7 +28,7 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
-from .templates.base import BINS, MAKE_PAIR, NESTED_STRUCTS, PAIR, POSE, SPREAD
+from .templates.base import BAG, BINS, MAKE_PAIR, NESTED_STRUCTS, PAIR, POSE, SPREAD
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -506,6 +506,9 @@ CONSTRUCTS: dict[str, Template] = {
     "struct-array-member": Template(C_FAMILY["struct-array-member"].body, prelude=BINS),
     "struct-vector-member": Template(
         C_FAMILY["struct-vector-member"].body, prelude=POSE
+    ),
+    "nested-member-assignment": Template(
+        C_FAMILY["nested-member-assignment"].body, prelude=BAG
     ),
     "struct-parameter": Template(
         C_FAMILY["struct-parameter"].body, SPREAD, prelude=PAIR

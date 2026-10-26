@@ -43,6 +43,18 @@ PICK = (
     "            if (a > 8) {\n                return 64.0;\n            }\n            break;\n    }\n"
     "    return 4.0 + float(a);\n}"
 )
+# advance and slot change their argument, so each call gives a new value.
+ADVANCE = "int advance(inout int k) {\n    k = k + 5;\n    return k;\n}"
+SLOT = "int slot(inout int k) {\n    k = k + 1;\n    return k;\n}"
+BAG = (
+    "struct Item {\n    $vec2 pos;\n    float w[2];\n};\n"
+    "struct Bag {\n    Item items[2];\n    int n;\n};"
+)
+# The sum of the members a nested-member-assignment probe writes, weighted so that each one stays recoverable.
+BAG_SUM = (
+    "b.items[0].pos.y + b.items[1].pos.y * 32.0 + b.items[0].w[1] * 1024.0 + b.items[1].w[0] * 16384.0"
+    " + b.items[0].w[0] * 262144.0 + b.items[1].w[1] * 4194304.0"
+)
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -449,6 +461,45 @@ C_FAMILY = {
         "float f = float(iin[i]);\n$mat2 d = $mat2(f);\n$mat2 e = $mat2(2.0) + d;\n"
         "outp[i] = d[0][0] + d[0][1] * 16.0 + d[1][0] * 256.0 + d[1][1] * 4096.0 + e[1][1] * 65536.0"
         " + e[0][1] * 1048576.0;"
+    ),
+    # Both loops have no condition of their own and end only through their break.
+    "infinite-loop": Template(
+        "int k = iin[i];\nfloat acc = 0.0;\nfor (;;) {\n    acc += 2.0;\n    k = k + 3;\n    if (k > 20) {\n"
+        "        break;\n    }\n}\nwhile (true) {\n    acc += 64.0;\n    if (acc > 200.0) {\n        break;\n"
+        "    }\n}\noutp[i] = acc + float(k) * 1024.0;"
+    ),
+    # A loop condition is evaluated before every iteration, and && skips its right operand when the left is false.
+    "loop-condition-call": Template(
+        "int k = iin[i];\nfloat acc = 0.0;\nwhile (advance(k) < 40) {\n    acc += 1.0;\n}\n"
+        "for (int j = advance(k); j < 64 && advance(k) < 60; j += 4) {\n    acc += 32.0;\n}\n"
+        "outp[i] = acc + float(k) * 4096.0;",
+        ADVANCE,
+    ),
+    # A compound assignment evaluates its left operand once, so each one calls slot once.
+    "indexed-compound-assignment": Template(
+        "float a[4];\nfor (int j = 0; j < 4; j++) {\n    a[j] = float(j);\n}\nint k = iin[i] & 1;\n"
+        "a[slot(k)] += 8.0;\na[slot(k)] *= 4.0;\na[k - 1] -= 0.5;\n"
+        "outp[i] = a[0] + a[1] * 16.0 + a[2] * 256.0 + a[3] * 4096.0 + float(k) * 65536.0;",
+        SLOT,
+    ),
+    # Vector compound assignments work component by component, with a scalar operand applied to every component.
+    "vector-compound-assignment": Template(
+        "$vec4 v = $vec4(float(iin[i]), 1.0, 2.0, 3.0);\n$vec4 w = $vec4(0.5, 0.25, 4.0, 1.0);\n"
+        "v += w;\nv *= 2.0;\nv -= w * 2.0;\nv /= $vec4(2.0, 4.0, 8.0, 2.0);\nv *= w;\nv.y += 1.0;\n"
+        "outp[i] = v.x + v.y * 64.0 + v.z * 4096.0 + v.w * 65536.0;"
+    ),
+    # Stores through a member of an array element of a struct, with indices the input picks.
+    "nested-member-assignment": Template(
+        "Bag b;\nfor (int j = 0; j < 2; j++) {\n    b.items[j].pos.x = float(j);\n"
+        "    b.items[j].pos.y = float(j) + 2.0;\n    b.items[j].w[0] = 1.0;\n    b.items[j].w[1] = 3.0;\n}\n"
+        "int k = iin[i] & 1;\nb.n = iin[i];\nb.items[k].pos.y = float(b.n) * 2.0;\nb.items[1 - k].w[k] += 8.0;\n"
+        f"b.items[k].w[1 - k] = b.items[1 - k].pos.x + 4.0;\noutp[i] = {BAG_SUM};",
+        BAG,
+    ),
+    "bool-array": Template(
+        "bool flags[4];\nfor (int j = 0; j < 4; j++) {\n    flags[j] = ((iin[i] >> j) & 1) == 1;\n}\n"
+        "bool either = flags[0] || flags[3];\nflags[1] = !flags[1];\n"
+        "outp[i] = (flags[1] ? 1.0 : 0.0) + (flags[2] ? 2.0 : 0.0) + (either ? 4.0 : 0.0) + float(iin[i]) * 8.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,

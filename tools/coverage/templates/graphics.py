@@ -6,6 +6,7 @@ import re
 from dataclasses import replace
 
 from . import (
+    assignments,
     branches,
     calls,
     composites,
@@ -314,6 +315,7 @@ METAL = {
     **scopes.METAL,
     **calls.METAL,
     **evaluation.METAL,
+    **assignments.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -506,6 +508,7 @@ WGSL = {
     **branches.WGSL,
     **shapes.WGSL,
     **evaluation.WGSL,
+    **assignments.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
