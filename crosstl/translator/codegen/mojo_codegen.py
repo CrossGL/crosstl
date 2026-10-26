@@ -8928,6 +8928,10 @@ class MojoCodeGen:
                 return self.generate_increment_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
+                operand_type = self.expression_result_type(expr.operand)
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return f"(~{operand})"
                 return f"(not {operand})"
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
@@ -14972,6 +14976,17 @@ class MojoCodeGen:
             vector_info = self.vector_type_info(array_type)
             if vector_info is not None:
                 return MOJO_DTYPE_INFO[vector_info[0]][0]
+            return None
+        if isinstance(expr, UnaryOpNode):
+            op = self.map_operator(expr.op)
+            operand_type = self.expression_result_type(expr.operand)
+            if op == "not":
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return operand_type
+                return "bool"
+            if op in {"+", "-", "~"}:
+                return operand_type
             return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
