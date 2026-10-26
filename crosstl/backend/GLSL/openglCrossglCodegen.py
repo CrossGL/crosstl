@@ -3705,7 +3705,9 @@ class GLSLToCrossGLConverter:
             operand = self.generate_expression(node.operand)
             return f"({operand}{node.op})"
         elif isinstance(node, AssignmentNode):
-            return self.generate_assignment(node)
+            # An assignment is an expression whose value is the assigned value, so an
+            # operand position must keep it grouped against the surrounding operator.
+            return f"({self.generate_assignment(node)})"
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node)
         elif isinstance(node, MemberAccessNode):
@@ -4027,10 +4029,7 @@ class GLSLToCrossGLConverter:
             self.mark_structured_element_reference(args[position])
 
     def generate_postfix_base_expression(self, node):
-        expression = self.generate_expression(node)
-        if isinstance(node, AssignmentNode):
-            return f"({expression})"
-        return expression
+        return self.generate_expression(node)
 
     def structured_buffer_access_parts(self, node):
         if not isinstance(node, ArrayAccessNode):
