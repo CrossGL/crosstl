@@ -15,7 +15,17 @@ import crosstl
 from crosstl.translator.semantics import AmbiguousMatrixSpellingError
 from crosstl.translator.semantics.matrix_spellings import ambiguous_matrix_spelling
 
-TARGETS = ("metal", "opengl", "directx", "vulkan", "slang", "cuda", "hip", "rust", "mojo")
+TARGETS = (
+    "metal",
+    "opengl",
+    "directx",
+    "vulkan",
+    "slang",
+    "cuda",
+    "hip",
+    "rust",
+    "mojo",
+)
 
 ISSUE_REPRODUCER = """
 shader Nsq {
@@ -149,7 +159,9 @@ def test_only_non_square_floating_point_spellings_are_ambiguous(name, readings):
     assert ambiguous_matrix_spelling(name) == readings
 
 
-@pytest.mark.parametrize("source", (SQUARE, SQUARE_DIAGONAL), ids=("columns", "diagonal"))
+@pytest.mark.parametrize(
+    "source", (SQUARE, SQUARE_DIAGONAL), ids=("columns", "diagonal")
+)
 @pytest.mark.parametrize("backend", ("metal", "opengl", "directx", "vulkan"))
 def test_square_spellings_stay_aliases_of_matn(tmp_path, backend, source):
     """``float3x3(...)`` fills columns and ``float3x3(s)`` is diagonal, as ``mat3``; HLSL output filled rows."""
