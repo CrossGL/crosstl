@@ -27462,3 +27462,29 @@ def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_mojo_boolean_vector_logical_ops_use_bitwise_operators():
+    """&& and || on boolean vectors must be lane-wise (& / |) in Mojo.
+
+    Scalar bool keeps short-circuit and/or. See issue #3137.
+    """
+    code = """
+    shader P {
+        bvec2 both(bvec2 a, bvec2 b) { return a && b; }
+        bvec2 either(bvec2 a, bvec2 b) { return a || b; }
+        bvec3 cmp(vec3 x, vec3 y, vec3 z) { return (x < y) && (y < z); }
+        bool scalar_and(bool a, bool b) { return a && b; }
+        bool scalar_or(bool a, bool b) { return a || b; }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    # Vector forms use bitwise operators
+    assert "(a & b)" in generated
+    assert "(a | b)" in generated
+    # Comparison results are boolean vectors; the && between them should be &
+    assert "&" in generated
+    # Scalar forms keep logical operators
+    assert "(a and b)" in generated
+    assert "(a or b)" in generated
