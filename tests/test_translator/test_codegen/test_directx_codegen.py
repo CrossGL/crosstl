@@ -85,6 +85,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXTrailingZeroBuiltinError,
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
+    DirectXWaveSizeProfileError,
     DirectXWorkgroupPointerError,
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
@@ -52009,3 +52010,69 @@ def test_directx_dx10_profile_rejects_ray_tracing_stages():
         match="DirectX profile dx10 does not support the 'raygeneration'",
     ):
         HLSLCodeGen(target_profile="dx10").generate(crosstl.translator.parse(code))
+
+
+WAVE_SIZE_HLSL = """
+RWStructuredBuffer<uint> outp : register(u0);
+[WaveSize({arguments})]
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {{ outp[id.x] = id.x; }}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+@pytest.mark.parametrize(
+    ("arguments", "wave_size", "shader_model"),
+    [
+        ("32", (32,), "6.6"),
+        ("16, 64", (16, 64), "6.8"),
+        ("16, 64, 32", (16, 64, 32), "6.8"),
+    ],
+)
+def test_directx_dx11_profile_rejects_wave_size_attribute(
+    tmp_path, backend, arguments, wave_size, shader_model
+):
+    source = tmp_path / "wave_size.hlsl"
+    source.write_text(WAVE_SIZE_HLSL.format(arguments=arguments))
+
+    with pytest.raises(DirectXWaveSizeProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.wave_size == wave_size
+    assert error.shader_model == shader_model
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-wave-size-unsupported"
+    )
+    assert f"Shader Model {shader_model}" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert f"[WaveSize({arguments})]" in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+def test_directx_legacy_profiles_reject_crossgl_wave_size_attribute(target_profile):
+    code = """
+    shader LegacyWaveSize {
+        compute {
+            void main() @ WaveSize(32) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWaveSizeProfileError,
+        match=(
+            f"DirectX profile {target_profile} does not support the "
+            "WaveSize attribute"
+        ),
+    ):
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+    assert "[WaveSize(32)]" in generated

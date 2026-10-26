@@ -690,6 +690,19 @@ class DirectXRayTracingStageProfileError(ValueError):
         self.shader_attribute = shader_attribute
 
 
+class DirectXWaveSizeProfileError(ValueError):
+    """Raised when a DirectX profile below Direct3D 12 receives WaveSize."""
+
+    project_diagnostic_code = "project.translate.directx-wave-size-unsupported"
+    missing_capabilities = ("directx.wave-size",)
+
+    def __init__(self, message, *, target_profile, wave_size, shader_model):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.wave_size = wave_size
+        self.shader_model = shader_model
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -33657,6 +33670,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "entry points"
             )
         arguments_text = ", ".join(str(value) for value in wave_size_values)
+        if self.target_profile in {"dx10", "dx11"}:
+            shader_model = "6.6" if len(wave_size_values) == 1 else "6.8"
+            raise DirectXWaveSizeProfileError(
+                f"DirectX profile {self.target_profile} does not support the "
+                f"WaveSize attribute; [WaveSize({arguments_text})] requires "
+                f"DirectX 12 / Shader Model {shader_model}",
+                target_profile=self.target_profile,
+                wave_size=tuple(wave_size_values),
+                shader_model=shader_model,
+            )
         return f"[WaveSize({arguments_text})]\n"
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
