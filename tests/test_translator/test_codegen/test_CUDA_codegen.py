@@ -2652,6 +2652,37 @@ class TestCudaCodeGen:
         assert "(v / h)" not in cuda_code
         assert "(v - h)" not in cuda_code
 
+    def test_half_vector_swizzles_expand_to_half_constructors(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 make(half a) { return f16vec4(a, a, a, a); }
+                f16vec3 swizzle(f16vec4 e, f16vec3 t, half a) {
+                    f16vec3 r = e.xyz;
+                    f16vec4 q = t.xxyz;
+                    f16vec2 p = e.wy;
+                    f16vec3 m = make(a).zyx;
+                    return r + e.wzy + q.xyz + m;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "cgl_half3 r = cgl_make_half3(e.x, e.y, e.z);" in cuda_code
+        assert "cgl_half4 q = cgl_make_half4(t.x, t.x, t.y, t.z);" in cuda_code
+        assert "half2 p = __floats2half2_rn(e.w, e.y);" in cuda_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_construct_cgl_half4_zyx(make(a));" in cuda_code
+        )
+        assert "cgl_cgl_half3_add(r, cgl_make_half3(e.w, e.z, e.y))" in cuda_code
+        assert "e.xyz" not in cuda_code
+        assert "e.wzy" not in cuda_code
+        assert "t.xxyz" not in cuda_code
+        assert "e.wy" not in cuda_code
+
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {

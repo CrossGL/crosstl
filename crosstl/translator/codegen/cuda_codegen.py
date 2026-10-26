@@ -6248,7 +6248,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         result_type = self.vector_type_for_components(
             vector_info["component_type"], len(components)
         )
-        result_info = self.vector_type_info(result_type)
+        result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
 
@@ -11089,6 +11089,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
+
+    def vector_type_for_components(self, component_type, component_count):
+        # half has no vecN spelling: f16vec3 and f16vec4 lower to the
+        # cgl_half helpers and f16vec2 to the native half2
+        if component_type == "half" and 2 <= component_count <= 4:
+            return f"f16vec{component_count}"
+        return super().vector_type_for_components(component_type, component_count)
+
+    def swizzle_result_vector_info(self, result_type):
+        result_info = self.vector_type_info(result_type)
+        if result_info is not None:
+            return result_info
+        if self.native_vector_component_type(result_type) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+            }
+        return None
 
     def native_vector_component_type(self, type_name):
         # half2 maps to the native half2 type, which vector_type_info leaves
