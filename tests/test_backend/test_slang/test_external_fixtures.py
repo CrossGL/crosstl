@@ -1792,7 +1792,7 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2D texFrame;",
-            "bool mandelbrot(vec2 z, int i)",
+            "bool mandelbrot(inout vec2 z, out int i)",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
             "texFrame[thread] = vec4(color, 1.0);",
         ],
