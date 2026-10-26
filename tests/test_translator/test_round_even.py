@@ -11,7 +11,7 @@ import crosstl
     "backend, expected",
     [
         ("directx", "round(a)"),
-        ("slang", "round(a)"),
+        ("slang", "rint(a)"),
         ("wgsl", "round(a)"),
         ("metal", "rint(a)"),
         ("cuda", "rintf(a)"),
@@ -62,7 +62,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     [
         ("cgl", "roundEven("),
         ("directx", "round("),
-        ("slang", "round("),
+        ("slang", "rint("),
         ("wgsl", "round("),
         ("metal", "rint("),
         ("cuda", "rintf("),
@@ -71,12 +71,13 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     ],
 )
 def test_hlsl_round_imports_as_ties_to_even_rounding(tmp_path, backend, expected):
-    # HLSL round(2.5) is 2 (DXC lowers it to Round_ne); Metal round and CUDA roundf give 3.
+    # HLSL round(2.5) is 2 (DXC lowers it to Round_ne); Metal round and CUDA roundf give 3,
+    # and Slang round leaves halfway cases to the target.
     path = tmp_path / "round.hlsl"
     path.write_text(HLSL_ROUND)
     out = crosstl.translate(str(path), backend=backend, format_output=False)
     assert expected in out
-    if backend in {"metal", "cuda", "hip"}:
+    if backend in {"metal", "cuda", "hip", "slang"}:
         assert "round" not in out
 
 

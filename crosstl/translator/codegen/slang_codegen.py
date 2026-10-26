@@ -363,8 +363,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
-            # Slang keeps HLSL's spelling: roundEven is written as round, as the HLSL generator does.
-            "roundEven": "round",
+            # Slang rint rounds halfway cases to the nearest even integer on every target. Slang round
+            # leaves them to the target (round on Metal, Round on SPIR-V, roundf on CUDA).
+            "roundEven": "rint",
             "floatBitsToInt": "asint",
             "floatBitsToUint": "asuint",
             "intBitsToFloat": "asfloat",
