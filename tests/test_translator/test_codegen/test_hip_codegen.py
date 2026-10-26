@@ -14283,3 +14283,44 @@ def test_hip_half_vector_constructor_splats_a_half_cast():
 
     assert "return cgl_cgl_half3_splat(__float2half(x));" in hip_code
     assert "cgl_make_half3(__float2half(x))" not in hip_code
+
+
+OUT_INOUT_VALUE_PARAMETERS_SOURCE = """
+shader main {
+    struct P { float a; vec2 b; };
+    buffer float* results;
+    void setx(inout float x) { x = 5.0; }
+    void sety(out float y) { y = 5.0; }
+    void setv(inout vec4 v, out P p, in float k, float j, float arr[2]) {
+        v = vec4(k);
+        p.a = j;
+        arr[0] = k;
+    }
+    compute {
+    @ numthreads(1, 1, 1)
+    void main() {
+        float a = 1.0;
+        float b;
+        vec4 v;
+        P p;
+        float arr[2];
+        setx(a);
+        sety(b);
+        setv(v, p, a, b, arr);
+        results[0] = a + b + v.x + p.a + arr[0];
+    }
+    }
+}
+"""
+
+
+def test_hip_out_and_inout_value_parameters_are_references(tmp_path):
+    ast = Parser(Lexer(OUT_INOUT_VALUE_PARAMETERS_SOURCE).tokens).parse()
+    hip_code = HipCodeGen().generate(ast)
+
+    assert "void setx(float& x)" in hip_code
+    assert "void sety(float& y)" in hip_code
+    assert "void setv(float4& v, P& p, float k, float j, float arr[2])" in hip_code
+    assert "setx(a);" in hip_code
+    assert "sety(b);" in hip_code
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

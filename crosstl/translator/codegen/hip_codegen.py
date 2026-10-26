@@ -104,6 +104,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .reference_parameters import (
+    is_reference_value_type,
+    parameter_is_writable,
+    reference_declarator,
+)
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
@@ -335,6 +340,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
+        self.current_function_stage_name = None
         self.current_function_is_kernel_entry = False
         self.current_expression_expected_type = None
         self.structs_by_name = {}
@@ -1931,6 +1937,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         saved_stage_builtin_aliases = self.stage_builtin_aliases
         saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
+        saved_current_function_stage_name = self.current_function_stage_name
         saved_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -1989,6 +1996,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             qualifiers.append("__device__")
 
         stage_name = self.function_stage_name(node)
+        self.current_function_stage_name = stage_name
         is_kernel_entry = "__global__" in qualifiers
         self.current_function_is_kernel_entry = is_kernel_entry
 
@@ -2173,6 +2181,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.stage_builtin_aliases = saved_stage_builtin_aliases
         self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
+        self.current_function_stage_name = saved_current_function_stage_name
         self.current_generic_function_substitutions = (
             saved_generic_function_substitutions
         )
@@ -2210,9 +2219,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         self.register_variable_type(param_name, param_type, param)
         declaration = self.format_typed_declarator(param_type, param_name)
-        return self.apply_resource_memory_qualifiers_to_declaration(
+        declaration = self.apply_resource_memory_qualifiers_to_declaration(
             declaration, param_name, param
         )
+        if (
+            self.current_function_stage_name is None
+            and parameter_is_writable(param)
+            and is_reference_value_type(
+                self.parameter_raw_type(param),
+                self.type_name_string(param_type),
+                self.structs_by_name,
+            )
+        ):
+            declaration = reference_declarator(declaration, param_name)
+        return declaration
 
     def semantic_from_node(self, node):
         semantic = getattr(node, "semantic", None)

@@ -59,6 +59,11 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .reference_parameters import (
+    is_reference_value_type,
+    parameter_is_writable,
+    reference_declarator,
+)
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
@@ -1438,9 +1443,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 params.append(geometry_stream_declaration)
             else:
                 self.register_variable_type(param_name, declaration_type, param)
-                params.append(
-                    self.format_typed_declarator(declaration_type, param_name)
-                )
+                declaration = self.format_typed_declarator(declaration_type, param_name)
+                if (
+                    stage_name is None
+                    and parameter_is_writable(param)
+                    and is_reference_value_type(
+                        param_type,
+                        self.type_name_string(declaration_type),
+                        self.structs_by_name,
+                    )
+                ):
+                    declaration = reference_declarator(declaration, param_name)
+                params.append(declaration)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
