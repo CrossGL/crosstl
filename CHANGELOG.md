@@ -49,6 +49,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - SPIR-V output lowers Metal structures with device, constant, threadgroup or thread pointer members to resource handles, as HLSL and GLSL output do. On all three targets such a member may hold a null pointer that is overwritten before every use, and a thread pointer member may point into a fixed-size local array.
 
 ### Fixed
+- CUDA and HIP output lower `length`, `normalize`, `distance` and `cross` on `cgl_half3` and `cgl_half4` vectors to generated helpers that compute in `float` through `__half2float`, such as `cgl_cgl_half3_length(s)`, and `distance` on `float` and `double` vectors to a `cgl_float3_distance` style helper. They used to write bare calls such as `length(s)` and `distance(a, b)`, which CUDA and HIP do not declare.
 
 - CUDA and HIP output combine a half vector with a `half` scalar under `+`, `-`, `*` and `/` through the existing vector-scalar helpers, such as `cgl_cgl_half3_mul_scalar(v, h)`. They used to keep the native operator, as in `(v * h)`, which does not compile because the generated `cgl_half3` and `cgl_half4` structures define no arithmetic operators.
 - CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
