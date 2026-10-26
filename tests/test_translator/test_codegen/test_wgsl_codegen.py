@@ -3489,7 +3489,12 @@ shader Diag {
             mat3x2 c = mat3x2(fin[i] + 1.0);
             mat3 d = mat3(k);
             mat2 e = mat2(1);
-            outp[i] = a[1].y + b[1].y + c[2].y + d[1].y + e[0].x;
+            mat2 f = mat2(-fin[i]);
+            mat2 g = mat2(-1.0);
+            mat3 h = mat3(-k);
+            mat2 n = mat2(1u);
+            outp[i] = a[1].y + b[1].y + c[2].y + d[1].y + e[0].x + f[1].y + g[0].x
+                + h[2].z + n[1].y;
         }
     }
 }
@@ -3513,6 +3518,16 @@ def test_wgsl_codegen_expands_one_scalar_matrix_constructor_to_diagonal(tmp_path
     ) in generated
     assert "vec3<f32>(f32(k), 0.0, 0.0)" in generated
     assert "mat2x2<f32>(vec2<f32>(1, 0.0), vec2<f32>(0.0, 1))" in generated
+    assert (
+        "var f: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-fin[i], 0.0), vec2<f32>(0.0, -fin[i]));"
+    ) in generated
+    assert (
+        "var g: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-1.0, 0.0), vec2<f32>(0.0, -1.0));"
+    ) in generated
+    assert "vec3<f32>(0.0, 0.0, f32(-k))" in generated
+    assert "vec2<f32>(f32(1u), 0.0)" in generated
     assert "mat2x2<f32>(fin[i])" not in generated
     validate_wgsl_with_naga(tmp_path, generated)
 

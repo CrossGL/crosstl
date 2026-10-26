@@ -4655,18 +4655,26 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         shape = self.matrix_shape(matrix_type)
         if shape is None:
             return None
-        arg_type = self.expression_type(arg)
+        # ``-s`` and ``+s`` have the type of ``s``.
+        operand = arg
+        while (
+            isinstance(operand, UnaryOpNode)
+            and operand.operator in {"-", "+"}
+            and not operand.is_postfix
+        ):
+            operand = operand.operand
+        arg_type = self.expression_type(operand)
         try:
             arg_type_name = (
                 self.type_name_string(arg_type) if arg_type is not None else None
             )
         except ValueError:
             arg_type_name = None
-        is_numeric_literal = isinstance(arg, LiteralNode) and isinstance(
-            arg.value, (int, float)
+        is_numeric_literal = isinstance(operand, LiteralNode) and isinstance(
+            operand.value, (int, float)
         )
         if arg_type_name not in {"f32", "f16", "i32", "u32"} and not (
-            is_numeric_literal and not isinstance(arg.value, bool)
+            is_numeric_literal and not isinstance(operand.value, bool)
         ):
             return None
         element, columns, rows = shape
@@ -4677,12 +4685,19 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 "time and requires an argument without side effects; assign the "
                 "argument to a local variable first"
             )
-        if self.is_float_vector_abstract_int_argument(arg, element) or (
-            is_numeric_literal and arg_type_name is None
-        ):
+        # An integer literal without the ``u`` suffix is an abstract integer in
+        # WGSL and converts to the element type; ``1u`` is converted below.
+        if (
+            self.is_float_vector_abstract_int_argument(operand, element)
+            and arg_type_name != "u32"
+        ) or (is_numeric_literal and arg_type_name is None):
             diagonal = self.generate_expression(arg)
-        else:
+        elif operand is arg:
             diagonal = self.generate_expression_for_target(arg, element)
+        else:
+            diagonal = self.generate_expression(arg)
+            if arg_type_name != element:
+                diagonal = f"{element}({diagonal})"
         column_values = []
         for column in range(columns):
             components = [diagonal if row == column else "0.0" for row in range(rows)]
