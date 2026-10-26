@@ -1850,6 +1850,15 @@ class TestHipCodeGen:
                     f16vec3 g = pow(h, s);
                     return a + b.xyz + c + d + g;
                 }
+                f16vec2 f2(f16vec2 h, f16vec2 e, half s) {
+                    f16vec2 a = sin(h);
+                    f16vec2 b = exp2(h);
+                    f16vec2 c = inversesqrt(h);
+                    f16vec2 d = pow(h, e);
+                    f16vec2 g = pow(h, s);
+                    f16vec2 fl = floor(h);
+                    return a + b + c + d + g + fl;
+                }
             }
         }
         """
@@ -1862,6 +1871,12 @@ class TestHipCodeGen:
         assert "cgl_half3 c = cgl_cgl_half3_inversesqrt(h);" in hip_code
         assert "cgl_half3 d = cgl_cgl_half3_pow_vector(h, e);" in hip_code
         assert "cgl_half3 g = cgl_cgl_half3_pow_scalar(h, s);" in hip_code
+        assert "half2 a = cgl_half2_sin(h);" in hip_code
+        assert "half2 b = cgl_half2_exp2(h);" in hip_code
+        assert "half2 c = cgl_half2_inversesqrt(h);" in hip_code
+        assert "half2 d = cgl_half2_pow_vector(h, e);" in hip_code
+        assert "half2 g = cgl_half2_pow_scalar(h, s);" in hip_code
+        assert "half2 fl = cgl_half2_floor(h);" in hip_code
         assert "__float2half(sinf(__half2float(value.x)))" in hip_code
         assert "__float2half(rsqrtf(__half2float(value.z)))" in hip_code
         assert (
@@ -1872,9 +1887,36 @@ class TestHipCodeGen:
             "__device__ inline cgl_half3 cgl_cgl_half3_pow_scalar"
             "(cgl_half3 base, half exponent)" in hip_code
         )
+        assert (
+            "__floats2half2_rn(sinf(__half2float(value.x)), sinf(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(exp2f(__half2float(value.x)), exp2f(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(rsqrtf(__half2float(value.x)), rsqrtf(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent.x)), "
+            "powf(__half2float(base.y), __half2float(exponent.y)))" in hip_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent)), "
+            "powf(__half2float(base.y), __half2float(exponent)))" in hip_code
+        )
+        assert (
+            "__floats2half2_rn(floorf(__half2float(value.x)), floorf(__half2float(value.y)))"
+            in hip_code
+        )
         assert "sinf(h)" not in hip_code
         assert "expf(q)" not in hip_code
+        assert "exp2f(h)" not in hip_code
+        assert "rsqrtf(h)" not in hip_code
         assert "powf(h" not in hip_code
+        assert "floorf(h)" not in hip_code
 
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
