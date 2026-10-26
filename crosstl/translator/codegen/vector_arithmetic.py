@@ -247,7 +247,9 @@ class VectorArithmeticMixin:
             if func_name in self.scalar_float_math_functions() and raw_args:
                 return self.expression_result_type(raw_args[0])
             if isinstance(func_name, str):
-                return self.function_return_types.get(func_name)
+                return self.function_return_types.get(
+                    func_name
+                ) or self.scalar_cast_result_type(node)
             return None
         if isinstance(node, BinaryOpNode):
             left_type = self.expression_result_type(node.left)
@@ -913,14 +915,14 @@ class VectorArithmeticMixin:
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if left_info and self.scalar_component_type(right_type) is not None:
+        if left_info and self.vector_binary_scalar_operand(left_info, right_type):
             helper_name = self.require_vector_binary_helper(
                 left_info, operator, "scalar_right"
             )
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if right_info and self.scalar_component_type(left_type) is not None:
+        if right_info and self.vector_binary_scalar_operand(right_info, left_type):
             helper_name = self.require_vector_binary_helper(
                 right_info, operator, "scalar_left"
             )
@@ -928,6 +930,21 @@ class VectorArithmeticMixin:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
         return None
+
+    def vector_binary_scalar_operand(self, vector_info, scalar_type):
+        """Return whether a scalar operand can use the vector-scalar helpers.
+
+        ``half`` is not a general scalar component type, but a half vector
+        combined with a ``half`` scalar still needs the helper, because the
+        generated ``cgl_halfN`` structures define no arithmetic operators.
+        """
+        if self.scalar_component_type(scalar_type) is not None:
+            return True
+        if vector_info.get("component_type") != "half" or scalar_type is None:
+            return False
+        if not isinstance(scalar_type, str):
+            scalar_type = self.convert_type_node_to_string(scalar_type)
+        return self.map_vector_arithmetic_type(scalar_type) in {"half", "float16_t"}
 
     def lower_scalar_modulo_operation(
         self,

@@ -2619,6 +2619,39 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
+    def test_half_vector_with_half_scalar_uses_scalar_helpers(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 scale(f16vec3 v, half h) {
+                    f16vec3 a = v * h;
+                    f16vec3 b = h * v;
+                    f16vec3 c = v / h;
+                    f16vec3 d = v - h;
+                    f16vec4 e = f16vec4(v, h) + h;
+                    return a + b + c + d + e.xyz;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "cgl_half3 a = cgl_cgl_half3_mul_scalar(v, h);" in cuda_code
+        assert "cgl_half3 b = cgl_scalar_mul_cgl_half3(h, v);" in cuda_code
+        assert "cgl_half3 c = cgl_cgl_half3_div_scalar(v, h);" in cuda_code
+        assert "cgl_half3 d = cgl_cgl_half3_sub_scalar(v, h);" in cuda_code
+        assert "cgl_cgl_half4_add_scalar(" in cuda_code
+        assert (
+            "__device__ inline cgl_half3 cgl_cgl_half3_mul_scalar"
+            "(cgl_half3 lhs, half rhs)" in cuda_code
+        )
+        assert "(v * h)" not in cuda_code
+        assert "(h * v)" not in cuda_code
+        assert "(v / h)" not in cuda_code
+        assert "(v - h)" not in cuda_code
+
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {
@@ -2639,6 +2672,34 @@ class TestCudaCodeGen:
         assert "return cgl_make_half4(b.y, b.y, b.y, b.y);" in cuda_code
         assert "cgl_make_half3(b.x);" not in cuda_code
         assert "cgl_make_half4(b.y);" not in cuda_code
+
+    def test_vector_with_scalar_constructor_operand_uses_scalar_helpers(self):
+        source_code = """
+        shader Scale {
+            vec3 f(vec3 v, int i) {
+                return v * float(i);
+            }
+            vec3 g(vec3 v, int i) {
+                return float(i) - v;
+            }
+            ivec2 h(ivec2 v, float x) {
+                return v + int(x);
+            }
+            vec4 k(vec4 v, int i) {
+                return v / float(i) % float(i);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "return cgl_float3_mul_scalar(v, float(i));" in cuda_code
+        assert "return cgl_scalar_sub_float3(float(i), v);" in cuda_code
+        assert "return cgl_int2_add_scalar(v, int(x));" in cuda_code
+        assert "cgl_float4_mod_scalar(cgl_float4_div_scalar(v, float(i))" in cuda_code
+        assert "(v * float(i))" not in cuda_code
+        assert "(float(i) - v)" not in cuda_code
+        assert "(v + int(x))" not in cuda_code
 
     @pytest.mark.parametrize(
         "vector_type",
