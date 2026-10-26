@@ -53,6 +53,9 @@ Per target:
   brace initializers and vector casts become `transpose(matRxC(...))`, `m._mRC` and `m._RC` become `m[C][R]`,
   `*` of two matrices becomes `matrixCompMult`, a matrix cast keeps the upper-left elements and a scalar cast fills
   every element. Row writes and multi-component swizzle writes whose operands have side effects are refused.
+- The Slang importer (`crosstl/backend/slang/slang_matrix_import.py`) applies the same lowering as the HLSL
+  importer with default packing, since Slang matrices follow HLSL: `floatRxC` becomes `matCxR` and `mul(a, b)` stays
+  `a * b`. `row_major` and `column_major` declarations become `@ row_major` and `@ column_major`.
 - With row-major packing (`matrix_packing="row_major"`, DXC `-Zpr`) the HLSL importer represents each HLSL matrix
   by its transpose, so that CrossGL's column-major storage holds the bytes of the HLSL rows: `floatRxC` becomes
   `matRxC`, `m[i]`, `m[i][j]`, `m._mRC`, constructors and initializers keep their order, and `mul(a, b)` becomes
@@ -62,6 +65,4 @@ Per target:
   integer counterpart of `mat2x3`. The GLSL and Metal emitters emulate them as structs of columns.
 - MSL takes only whole columns or one scalar per element in a matrix constructor, so the Metal emitter spreads the
   components of a mixed argument list, such as `mat2(vec4)`, through a helper.
-- The Slang importer (`crosstl/backend/slang/slang_matrix_import.py`) applies the same lowering as the HLSL
-  importer with default packing, since Slang matrices follow HLSL: `floatRxC` becomes `matCxR` and `mul(a, b)` stays
-  `a * b`. `row_major` and `column_major` declarations become `@ row_major` and `@ column_major`.
+- Still open: Slang keeps its previous spelling until it gets the HLSL lowering.
