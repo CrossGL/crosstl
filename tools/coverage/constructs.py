@@ -89,6 +89,10 @@ def _curated() -> list[Construct]:
         c("control-flow", "switch-in-loop", "OpSwitch", "OpLoopMerge"),
         c("control-flow", "do-while-continue", "OpLoopMerge", "OpBranchConditional"),
         c("control-flow", "chained-conditional", "OpSelect"),
+        c("control-flow", "nested-switch", "OpSwitch", "OpSelectionMerge"),
+        c("control-flow", "unsigned-switch", "OpSwitch", "OpTypeInt"),
+        c("control-flow", "multi-variable-loop", "OpLoopMerge", "OpISub"),
+        c("control-flow", "forward-declaration", "OpFunction", "OpFunctionCall"),
         c(
             "control-flow",
             "discard",
@@ -209,6 +213,14 @@ def _curated() -> list[Construct]:
         c("type", "constant-array", "OpConstantComposite", "OpTypeArray"),
         c("type", "matrix-column-assignment", "OpTypeMatrix", "OpAccessChain"),
         c("type", "vector-array", "OpTypeArray", "OpTypeVector"),
+        c(
+            "type",
+            "non-square-matrix",
+            "OpTypeMatrix",
+            "OpMatrixTimesVector",
+            "OpVectorTimesMatrix",
+        ),
+        c("type", "struct-vector-member", "OpTypeStruct", "OpVectorShuffle"),
         c("type", "global-constant", "OpConstant"),
         c("type", "runtime-array-length", "OpTypeRuntimeArray", "OpArrayLength"),
         c("compute", "shared-memory", "StorageClass.Workgroup", "OpControlBarrier"),
@@ -314,8 +326,9 @@ def _spellings(dialect) -> dict[str, str]:
         spelled[f"uvec{size}"] = dialect.type(Type("uint", (size,)))
     try:
         spelled["mat2"] = dialect.type(Type("float", (2, 2)))
+        spelled["mat2x3"] = dialect.type(Type("float", (2, 3)))
     except ProbeError:
-        pass  # the language has no matrices, and its templates do not use $mat2
+        pass  # the language lacks these matrices, and its templates do not use them
     try:
         spelled["bvec2"] = dialect.type(Type("bool", (2,)))
     except ProbeError:

@@ -14,6 +14,7 @@ from . import (
     functions,
     operators,
     scopes,
+    shapes,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
 
@@ -165,6 +166,7 @@ HLSL = {
     **constructors.HLSL,
     **scopes.HLSL,
     **calls.HLSL,
+    **shapes.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -499,6 +501,7 @@ WGSL = {
     **declarations.WGSL,
     **calls.WGSL,
     **branches.WGSL,
+    **shapes.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

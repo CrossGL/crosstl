@@ -28,6 +28,9 @@ FIND = (
 TWICE = "float twice(float x) {\n    return x * 2.0;\n}"
 BLEND = "float blend(float x, float y) {\n    return x + y * 0.5;\n}"
 SPREAD = "float spread(Pair q) {\n    q.a = q.a * 2.0;\n    return q.a + q.b;\n}"
+POSE = "struct Pose {\n    $vec4 v;\n    $vec2 u;\n    int n;\n};"
+# quadruple calls twice above its definition, which the prototype declares.
+QUAD = "float twice(float x);\n\nfloat quadruple(float x) {\n    return twice(twice(x));\n}\n\n"
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -358,6 +361,45 @@ C_FAMILY = {
         "$vec2 pts[3];\nfor (int k = 0; k < 3; k++) {\n    pts[k] = $vec2(fin[i] + float(k), float(iin[i] * k));\n}\n"
         "int j = iin[i] % 3;\npts[j].y = pts[j].y + 100.0;\n"
         "outp[i] = pts[0].x + pts[1].y * 10.0 + pts[2].x * 1024.0 + pts[j].y;"
+    ),
+    # A break leaves only the innermost switch, and case 1 of the second inner switch falls through into case 2.
+    "nested-switch": Template(
+        "float acc = 0.0;\nint a = iin[i];\nswitch (a & 3) {\n    case 0:\n        switch ((a >> 2) & 1) {\n"
+        "            case 0:\n                acc += 1.0;\n                break;\n            default:\n"
+        "                acc += 2.0;\n                break;\n        }\n        acc += 4.0;\n        break;\n"
+        "    case 1:\n        switch (a >> 2) {\n            case 1:\n                acc += 8.0;\n"
+        "            case 2:\n                acc += 16.0;\n                break;\n        }\n        acc += 32.0;\n"
+        "        break;\n    default:\n        acc += 64.0;\n        break;\n}\noutp[i] = acc + fin[i];"
+    ),
+    # The selector is unsigned, and two labels lie above 2^31, where a signed reading of them would be negative.
+    "unsigned-switch": Template(
+        "uint u = uint(iin[i] - 8);\nfloat r = 0.0;\nswitch (u) {\n    case 0u:\n        r = 1.0;\n        break;\n"
+        "    case 4294967295u:\n        r = 2.0;\n        break;\n    case 4294967288u:\n        r = 3.0;\n"
+        "        break;\n    case 7u:\n        r = 4.0;\n        break;\n    default:\n"
+        "        r = float(u % 5u) * 8.0;\n        break;\n}\noutp[i] = r + fin[i];"
+    ),
+    # Both counters step after a continue too.
+    "multi-variable-loop": Template(
+        "float acc = 0.0;\nint n = 6 + (iin[i] & 3);\nfor (int a = 0, b = n; a < b; a++, b--) {\n"
+        "    if (a == 1) {\n        continue;\n    }\n    acc += float(a * 16 + b);\n}\noutp[i] = acc + fin[i];"
+    ),
+    "forward-declaration": Template(
+        "outp[i] = quadruple(fin[i]) + quadruple(float(iin[i]));", QUAD + TWICE
+    ),
+    # m has two columns of three rows: m * v takes two components and gives three, v * m the reverse, and m[1] is
+    # the second column. The entries are small integers, so every product and sum is exact.
+    "non-square-matrix": Template(
+        "float a = float(iin[i]);\n$mat2x3 m = $mat2x3(a, 1.0, 2.0, 3.0, 4.0, 5.0);\n"
+        "$vec3 v = m * $vec2(1.0, 2.0);\n$vec2 w = $vec3(1.0, 1.0, 2.0) * m;\n"
+        "outp[i] = v.x + v.z * 16.0 + w.x * 256.0 + w.y * 4096.0 + m[1].z * 65536.0;"
+    ),
+    # Swizzles read and write vector members; the weights keep the sum below 2^24, so it is exact.
+    "struct-vector-member": Template(
+        "Pose p;\np.v = $vec4(float(iin[i]), 1.0, 2.0, 3.0);\np.u = p.v.wx;\np.n = iin[i] & 3;\n"
+        "p.v.yz = p.u * 2.0;\np.u.y = p.v.y + 1.0;\n"
+        "outp[i] = p.v.x + p.v.y * 16.0 + p.v.z * 128.0 + p.v.w * 4096.0 + p.u.x * 16384.0 + p.u.y * 65536.0"
+        " + float(p.n) * 1048576.0;",
+        POSE,
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
