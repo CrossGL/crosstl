@@ -2166,6 +2166,37 @@ class TestHipCodeGen:
         assert "o.xy" not in hip_code
         assert "o.zw" not in hip_code
 
+    def test_native_half2_swizzles_and_constructors_expand_components(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 f(f16vec2 a, f16vec2 b, half h, f16vec4 d) {
+                    half x = a.x;
+                    f16vec2 xy = a.xy;
+                    f16vec2 xx = a.xx;
+                    f16vec2 yy = a.yy;
+                    f16vec2 s = a.yx;
+                    f16vec4 c1 = f16vec4(a, b);
+                    f16vec3 c2 = f16vec3(a, h);
+                    f16vec4 c3 = f16vec4(d.xy, a);
+                    return c1 + c3;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "half x = a.x;" in hip_code
+        assert "half2 xy = __floats2half2_rn(a.x, a.y);" in hip_code
+        assert "half2 xx = __floats2half2_rn(a.x, a.x);" in hip_code
+        assert "half2 yy = __floats2half2_rn(a.y, a.y);" in hip_code
+        assert "half2 s = __floats2half2_rn(a.y, a.x);" in hip_code
+        assert "cgl_make_half4(a.x, a.y, b.x, b.y)" in hip_code
+        assert "cgl_make_half4(d.x, d.y, a.x, a.y)" in hip_code
+        assert "cgl_make_half3(a.x, a.y, h)" in hip_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [
