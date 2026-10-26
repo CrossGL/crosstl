@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import composites, operators
+from . import composites, constructors, functions, operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -48,6 +48,7 @@ _GLSL_RAYTRACING_STAGES = {
 GLSL = {
     **C_FAMILY,
     **_GLSL_RAYTRACING_STAGES,
+    **constructors.GLSL,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),
@@ -152,6 +153,7 @@ HLSL = {
     ),
     **operators.HLSL,
     **composites.HLSL,
+    **constructors.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -292,6 +294,8 @@ _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 
 METAL = {
     **C_FAMILY,
+    **functions.METAL,
+    **constructors.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -476,6 +480,8 @@ WGSL = {
     ),
     **operators.WGSL,
     **composites.WGSL,
+    **functions.WGSL,
+    **constructors.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

@@ -120,6 +120,7 @@ from .builtin_result_types import (
     component_access_type,
     inferred_value_type,
 )
+from .c_family_operands import postfix_operand
 from .call_graph import validate_recursion_free
 from .constant_ordering import partition_constants_by_struct_dependency
 from .crossgl_vector_names import (
@@ -11963,7 +11964,7 @@ class MetalCodeGen(
                 if layout_store is not None and not layout_store[1]:
                     operand = layout_store[0]
             if getattr(expr, "is_postfix", False):
-                return f"{operand}{operator}"
+                return f"{postfix_operand(operand)}{operator}"
             if operator == "!":
                 operand = metal_logical_not_operand(
                     operand, self.expression_result_type(expr.operand)

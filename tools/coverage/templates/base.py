@@ -17,7 +17,11 @@ class Template:
 
 ABSENT = Template(entry="<absent>")
 
-NESTED_STRUCTS = "struct Pair {\n    float a;\n    float b;\n};\nstruct Frame {\n    Pair p;\n    float w;\n};"
+PAIR = "struct Pair {\n    float a;\n    float b;\n};"
+NESTED_STRUCTS = PAIR + "\nstruct Frame {\n    Pair p;\n    float w;\n};"
+MAKE_PAIR = "Pair make(float x) {\n    Pair p;\n    p.a = x;\n    p.b = x * 2.0;\n    return p;\n}"
+# Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
+_FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
 # Operator probes. The integer inputs are 0 to 15 (:func:`..execution.inputs`), so a probe subtracts 8 where it needs
 # a negative operand, and divides and takes remainders of non-negative operands only: GLSL leaves the remainder of a
@@ -142,6 +146,27 @@ C_FAMILY = {
         "float a = fin[i];\nbump(a);\noutp[i] = a;",
         "void bump(inout float a) {\n    a = a + 1.0;\n}",
     ),
+    # An array argument is copied, so the callee's write to v[0] must not reach values[0].
+    "array-parameter": Template(
+        "float values[4];\n"
+        + _FILL.format("values")
+        + "outp[i] = total(values) * 10.0 + values[0];",
+        "float total(float v[4]) {\n    v[0] = 0.0;\n    return v[0] + v[1] + v[2] + v[3];\n}",
+    ),
+    "struct-return": Template(
+        "Pair p = make(fin[i]);\noutp[i] = p.a + p.b * 4.0;", PAIR + "\n" + MAKE_PAIR
+    ),
+    # The int overload scales by 4 and the float one by 2, so picking the wrong one changes the result.
+    "function-overloading": Template(
+        "outp[i] = scaled(fin[i]) + scaled(iin[i]);",
+        "float scaled(float x) {\n    return x * 2.0;\n}\nfloat scaled(int x) {\n    return float(x) * 4.0;\n}",
+    ),
+    # Case 0 falls through into case 1, and cases 2 and 3 share their statements.
+    "switch-fallthrough": Template(
+        "float acc = 0.0;\nswitch (iin[i] & 3) {\n    case 0:\n        acc += 1.0;\n    case 1:\n"
+        "        acc += 2.0;\n        break;\n    case 2:\n    case 3:\n        acc += 4.0;\n        break;\n}\n"
+        "outp[i] = acc;"
+    ),
     "array": Template(
         "float values[4];\nfor (int k = 0; k < 4; k++) {\n    values[k] = fin[i] * float(k);\n}\n"
         "outp[i] = values[iin[i] & 3];"
@@ -160,6 +185,12 @@ C_FAMILY = {
     "array-initializer": Template(
         "float values[4] = {1.0, 2.0, 4.0, 8.0};\noutp[i] = values[iin[i] & 3] + float(iin[i]);"
     ),
+    # Assigning an array copies it, so the write to b[0] must not reach a[0].
+    "array-copy": Template(
+        "float a[4];\n"
+        + _FILL.format("a")
+        + "float b[4] = a;\nb[0] = 9.0;\noutp[i] = a[0] * 10.0 + b[0] + b[3];"
+    ),
     "nested-struct": Template(
         "Frame s;\ns.p.a = float(iin[i]);\ns.p.b = 2.0;\ns.w = 3.0;\noutp[i] = s.p.a * s.w + s.p.b;",
         NESTED_STRUCTS,
@@ -176,6 +207,32 @@ C_FAMILY = {
     ),
     "matrix-vector-product": Template(
         "$mat2 m = $mat2(fin[i], 1.0, 2.0, 3.0);\n$vec2 v = m * $vec2(1.0, fin[i]);\noutp[i] = v.y;"
+    ),
+    # v takes a vector and two scalars, s splats one scalar, and each component of v scales its own power of ten.
+    "vector-constructor": Template(
+        "float f = fin[i];\n$vec2 h = $vec2(f, 1.0);\n$vec4 v = $vec4(h, 2.0, f);\n$vec3 s = $vec3(f + 1.0);\n"
+        "outp[i] = v.x * 1000.0 + v.y * 100.0 + v.z * 10.0 + v.w + s.z * 0.5;"
+    ),
+    # The columns are (f, 1) and (2, 3), so m[0][1] is 1 and m[1][0] is 2.
+    "matrix-from-vectors": Template(
+        "float f = float(iin[i]);\n$mat2 m = $mat2($vec2(f, 1.0), $vec2(2.0, 3.0));\n"
+        "outp[i] = m[0][1] * 100.0 + m[1][0] * 10.0 + m[0][0];"
+    ),
+    # lt is (fin[i] < 0, iin[i] < 8) and eq is (true, iin[i] == 4); each test that holds adds its own power of two.
+    "vector-comparison": Template(
+        "$vec2 a = $vec2(fin[i], float(iin[i]));\n$bvec2 lt = a < $vec2(0.0, 8.0);\n"
+        "$bvec2 eq = a == $vec2(fin[i], 4.0);\nfloat r = 0.0;\nif (lt.x) {\n    r += 1.0;\n}\n"
+        "if (any(lt)) {\n    r += 2.0;\n}\nif (all(lt)) {\n    r += 4.0;\n}\nif (all(eq)) {\n    r += 8.0;\n}\n"
+        "outp[i] = r;"
+    ),
+    "struct-constructor": Template(
+        "Pair p = Pair(fin[i], 2.0);\nPair q = Pair(p.b, p.a * 3.0);\noutp[i] = p.a + q.a * 10.0 + q.b * 100.0;",
+        PAIR,
+    ),
+    # Assigning a struct copies it, so the write to b.a must not reach a.a.
+    "struct-copy": Template(
+        "Pair a;\na.a = fin[i];\na.b = 2.0;\nPair b = a;\nb.a = 9.0;\noutp[i] = a.a * 10.0 + b.a + b.b;",
+        PAIR,
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
