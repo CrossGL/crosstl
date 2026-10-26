@@ -27341,10 +27341,6 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
     assert "var ref:" not in generated_code
 
 
-if __name__ == "__main__":
-    pytest.main()
-
-
 @pytest.mark.parametrize(
     ("code", "source_type", "target_type", "context"),
     [
@@ -27377,6 +27373,36 @@ if __name__ == "__main__":
             "bvec2",
             "bool",
             "while condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ for (int i = 0; a == b; i++) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "for condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ float s = 0.0; do { s = s + 1.0; } while (a == b); return s; } }"
+            ),
+            "bvec2",
+            "bool",
+            "do-while condition",
+        ),
+        (
+            "shader P { float f(vec2 a, vec2 b) { return (a == b) ? 1.0 : 0.0; } }",
+            "bvec2",
+            "bool",
+            "ternary condition",
+        ),
+        (
+            "shader P { float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
+            "vec3",
+            "float",
+            "global declaration g",
         ),
         (
             "shader P { float f(vec4 v) { float s = v; return s; } }",
@@ -27432,3 +27458,7 @@ def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
     assert ".reduce_or()" in generated
     assert "var s: Float32 = v[0]" in generated
     assert "return dot_product(v, v)" in generated
+
+
+if __name__ == "__main__":
+    pytest.main()
