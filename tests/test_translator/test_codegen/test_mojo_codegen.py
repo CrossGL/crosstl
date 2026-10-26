@@ -24035,8 +24035,8 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
         "return SIMD[DType.int32, 4]((nextFloat()).cast[DType.int32]())"
         in generated_code
     )
-    assert "return SIMD[DType.bool, 2](nextBool())" in generated_code
-    assert "return SIMD[DType.bool, 4](nextBool())" in generated_code
+    assert "return SIMD[DType.bool, 2](fill=nextBool())" in generated_code
+    assert "return SIMD[DType.bool, 4](fill=nextBool())" in generated_code
     assert "fn _crossgl_vec3_splat" not in generated_code
 
 
@@ -27458,6 +27458,40 @@ def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
     assert ".reduce_or()" in generated
     assert "var s: Float32 = v[0]" in generated
     assert "return dot_product(v, v)" in generated
+
+
+def test_mojo_bool_vector_splats_use_fill_keyword():
+    code = """
+    shader P {
+        bvec2 f(bool s) { return bvec2(s); }
+        bvec2 g() { return bvec2(true); }
+        bvec4 h(bool s) { return bvec4(s); }
+        bvec3 k(bool s) { return bvec3(s); }
+        bvec2 c(bool s, bvec2 b) { return s == b; }
+        bvec2 m(float x) { return bvec2(x < 1.0); }
+        vec2 v(float x) { return vec2(x); }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return SIMD[DType.bool, 2](fill=s)" in generated
+    assert "return SIMD[DType.bool, 2](fill=True)" in generated
+    assert "return SIMD[DType.bool, 4](fill=s)" in generated
+    assert "return SIMD[DType.bool, 4](s, s, s, False)" in generated
+    assert "return (SIMD[DType.bool, 2](fill=s)).eq(b)" in generated
+    assert "return SIMD[DType.bool, 2](fill=(x < 1.0))" in generated
+    assert "cast[DType.bool]" not in generated
+    assert "return SIMD[DType.float32, 2](x)" in generated
+
+
+def test_mojo_scalar_comparisons_and_logical_ops_are_typed_bool():
+    codegen = MojoCodeGen()
+
+    for op in ("<", "<=", ">", ">=", "==", "!="):
+        assert codegen.binary_expression_result_type(op, "float", "float") == "bool"
+    assert codegen.binary_expression_result_type("&&", "bool", "bool") == "bool"
+    assert codegen.binary_expression_result_type("||", "bool", "bool") == "bool"
+    assert codegen.binary_expression_result_type("+", "float", "float") == "float"
 
 
 if __name__ == "__main__":
