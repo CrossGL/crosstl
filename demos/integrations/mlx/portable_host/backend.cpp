@@ -25,6 +25,9 @@ namespace {
 std::atomic<CrosstlMlxDispatch> dispatch_callback{nullptr};
 std::atomic<CrosstlMlxEntryAvailable> entry_available_callback{nullptr};
 std::mutex registration_mutex;
+// The native target that runs the translated kernels, which device_info
+// reports as the device architecture, as each MLX GPU backend reports its own.
+std::string device_architecture;
 constexpr uint64_t max_slice_update_elements = (uint64_t(1) << 28) - 33;
 
 void require_runtime() {
@@ -1393,6 +1396,20 @@ extern "C" MLX_API int crosstl_mlx_register_dispatch(
   return dispatch_callback.compare_exchange_strong(expected, callback) ? 0 : 2;
 }
 
+// Names the device architecture; only before the runtime registers, so every
+// device_info result reports the same one.
+extern "C" MLX_API int crosstl_mlx_set_device_architecture(const char* name) {
+  if (!name || !*name) {
+    return 1;
+  }
+  std::lock_guard<std::mutex> lock(registration_mutex);
+  if (dispatch_callback.load()) {
+    return 2;
+  }
+  device_architecture = name;
+  return 0;
+}
+
 extern "C" MLX_API int crosstl_mlx_register_runtime(
     uint32_t version,
     CrosstlMlxDispatch callback,
@@ -1432,9 +1449,15 @@ device_info(int index) {
   if (index != 0) {
     throw std::invalid_argument("CrossTL host runtime has one device.");
   }
-  static const std::
-      unordered_map<std::string, std::variant<std::string, size_t>>
-          info{{"device_name", std::string("CrossTL native host dispatch")}};
+  static const auto info = [] {
+    std::unordered_map<std::string, std::variant<std::string, size_t>> values{
+        {"device_name", std::string("CrossTL native host dispatch")}};
+    std::lock_guard<std::mutex> lock(registration_mutex);
+    if (!device_architecture.empty()) {
+      values.emplace("architecture", device_architecture);
+    }
+    return values;
+  }();
   return info;
 }
 

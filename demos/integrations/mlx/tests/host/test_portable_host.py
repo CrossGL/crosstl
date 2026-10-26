@@ -1750,8 +1750,9 @@ def test_registration_retains_callback_and_uses_platform_library(
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
     host.callback = runtime.CALLBACK(lambda *args: 0)
     host.entry_available = runtime.ENTRY_AVAILABLE(lambda entry: 0)
+    host.target = "opengl"
     module = SimpleNamespace(__file__=str(tmp_path / "core.pyd"), gpu="gpu")
-    selected, loaded, registered = [], [], []
+    selected, loaded, registered, architectures = [], [], [], []
     module.set_default_device = selected.append
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
     monkeypatch.setitem(sys.modules, "mlx.core", module)
@@ -1762,9 +1763,16 @@ def test_registration_retains_callback_and_uses_platform_library(
         registered.append((version, callback, available))
         return 0
 
+    def architecture(name):
+        architectures.append(name)
+        return 0
+
     def load(path):
         loaded.append(path)
-        return SimpleNamespace(crosstl_mlx_register_runtime=register)
+        return SimpleNamespace(
+            crosstl_mlx_register_runtime=register,
+            crosstl_mlx_set_device_architecture=architecture,
+        )
 
     monkeypatch.setattr(runtime.ctypes, "CDLL", load)
     host.install()
@@ -1772,6 +1780,9 @@ def test_registration_retains_callback_and_uses_platform_library(
     assert registered == [
         (runtime.DISPATCH_VERSION, host.callback, host.entry_available)
     ] and selected == ["gpu"]
+    # mx.device_info names the native target as the GPU architecture, set
+    # before the callback registers.
+    assert architectures == [b"opengl"]
     assert loaded == [
         str(tmp_path / ("mlx.dll" if platform == "win32" else "core.pyd"))
     ]

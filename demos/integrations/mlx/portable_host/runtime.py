@@ -954,6 +954,13 @@ class HostRuntime:
             else Path(mx.__file__)
         )
         self.library = ctypes.CDLL(str(library))
+        # mx.device_info reports the native target as the GPU architecture.
+        architecture = self.library.crosstl_mlx_set_device_architecture
+        architecture.argtypes = [ctypes.c_char_p]
+        architecture.restype = ctypes.c_int
+        result = architecture(self.target.encode("ascii"))
+        if result:
+            raise RuntimeError(f"MLX rejected the device architecture: {result}")
         register = self.library.crosstl_mlx_register_runtime
         register.argtypes = [ctypes.c_uint32, CALLBACK, ENTRY_AVAILABLE]
         register.restype = ctypes.c_int

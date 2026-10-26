@@ -1488,6 +1488,8 @@ no-GPU backend build definition and adds four explicitly named backend files:
 
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
   implements device/stream hooks, `Arange::eval_gpu` and 29 unary primitive hooks,
+  reports the native target (`metal`, `directx` or `opengl`), which `runtime.py`
+  names before it registers, as the GPU `architecture` of `mx.device_info`,
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
   and reciprocal variants, yielding 30 float32 entries plus Boolean LogicalNot. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
