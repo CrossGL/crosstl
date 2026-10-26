@@ -69,10 +69,10 @@ def test_boolean_reductions_run_with_native_mojo(tmp_path, width):
     }
     output = f"""
 def either(a: SIMD[DType.float32, {storage}], b: SIMD[DType.float32, {storage}]) -> Bool:
-    return {expressions['either']}
+    return {expressions["either"]}
 
 def every(a: SIMD[DType.float32, {storage}], b: SIMD[DType.float32, {storage}]) -> Bool:
-    return {expressions['every']}
+    return {expressions["every"]}
 
 def main():
     var low = SIMD[DType.float32, {storage}]({low})
@@ -140,3 +140,40 @@ def test_user_defined_any_is_not_replaced(tmp_path):
     )
     assert "any(a)" in output
     assert ".reduce_or()" not in output
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+def test_boolean_vector_not_emits_bitwise_inversion(tmp_path, width):
+    output = translate(
+        tmp_path,
+        f"""
+shader Probe {{
+    bvec{width} invert(bvec{width} a) {{ return !a; }}
+    bvec{width} not_eq(vec{width} a, vec{width} b) {{ return !(a == b); }}
+    bool either(bvec{width} a) {{ return any(!a); }}
+    bool every(vec{width} a, vec{width} b) {{ return all(!(a == b)); }}
+}}
+""",
+    )
+    storage = 4 if width == 3 else width
+    assert f"SIMD[DType.bool, {storage}]" in output
+    assert "(~a)" in output
+    assert "(~(a).eq(b))" in output
+    assert ".reduce_or()" in output
+    assert ".reduce_and()" in output
+    if width == 3:
+        assert "SIMD[DType.bool, 4](True, True, True, False)" in output
+        assert "SIMD[DType.bool, 4](False, False, False, True)" in output
+    else:
+        assert "((~a)).reduce_or()" in output
+        assert "((~(a).eq(b))).reduce_and()" in output
+    assert "(not a)" not in output
+
+
+def test_scalar_boolean_not_remains_logical_not(tmp_path):
+    output = translate(
+        tmp_path,
+        "shader Probe { bool invert(bool a) { return !a; } }",
+    )
+    assert "(not a)" in output
+    assert "(~a)" not in output
