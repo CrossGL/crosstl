@@ -5536,7 +5536,7 @@ def test_constructor_match_resource_size_target_shape_contexts_for_mojo_codegen(
 
 def test_mojo_float_vector_from_bool_uses_int_conversion():
     # Mojo's Bool has no .cast method, so a bool scalar or bool vector
-    # component going into a float vector must go through Int first.
+    # component going into a numeric vector must go through Int first.
     generated_code = generate_code(
         parse_code(
             tokenize_code(
@@ -5544,6 +5544,8 @@ def test_mojo_float_vector_from_bool_uses_int_conversion():
                 "    vec2 v2(bool s) { return vec2(s); }\n"
                 "    vec2 v2m(bool s, float x) { return vec2(s, x); }\n"
                 "    vec2 vb(bvec2 b) { return vec2(b); }\n"
+                "    i8vec2 vi8(bool s) { return i8vec2(s); }\n"
+                "    u8vec2 vu8(bool s) { return u8vec2(s); }\n"
                 "}\n"
             )
         )
@@ -5555,7 +5557,9 @@ def test_mojo_float_vector_from_bool_uses_int_conversion():
         "return SIMD[DType.float32, 2](Float32(Int(b[0])), Float32(Int(b[1])))"
         in generated_code
     )
-    assert "(s).cast[DType.float32]()" not in generated_code
+    assert "return SIMD[DType.int8, 2](Int8(Int(s)))" in generated_code
+    assert "return SIMD[DType.uint8, 2](UInt8(Int(s)))" in generated_code
+    assert "(s).cast[" not in generated_code
     assert "b[0].cast[DType.float32]()" not in generated_code
 
 

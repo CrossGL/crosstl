@@ -15674,8 +15674,10 @@ class MojoCodeGen:
             "DType.float16": "Float16",
             "DType.float32": "Float32",
             "DType.float64": "Float64",
+            "DType.int8": "Int8",
             "DType.int16": "Int16",
             "DType.int32": "Int32",
+            "DType.uint8": "UInt8",
             "DType.uint16": "UInt16",
             "DType.uint32": "UInt32",
         }.get(target_dtype)
