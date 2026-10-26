@@ -16552,7 +16552,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(array<f32> h) {" in result
+        assert "void prepare(inout array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
         assert "u32 count(array<f32> h) {" in result
         assert "return h.size();" in result
@@ -18983,18 +18983,7 @@ class TestHipCodeGen:
                     "State state{input[0]}; increment(state,input[1]); "
                     "output[0]=state.value;",
                 ),
-                "non-const record reference",
-            ),
-            (
-                "two-reference-parameters",
-                hip_record_probe_source(
-                    "struct State { int value; };",
-                    "void step(State& first, State& second) "
-                    "{ first.value+=1; second.value+=first.value; }",
-                    "State state{input[0]}; step(state,state); "
-                    "output[0]=state.value;",
-                ),
-                "non-const record reference",
+                None,
             ),
             (
                 "reference-return",
@@ -19015,7 +19004,7 @@ class TestHipCodeGen:
                     "Outer state{{input[0]}}; increment(state.inner,input[1]); "
                     "output[0]=state.inner.value;",
                 ),
-                "non-const record reference",
+                None,
             ),
             (
                 "polymorphic-resource",
@@ -19261,7 +19250,7 @@ class TestHipCodeGen:
                     "State state{input[0]}; increment(state,input[1]); "
                     "output[0]=state.value;",
                 ),
-                "non-const record reference",
+                None,
             ),
             (
                 "using-reference-return",

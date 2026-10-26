@@ -22,6 +22,7 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .reference_parameters import ReferenceParameters
 
 
 class CudaToCrossGLConverter:
@@ -4036,6 +4037,7 @@ class CudaToCrossGLConverter:
                 self.visit(var)
                 self.emit("")
 
+        self.reference_parameters = ReferenceParameters(node)
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
@@ -4152,6 +4154,9 @@ class CudaToCrossGLConverter:
                 )
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
+                mode = self.function_reference_parameters().mode(node, index)
+                if mode:
+                    param_type = f"{mode} {param_type}"
                 params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
@@ -4547,6 +4552,14 @@ class CudaToCrossGLConverter:
 
     def register_type_alias(self, name, alias_type):
         self.type_alias_scopes[-1][name] = alias_type
+
+    def function_reference_parameters(self):
+        """The :class:`ReferenceParameters` of the program being converted."""
+        analysis = getattr(self, "reference_parameters", None)
+        if analysis is None:
+            analysis = ReferenceParameters(None)
+            self.reference_parameters = analysis
+        return analysis
 
     def resolve_type_alias(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)

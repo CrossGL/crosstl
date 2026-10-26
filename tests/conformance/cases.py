@@ -705,6 +705,13 @@ def o_half_mul(inp):
     )
 
 
+def o_reference_params(inp):
+    """x = inp + 5 through bump(int&); swap_pair(Pair&) leaves p = (i, x); 7x + 3i + x + 2x."""
+    x = inp.astype(np.int64) + 5
+    i = np.arange(inp.size, dtype=np.int64)
+    return (10 * x + 3 * i).astype(np.int32)
+
+
 def o_fib(inp):
     def fib(n):
         a, b = 0, 1
@@ -1591,6 +1598,15 @@ CASES = [
         np.arange(67, dtype=np.int32) * 7,
         np.int32,
         lambda inp: inp[3:67].astype(np.int32),
+    ),
+    Case(
+        "u_reference_params",
+        "H17",
+        "int& and Pair& parameters written by the callee, const int& read",
+        "C++ lvalue reference parameters bind the caller's object",
+        SMALL[:64].copy(),
+        np.int32,
+        o_reference_params,
     ),
     Case(
         "m_ptr_arith",
