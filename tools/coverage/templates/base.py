@@ -17,7 +17,11 @@ class Template:
 
 ABSENT = Template(entry="<absent>")
 
-NESTED_STRUCTS = "struct Pair {\n    float a;\n    float b;\n};\nstruct Frame {\n    Pair p;\n    float w;\n};"
+PAIR = "struct Pair {\n    float a;\n    float b;\n};"
+NESTED_STRUCTS = PAIR + "\nstruct Frame {\n    Pair p;\n    float w;\n};"
+MAKE_PAIR = "Pair make(float x) {\n    Pair p;\n    p.a = x;\n    p.b = x * 2.0;\n    return p;\n}"
+# Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
+_FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
 # Operator probes. The integer inputs are 0 to 15 (:func:`..execution.inputs`), so a probe subtracts 8 where it needs
 # a negative operand, and divides and takes remainders of non-negative operands only: GLSL leaves the remainder of a
@@ -142,6 +146,27 @@ C_FAMILY = {
         "float a = fin[i];\nbump(a);\noutp[i] = a;",
         "void bump(inout float a) {\n    a = a + 1.0;\n}",
     ),
+    # An array argument is copied, so the callee's write to v[0] must not reach values[0].
+    "array-parameter": Template(
+        "float values[4];\n"
+        + _FILL.format("values")
+        + "outp[i] = total(values) * 10.0 + values[0];",
+        "float total(float v[4]) {\n    v[0] = 0.0;\n    return v[0] + v[1] + v[2] + v[3];\n}",
+    ),
+    "struct-return": Template(
+        "Pair p = make(fin[i]);\noutp[i] = p.a + p.b * 4.0;", PAIR + "\n" + MAKE_PAIR
+    ),
+    # The int overload scales by 4 and the float one by 2, so picking the wrong one changes the result.
+    "function-overloading": Template(
+        "outp[i] = scaled(fin[i]) + scaled(iin[i]);",
+        "float scaled(float x) {\n    return x * 2.0;\n}\nfloat scaled(int x) {\n    return float(x) * 4.0;\n}",
+    ),
+    # Case 0 falls through into case 1, and cases 2 and 3 share their statements.
+    "switch-fallthrough": Template(
+        "float acc = 0.0;\nswitch (iin[i] & 3) {\n    case 0:\n        acc += 1.0;\n    case 1:\n"
+        "        acc += 2.0;\n        break;\n    case 2:\n    case 3:\n        acc += 4.0;\n        break;\n}\n"
+        "outp[i] = acc;"
+    ),
     "array": Template(
         "float values[4];\nfor (int k = 0; k < 4; k++) {\n    values[k] = fin[i] * float(k);\n}\n"
         "outp[i] = values[iin[i] & 3];"
@@ -159,6 +184,12 @@ C_FAMILY = {
     ),
     "array-initializer": Template(
         "float values[4] = {1.0, 2.0, 4.0, 8.0};\noutp[i] = values[iin[i] & 3] + float(iin[i]);"
+    ),
+    # Assigning an array copies it, so the write to b[0] must not reach a[0].
+    "array-copy": Template(
+        "float a[4];\n"
+        + _FILL.format("a")
+        + "float b[4] = a;\nb[0] = 9.0;\noutp[i] = a[0] * 10.0 + b[0] + b[3];"
     ),
     "nested-struct": Template(
         "Frame s;\ns.p.a = float(iin[i]);\ns.p.b = 2.0;\ns.w = 3.0;\noutp[i] = s.p.a * s.w + s.p.b;",
