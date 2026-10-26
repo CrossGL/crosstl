@@ -17855,6 +17855,27 @@ def test_direct_literal_nodes_emit_mojo_escaping():
     )
 
 
+def test_scalar_bool_casts_to_float_route_through_int():
+    code = """
+    shader FB {
+        float f(bool s) { return float(s); }
+        float g(float x) { return float(x < 1.0); }
+        half h(bool s) { return half(s); }
+        double d(bool s) { return double(s); }
+        int i(bool s) { return int(s); }
+        uint u(bool s) { return uint(s); }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Float32(Int(s))" in generated_code
+    assert "return Float32(Int((x < 1.0)))" in generated_code
+    assert "return Float16(Int(s))" in generated_code
+    assert "return Float64(s)" in generated_code
+    assert "return Int32(s)" in generated_code
+    assert "return UInt32(s)" in generated_code
+
+
 def test_direct_cast_nodes_emit_mojo_casts_without_ast_repr():
     codegen = MojoCodeGen()
     scalar_expr = CastNode(

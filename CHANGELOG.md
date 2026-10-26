@@ -32,6 +32,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Improved
 
+- Mojo output converts scalar boolean values to `float` and `half` through `Int`, so casts from boolean variables and comparison expressions compile.
 - WGSL output monomorphizes generic functions, passes `inout` and `out` parameters as pointers, copies written parameters into locals, binds every entry parameter with `@location` or `@builtin` and gives integer varyings `@interpolate(flat)`. Memory barriers, matrix-scalar `+`, `-` and `/`, `matrixCompMult`, `outerProduct`, `dot4add_i8packed` and `dot4add_u8packed` are lowered to WGSL instead of being copied.
 - Inline ray queries have one CrossGL spelling, the DXR method names, and translate between HLSL, GLSL and SPIR-V.
 - The Metal importer reads more of the MSL that real headers use: function templates deduce their arguments before applying defaults, partial specializations constrained with `enable_if` are selected, alias templates work as constructors, a local alias may reuse its template's name, `simd` type aliases work as constructors, an unscoped enumerator is found in the enclosing scope as in C++, and `powr` and `exp10` are lowered for other targets.
