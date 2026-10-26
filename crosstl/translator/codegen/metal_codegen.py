@@ -5285,6 +5285,8 @@ class MetalCodeGen(
             self.validate_metal_fragment_invocation_density(func, shader_type)
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
+        if shader_type in {"compute", "ray_generation"}:
+            self.validate_metal_kernel_derivatives(func, shader_type)
         self.current_unsupported_glsl_buffer_block_parameters = (
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
@@ -6959,6 +6961,47 @@ class MetalCodeGen(
                     ),
                     missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
                 )
+
+    def metal_kernel_derivative_call_name(self, func):
+        """Return the first derivative built-in that ``func`` calls, or ``None``."""
+        derivative_names = {
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES,
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES.values(),
+            "fwidth",
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name in derivative_names and name not in self.user_function_names:
+                return name
+        return None
+
+    def validate_metal_kernel_derivatives(self, func, shader_type):
+        """Refuse derivatives reached from a Metal ``kernel`` function.
+
+        MSL has ``dfdx``, ``dfdy`` and ``fwidth`` only in fragment functions, so a kernel that calls them,
+        directly or through a helper, does not compile. SPIR-V derivative groups and Shader Model 6.6 compute
+        derivatives have no Metal equivalent.
+        """
+        for reachable_func in self.metal_reachable_functions(func):
+            derivative_name = self.metal_kernel_derivative_call_name(reachable_func)
+            if derivative_name is None:
+                continue
+            entry_name = getattr(func, "name", None) or "<entry>"
+            caller_name = getattr(reachable_func, "name", None) or entry_name
+            via = "" if reachable_func is func else f" through '{caller_name}'"
+            raise UnsupportedMetalFeatureError(
+                derivative_name,
+                (
+                    f"Metal {shader_type} entry point '{entry_name}' calls "
+                    f"{derivative_name}{via}; Metal has derivatives only in fragment "
+                    "functions, so a kernel function cannot call dfdx, dfdy or fwidth."
+                ),
+                missing_capabilities=("metal.kernel-derivatives",),
+                operation=derivative_name,
+                reason="derivatives are fragment-only in Metal",
+            )
 
     def metal_reachable_functions(self, root_func):
         reachable = []
