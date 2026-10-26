@@ -5285,6 +5285,8 @@ class MetalCodeGen(
             self.validate_metal_fragment_invocation_density(func, shader_type)
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
+        if shader_type in self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS:
+            self.validate_metal_kernel_derivatives(func, shader_type)
         self.current_unsupported_glsl_buffer_block_parameters = (
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
@@ -6959,6 +6961,61 @@ class MetalCodeGen(
                     ),
                     missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
                 )
+
+    def metal_kernel_derivative_call_name(self, func):
+        """Return the first derivative built-in that ``func`` calls, or ``None``."""
+        derivative_names = {
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES,
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES.values(),
+            "fwidth",
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name in derivative_names and name not in self.user_function_names:
+                return name
+        return None
+
+    # The Metal function kind each non-fragment stage is written as. None of
+    # them has derivatives.
+    METAL_DERIVATIVE_FREE_FUNCTION_KINDS = {
+        "compute": "kernel",
+        "ray_generation": "kernel",
+        "mesh": "mesh",
+        "object": "object",
+        "task": "object",
+        "amplification": "object",
+    }
+
+    def validate_metal_kernel_derivatives(self, func, shader_type):
+        """Refuse derivatives reached from a Metal ``kernel``, ``mesh`` or ``object`` function.
+
+        MSL has ``dfdx``, ``dfdy`` and ``fwidth`` only in fragment functions, so a kernel, mesh or object function
+        that calls them, directly or through a helper, does not compile. SPIR-V derivative groups and Shader Model
+        6.6 compute derivatives have no Metal equivalent.
+        """
+        function_kind = self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS[shader_type]
+        article = "an" if function_kind == "object" else "a"
+        for reachable_func in self.metal_reachable_functions(func):
+            derivative_name = self.metal_kernel_derivative_call_name(reachable_func)
+            if derivative_name is None:
+                continue
+            entry_name = getattr(func, "name", None) or "<entry>"
+            caller_name = getattr(reachable_func, "name", None) or entry_name
+            via = "" if reachable_func is func else f" through '{caller_name}'"
+            raise UnsupportedMetalFeatureError(
+                derivative_name,
+                (
+                    f"Metal {shader_type} entry point '{entry_name}' calls "
+                    f"{derivative_name}{via}; Metal has derivatives only in fragment "
+                    f"functions, so {article} {function_kind} function cannot call dfdx, dfdy "
+                    "or fwidth."
+                ),
+                missing_capabilities=(f"metal.{function_kind}-derivatives",),
+                operation=derivative_name,
+                reason="derivatives are fragment-only in Metal",
+            )
 
     def metal_reachable_functions(self, root_func):
         reachable = []
@@ -10501,6 +10558,9 @@ class MetalCodeGen(
                 and args
                 and func_name not in self.user_function_names
             ):
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                if unified_type is not None:
+                    return unified_type
                 return self.expression_result_type(args[0])
             if (
                 func_name in self.METAL_DERIVATIVE_FUNCTION_ALIASES
@@ -11771,9 +11831,11 @@ class MetalCodeGen(
                     left,
                     right,
                 )
+            unconverted_operands = (left, right)
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
+            mixed_operands_converted = (left, right) != unconverted_operands
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
             matrix_arithmetic = self.metal_matrix_builtins.componentwise(
@@ -11786,9 +11848,18 @@ class MetalCodeGen(
                 expression_width = self.vector_value_width(
                     self.expression_result_type(expr)
                 )
+                # Once mixed operands share a common component type, casting
+                # each one to an integer declared type would mix them again,
+                # as in int4(uint4(a) + int4(b)) (#3089). The declaration
+                # converts the result instead.
                 if (
                     expression_width is not None
                     and expression_width == self.vector_value_width(expected_type)
+                    and not (
+                        mixed_operands_converted
+                        and self.vector_component_type(self.map_type(expected_type))
+                        in {"int", "uint", "short", "ushort", "long", "ulong"}
+                    )
                 ):
                     left = self.cast_binary_operand_to_expected_vector(
                         left, self.expression_result_type(expr.left), expected_type
@@ -12296,7 +12367,15 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 # MSL rint() rounds halfway cases to the nearest even integer (MSL 4.1 section 6.5).
-                arg = self.generate_expression(expr.args[0])
+                # It has only float and half overloads, so integer operands are converted to float.
+                unified_args = self.generate_metal_unified_builtin_arguments(
+                    func_name, expr.args
+                )
+                arg = (
+                    unified_args[0]
+                    if unified_args is not None
+                    else self.generate_expression(expr.args[0])
+                )
                 rint_name = (
                     "metal::rint"
                     if self.metal_function_name_is_shadowed("rint")

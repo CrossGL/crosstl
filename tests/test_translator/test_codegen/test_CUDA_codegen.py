@@ -2751,6 +2751,44 @@ class TestCudaCodeGen:
         assert "o.xy" not in cuda_code
         assert "o.zw" not in cuda_code
 
+    def test_half_vector_math_builtins_use_component_helpers(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 f(f16vec3 h, f16vec4 q, f16vec3 e, half s) {
+                    f16vec3 a = sin(h);
+                    f16vec4 b = exp(q);
+                    f16vec3 c = inversesqrt(h);
+                    f16vec3 d = pow(h, e);
+                    f16vec3 g = pow(h, s);
+                    return a + b.xyz + c + d + g;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "cgl_half3 a = cgl_cgl_half3_sin(h);" in cuda_code
+        assert "cgl_half4 b = cgl_cgl_half4_exp(q);" in cuda_code
+        assert "cgl_half3 c = cgl_cgl_half3_inversesqrt(h);" in cuda_code
+        assert "cgl_half3 d = cgl_cgl_half3_pow_vector(h, e);" in cuda_code
+        assert "cgl_half3 g = cgl_cgl_half3_pow_scalar(h, s);" in cuda_code
+        assert "__float2half(sinf(__half2float(value.x)))" in cuda_code
+        assert "__float2half(rsqrtf(__half2float(value.z)))" in cuda_code
+        assert (
+            "__float2half(powf(__half2float(base.y), __half2float(exponent.y)))"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline cgl_half3 cgl_cgl_half3_pow_scalar"
+            "(cgl_half3 base, half exponent)" in cuda_code
+        )
+        assert "sinf(h)" not in cuda_code
+        assert "expf(q)" not in cuda_code
+        assert "powf(h" not in cuda_code
+
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {

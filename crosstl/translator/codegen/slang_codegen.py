@@ -363,6 +363,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
+            # Slang rint rounds halfway cases to the nearest even integer on every target. Slang round
+            # leaves them to the target (round on Metal, Round on SPIR-V, roundf on CUDA).
+            "roundEven": "rint",
             "floatBitsToInt": "asint",
             "floatBitsToUint": "asuint",
             "intBitsToFloat": "asfloat",

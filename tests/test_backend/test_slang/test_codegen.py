@@ -204,6 +204,56 @@ def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
     cgl_translator.parse(generated_code)
 
 
+@pytest.mark.parametrize(
+    ("attribute", "crossgl_attribute", "directx_attribute"),
+    [
+        ("[WaveSize(32)]", "@ WaveSize(32)", "[WaveSize(32)]"),
+        ("[WaveSize(16, 64)]", "@ WaveSize(16, 64)", "[WaveSize(16, 64)]"),
+        ("[WaveSize(16, 64, 32)]", "@ WaveSize(16, 64, 32)", "[WaveSize(16, 64, 32)]"),
+    ],
+)
+def test_wave_size_attribute_is_carried_to_crossgl_entry_point(
+    tmp_path, attribute, crossgl_attribute, directx_attribute
+):
+    code = f"""
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    {attribute}
+    [numthreads(64, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {{ outp[id.x] = WaveActiveSum(id.x); }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert crossgl_attribute in generated_code
+    assert (
+        "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    cgl_translator.parse(generated_code)
+
+    source = tmp_path / "ws.slang"
+    source.write_text(code)
+    directx = translate(str(source), backend="directx")
+    assert directx_attribute in directx
+    assert "[numthreads(64, 1, 1)]" in directx
+
+
+def test_wave_size_attribute_after_numthreads_is_carried():
+    code = """
+    RWStructuredBuffer<uint> outp;
+    [numthreads(64, 1, 1)]
+    [WaveSize(32)]
+    void main(uint3 id : SV_DispatchThreadID) { outp[id.x] = WaveActiveSum(id.x); }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@ WaveSize(32)" in generated_code
+    assert "compute {" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_array_member_codegen():
     code = """
     struct Cluster {
