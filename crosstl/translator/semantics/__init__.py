@@ -233,8 +233,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). ``&&``/``||`` on boolean vectors become ``and``/``or``
-    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
-    and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
+    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V,
+    Metal, CUDA and HIP, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
     attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input

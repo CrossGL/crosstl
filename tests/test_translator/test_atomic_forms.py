@@ -1,4 +1,4 @@
-"""HLSL interlocked calls reach OpenGL, Metal and SPIR-V in the value-returning atomic forms.
+"""HLSL interlocked calls reach OpenGL, Metal, SPIR-V, CUDA and HIP in the value-returning atomic forms.
 
 ``InterlockedAdd(dest, value, original)`` returns the previous value through its last argument, and
 ``InterlockedCompareStore`` returns nothing. The HLSL importer kept those argument lists for destinations other than
@@ -84,6 +84,17 @@ def test_metal_output_compiles(tmp_path):
     _run(
         ["xcrun", "-sdk", "macosx", "metal", "-c", str(path), "-o", str(path) + ".air"]
     )
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_receive_value_returning_atomics(tmp_path, backend):
+    code = re.sub(r"\s+", " ", _translate(tmp_path, backend))
+    assert "o9 = atomicAdd(&g, 1u);" in code
+    assert re.search(r"o10 = atomicAdd\(&v\[[^;]*\]\.z, 1u\);", code)
+    assert "o8 = atomicCAS(&c[7], 0u, 11u);" in code
+    assert "atomicCAS(&c[8], 0u, 12u);" in code
+    assert "unsupported" not in code
+    assert "Interlocked" not in code
 
 
 def test_hlsl_output_keeps_the_interlocked_argument_lists(tmp_path):
