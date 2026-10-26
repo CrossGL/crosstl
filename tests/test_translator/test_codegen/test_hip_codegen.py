@@ -2034,6 +2034,39 @@ class TestHipCodeGen:
         assert "t.xxyz" not in hip_code
         assert "e.wy" not in hip_code
 
+    def test_half_vector_swizzle_assignment_writes_each_component(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 assign(f16vec4 e, f16vec3 r, f16vec2 p, half h) {
+                    f16vec4 o = e;
+                    o.wzy += r;
+                    o.xy = p;
+                    o.zw += p;
+                    o.wz = h;
+                    return o;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "cgl_half3 __crossgl_swizzle_value_0 = r;" in hip_code
+        assert "o.w = (o.w + __crossgl_swizzle_value_0.x);" in hip_code
+        assert "o.y = (o.y + __crossgl_swizzle_value_0.z);" in hip_code
+        assert "half2 __crossgl_swizzle_value_1 = p;" in hip_code
+        assert "o.x = __crossgl_swizzle_value_1.x;" in hip_code
+        assert "o.y = __crossgl_swizzle_value_1.y;" in hip_code
+        assert "half2 __crossgl_swizzle_value_2 = p;" in hip_code
+        assert "o.w = (o.w + __crossgl_swizzle_value_2.y);" in hip_code
+        assert "half __crossgl_swizzle_value_3 = h;" in hip_code
+        assert "o.z = __crossgl_swizzle_value_3;" in hip_code
+        assert "__floats2half2_rn(o." not in hip_code
+        assert "o.xy" not in hip_code
+        assert "o.zw" not in hip_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [

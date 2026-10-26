@@ -3851,14 +3851,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         result_type = self.vector_type_for_components(
             object_info["component_type"], len(components)
         )
-        result_info = self.vector_type_info(result_type)
+        result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
 
         object_expr = self.visit(object_node)
         value_expr = self.visit(value_node)
         temp_name = self.next_hip_temp_variable("swizzle_value")
-        value_info = self.vector_type_info(self.expression_result_type(value_node))
+        value_info = self.swizzle_result_vector_info(
+            self.expression_result_type(value_node)
+        )
         if value_info is not None:
             if len(value_info["components"]) != len(components):
                 return None
