@@ -1163,6 +1163,104 @@ def test_opencl_mem_fence_and_scoped_fences_lower_to_crossgl_fences():
 
 
 @pytest.mark.parametrize(
+    "call, statements",
+    [
+        ("barrier(CLK_LOCAL_MEM_FENCE)", ["workgroupBarrier();"]),
+        (
+            "barrier(CLK_GLOBAL_MEM_FENCE)",
+            [
+                "memoryBarrierBuffer();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierBuffer();",
+            ],
+        ),
+        (
+            "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)",
+            ["memoryBarrierBuffer();", "workgroupBarrier();", "memoryBarrierBuffer();"],
+        ),
+        (
+            "work_group_barrier(CLK_IMAGE_MEM_FENCE)",
+            [
+                "memoryBarrierImage();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierImage();",
+            ],
+        ),
+        (
+            "work_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_device)",
+            [
+                "memoryBarrierBuffer();",
+                "workgroupExecutionBarrier();",
+                "memoryBarrierBuffer();",
+            ],
+        ),
+        (
+            "barrier(CLK_GLOBAL_MEM_FENCE | CLK_IMAGE_MEM_FENCE)",
+            [
+                "deviceMemoryBarrier();",
+                "workgroupExecutionBarrier();",
+                "deviceMemoryBarrier();",
+            ],
+        ),
+        ("work_group_barrier(0)", ["workgroupExecutionBarrier();"]),
+    ],
+)
+def test_opencl_barriers_order_the_memory_their_flags_name(call, statements):
+    crossgl = generate_crossgl(f"""
+        kernel void probe(global uint *outp) {{
+            uint i = get_global_id(0);
+            outp[i] = 1u;
+            {call};
+            outp[i] = outp[(i + 1u) % 64u];
+        }}
+        """)
+
+    lines = [line.strip() for line in crossgl.splitlines()]
+    start = lines.index("outp[i] = 1u;") + 1
+    assert lines[start : start + len(statements) + 1] == [
+        *statements,
+        "outp[i] = outp[((i + 1u) % 64u)];",
+    ]
+    assert "CLK_" not in crossgl
+
+
+def test_opencl_global_barrier_orders_device_memory_on_targets(tmp_path):
+    source = tmp_path / "probe.cl"
+    source.write_text(
+        """
+        kernel void probe(global uint *outp) {
+            uint i = get_global_id(0);
+            outp[i] = 1u;
+            barrier(CLK_GLOBAL_MEM_FENCE);
+            outp[i] = outp[(i + 1u) % 64u];
+        }
+        """,
+        encoding="utf-8",
+    )
+    options = {"threadgroup_size": (64, 1, 1)}
+
+    def translate(backend):
+        return crosstl.translate(
+            str(source), backend=backend, format_output=False, source_options=options
+        )
+
+    assert "threadgroup_barrier(mem_flags::mem_device);" in translate("metal")
+    assert "DeviceMemoryBarrierWithGroupSync();" in translate("hlsl")
+    assert "storageBarrier();" in translate("wgsl")
+    assert "memoryBarrierBuffer();" in translate("glsl")
+
+
+def test_opencl_work_group_barrier_refuses_scopes_wider_than_the_device():
+    with pytest.raises(OpenCLFenceScopeUnsupportedError, match="memory_scope_"):
+        generate_crossgl("""
+            kernel void probe(global uint *outp) {
+                work_group_barrier(CLK_GLOBAL_MEM_FENCE, memory_scope_all_svm_devices);
+                outp[get_global_id(0)] = 0u;
+            }
+            """)
+
+
+@pytest.mark.parametrize(
     "call",
     [
         "atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE, memory_order_acq_rel, "
