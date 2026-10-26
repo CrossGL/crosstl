@@ -219,11 +219,19 @@ def test_directx_12_only_stages_require_directx_12(stage):
         "WaveActiveSum(value)",
         "WaveReadLaneAt(value, 0u)",
         "WaveGetLaneIndex()",
+        "WaveMultiPrefixSum(value, WaveMatch(value))",
         "QuadReadAcrossX(value)",
+        "QuadAny(value != 0u)",
     ),
 )
 def test_wave_intrinsics_require_directx_12(call):
     source = f"uint value = 1u;\nuint result = {call};"
+
+    assert directx_target_profiles_for_source(source) == ("directx-12",)
+
+
+def test_wave_size_range_requires_directx_12():
+    source = "[WaveSize(16, 64)]\n[numthreads(64, 1, 1)]\nvoid main() {}"
 
     assert directx_target_profiles_for_source(source) == ("directx-12",)
 
@@ -234,9 +242,14 @@ def test_directx_12_stage_and_wave_detection_ignores_comments_and_literals():
         '/* [shader("mesh")] */\n'
         'string marker = "[shader(\\"amplification\\")] QuadReadAcrossX(x)";\n'
         "uint my_WaveActiveSum(uint x) { return x; }\n"
+        "float WaveHeight(float x) { return x * 0.5; }\n"
+        "float QuadReadValue(float x) { return x; }\n"
         '[shader("compute")]\n'
         "[numthreads(1, 1, 1)]\n"
-        "void main() { uint y = my_WaveActiveSum(1u); }"
+        "void main() {\n"
+        "    uint y = my_WaveActiveSum(1u);\n"
+        "    float h = WaveHeight(QuadReadValue(1.0));\n"
+        "}"
     )
 
     assert directx_target_profiles_for_source(source) == (

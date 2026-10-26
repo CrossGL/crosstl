@@ -22,9 +22,47 @@ _HLSL_DIRECTX_12_STAGE_RE = re.compile(
     r"|callable|mesh|amplification)\"\s*\)\s*\]",
     re.IGNORECASE,
 )
-# Wave and quad intrinsics need Shader Model 6.0, which Direct3D 11 lacks.
+# Wave and quad intrinsics (Shader Model 6.0 to 6.7) and the WaveSize
+# attribute, which Direct3D 11 lacks. Matched by name so that user functions
+# such as WaveHeight keep both profiles.
+_HLSL_WAVE_INTRINSICS = (
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveIsFirstLane",
+    "WaveActiveAnyTrue",
+    "WaveActiveAllTrue",
+    "WaveActiveBallot",
+    "WaveReadLaneAt",
+    "WaveReadLaneFirst",
+    "WaveActiveAllEqual",
+    "WaveActiveCountBits",
+    "WaveActiveSum",
+    "WaveActiveProduct",
+    "WaveActiveBitAnd",
+    "WaveActiveBitOr",
+    "WaveActiveBitXor",
+    "WaveActiveMin",
+    "WaveActiveMax",
+    "WavePrefixCountBits",
+    "WavePrefixSum",
+    "WavePrefixProduct",
+    "WaveMatch",
+    "WaveMultiPrefixSum",
+    "WaveMultiPrefixProduct",
+    "WaveMultiPrefixCountBits",
+    "WaveMultiPrefixBitAnd",
+    "WaveMultiPrefixBitOr",
+    "WaveMultiPrefixBitXor",
+    "QuadReadLaneAt",
+    "QuadReadAcrossX",
+    "QuadReadAcrossY",
+    "QuadReadAcrossDiagonal",
+    "QuadAny",
+    "QuadAll",
+    "WaveSize",
+)
 _HLSL_WAVE_INTRINSIC_RE = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:Wave[A-Z][A-Za-z0-9_]*|QuadRead[A-Za-z0-9_]+)\s*\("
+    r"(?<![A-Za-z0-9_.])(?:" + "|".join(_HLSL_WAVE_INTRINSICS) + r")\s*\("
 )
 _DXC_PROFILE_RE = re.compile(r"^(?P<stage>[a-z]+)_(?P<major>\d+)_(?P<minor>\d+)$")
 _DXC_NATIVE_16_BIT_MINIMUM_PROFILE = (6, 2)
