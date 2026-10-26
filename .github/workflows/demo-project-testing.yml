@@ -345,6 +345,7 @@ jobs:
               tests/test_translator/test_opengl_float_atomic_storage.py \
               demos/integrations/mlx/tests/kernels/test_float_atomic_storage_opengl.py \
               tests/test_translator/test_resource_aggregates_opengl.py \
+              tests/test_translator/test_resource_member_stores.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
@@ -485,6 +486,7 @@ jobs:
               tests/test_translator/test_float_atomic_memory.py \
               demos/integrations/mlx/tests/kernels/test_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \
+              tests/test_translator/test_resource_member_stores.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
@@ -740,6 +742,7 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_float_atomic_compare_exchange.py \
               demos/integrations/mlx/tests/kernels/test_float_scatter_runtime.py \
               tests/test_translator/test_resource_aggregates.py \
+              tests/test_translator/test_resource_member_stores.py \
               tests/test_translator/test_void_return_effects.py \
               tests/test_translator/test_template_wrapper_runtime.py \
               tests/test_translator/test_functor_member_runtime.py \
@@ -2789,7 +2792,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Sixty jobs, twenty of them on macOS: run them in six waves.
+      # Sixty-three jobs, twenty-one of them on macOS: run them in seven waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2815,6 +2818,7 @@ jobs:
             serialization,
             training,
             rope,
+            fft,
           ]
         target: [opengl, directx, metal]
         include:

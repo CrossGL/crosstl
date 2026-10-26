@@ -242,6 +242,16 @@ ROPE_TESTS = _tests(
     ("antialias_1d_smoke", "antialias_non_integer_scale_smoke"),
 )
 
+# test_fft: norms, strided and transposed inputs, and the vmap and jvp
+# transforms, every size of them a single-threadgroup Stockham plan. The
+# frequency and shift tests run with the operations. test_fft and test_fftn
+# pad their inputs through complex64 slice updates, which the host refuses.
+FFT_TESTS = _tests(
+    "test_fft",
+    "TestFFT",
+    ("fft_norm", "fft_contiguity", "fft_vmap", "fft_jvp"),
+)
+
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
     "nn": NN_TESTS,
@@ -249,4 +259,5 @@ GROUPS = {
     "serialization": SERIALIZATION_TESTS,
     "training": TRAINING_TESTS,
     "rope": ROPE_TESTS,
+    "fft": FFT_TESTS,
 }
