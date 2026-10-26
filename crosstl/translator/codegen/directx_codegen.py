@@ -677,6 +677,19 @@ class DirectXNative16BitUnsupportedError(ValueError):
         self.source_location = source_location
 
 
+class DirectXRayTracingStageProfileError(ValueError):
+    """Raised when a DirectX profile below Direct3D 12 receives a DXR stage."""
+
+    project_diagnostic_code = "project.translate.directx-ray-tracing-stage-unsupported"
+    missing_capabilities = ("directx.ray-tracing",)
+
+    def __init__(self, message, *, target_profile, shader_type, shader_attribute):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.shader_type = shader_type
+        self.shader_attribute = shader_attribute
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -39225,7 +39238,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
+    HLSL_RAY_TRACING_SHADER_ATTRIBUTES = {
+        "ray_generation": "raygeneration",
+        "ray_intersection": "intersection",
+        "ray_closest_hit": "closesthit",
+        "ray_any_hit": "anyhit",
+        "ray_miss": "miss",
+        "ray_callable": "callable",
+    }
+
+    def validate_directx_ray_tracing_stage_profile(self, shader_type):
+        shader_attribute = self.HLSL_RAY_TRACING_SHADER_ATTRIBUTES.get(shader_type)
+        if shader_attribute is None or self.target_profile not in {"dx10", "dx11"}:
+            return
+
+        raise DirectXRayTracingStageProfileError(
+            f"DirectX profile {self.target_profile} does not support the "
+            f"'{shader_attribute}' ray tracing stage; DirectX Raytracing requires "
+            "DirectX 12 / Shader Model 6.3",
+            target_profile=self.target_profile,
+            shader_type=shader_type,
+            shader_attribute=shader_attribute,
+        )
+
     def validate_hlsl_stage_requirements(self, func, shader_type, stage_node=None):
+        self.validate_directx_ray_tracing_stage_profile(shader_type)
         self.validate_hlsl_max_tess_factor_value(func, shader_type)
         self.validate_hlsl_mesh_output_topology(func, shader_type)
 
