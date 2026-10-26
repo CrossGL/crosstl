@@ -11771,9 +11771,11 @@ class MetalCodeGen(
                     left,
                     right,
                 )
+            unconverted_operands = (left, right)
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
+            mixed_operands_converted = (left, right) != unconverted_operands
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
             matrix_arithmetic = self.metal_matrix_builtins.componentwise(
@@ -11786,9 +11788,18 @@ class MetalCodeGen(
                 expression_width = self.vector_value_width(
                     self.expression_result_type(expr)
                 )
+                # Once mixed operands share a common component type, casting
+                # each one to an integer declared type would mix them again,
+                # as in int4(uint4(a) + int4(b)) (#3089). The declaration
+                # converts the result instead.
                 if (
                     expression_width is not None
                     and expression_width == self.vector_value_width(expected_type)
+                    and not (
+                        mixed_operands_converted
+                        and self.vector_component_type(self.map_type(expected_type))
+                        in {"int", "uint", "short", "ushort", "long", "ulong"}
+                    )
                 ):
                     left = self.cast_binary_operand_to_expected_vector(
                         left, self.expression_result_type(expr.left), expected_type
