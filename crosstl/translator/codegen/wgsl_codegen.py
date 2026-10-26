@@ -328,10 +328,31 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "uimagebuffer",
         "uimagecube",
         "uimagecubearray",
+        "isampler1d",
+        "isampler1darray",
         "isampler2d",
         "isampler2darray",
+        "isampler2dms",
+        "isampler2dmsarray",
+        "isampler2drect",
+        "isampler3d",
+        "isamplerbuffer",
+        "isamplercube",
+        "isamplercubearray",
+        "sampler2drect",
+        "sampler2drectshadow",
+        "samplerbuffer",
+        "usampler1d",
+        "usampler1darray",
         "usampler2d",
         "usampler2darray",
+        "usampler2dms",
+        "usampler2dmsarray",
+        "usampler2drect",
+        "usampler3d",
+        "usamplerbuffer",
+        "usamplercube",
+        "usamplercubearray",
     }
     STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
@@ -393,10 +414,18 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "texture3d": "texture_3d<f32>",
         "texturecube": "texture_cube<f32>",
         "texturecubearray": "texture_cube_array<f32>",
+        "isampler1d": "texture_1d<i32>",
         "isampler2d": "texture_2d<i32>",
         "isampler2darray": "texture_2d_array<i32>",
+        "isampler3d": "texture_3d<i32>",
+        "isamplercube": "texture_cube<i32>",
+        "isamplercubearray": "texture_cube_array<i32>",
+        "usampler1d": "texture_1d<u32>",
         "usampler2d": "texture_2d<u32>",
         "usampler2darray": "texture_2d_array<u32>",
+        "usampler3d": "texture_3d<u32>",
+        "usamplercube": "texture_cube<u32>",
+        "usamplercubearray": "texture_cube_array<u32>",
     }
     STORAGE_TEXTURE_DIMENSION_MAP = {
         "image1d": "1d",
@@ -3399,6 +3428,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 )
                 if narrowed is not None:
                     return narrowed
+                diagonal = self.generate_scalar_matrix_constructor(
+                    function_name, node.arguments[0]
+                )
+                if diagonal is not None:
+                    return diagonal
             args = self.generate_type_constructor_call_arguments(
                 function_name, node.arguments
             )
@@ -4458,7 +4492,34 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             raise ValueError(
                 "WGSL target requires imageSize() to use a storage image resource"
             )
-        return f"vec2<i32>(textureDimensions({self.generate_expression(image)}))"
+        image_expr = self.generate_expression(image)
+        dimensions = f"textureDimensions({image_expr})"
+
+        # GLSL's imageSize returns int for 1D images, ivec2 for 2D and cube
+        # images, and ivec3 for 3D and array images with the array size last.
+        # Cube images are lowered to 2D array storage textures with six layers
+        # per cube, so a cube array's last component is the number of cubes.
+        image_type = self.resource_type_name(self.expression_type(image)) or ""
+        base_type = (
+            image_type[1:]
+            if image_type.startswith(("iimage", "uimage"))
+            else image_type
+        )
+        if base_type == "image1d":
+            return f"i32({dimensions})"
+        if base_type == "image3d":
+            return f"vec3<i32>({dimensions})"
+        if base_type == "image2darray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr})))"
+            )
+        if base_type == "imagecubearray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr}) / 6u))"
+            )
+        return f"vec2<i32>({dimensions})"
 
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
@@ -4692,6 +4753,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             )
             if narrowed is not None:
                 return narrowed
+            diagonal = self.generate_scalar_matrix_constructor(
+                node.constructor_type, node.arguments[0]
+            )
+            if diagonal is not None:
+                return diagonal
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
@@ -4705,6 +4771,65 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         else:
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{self.type_name_string(node.constructor_type)}({args})"
+
+    def generate_scalar_matrix_constructor(self, matrix_type, arg):
+        """Expand a one-scalar matrix constructor such as ``mat2(s)``.
+
+        CrossGL, like GLSL (4.60 section 5.4.2), builds a matrix with ``s`` on
+        the diagonal and zeros elsewhere. WGSL has no such constructor, so the
+        matrix is written column by column.
+        """
+        shape = self.matrix_shape(matrix_type)
+        if shape is None:
+            return None
+        # ``-s`` and ``+s`` have the type of ``s``.
+        operand = arg
+        while (
+            isinstance(operand, UnaryOpNode)
+            and operand.operator in {"-", "+"}
+            and not operand.is_postfix
+        ):
+            operand = operand.operand
+        arg_type = self.expression_type(operand)
+        try:
+            arg_type_name = (
+                self.type_name_string(arg_type) if arg_type is not None else None
+            )
+        except ValueError:
+            arg_type_name = None
+        is_numeric_literal = isinstance(operand, LiteralNode) and isinstance(
+            operand.value, (int, float)
+        )
+        if arg_type_name not in {"f32", "f16", "i32", "u32"} and not (
+            is_numeric_literal and not isinstance(operand.value, bool)
+        ):
+            return None
+        element, columns, rows = shape
+        if not self.is_repeatable_matrix_operand(arg):
+            raise ValueError(
+                "WGSL target writes a one-scalar matrix constructor "
+                f"mat{columns}x{rows}<{element}>(s) one diagonal element at a "
+                "time and requires an argument without side effects; assign the "
+                "argument to a local variable first"
+            )
+        # An integer literal without the ``u`` suffix is an abstract integer in
+        # WGSL and converts to the element type; ``1u`` is converted below.
+        if (
+            self.is_float_vector_abstract_int_argument(operand, element)
+            and arg_type_name != "u32"
+        ) or (is_numeric_literal and arg_type_name is None):
+            diagonal = self.generate_expression(arg)
+        elif operand is arg:
+            diagonal = self.generate_expression_for_target(arg, element)
+        else:
+            diagonal = self.generate_expression(arg)
+            if arg_type_name != element:
+                diagonal = f"{element}({diagonal})"
+        column_values = []
+        for column in range(columns):
+            components = [diagonal if row == column else "0.0" for row in range(rows)]
+            column_values.append(f"vec{rows}<{element}>({', '.join(components)})")
+        return f"mat{columns}x{rows}<{element}>({', '.join(column_values)})"
 
     def generic_constructor_type_name(self, name):
         parsed = self.generic_constructor_parts(name)
