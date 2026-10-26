@@ -17,6 +17,7 @@ import itertools
 import math
 import re
 
+from demos.integrations.mlx.portable_host.gather_axis_layout import slabs
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
     MAX_STORAGE_ELEMENTS,
@@ -62,28 +63,9 @@ def launch_plan(index_shape, axis):
     if math.prod(index_shape[axis + 1 :]) > MAX_ELEMENTS:
         raise ValueError("Native axis-scatter launch exceeds per-axis workgroup limits")
     limit = 1 if rows > MAX_ELEMENTS else MAX_ELEMENTS
-    slabs = [()]
-    if leading:
-        split, suffix = 0, math.prod(leading[1:])
-        while suffix > limit:
-            split += 1
-            suffix //= leading[split]
-        extent, slabs, first = limit // suffix, [], 0
-        while first < math.prod(leading):
-            start, remaining = [0] * len(leading), first
-            for i in reversed(range(len(leading))):
-                start[i] = remaining % leading[i]
-                remaining //= leading[i]
-            count = min(extent, leading[split] - start[split])
-            slabs.append(
-                tuple(slice(start[i], start[i] + 1) for i in range(split))
-                + (slice(start[split], start[split] + count),)
-                + (slice(None),) * (len(leading) - split - 1)
-            )
-            first += count * suffix
     return [
         (slab, slice(row, min(rows, row + MAX_ELEMENTS)))
-        for slab in slabs
+        for slab in slabs(leading, limit)
         for row in range(0, rows, MAX_ELEMENTS)
     ]
 

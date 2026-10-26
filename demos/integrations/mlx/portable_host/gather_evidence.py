@@ -4,7 +4,11 @@ import hashlib
 import math
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import gather_storage, gather_workloads
+from demos.integrations.mlx.portable_host import (
+    gather_axis_workloads,
+    gather_storage,
+    gather_workloads,
+)
 from demos.integrations.mlx.portable_host.gather_layout import signature
 from demos.integrations.mlx.portable_host.runtime import BOOLEAN_GUARD, COPY_GUARD
 
@@ -496,13 +500,25 @@ def validate(np, records, trace, upstream, *, workloads=gather_workloads):
         events = [
             event for event in trace[cursor:end] if event["entry"].startswith("gather")
         ]
-        if not case["layout"].startswith("large-"):
-            require(
-                len(events) == 1,
-                "Each gather workload requires exactly one native gather",
-            )
         expected_source, expected_indices, expected = workloads.reference(np, case)
-        actual = audit_batches(np, events, expected_source, expected_indices, expected)
+        if workloads is gather_axis_workloads:
+            from demos.integrations.mlx.portable_host.gather_axis_evidence import (
+                audit_batches as audit_axis_batches,
+            )
+
+            axis = 0 if case["axis"] is None else case["axis"] % expected_source.ndim
+            actual = audit_axis_batches(
+                np, events, expected_source, expected_indices[0], expected, axis
+            )
+        else:
+            if not case["layout"].startswith("large-"):
+                require(
+                    len(events) == 1,
+                    "Each gather workload requires exactly one native gather",
+                )
+            actual = audit_batches(
+                np, events, expected_source, expected_indices, expected
+            )
         require(
             actual == record["actual"] == gather_workloads.words(np, expected),
             "Gather readback and MLX result disagree",

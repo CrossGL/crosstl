@@ -1135,17 +1135,28 @@ check after building MLX with its original GPU backends disabled.
 `indexing/gather_axis.h` specialization. Its source and index contiguity flags,
 removed-axis shape and strides, axis extent and three-dimensional grid follow
 the pinned upstream host implementation. It uses the same six source storage
-types and four index types as general Gather, but retains its 65,535-element
-allocation bound. Negative
+types and four index types as general Gather, and shares its storage bound of
+2^28 - 33 elements. Each launch keeps the portable limit of 65,535 workgroups
+per axis: the host splits MLX's [trailing, index rows, leading] grid like
+`ScatterAxis`, into leading slabs and index-row ranges, and runs a trailing
+extent past one launch axis per leading position and index row, as slabs of
+the trailing axes through the strided specializations. Each launch's views
+start at its first element and are checked against their allocations, and
+`gather_axis_layout.launch_plan` mirrors the planner for the evidence audit.
+Negative
 source or index storage strides are materialized through translated copies;
 positive and zero strides retain their views. Index values, allocation spans
 and contiguity claims are checked before native submission.
 
-Replace `--capacity` with `--axis` to run 60 axis-gather workloads and unchanged
+Replace `--capacity` with `--axis` to run 72 axis-gather workloads and unchanged
 upstream `test_take_along_axis` in separate CPU and native processes. Coverage
 includes each axis, flattened input, noncontiguous source/index combinations,
-broadcasts, negative indices, reversed views, exact floating-point payloads and
-64-bit values beyond binary64's exact integer range. The required three-OS gate
+broadcasts, negative indices, reversed views, exact floating-point payloads,
+64-bit values beyond binary64's exact integer range, and twelve float32 and
+int64 workloads whose launches split: 70,001 trailing elements, a 257 x 257
+trailing slab, 70,001 index rows, 131,073 leading positions, a 300 x 300
+leading slab and a split of both. The audit replays the planner, checking each
+launch's uploads and its region of the output. The required three-OS gate
 retains the same compiled-module, upload, readback and guard evidence as general
 Gather. No extra OpenGL index-range assertion is needed for this kernel.
 

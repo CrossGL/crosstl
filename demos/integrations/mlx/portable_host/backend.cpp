@@ -1921,6 +1921,7 @@ std::vector<AxisLaunchTile> axis_launch_tiles(
 void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
+  constexpr uint64_t launch_limit = 65535;
   if (inputs.size() != 2 || !cast_type(out.dtype()) ||
       inputs[0].dtype() != out.dtype() || inputs[0].ndim() == 0 ||
       inputs[0].ndim() > 64 || inputs[0].ndim() != inputs[1].ndim() ||
@@ -1946,13 +1947,9 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto idx = gather_input(inputs[1]);
   const auto source_span = gather_span(src, max_storage_elements);
   const auto index_span = gather_span(idx, max_storage_elements);
-  const std::string entry = std::string("gather_axis") + cast_type(out.dtype()) +
-      storage_type(index_dtype) + "_int" + (src.flags().row_contiguous ? "c" : "nc") +
-      (idx.flags().row_contiguous ? "c" : "nc");
-  require_entry(entry);
-  std::vector<int32_t> shape;
+  std::vector<int32_t> shape, pre_shape, post_shape;
   std::vector<int64_t> source_strides, index_strides;
-  uint64_t before = 1, after = 1;
+  uint64_t after = 1;
   for (size_t i = 0; i < src.ndim(); ++i) {
     if (i == axis_) {
       continue;
@@ -1960,23 +1957,34 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
     shape.push_back(idx.shape(i));
     source_strides.push_back(src.strides()[i]);
     index_strides.push_back(idx.strides()[i]);
-    (i < axis_ ? before : after) *= idx.shape(i);
+    (i < axis_ ? pre_shape : post_shape).push_back(idx.shape(i));
+    if (i > axis_) {
+      after *= idx.shape(i);
+    }
   }
+  // The kernel strides its output by the launch's x extent, so a trailing
+  // extent past one launch axis runs per leading position and index row, as
+  // slabs of the trailing axes through the strided specializations.
+  const bool wide = after > launch_limit;
+  const std::string entry = std::string("gather_axis") + cast_type(out.dtype()) +
+      storage_type(index_dtype) + "_int" +
+      (!wide && src.flags().row_contiguous ? "c" : "nc") +
+      (!wide && idx.flags().row_contiguous ? "c" : "nc");
+  require_entry(entry);
   uint64_t ndim = src.ndim() - 1;
   if (shape.empty()) {
     shape.push_back(1);
     source_strides.push_back(0);
     index_strides.push_back(0);
   }
+  const uint64_t rows = idx.shape(axis_);
   int32_t axis = axis_, axis_size = src.shape(axis_);
   uint64_t source_step = src.strides()[axis_], index_step = idx.strides()[axis_];
-  // Storage is bounded as a whole; each launch axis keeps the portable limit.
-  if (after > 65535 || uint64_t(idx.shape(axis_)) > 65535 || before > 65535) {
-    throw std::invalid_argument("CrossTL axis gather launch exceeds per-axis workgroup limits.");
-  }
+  auto* const source_data = static_cast<uint8_t*>(const_cast<void*>(src.data<void>()));
+  auto* const index_data = static_cast<uint8_t*>(const_cast<void*>(idx.data<void>()));
   CrosstlMlxBuffer buffers[] = {
-      {"src", cast_type(src.dtype()), const_cast<void*>(src.data<void>()), source_span, 0},
-      {"indices", storage_type(idx.dtype()), const_cast<void*>(idx.data<void>()), index_span, 0},
+      {"src", cast_type(src.dtype()), source_data, source_span, 0},
+      {"indices", storage_type(idx.dtype()), index_data, index_span, 0},
       {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"shape", "int32", shape.data(), shape.size(), 0},
       {"src_strides", "int64", source_strides.data(), source_strides.size(), 0},
@@ -1987,15 +1995,76 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
       {"src_ax_stride", "uint64", &source_step, 1, 0},
       {"idx_ax_stride", "uint64", &index_step, 1, 0},
   };
-  const CrosstlMlxLaunch launch{
-      {static_cast<uint32_t>(after), static_cast<uint32_t>(idx.shape(axis_)),
-       static_cast<uint32_t>(before)}, {1, 1, 1}};
-  char error[2048] = {};
-  const int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 11, out.size(), &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native axis gather failed: ") + error);
+  // Dispatches the launch whose views start at `start` along the non-axis
+  // axes and at `first_row` index rows, with `shape` holding its extents.
+  auto dispatch = [&](const std::vector<uint64_t>& start, uint64_t first_row,
+                      uint64_t launch_rows, uint64_t first_out, uint32_t x,
+                      uint32_t y, uint32_t z) {
+    uint64_t source_offset = 0, index_offset = first_row * index_step;
+    uint64_t source_extent = 1 + uint64_t(axis_size - 1) * source_step;
+    uint64_t index_extent = 1 + (launch_rows - 1) * index_step;
+    for (size_t i = 0; i < shape.size(); ++i) {
+      if (i < start.size()) {
+        source_offset += start[i] * uint64_t(source_strides[i]);
+        index_offset += start[i] * uint64_t(index_strides[i]);
+      }
+      source_extent += uint64_t(shape[i] - 1) * uint64_t(source_strides[i]);
+      index_extent += uint64_t(shape[i] - 1) * uint64_t(index_strides[i]);
+    }
+    const uint64_t outputs = uint64_t(x) * y * z;
+    if (source_offset > source_span || source_extent > source_span - source_offset ||
+        index_offset > index_span || index_extent > index_span - index_offset ||
+        first_out > out.size() || outputs > out.size() - first_out) {
+      throw std::invalid_argument("CrossTL axis gather launch exceeds its allocations.");
+    }
+    buffers[0].data = source_data + source_offset * src.itemsize();
+    buffers[0].count = source_extent;
+    buffers[1].data = index_data + index_offset * idx.itemsize();
+    buffers[1].count = index_extent;
+    buffers[2].data = out.data<uint8_t>() + first_out * out.itemsize();
+    buffers[2].count = outputs;
+    const CrosstlMlxLaunch launch{{x, y, z}, {1, 1, 1}};
+    char error[2048] = {};
+    const int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 11, outputs, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native axis gather failed: ") + error);
+    }
+  };
+  if (!wide) {
+    for (const auto& tile : axis_launch_tiles(pre_shape, rows)) {
+      std::copy(tile.pre_shape.begin(), tile.pre_shape.end(), shape.begin());
+      dispatch(tile.pre_start, tile.first_row, tile.rows,
+               (tile.first_pre * rows + tile.first_row) * after,
+               static_cast<uint32_t>(after), static_cast<uint32_t>(tile.rows),
+               static_cast<uint32_t>(tile.pre_count));
+    }
+    return;
+  }
+  uint64_t before = 1;
+  for (auto size : pre_shape) {
+    before *= uint64_t(size);
+  }
+  const auto slabs = axis_launch_tiles(post_shape, 1);
+  std::vector<uint64_t> start(shape.size());
+  for (uint64_t position = 0; position < before; ++position) {
+    uint64_t remaining = position;
+    for (size_t i = pre_shape.size(); i-- > 0;) {
+      start[i] = remaining % uint64_t(pre_shape[i]);
+      remaining /= uint64_t(pre_shape[i]);
+      shape[i] = 1;
+    }
+    for (uint64_t row = 0; row < rows; ++row) {
+      for (const auto& slab : slabs) {
+        std::copy(slab.pre_shape.begin(), slab.pre_shape.end(),
+                  shape.begin() + pre_shape.size());
+        std::copy(slab.pre_start.begin(), slab.pre_start.end(),
+                  start.begin() + pre_shape.size());
+        dispatch(start, row, 1, (position * rows + row) * after + slab.first_pre,
+                 static_cast<uint32_t>(slab.pre_count), 1, 1);
+      }
+    }
   }
 }
 

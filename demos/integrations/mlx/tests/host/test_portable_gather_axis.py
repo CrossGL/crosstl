@@ -72,7 +72,11 @@ def buffers(case):
     return entry, supplied, arrays, expected, execution
 
 
-@pytest.mark.parametrize("case", list(workloads.cases()), ids=lambda case: case["id"])
+@pytest.mark.parametrize(
+    "case",
+    [case for case in workloads.cases() if case["layout"] not in workloads.WIDE],
+    ids=lambda case: case["id"],
+)
 def test_axis_gather_preserves_all_workload_layouts(case):
     entry, supplied, arrays, expected, execution = buffers(case)
     metadata = layout.validate(entry, supplied, expected.size, execution)
