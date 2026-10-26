@@ -10196,7 +10196,21 @@ class MojoCodeGen:
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
 
+        if uses_scalar_splat_constructor and len(emitted_args) == 1:
+            return self.scalar_splat_expression(dtype, storage_width, emitted_args[0])
+
         return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def scalar_splat_expression(self, dtype, storage_width, scalar_expr):
+        """Splat ``scalar_expr`` into every lane of a ``SIMD[dtype, width]``.
+
+        Mojo's one-argument SIMD constructor only splats a ``Scalar[dtype]``.
+        ``Bool`` is not ``Scalar[DType.bool]``, so a boolean splat must use the
+        explicit ``fill`` keyword.
+        """
+        if dtype == "DType.bool":
+            return f"SIMD[{dtype}, {storage_width}](fill={scalar_expr})"
+        return f"SIMD[{dtype}, {storage_width}]({scalar_expr})"
 
     def generate_matrix_constructor(self, func_name, args):
         dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
@@ -12683,7 +12697,13 @@ class MojoCodeGen:
             expr.right, info[0], "vector comparison"
         )
         if self.vector_type_info(self.expression_result_type(expr.left)) is None:
-            left = f"SIMD[{info[0]}, {info[2]}]({left})"
+            left = self.scalar_splat_expression(info[0], info[2], left)
+        if (
+            info[0] == "DType.bool"
+            and self.vector_type_info(self.expression_result_type(expr.right)) is None
+        ):
+            # Mojo does not convert a Bool argument to a mask either.
+            right = self.scalar_splat_expression(info[0], info[2], right)
         method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
         return f"({left}).{method}({right})"
 
@@ -15329,6 +15349,10 @@ class MojoCodeGen:
             return left_type
         if right_info is not None:
             return right_type
+        if mapped_op in MOJO_VECTOR_COMPARISON_METHODS or mapped_op in {"and", "or"}:
+            # A comparison or logical operation on scalars yields a ``Bool``,
+            # not a value of its operand type.
+            return "bool"
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
