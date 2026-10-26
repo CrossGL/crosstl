@@ -11737,8 +11737,8 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
-        "size_bytes": 1619,
+        "sha256": "8f7725f7bfc591e6aab8ea65cc1088401d624b0eb4f4a131b10dc06d0569755d",
+        "size_bytes": 1668,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "std430",
@@ -17272,7 +17272,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 43106796
+    assert artifact["generatedSizeBytesTotal"] == 42976818
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],

@@ -10,7 +10,10 @@ SPIR-V generator refused them. :func:`lower_metal_math_spellings` handles them f
   bounds ``pow`` by ``exp2(y * log2(x))``), within MSL's fast-math bound for ``exp10``.
 * ``sinpi``, ``cospi``, ``tanpi``, ``asinpi``, ``acospi``, ``atanpi`` and ``atan2pi`` are exact at integers and
   half-integers in MSL (``sinpi(1.0)`` is ``0``), which ``sin(x * pi)`` is not. They are refused with
-  :class:`MetalMathFunctionUnsupportedError` until an exact range reduction lowers them.
+  :class:`MetalMathFunctionUnsupportedError` until an exact range reduction lowers them. CUDA and HIP keep ``sinpi``
+  and ``cospi``: both math libraries declare ``sinpi``/``cospi`` for ``double`` and ``sinpif``/``cospif`` for
+  ``float``, exact at integers and half-integers, and their generators pick the spelling for the operand's precision
+  and apply it per component to vectors. Neither declares the other five, so those stay refused there too.
 
 A program that defines a function with one of these names keeps its calls.
 """
@@ -35,6 +38,11 @@ PI_FUNCTIONS = frozenset(
 )
 _ARITY = {"powr": 2, "exp10": 1, **{name: 1 for name in PI_FUNCTIONS}, "atan2pi": 2}
 _CARRYING = frozenset({"metal", "cgl", "crossgl", ""})
+# Pi functions a target's own math library provides, so the call is kept for its generator.
+_NATIVE_PI_FUNCTIONS = {
+    "cuda": frozenset({"sinpi", "cospi"}),
+    "hip": frozenset({"sinpi", "cospi"}),
+}
 
 
 class MetalMathFunctionUnsupportedError(TranslationDiagnostic):
@@ -43,7 +51,7 @@ class MetalMathFunctionUnsupportedError(TranslationDiagnostic):
     def __init__(self, target, name):
         self.missing_capabilities = (f"{target}.metal-math-{name}",)
         super().__init__(
-            f"MSL {name} is exact at integers and half-integers, which {target} has no function for, and CrossTL "
+            f"{name} is exact at integers and half-integers, which {target} has no function for, and CrossTL "
             "does not lower it with an exact range reduction yet",
             target=target,
             code=f"{CODE_PREFIX}{target}-metal-math-function-unsupported",
@@ -59,6 +67,8 @@ def _replacement(node, name, target):
     if len(arguments) != _ARITY[name]:
         return node
     if name in PI_FUNCTIONS:
+        if name in _NATIVE_PI_FUNCTIONS.get(target, ()):
+            return node
         raise MetalMathFunctionUnsupportedError(target, name)
     if name == "powr":
         return A.FunctionCallNode(_identifier("pow"), arguments)

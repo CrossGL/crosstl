@@ -91,6 +91,28 @@ from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter
 
 
+class MojoScalarConversionError(ValueError):
+    """Raised when a source vector reaches a place that needs a scalar."""
+
+    project_diagnostic_code = "project.translate.mojo-scalar-conversion-unsupported"
+    missing_capabilities = ("mojo.scalar-conversion-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        source_type=None,
+        target_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.source_type = source_type
+        self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 def _matrix_aliases(prefix, dtype, *, rows_first):
     aliases = {}
     for first in (2, 3, 4):
@@ -913,6 +935,13 @@ MOJO_INTEGER_DTYPES = {
     "DType.uint32",
 }
 
+# Element types the round_even helper has overloads for, with their scalar types.
+ROUND_EVEN_FLOAT_DTYPES = {
+    "DType.float16": "Float16",
+    "DType.float32": "Float32",
+    "DType.float64": "Float64",
+}
+
 MOJO_FLOAT_DTYPES = {
     "DType.float32",
     "DType.float64",
@@ -1207,6 +1236,15 @@ MOJO_GPU_BUILTIN_PARAMETER_ORDER = (
     "grid_dim_uint",
     "block_dim_uint",
 )
+
+MOJO_VECTOR_COMPARISON_METHODS = {
+    "<": "lt",
+    "<=": "le",
+    ">": "gt",
+    ">=": "ge",
+    "==": "eq",
+    "!=": "ne",
+}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
@@ -1659,6 +1697,9 @@ class MojoCodeGen:
                             node.initial_value, vtype, f"global declaration {node.name}"
                         )
                         init_expr = self.generate_expression(node.initial_value)
+                        self.validate_scalar_target_conversion(
+                            node.initial_value, vtype, f"global declaration {node.name}"
+                        )
                     var_name = self.mojo_identifier(node.name)
                     if vtype is None:
                         code += f"var {var_name} = {init_expr}\n"
@@ -2668,6 +2709,9 @@ class MojoCodeGen:
             init_expr = self.generate_expression(
                 node.initial_value, variable_type, f"stage declaration {node.name}"
             )
+            self.validate_scalar_target_conversion(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
             var_name = self.mojo_identifier(node.name)
             return (
                 f"{self.generate_resource_metadata_comment(node, variable_type)}"
@@ -2819,7 +2863,7 @@ class MojoCodeGen:
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
             value_code = self.generate_expression(value, const_type, f"constant {name}")
-            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
+            code += f"comptime {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 
     def collect_function_return_types(self, ast):
@@ -3757,9 +3801,7 @@ class MojoCodeGen:
                     value_text = self.generate_expression(value)
                     literal_value = self.literal_int_value(value)
                     next_value = literal_value + 1 if literal_value is not None else 0
-                code += (
-                    f"alias {enum_constant_name(name, variant.name)} = {value_text}\n"
-                )
+                code += f"comptime {enum_constant_name(name, variant.name)} = {value_text}\n"
         return code + ("\n" if code else "")
 
     def generate_generic_payload_enum_structs(self):
@@ -5563,7 +5605,7 @@ class MojoCodeGen:
         )
         self.enum_types[node.name] = enum_type
 
-        code = f"alias {node.name} = {enum_type}\n"
+        code = f"comptime {node.name} = {enum_type}\n"
         next_value = 0
         local_aliases = {}
         local_values = {}
@@ -5592,7 +5634,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:
@@ -5652,7 +5694,7 @@ class MojoCodeGen:
             )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
-            code += f"alias {alias_name} = {value_text}\n"
+            code += f"comptime {alias_name} = {value_text}\n"
 
             literal_value = resolved_value
             if literal_value is None:
@@ -6538,6 +6580,9 @@ class MojoCodeGen:
         prelude, right = self.generate_expression_with_prelude(
             node.right, indent, left_type, "assignment target"
         )
+        self.validate_scalar_target_conversion(
+            node.right, left_type, "assignment target"
+        )
         op = self.map_operator(node.operator)
         self.register_resource_assignment_alias_metadata(node.left, node.right, op)
         return f"{prelude}{indent_str}{left} {op} {right}\n"
@@ -7034,6 +7079,9 @@ class MojoCodeGen:
                     var_type,
                     f"declaration {stmt.name}",
                 )
+                self.validate_scalar_target_conversion(
+                    stmt.initial_value, var_type, f"declaration {stmt.name}"
+                )
                 var_name = self.mojo_identifier(stmt.name)
                 if var_type is None:
                     return f"{prelude}{indent_str}var {var_name} = {init_expr}\n"
@@ -7092,6 +7140,9 @@ class MojoCodeGen:
                     indent,
                     self.current_return_type,
                     "return value",
+                )
+                self.validate_scalar_target_conversion(
+                    stmt.value, self.current_return_type, "return value"
                 )
                 return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
@@ -8310,6 +8361,9 @@ class MojoCodeGen:
             node.right, left_type, "assignment target"
         )
         right = self.generate_expression(node.right, left_type, "assignment target")
+        self.validate_scalar_target_conversion(
+            node.right, left_type, "assignment target"
+        )
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
 
@@ -8327,9 +8381,11 @@ class MojoCodeGen:
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
-        condition = self.generate_expression(
+        condition_expr = (
             node.condition if hasattr(node, "condition") else node.if_condition
         )
+        condition = self.generate_expression(condition_expr)
+        self.validate_condition_scalar(condition_expr, "if condition")
         entry_alias_state = self.resource_access_alias_state()
         code = f"{indent_str}if {condition}:\n"
 
@@ -8366,6 +8422,7 @@ class MojoCodeGen:
 
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "for condition")
         entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}{init}\n"
@@ -8464,6 +8521,7 @@ class MojoCodeGen:
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "while condition")
         entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}while {condition}:\n"
@@ -8519,6 +8577,7 @@ class MojoCodeGen:
         break_flag = f"__cgl_do_break_{self.do_while_counter}"
         self.do_while_counter += 1
         condition = self.generate_expression(node.condition)
+        self.validate_condition_scalar(node.condition, "do-while condition")
 
         code = f"{indent_str}var {break_flag}: Bool = False\n"
         code += f"{indent_str}while True:\n"
@@ -8826,6 +8885,12 @@ class MojoCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
+            comparison = self.generate_vector_comparison(expr)
+            if comparison is not None:
+                return comparison
+            boolean_vector_logical = self.generate_boolean_vector_logical_op(expr)
+            if boolean_vector_logical is not None:
+                return boolean_vector_logical
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
@@ -8870,6 +8935,10 @@ class MojoCodeGen:
                 return self.generate_increment_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
+                operand_type = self.expression_result_type(expr.operand)
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return f"(~{operand})"
                 return f"(not {operand})"
             return f"({op}{operand})"
         elif isinstance(expr, ArrayAccessNode):
@@ -8949,6 +9018,10 @@ class MojoCodeGen:
                 )
                 return f"{call_name}({args})"
 
+            reduction = self.generate_boolean_vector_reduction(func_name, expr.args)
+            if reduction is not None:
+                return reduction
+
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, expr.args
             )
@@ -8957,6 +9030,12 @@ class MojoCodeGen:
 
             if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
+            if (
+                func_name == "roundEven"
+                and len(expr.args) == 1
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.generate_round_even_call(expr.args[0])
             if func_name == "mod":
                 return self.generate_mod_call(expr.args)
             if func_name == "saturate":
@@ -9128,6 +9207,7 @@ class MojoCodeGen:
                 return bool_vector_select
             branch_context = target_context or "ternary expression"
             condition = self.generate_expression(expr.condition)
+            self.validate_condition_scalar(expr.condition, "ternary condition")
             true_expr = self.generate_expression(
                 expr.true_expr, target_type, f"{branch_context} true branch"
             )
@@ -10129,7 +10209,21 @@ class MojoCodeGen:
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
 
+        if uses_scalar_splat_constructor and len(emitted_args) == 1:
+            return self.scalar_splat_expression(dtype, storage_width, emitted_args[0])
+
         return f"{mojo_type}({', '.join(emitted_args)})"
+
+    def scalar_splat_expression(self, dtype, storage_width, scalar_expr):
+        """Splat ``scalar_expr`` into every lane of a ``SIMD[dtype, width]``.
+
+        Mojo's one-argument SIMD constructor only splats a ``Scalar[dtype]``.
+        ``Bool`` is not ``Scalar[DType.bool]``, so a boolean splat must use the
+        explicit ``fill`` keyword.
+        """
+        if dtype == "DType.bool":
+            return f"SIMD[{dtype}, {storage_width}](fill={scalar_expr})"
+        return f"SIMD[{dtype}, {storage_width}]({scalar_expr})"
 
     def generate_matrix_constructor(self, func_name, args):
         dtype, columns, rows = MOJO_MATRIX_TYPES[func_name]
@@ -10248,6 +10342,62 @@ class MojoCodeGen:
             dtype = "DType.float32"
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
+
+    def round_even_operand_type(self, arg):
+        """Source type of a ``round_even`` operand, including typed buffer elements."""
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None and isinstance(arg, ArrayAccessNode):
+            info = self.buffer_resource_info(self.expression_result_type(arg.array))
+            if info is not None and info[0] in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
+                arg_type = info[1]
+        return arg_type
+
+    def round_even_operand_dtypes(self, arg):
+        """Return ``(source dtype, dtype the helper rounds in, source type)``.
+
+        The helper has overloads for float16, float32 and float64 elements;
+        integer operands round as float32, as HLSL ``round`` converts them.
+        """
+        arg_type = self.round_even_operand_type(arg)
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            source_dtype = vector_info[0]
+        else:
+            source_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(arg_type))
+        if source_dtype is None or source_dtype in ROUND_EVEN_FLOAT_DTYPES:
+            return source_dtype, source_dtype, arg_type
+        return source_dtype, "DType.float32", arg_type
+
+    def is_scalar_literal_operand(self, arg):
+        """A numeric literal, optionally under unary ``+`` or ``-``."""
+        while isinstance(arg, UnaryOpNode) and self.map_operator(arg.op) in {
+            "+",
+            "-",
+        }:
+            arg = arg.operand
+        return self.is_literal_expression(arg) and not isinstance(arg, ArrayLiteralNode)
+
+    def generate_round_even_call(self, arg):
+        self.required_math_helpers.add("round_even")
+        arg_expr = self.generate_expression(arg)
+        source_dtype, target_dtype, _ = self.round_even_operand_dtypes(arg)
+        if self.is_scalar_literal_operand(arg):
+            # A literal converts to every overload, and an integer literal has no
+            # cast method, so it is spelled in the scalar type it rounds in.
+            scalar_type = ROUND_EVEN_FLOAT_DTYPES.get(target_dtype, "Float32")
+            return f"round_even({scalar_type}({arg_expr}))"
+        if source_dtype != target_dtype:
+            arg_expr = f"({arg_expr}).cast[{target_dtype}]()"
+        return f"round_even({arg_expr})"
+
+    def round_even_result_type(self, arg):
+        source_dtype, target_dtype, arg_type = self.round_even_operand_dtypes(arg)
+        if source_dtype == target_dtype:
+            return arg_type or "float"
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            return self.vector_type_name_for_dtype_width(target_dtype, vector_info[1])
+        return "float"
 
     def generate_mod_call(self, args):
         generated_args = [self.generate_expression(arg) for arg in args]
@@ -10613,6 +10763,46 @@ class MojoCodeGen:
         self.validate_buffer_result_target_shape(expr, target_type, context)
         self.validate_reinterpret_result_target_shape(expr, target_type, context)
         self.validate_aggregate_target_shape(expr, target_type, context)
+
+    def validate_scalar_target_conversion(self, expr, target_type, context):
+        """Refuse a source vector where the target needs a scalar.
+
+        Mojo does not convert ``SIMD[dtype, N]`` to a scalar implicitly, and a
+        comparison of two vectors is a lane-wise ``SIMD[DType.bool, N]`` mask
+        rather than a ``Bool``.
+        """
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_scalar_target_conversion(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_scalar_target_conversion(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        target_name = self.type_name(target_type)
+        if not self.is_scalar_type_name(target_name):
+            return
+
+        source_type = self.expression_result_type(expr)
+        if self.vector_type_info(source_type) is None:
+            return
+
+        source_name = self.type_name(source_type)
+        raise MojoScalarConversionError(
+            "Mojo cannot preserve source conversion from "
+            f"'{source_name}' to '{target_name}' in {context}: vector to scalar",
+            source_type=source_name,
+            target_type=target_name,
+            reason="vector-to-scalar",
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def validate_condition_scalar(self, condition, context):
+        self.validate_scalar_target_conversion(condition, "bool", context)
 
     def validate_aggregate_target_shape(self, expr, target_type, context):
         if expr is None or target_type is None:
@@ -12550,6 +12740,98 @@ class MojoCodeGen:
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
 
+    def vector_comparison_info(self, op, left_type, right_type):
+        if self.map_operator(op) not in MOJO_VECTOR_COMPARISON_METHODS:
+            return None
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None and right_info is not None and left_info != right_info:
+            raise ValueError(
+                "Mojo vector comparison requires matching element types and widths"
+            )
+        return left_info or right_info
+
+    def generate_vector_comparison(self, expr):
+        info = self.vector_comparison_info(
+            expr.op,
+            self.expression_result_type(expr.left),
+            self.expression_result_type(expr.right),
+        )
+        if info is None:
+            return None
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left, info[0], "vector comparison"
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right, info[0], "vector comparison"
+        )
+        if self.vector_type_info(self.expression_result_type(expr.left)) is None:
+            left = self.scalar_splat_expression(info[0], info[2], left)
+        if (
+            info[0] == "DType.bool"
+            and self.vector_type_info(self.expression_result_type(expr.right)) is None
+        ):
+            # Mojo does not convert a Bool argument to a mask either.
+            right = self.scalar_splat_expression(info[0], info[2], right)
+        method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
+        return f"({left}).{method}({right})"
+
+    def generate_boolean_vector_logical_op(self, expr):
+        """Combine boolean vector masks per component.
+
+        Mojo's ``and`` and ``or`` return one whole operand, chosen by whether
+        any lane of the left mask is true, so ``&&`` and ``||`` on boolean
+        vectors are written with the lane-wise ``&`` and ``|``. A scalar
+        ``bool`` operand of a mask is splatted to the mask's lanes. Two scalar
+        ``bool`` operands keep ``and`` and ``or``, which short-circuit.
+        """
+        op = self.map_operator(expr.op)
+        if op not in {"and", "or"}:
+            return None
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        left_mask = left_info is not None and left_info[0] == "DType.bool"
+        right_mask = right_info is not None and right_info[0] == "DType.bool"
+        if left_mask and right_mask:
+            if left_info != right_info:
+                raise ValueError(
+                    "Mojo boolean vector && and || require masks of the same width"
+                )
+        elif not (
+            (left_mask and MOJO_SCALAR_DTYPES.get(right_type) == "DType.bool")
+            or (right_mask and MOJO_SCALAR_DTYPES.get(left_type) == "DType.bool")
+        ):
+            return None
+        left = self.generate_expression(expr.left)
+        right = self.generate_expression(expr.right)
+        # Mojo does not convert a Bool to a mask, so splat it explicitly.
+        if not left_mask:
+            left = f"SIMD[DType.bool, {right_info[2]}](fill={left})"
+        if not right_mask:
+            right = f"SIMD[DType.bool, {left_info[2]}](fill={right})"
+        lane_op = "&" if op == "and" else "|"
+        return f"({left} {lane_op} {right})"
+
+    def generate_boolean_vector_reduction(self, name, args):
+        if name not in {"any", "all"} or len(args) != 1:
+            return None
+        info = self.vector_type_info(self.expression_result_type(args[0]))
+        if info is None or info[0] != "DType.bool":
+            return None
+        mask = self.generate_expression(args[0])
+        if info[1] != info[2]:
+            # Three-lane vectors use four storage lanes. Ignore padding without
+            # evaluating a side-effecting argument more than once.
+            used, padding, op = (
+                ("True", "False", "&") if name == "any" else ("False", "True", "|")
+            )
+            lanes = ", ".join([used] * info[1] + [padding] * (info[2] - info[1]))
+            mask = f"({mask} {op} SIMD[DType.bool, {info[2]}]({lanes}))"
+        reduction = "reduce_or" if name == "any" else "reduce_and"
+        return f"({mask}).{reduction}()"
+
     def generate_vector_binary_op(self, expr):
         op = self.map_operator(expr.op)
         if op not in MOJO_VECTOR_ARITHMETIC_OPS:
@@ -13724,23 +14006,7 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
         if helper_name == "round_even":
-            return (
-                "fn round_even(x: Float32) -> Float32:\n"
-                "    var lower = floor(x)\n"
-                "    var fraction = x - lower\n"
-                "    if fraction < 0.5:\n"
-                "        return lower\n"
-                "    if fraction > 0.5:\n"
-                "        return lower + 1.0\n"
-                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
-                "    if parity == 0.0:\n"
-                "        return lower\n"
-                "    return lower + 1.0\n\n"
-                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
-                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
-                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
-                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
-            )
+            return self.generate_round_even_helper()
         if helper_name == "cross_product":
             return (
                 "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
@@ -13796,6 +14062,34 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
+
+    def generate_round_even_helper(self):
+        """Round halfway cases to the nearest even integer, per element type."""
+        code = ""
+        for dtype, scalar_type in ROUND_EVEN_FLOAT_DTYPES.items():
+            code += (
+                f"fn round_even(x: {scalar_type}) -> {scalar_type}:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+            )
+            for width in (2, 4):
+                vector_type = f"SIMD[{dtype}, {width}]"
+                components = ", ".join(
+                    f"round_even(v[{index}])" for index in range(width)
+                )
+                code += (
+                    f"fn round_even(v: {vector_type}) -> {vector_type}:\n"
+                    f"    return {vector_type}({components})\n\n"
+                )
+        return code
 
     def generate_min_max_helper(self, helper_name, comparator):
         selector = f"a if a {comparator} b else b"
@@ -14190,6 +14484,13 @@ class MojoCodeGen:
         return self.generate_expression(piece["expr"], target_type, context)
 
     def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        if target_dtype in {"DType.float16", "DType.float32"} and (
+            self.is_scalar_bool_expression(expr)
+        ):
+            # Mojo's Float16/Float32 constructors do not accept Bool directly.
+            # Converting through Int preserves GLSL's 0/1 numeric cast.
+            return f"Int({self.generate_expression(expr)})"
+
         target_type = self.constructor_scalar_expression_target_type(
             expr, target_dtype, force_scalar_target=True
         )
@@ -14796,6 +15097,17 @@ class MojoCodeGen:
             if vector_info is not None:
                 return MOJO_DTYPE_INFO[vector_info[0]][0]
             return None
+        if isinstance(expr, UnaryOpNode):
+            op = self.map_operator(expr.op)
+            operand_type = self.expression_result_type(expr.operand)
+            if op == "not":
+                info = self.vector_type_info(operand_type)
+                if info is not None and info[0] == "DType.bool":
+                    return operand_type
+                return "bool"
+            if op in {"+", "-", "~"}:
+                return operand_type
+            return None
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
@@ -14816,6 +15128,10 @@ class MojoCodeGen:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            if func_name in {"any", "all"} and not self.is_user_defined_function(
+                func_name
+            ):
+                return "bool"
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type is not None:
                 return numeric_result_type
@@ -14846,8 +15162,8 @@ class MojoCodeGen:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "roundEven" and expr.args:
-                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and len(expr.args) == 1:
+                return self.round_even_result_type(expr.args[0])
             if func_name in {"inverse", "transpose"} and expr.args:
                 return self.expression_result_type(expr.args[0])
             if func_name in {"length", "dot"}:
@@ -15098,6 +15414,9 @@ class MojoCodeGen:
         return None
 
     def binary_expression_result_type(self, op, left_type, right_type):
+        comparison = self.vector_comparison_info(op, left_type, right_type)
+        if comparison is not None:
+            return self.vector_type_name_for_dtype_width("DType.bool", comparison[1])
         left_info = self.vector_type_info(left_type)
         right_info = self.vector_type_info(right_type)
         mapped_op = self.map_operator(op)
@@ -15118,6 +15437,10 @@ class MojoCodeGen:
             return left_type
         if right_info is not None:
             return right_type
+        if mapped_op in MOJO_VECTOR_COMPARISON_METHODS or mapped_op in {"and", "or"}:
+            # A comparison or logical operation on scalars yields a ``Bool``,
+            # not a value of its operand type.
+            return "bool"
         return left_type if left_type == right_type else left_type or right_type
 
     def selected_function_return_type(self, func_name, args):
@@ -15376,6 +15699,29 @@ class MojoCodeGen:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
 
+    def is_scalar_bool_expression(self, expr):
+        """Return whether ``expr`` evaluates to a scalar boolean.
+
+        Scalar comparisons and logical expressions are recognized directly as
+        their result type is inferred from their operands on some codegen paths.
+        Vector comparisons and logical operations remain SIMD masks.
+        """
+        expr_type = self.expression_result_type(expr)
+        if self.is_bool_scalar_type(expr_type):
+            return True
+
+        if isinstance(expr, BinaryOpNode):
+            op = self.map_operator(expr.op)
+            if op in MOJO_VECTOR_COMPARISON_METHODS or op in {"and", "or"}:
+                return (
+                    self.vector_type_info(self.expression_result_type(expr.left))
+                    is None
+                    and self.vector_type_info(self.expression_result_type(expr.right))
+                    is None
+                )
+
+        return False
+
     def compatible_numeric_vector_target(self, source_info, target_info):
         if source_info is None or target_info is None:
             return False
@@ -15455,14 +15801,41 @@ class MojoCodeGen:
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
 
+    def bool_cast_text(self, expr_text, target_dtype):
+        # Mojo's Bool has no .cast method, so a bool value going to a numeric
+        # type goes through Int first: Float32(Int(s)). Returns None when the
+        # target has no scalar constructor form here, leaving the old output.
+        constructor = {
+            "DType.float16": "Float16",
+            "DType.float32": "Float32",
+            "DType.float64": "Float64",
+            "DType.int8": "Int8",
+            "DType.int16": "Int16",
+            "DType.int32": "Int32",
+            "DType.uint8": "UInt8",
+            "DType.uint16": "UInt16",
+            "DType.uint32": "UInt32",
+        }.get(target_dtype)
+        if constructor is None:
+            return None
+        return f"{constructor}(Int({expr_text}))"
+
     def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return expr_text
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(expr_text, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"({expr_text}).cast[{target_dtype}]()"
 
     def cast_vector_component(self, component, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return component
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(component, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"{component}.cast[{target_dtype}]()"
 
     def generate_constructor_scalar_expression(

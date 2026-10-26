@@ -117,6 +117,7 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .relational_builtins import lower_relational_builtins
+from .resource_aggregates import lower_resource_aggregates
 from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
@@ -3691,7 +3692,7 @@ class VulkanSPIRVCodeGen(
             return self.unsupported_matrix_operation(op, result_type)
 
         if left_matrix is not None and right_matrix is not None:
-            if op in {"+", "-"}:
+            if op in {"+", "-", "/"}:
                 return self.componentwise_matrix_operation(
                     op, left, left_type, left_matrix, right, right_type, right_matrix
                 )
@@ -3708,10 +3709,9 @@ class VulkanSPIRVCodeGen(
             if right_vector is None:
                 if op == "*":
                     return self.matrix_times_scalar(left, left_type, left_matrix, right)
-                if op == "/":
-                    return self.matrix_divided_by_scalar(
-                        left, left_type, left_matrix, right
-                    )
+                return self.matrix_scalar_componentwise(
+                    op, left, left_type, left_matrix, right, scalar_first=False
+                )
             return self.unsupported_matrix_operation(op, result_type)
 
         left_vector = self.vector_type_info_from_type(left_type)
@@ -3719,6 +3719,10 @@ class VulkanSPIRVCodeGen(
             return self.vector_times_matrix(left, left_vector, right, right_matrix)
         if op == "*" and left_vector is None and right_matrix is not None:
             return self.matrix_times_scalar(right, right_type, right_matrix, left)
+        if left_vector is None and right_matrix is not None:
+            return self.matrix_scalar_componentwise(
+                op, right, right_type, right_matrix, left, scalar_first=True
+            )
 
         return self.unsupported_matrix_operation(op, result_type)
 
@@ -3813,18 +3817,27 @@ class VulkanSPIRVCodeGen(
         )
         return spirv_id
 
-    def matrix_divided_by_scalar(
-        self, matrix: SpirvId, matrix_type: SpirvId, matrix_info, scalar: SpirvId
+    def matrix_scalar_componentwise(
+        self,
+        op: str,
+        matrix: SpirvId,
+        matrix_type: SpirvId,
+        matrix_info,
+        scalar: SpirvId,
+        *,
+        scalar_first: bool,
     ) -> SpirvId:
+        """``m op s`` or ``s op m`` for ``+``, ``-`` or ``/``, one column at a time (GLSL 4.60 section 5.9)."""
         scalar = self.matrix_scalar_operand(scalar, matrix_info["component_type"])
         if scalar is None:
-            return self.unsupported_matrix_operation("/", matrix_type)
+            return self.unsupported_matrix_operation(op, matrix_type)
 
         columns = []
         for index in range(matrix_info["column_count"]):
             column = self.composite_extract(matrix, matrix_info["column_type"], index)
+            operands = (scalar, column) if scalar_first else (column, scalar)
             columns.append(
-                self.binary_operation("/", matrix_info["column_type"], column, scalar)
+                self.binary_operation(op, matrix_info["column_type"], *operands)
             )
         return self.composite_construct(matrix_type, columns)
 
@@ -4703,6 +4716,20 @@ class VulkanSPIRVCodeGen(
             complex_negation = self.complex_struct_negate_operation(operand)
             if complex_negation is not None:
                 return complex_negation
+            # OpFNegate takes no matrix, so a matrix is negated one column at a time.
+            matrix_info = self.matrix_operand_info(self.registered_value_type(operand))
+            if matrix_info is not None:
+                columns = [
+                    self.unary_operation(
+                        "-",
+                        matrix_info["column_type"],
+                        self.composite_extract(
+                            operand, matrix_info["column_type"], index
+                        ),
+                    )
+                    for index in range(matrix_info["column_count"])
+                ]
+                return self.composite_construct(matrix_info["type"], columns)
             component_type = self.scalar_or_vector_component_type(result_type.type)
             # Unary minus on a bool result: SPIR-V has no negation opcode for
             # bool (OpFNegate/OpSNegate reject bool), and C++ promotes bool to int
@@ -17578,6 +17605,68 @@ class VulkanSPIRVCodeGen(
 
         return self.composite_construct(struct_type, components)
 
+    def struct_member_unlowered_pointer_info(
+        self, struct_node: StructNode, member
+    ) -> Optional[dict]:
+        raw_type = (
+            getattr(member, "element_type", None)
+            if isinstance(member, ArrayNode)
+            else getattr(
+                member,
+                "member_type",
+                getattr(member, "var_type", getattr(member, "vtype", None)),
+            )
+        )
+        type_text = (
+            self.convert_type_node_to_string(raw_type)
+            if raw_type is not None and not isinstance(raw_type, str)
+            else str(raw_type or "")
+        ).strip()
+        if "*" not in type_text:
+            return None
+        qualifiers = [
+            str(q) for q in getattr(member, "qualifiers", None) or () if q
+        ] + [
+            str(q)
+            for q in (
+                getattr(getattr(member, "attributes", None), "qualifiers", None) or ()
+            )
+            if q
+        ]
+        address_space = getattr(raw_type, "address_space", None)
+        if not address_space:
+            for candidate in (
+                "device",
+                "constant",
+                "threadgroup",
+                "thread",
+                "ray_data",
+            ):
+                if candidate in qualifiers or re.search(rf"\b{candidate}\b", type_text):
+                    address_space = candidate
+                    break
+        if address_space is None:
+            for attr in getattr(member, "attributes", None) or ():
+                attr_name = getattr(attr, "name", None)
+                attr_args = getattr(attr, "args", None) or ()
+                if attr_name in {"address_space", "resource_space"} and attr_args:
+                    address_space = str(attr_args[0]).strip()
+                    break
+        entry_point = None
+        stages = getattr(getattr(self, "spirv_program_ast", None), "stages", None) or {}
+        for stage in stages.values():
+            entry = getattr(stage, "entry_point", None)
+            if getattr(entry, "name", None):
+                entry_point = str(entry.name)
+                break
+        return {
+            "struct_name": getattr(struct_node, "name", None),
+            "member_name": getattr(member, "name", None),
+            "type_name": type_text,
+            "address_space": address_space or "unspecified",
+            "entry_point": entry_point,
+        }
+
     def process_crossgl_struct(self, struct_node: StructNode) -> Optional[SpirvId]:
         """Process a CrossGL struct definition."""
         if struct_node.name in self.generic_enum_struct_definitions:
@@ -17597,6 +17686,21 @@ class VulkanSPIRVCodeGen(
                 continue
             member_type = None
             member_name = member.name
+            pointer_info = self.struct_member_unlowered_pointer_info(
+                struct_node, member
+            )
+            if pointer_info is not None:
+                entry_suffix = (
+                    f" in entry point '{pointer_info['entry_point']}'"
+                    if pointer_info.get("entry_point")
+                    else ""
+                )
+                self.refuse_lowering(
+                    f"Pointer-bearing aggregate member '{struct_node.name}.{member_name}' "
+                    f"({pointer_info['type_name']}, address space '{pointer_info['address_space']}') "
+                    f"was not lowered before SPIR-V struct emission{entry_suffix}"
+                )
+                continue
 
             if isinstance(member, ArrayNode):
                 element_type = member.element_type
@@ -19938,7 +20042,16 @@ class VulkanSPIRVCodeGen(
             if swizzle_info is not None:
                 return swizzle_info[2]
             return None
+        if isinstance(expr, AssignmentNode):
+            target = getattr(
+                expr, "name", getattr(expr, "target", getattr(expr, "left", None))
+            )
+            return self.infer_expression_result_type(
+                target
+            ) or self.infer_expression_result_type(expr.value)
         if isinstance(expr, BinaryOpNode):
+            if expr.op == ",":
+                return self.infer_expression_result_type(expr.right)
             left_type = self.infer_expression_result_type(expr.left)
             right_type = self.infer_expression_result_type(expr.right)
             return self.binary_expression_result_type(expr.op, left_type, right_type)
@@ -29795,7 +29908,26 @@ class VulkanSPIRVCodeGen(
 
             return self.load_from_variable(access, element_type)
 
+        elif isinstance(expr, AssignmentNode):
+            self.process_assignment(expr)
+            target = getattr(
+                expr, "name", getattr(expr, "target", getattr(expr, "left", None))
+            )
+            return (
+                self.process_expression(target)
+                if isinstance(
+                    target, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+                )
+                else None
+            )
+
         elif isinstance(expr, BinaryOpNode):
+            if expr.op == ",":
+                if isinstance(expr.left, AssignmentNode):
+                    self.process_assignment(expr.left)
+                else:
+                    self.process_expression(expr.left)
+                return self.process_expression(expr.right)
             if expr.op in SHORT_CIRCUIT_OPERATORS:
                 short_circuit = lower_short_circuit_logical(self, expr)
                 if short_circuit is not None:
@@ -32089,6 +32221,13 @@ class VulkanSPIRVCodeGen(
                 f"array of arrays of constant buffers '{name}': a SPIR-V descriptor array has one dimension"
             ),
             block_arrays=True,
+        )
+        ast = lower_resource_aggregates(
+            ast,
+            storage_pointer_parameters=True,
+            workgroup_access_assertions=getattr(
+                self, "workgroup_access_assertions", ()
+            ),
         )
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(

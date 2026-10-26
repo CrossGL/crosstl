@@ -114,3 +114,57 @@ def test_pi_functions_are_refused_until_they_reduce_exactly(
         == f"project.translate.{backend}-metal-math-function-unsupported"
     )
     assert function in str(raised.value)
+
+
+PI_PROBE = """
+shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = sinpi(fin[i]) + cospi(fin[i]);
+        }
+    }
+}
+"""
+
+
+# HIP declares sinpi and cospi for double only, so a float operand takes sinpif and cospif; a vector, which neither
+# library overloads, takes them per component.
+@pytest.mark.parametrize(
+    ("element", "expected", "helper"),
+    [
+        ("float", "outp[i] = (sinpif(fin[i]) + cospif(fin[i]));", None),
+        ("double", "outp[i] = (sinpi(fin[i]) + cospi(fin[i]));", None),
+        (
+            "vec2",
+            "outp[i] = cgl_float2_add(cgl_float2_sinpi(fin[i]), cgl_float2_cospi(fin[i]));",
+            "return make_float2(sinpif(value.x), sinpif(value.y));",
+        ),
+    ],
+)
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_keep_sinpi_and_cospi(
+    tmp_path, backend, element, expected, helper
+):
+    path = tmp_path / "probe.cgl"
+    path.write_text(PI_PROBE.replace("float*", f"{element}*"), encoding="utf-8")
+    code = crosstl.translate(str(path), backend=backend)
+    assert expected in code
+    if helper is not None:
+        assert helper in code
+
+
+@pytest.mark.parametrize("function", ["tanpi", "asinpi", "acospi", "atanpi"])
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_still_refuse_the_pi_functions_they_lack(
+    tmp_path, function, backend
+):
+    path = tmp_path / "probe.cgl"
+    path.write_text(PI_PROBE.replace("cospi(", f"{function}("), encoding="utf-8")
+    with pytest.raises(MetalMathFunctionUnsupportedError) as raised:
+        crosstl.translate(str(path), backend=backend)
+    assert function in str(raised.value)
+    assert not str(raised.value).startswith("MSL ")

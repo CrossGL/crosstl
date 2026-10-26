@@ -311,6 +311,15 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
 
 
+def test_a_glsl_probe_passes_a_shadow_sampler_for_a_depth_comparison():
+    shadow = feature(
+        "texture", Type("float"), Type.other("sampler2DShadow"), Type("float", (3,))
+    )
+    source = probes.build(shadow, "glsl").source
+    assert "layout(binding = 8) uniform sampler2DShadow u0;" in source
+    assert "float r = texture(u0, a1);" in source
+
+
 def test_a_subpass_input_names_its_input_attachment():
     subpass = feature("subpassLoad", VEC4, Type.other("subpassInput"), stage="fragment")
     source = probes.build(subpass, "glsl").source

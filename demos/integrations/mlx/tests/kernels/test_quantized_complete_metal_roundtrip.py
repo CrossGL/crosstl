@@ -52,7 +52,7 @@ QUANTIZED_METAL_CONTRACT_PATH = (
     / "quantized.metal-roundtrip.json"
 )
 QUANTIZED_METAL_CONTRACT_SHA256 = (
-    "615f43f69a3cea42e5b3398c2a806049a3900b72c6a91f24f945757d7c8c3dab"
+    "a9835e278d4fb361c3e78fa2066d016283fc721161f4b812f388f90cb91e138f"
 )
 QUANTIZED_METAL_ENTRY_CLASSIFICATION_SHA256 = (
     "5c7001d6e8eaa0135da1228044f22fd7cad8ef70def36d7ea15db94ef7fb24c6"
@@ -513,7 +513,7 @@ def test_current_mlx_quantized_metal_contract_is_complete_and_classified():
         "exactResourceDigestsIncluded": True,
         "exactResourceContractsIncluded": True,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 43106796,
+        "generatedSizeBytesTotal": 42976818,
         "generatedSizeRange": {
             "minimum": {
                 "entryPoint": "affine_dequantize_float16_t_gs_32_b_2",
@@ -524,7 +524,7 @@ def test_current_mlx_quantized_metal_contract_is_complete_and_classified():
                     "affine_gather_qmm_rhs_nt_bfloat16_t_gs_128_b_8_"
                     "bm_16_bn_32_bk_32_wm_1_wn_2"
                 ),
-                "sizeBytes": 45509,
+                "sizeBytes": 45212,
             },
         },
         "nativeCompiler": "xcrun -sdk macosx metal -std=metal3.1 -Werror -c",

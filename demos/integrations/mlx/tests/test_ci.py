@@ -3374,7 +3374,8 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
         "4",
     }
     assert 'python-version: "3.12"' in opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in opengl_job
+    assert "uses: ./.github/actions/apt-install" in opengl_job
+    assert "packages: glslang-tools spirv-tools" in opengl_job
     assert "python -m pip install -e . pytest-xdist" in opengl_job
     assert "glslangValidator --version" in opengl_job
     assert "spirv-val --version" in opengl_job
@@ -3623,7 +3624,8 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
         str(index) for index in range(24)
     }
     assert 'python-version: "3.12"' in binary_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in binary_opengl_job
+    assert "uses: ./.github/actions/apt-install" in binary_opengl_job
+    assert "packages: glslang-tools spirv-tools" in binary_opengl_job
     assert "python -m pip install -e . pytest-xdist" in binary_opengl_job
     assert "glslangValidator --version" in binary_opengl_job
     assert "spirv-val --version" in binary_opengl_job
@@ -3996,7 +3998,8 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
         str(index) for index in range(24)
     }
     assert 'python-version: "3.12"' in copy_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in copy_opengl_job
+    assert "uses: ./.github/actions/apt-install" in copy_opengl_job
+    assert "packages: glslang-tools spirv-tools" in copy_opengl_job
     assert "python -m pip install -e . pytest-xdist" in copy_opengl_job
     assert "glslangValidator --version" in copy_opengl_job
     assert "spirv-val --version" in copy_opengl_job
@@ -4183,7 +4186,8 @@ def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation
     assert "timeout-minutes: 60" in job
     assert "persist-credentials: false" in job
     assert "continue-on-error" not in job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in job
+    assert "uses: ./.github/actions/apt-install" in job
+    assert "packages: glslang-tools spirv-tools" in job
     assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
     assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
     assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
@@ -4216,7 +4220,8 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
         str(index) for index in range(24)
     }
     assert 'python-version: "3.12"' in reduce_opengl_job
-    assert "sudo apt-get install -y glslang-tools spirv-tools" in reduce_opengl_job
+    assert "uses: ./.github/actions/apt-install" in reduce_opengl_job
+    assert "packages: glslang-tools spirv-tools" in reduce_opengl_job
     assert "python -m pip install -e . pytest-xdist" in reduce_opengl_job
     assert "glslangValidator --version" in reduce_opengl_job
     assert "spirv-val --version" in reduce_opengl_job

@@ -20724,6 +20724,75 @@ def test_glsl_user_defined_mul_function_is_preserved():
     assert "vec3 color = (vec3(0.25) * vec3(2.0));" not in generated_code
 
 
+def test_translate_hlsl_8bit_pack_intrinsics_to_glsl_byte_operations(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    assert "packUnorm4x8(vec4(uvec4(a) & uvec4(255u)) / 255.0)" in generated
+    assert "packUnorm4x8(vec4(uvec4(b) & uvec4(255u)) / 255.0)" in generated
+    assert "(packUnorm4x8((vec4(a) + 128.0) / 255.0) ^ 0x80808080u)" in generated
+    assert "packUnorm4x8(vec4(a) / 255.0)" in generated
+    assert "((ivec4(int(r0)) << ivec4(24, 16, 8, 0)) >> ivec4(24))" in generated
+    assert "((uvec4(uint(r1)) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))" in generated
+    for name in ("pack_s8", "pack_u8", "pack_clamp_", "unpack_s8s32", "unpack_u8u32"):
+        assert f"{name}(" not in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "pack")
+
+
+def test_glsl_8bit_pack_intrinsics_round_trip_every_byte():
+    # packUnorm4x8 computes round(clamp(v, 0, 1) * 255.0) per lane; check in
+    # float32 that the emitted scaling packs every byte exactly.
+    np = pytest.importorskip("numpy")
+    bytes_ = np.arange(256, dtype=np.float32)
+    packed = np.round(np.clip(bytes_ / np.float32(255.0), 0, 1) * np.float32(255.0))
+    assert (packed == bytes_).all()
+
+    lanes = np.arange(-300, 300)
+    shifted = (lanes.astype(np.float32) + np.float32(128.0)) / np.float32(255.0)
+    clamped = np.round(np.clip(shifted, 0, 1) * np.float32(255.0)).astype(np.int64)
+    assert ((clamped ^ 0x80) == (np.clip(lanes, -128, 127) & 0xFF)).all()
+
+
+def test_glsl_8bit_pack_intrinsics_require_one_argument():
+    shader = """
+    shader PackBytes {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                ivec4 a = ivec4(1);
+                uint r = pack_s8(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="pack_s8 alias requires 1 argument"):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_glsl_hlsl_mad_alias_emits_multiply_add_expression():
     # Khronos GLSL 4.60 documents fma(x, y, z) as returning x * y + z;
     # shader ports commonly spell the non-fused source form as mad(x, y, z).
@@ -20768,6 +20837,61 @@ def test_glsl_user_defined_mad_function_is_preserved():
     assert "vec3 mad(vec3 value, vec3 scale, vec3 bias)" in generated_code
     assert "vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));" in generated_code
     assert "((vec3(0.25) * vec3(2.0)) + vec3(0.5))" not in generated_code
+
+
+def test_translate_hlsl_packed_dot4add_to_glsl_lane_dot_products(tmp_path):
+    source_path = tmp_path / "dot4.hlsl"
+    source_path.write_text(
+        """
+        StructuredBuffer<uint> a;
+        StructuredBuffer<uint> b;
+        RWStructuredBuffer<int> outi;
+        RWStructuredBuffer<uint> outu;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int acc = outi[id.x];
+            outi[id.x] = dot4add_i8packed(a[id.x], b[id.x], acc);
+            outu[id.x] = dot4add_u8packed(a[id.x], b[id.x], 0u);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    signed_lanes = "((ivec4(int({})) << ivec4(24, 16, 8, 0)) >> ivec4(24))"
+    unsigned_lanes = "((uvec4(uint({})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))"
+    a = "a[gl_GlobalInvocationID.x]"
+    b = "b[gl_GlobalInvocationID.x]"
+    assert (
+        f"(int(acc) + int(dot(vec4({signed_lanes.format(a)}), "
+        f"vec4({signed_lanes.format(b)}))))"
+    ) in generated
+    assert (
+        f"(uint(0u) + uint(dot(vec4({unsigned_lanes.format(a)}), "
+        f"vec4({unsigned_lanes.format(b)}))))"
+    ) in generated
+    assert "dot4add_" not in generated
+    assert_glsl_compute_validates_if_available(generated, tmp_path, "dot4add")
+
+
+def test_glsl_packed_dot4add_requires_three_arguments():
+    shader = """
+    shader PackedDot {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint a = 1u;
+                int r = dot4add_i8packed(a, a);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="dot4add_i8packed alias requires 3"):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
@@ -45052,7 +45176,7 @@ def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
     assert "return int(bitfieldExtract(uint(70000u), 0, 16));" in normalized
     assert "return (bitfieldExtract(uint(65536u), 0, 16) != 0u);" in normalized
     assert "return bitfieldExtract((-value), 0, 16);" in normalized
-    assert "return (~int(value));" in normalized
+    assert "return int(bitfieldExtract(uint((~int(value))), 0, 16));" in normalized
     assert "return (!(value != 0u));" in normalized
     assert "return (+int(value));" in normalized
     assert "value = bitfieldExtract((value + 1u), 0, 16);" in normalized

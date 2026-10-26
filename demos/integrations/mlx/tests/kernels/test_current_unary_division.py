@@ -48,6 +48,10 @@ PROFILE = "rne-flush"
 # The DirectX identity includes the explicit `precise` return locals of the
 # exponential/division helpers; removing only those locals reconstructs the
 # previous 11,114-byte source, and both strictly compile with DXC.
+# The OpenGL identity includes the `uint index_copy = index;` local that
+# written_stage_inputs (#2952) adds because the kernel writes its
+# thread-position input; dropping it and renaming `index_copy` back to `index`
+# reconstructs the previous 10,678-byte source.
 ARTIFACTS = {
     "metal": {
         "sha256": "36bf16346124ecb209ccd5acb2ca2fea1b41f966b4128d45600a63f7658bbefa",
