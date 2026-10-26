@@ -2619,6 +2619,27 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
+    def test_half_vector_constructor_splats_native_half2_component(self):
+        source_code = """
+        shader Widen {
+            f16vec3 widen(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec3(b.x);
+            }
+            f16vec4 widen4(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec4(b.y);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "return cgl_make_half3(b.x, b.x, b.x);" in cuda_code
+        assert "return cgl_make_half4(b.y, b.y, b.y, b.y);" in cuda_code
+        assert "cgl_make_half3(b.x);" not in cuda_code
+        assert "cgl_make_half4(b.y);" not in cuda_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [

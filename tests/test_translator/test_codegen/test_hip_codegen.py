@@ -1838,6 +1838,27 @@ class TestHipCodeGen:
         assert " = ivec3(" not in hip_code
         assert " = uvec4(" not in hip_code
 
+    def test_half_vector_constructor_splats_native_half2_component(self):
+        source_code = """
+        shader Widen {
+            f16vec3 widen(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec3(b.x);
+            }
+            f16vec4 widen4(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec4(b.y);
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "return cgl_make_half3(b.x, b.x, b.x);" in hip_code
+        assert "return cgl_make_half4(b.y, b.y, b.y, b.y);" in hip_code
+        assert "cgl_make_half3(b.x);" not in hip_code
+        assert "cgl_make_half4(b.y);" not in hip_code
+
     def test_fp16_aliases_emit_hip_half_types_and_intrinsics(self):
         source_code = """
         shader TestShader {
