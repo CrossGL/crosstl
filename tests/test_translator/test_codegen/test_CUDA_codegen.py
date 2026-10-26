@@ -3885,6 +3885,81 @@ class TestCudaCodeGen:
         assert "2.0 * cgl_float3_fract" not in cuda_code
         assert "float l = length(a);" not in cuda_code
 
+    def test_scalar_geometric_builtins_emit_cuda_math_calls(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f1 = 1.0;
+                    float f2 = 2.0;
+                    float fl = length(f1);
+                    float fd = distance(f1, f2);
+                    float fn = normalize(f1);
+
+                    double d1 = 3.0;
+                    double d2 = 4.0;
+                    double dl = length(d1);
+                    double dd = distance(d1, d2);
+                    double dn = normalize(d1);
+
+                    half h1 = half(1.0);
+                    half h2 = half(2.0);
+                    half hl = length(h1);
+                    half hd = distance(h1, h2);
+                    half hn = normalize(h1);
+
+                    int i1 = 2;
+                    bool b1 = true;
+
+                    float hf = distance(h1, f1);
+                    float f_lit = distance(f1, 1.0);
+                    float fi = distance(f1, 1);
+                    float hi = distance(h1, i1);
+                    float fb = distance(f1, b1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float fl = fabsf(f1);" in cuda_code
+        assert "float fd = fabsf(f1 - f2);" in cuda_code
+        assert "float fn = (f1 / fabsf(f1));" in cuda_code
+        assert "double dl = fabs(d1);" in cuda_code
+        assert "double dd = fabs(d1 - d2);" in cuda_code
+        assert "double dn = (d1 / fabs(d1));" in cuda_code
+        assert "half hl = __float2half(fabsf(__half2float(h1)));" in cuda_code
+        assert (
+            "half hd = __float2half(fabsf(__half2float(h1) - __half2float(h2)));"
+            in cuda_code
+        )
+        assert (
+            "half hn = __float2half(__half2float(h1) / fabsf(__half2float(h1)));"
+            in cuda_code
+        )
+        assert "float hf = fabsf(__half2float(h1) - f1);" in cuda_code
+        assert "float f_lit = fabsf(f1 - 1.0);" in cuda_code
+        assert "float fi = fabsf(f1 - 1);" in cuda_code
+        assert "float hi = fabsf(__half2float(h1) - i1);" in cuda_code
+        assert "float fb = distance(f1, b1);" in cuda_code
+        assert "h1 - f1" not in cuda_code
+        assert "h1 - i1" not in cuda_code
+        assert "fabsf(f1 - b1)" not in cuda_code
+        assert "length(" not in cuda_code
+        assert "normalize(" not in cuda_code
+        assert "distance(f1, f2)" not in cuda_code
+        assert "distance(d1, d2)" not in cuda_code
+        assert "distance(h1, h2)" not in cuda_code
+        assert "distance(h1, f1)" not in cuda_code
+        assert "distance(f1, 1.0)" not in cuda_code
+        assert "distance(f1, 1)" not in cuda_code
+        assert "distance(h1, i1)" not in cuda_code
+
     def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
         source_code = """
         shader TestShader {

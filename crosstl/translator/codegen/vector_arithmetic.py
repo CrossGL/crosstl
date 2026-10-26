@@ -88,6 +88,10 @@ MIN_MAX_INTEGER_SCALAR_TYPES = {
     4: ("long long", "unsigned long long"),
 }
 
+FLOAT_SCALARS = {"float", "double", "half"}
+INTEGER_SCALARS = {"int", "uint", "unsigned int"}
+NUMERIC_SCALARS = FLOAT_SCALARS | INTEGER_SCALARS
+
 
 class VectorArithmeticMixin:
     """Helpers for inferring and lowering vector arithmetic expressions."""
@@ -215,6 +219,15 @@ class VectorArithmeticMixin:
                 )
                 if vector_info is not None:
                     return vector_info["component_type"]
+                if func_name == "length":
+                    return self.expression_result_type(raw_args[0])
+            if func_name == "distance" and raw_args:
+                vector_info = self.vector_type_info(
+                    self.expression_result_type(raw_args[0])
+                )
+                if vector_info is not None:
+                    return vector_info["component_type"]
+                return self.expression_result_type(raw_args[0])
             if (
                 func_name in {
                     "abs",
@@ -1692,18 +1705,73 @@ class VectorArithmeticMixin:
         if func_name in {"length", "normalize"}:
             if len(raw_args) != 1:
                 return None
-            vector_info = self.vector_type_info(
-                self.expression_result_type(raw_args[0])
+            arg_type = self.expression_result_type(
+                raw_args[0]
+            ) or self.scalar_cast_result_type(raw_args[0])
+            vector_info = self.vector_type_info(arg_type)
+            if vector_info is not None:
+                if func_name == "length":
+                    helper_name = self.require_vector_length_helper(vector_info)
+                else:
+                    helper_name = self.require_vector_normalize_helper(vector_info)
+                if helper_name is None:
+                    return None
+                return f"{helper_name}({args[0]})"
+
+            scalar_type = self.map_vector_arithmetic_type(arg_type)
+            if scalar_type == "float":
+                if func_name == "length":
+                    return f"fabsf({args[0]})"
+                return f"({args[0]} / fabsf({args[0]}))"
+            if scalar_type == "double":
+                if func_name == "length":
+                    return f"fabs({args[0]})"
+                return f"({args[0]} / fabs({args[0]}))"
+            if scalar_type == "half":
+                if func_name == "length":
+                    return f"__float2half(fabsf(__half2float({args[0]})))"
+                return (
+                    f"__float2half(__half2float({args[0]}) / "
+                    f"fabsf(__half2float({args[0]})))"
+                )
+            return None
+
+        if func_name == "distance":
+            if len(raw_args) != 2:
+                return None
+            left_type = self.expression_result_type(
+                raw_args[0]
+            ) or self.scalar_cast_result_type(raw_args[0])
+            right_type = self.expression_result_type(
+                raw_args[1]
+            ) or self.scalar_cast_result_type(raw_args[1])
+            if (
+                left_type is None
+                or right_type is None
+                or self.vector_type_info(left_type) is not None
+                or self.vector_type_info(right_type) is not None
+            ):
+                return None
+            left_scalar = self.map_vector_arithmetic_type(left_type)
+            right_scalar = self.map_vector_arithmetic_type(right_type)
+            if (
+                left_scalar not in NUMERIC_SCALARS
+                or right_scalar not in NUMERIC_SCALARS
+                or (left_scalar in INTEGER_SCALARS and right_scalar in INTEGER_SCALARS)
+            ):
+                return None
+            if left_scalar == "half" and right_scalar == "half":
+                return (
+                    f"__float2half(fabsf(__half2float({args[0]}) - "
+                    f"__half2float({args[1]})))"
+                )
+            left_expr = f"__half2float({args[0]})" if left_scalar == "half" else args[0]
+            right_expr = (
+                f"__half2float({args[1]})" if right_scalar == "half" else args[1]
             )
-            if vector_info is None:
-                return None
-            if func_name == "length":
-                helper_name = self.require_vector_length_helper(vector_info)
-            else:
-                helper_name = self.require_vector_normalize_helper(vector_info)
-            if helper_name is None:
-                return None
-            return f"{helper_name}({args[0]})"
+            if "double" in (left_scalar, right_scalar):
+                return f"fabs({left_expr} - {right_expr})"
+            return f"fabsf({left_expr} - {right_expr})"
 
         if func_name in {"dot", "cross"}:
             if len(raw_args) != 2:
