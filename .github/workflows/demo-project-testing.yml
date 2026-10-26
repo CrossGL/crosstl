@@ -23,11 +23,8 @@ on:
       - "demos/integrations/**"
       - "tests/**"
       - "tools/**"
-      - "support/**"
       - "conftest.py"
       - "pyproject.toml"
-      - "requirements*.txt"
-      - "setup.cfg"
   schedule:
     - cron: "31 4 * * *"
   workflow_dispatch:
