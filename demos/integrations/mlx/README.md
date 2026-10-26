@@ -64,7 +64,11 @@ job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
 (`attention`), rope and gated delta (`sequence`), the gated delta backward
 (`backward`), sort (`ordering`), and the unfold, depthwise and Winograd
-convolutions (`convolution`). The job has one matrix leg per runner and group. Each leg
+convolutions (`convolution`). The job has one matrix leg per runner and group.
+GitHub expands at most 256 legs from one matrix, so the quantized groups run in
+`mlx-current-quantized-parity` and the GEMM and steel convolution groups in
+`mlx-current-gemm-parity`. Both reuse the first job's steps through a YAML
+alias, and a workflow test keeps every matrix within the limit. Each leg
 repeats the porting job's toolchain setup and pinned kernel checkout, runs only
 its group's bounded steps, and uploads its results as
 `mlx-current-parity-<os>-<group>`. A workflow test checks that each group's

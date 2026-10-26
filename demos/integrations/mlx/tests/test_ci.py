@@ -939,7 +939,7 @@ def test_project_demo_has_no_parent_cancellation_or_serialization():
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = workflow_text.workflow_job_names(workflow)
-    assert len(jobs) == 44
+    assert len(jobs) == 46
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -958,18 +958,43 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
 def test_current_tree_native_parity_job_runs_each_family_group_once():
     from tests.ci_helpers import (
         CURRENT_PARITY_JOB,
+        CURRENT_PARITY_JOBS,
         CURRENT_PARITY_UPLOAD,
+        MAX_MATRIX_LEGS,
         bounded_step_deadline,
+        current_parity_matrix,
     )
 
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = yaml.safe_load(workflow)["jobs"]
     job = jobs[CURRENT_PARITY_JOB]
     porting = jobs["mlx-metal-porting"]
-    matrix = job["strategy"]["matrix"]
-    assert job["strategy"]["fail-fast"] is False
-    assert len(matrix["os"]) == len(RUNNER_OSES)
-    assert set(matrix["os"]) == RUNNER_OSES
+    titles = set()
+    for name in CURRENT_PARITY_JOBS:
+        part = jobs[name]
+        part_matrix = part["strategy"]["matrix"]
+        assert part["strategy"]["fail-fast"] is False
+        assert len(part_matrix["os"]) == len(RUNNER_OSES)
+        assert set(part_matrix["os"]) == RUNNER_OSES
+        assert len(part_matrix["os"]) * len(part_matrix["group"]) <= MAX_MATRIX_LEGS
+        # Every part runs the same steps on the same runners within one
+        # deadline; a step runs only in the groups of its own part.
+        for key in ("needs", "env", "if", "runs-on", "timeout-minutes", "steps"):
+            assert part[key] == job[key], (name, key)
+        for entry in part_matrix.get("include", []):
+            assert entry["group"] in part_matrix["group"], (name, entry)
+        assert part["name"].startswith("MLX current-tree ")
+        assert part["name"].endswith(" (${{ matrix.os }}, ${{ matrix.group }})")
+        titles.add(part["name"])
+    assert len(titles) == len(CURRENT_PARITY_JOBS)
+    for name in CURRENT_PARITY_JOBS[1:]:
+        section = _workflow_job_section(workflow, name)
+        assert "    steps: *mlx-current-parity-steps" in section, name
+    assert "    steps: &mlx-current-parity-steps" in _workflow_job_section(
+        workflow, CURRENT_PARITY_JOB
+    )
+    matrix = current_parity_matrix(workflow)
+    assert len(matrix["group"]) == len(set(matrix["group"]))
     assert matrix["group"] == [
         "elementwise",
         "attention",

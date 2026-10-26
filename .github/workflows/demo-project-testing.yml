@@ -7282,11 +7282,14 @@ jobs:
     timeout-minutes: 210
     strategy:
       fail-fast: false
-      # 414 legs, a third of them on macOS: leave runners for other pull requests.
-      max-parallel: 24
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 126 legs here, a third of them on macOS; the three jobs
+      # together run at most 24 legs at once.
+      max-parallel: 8
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2, gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11]
         include:
           - {group: copy-0, family: copy, shard: 0}
           - {group: copy-1, family: copy, shard: 1}
@@ -7320,106 +7323,8 @@ jobs:
           - {group: reduce-9, family: reduce, shard: 9}
           - {group: reduce-10, family: reduce, shard: 10}
           - {group: reduce-11, family: reduce, shard: 11}
-          - {group: quantized-qmv-0, family: quantized-qmv, shard: 0}
-          - {group: quantized-qmv-1, family: quantized-qmv, shard: 1}
-          - {group: quantized-qmv-unaligned-0, family: quantized-qmv-unaligned, shard: 0}
-          - {group: quantized-qmv-unaligned-1, family: quantized-qmv-unaligned, shard: 1}
-          - {group: quantized-qmv-unaligned-2, family: quantized-qmv-unaligned, shard: 2}
-          - {group: quantized-qmv-unaligned-3, family: quantized-qmv-unaligned, shard: 3}
-          - {group: quantized-qmv-wide-0, family: quantized-qmv-wide, shard: 0}
-          - {group: quantized-qmv-wide-1, family: quantized-qmv-wide, shard: 1}
-          - {group: quantized-qmv-wide-2, family: quantized-qmv-wide, shard: 2}
-          - {group: quantized-qmv-wide-3, family: quantized-qmv-wide, shard: 3}
-          - {group: quantized-qmv-wide-4, family: quantized-qmv-wide, shard: 4}
-          - {group: quantized-qmv-wide-5, family: quantized-qmv-wide, shard: 5}
-          - {group: quantized-qmv-wide-6, family: quantized-qmv-wide, shard: 6}
-          - {group: quantized-qmv-wide-7, family: quantized-qmv-wide, shard: 7}
-          - {group: quantized-qmv-wide-8, family: quantized-qmv-wide, shard: 8}
-          - {group: quantized-qvm-0, family: quantized-qvm, shard: 0}
-          - {group: quantized-qvm-1, family: quantized-qvm, shard: 1}
-          - {group: quantized-qvm-2, family: quantized-qvm, shard: 2}
-          - {group: quantized-qvm-3, family: quantized-qvm, shard: 3}
-          - {group: quantized-qvm-split-k-0, family: quantized-qvm-split-k, shard: 0}
-          - {group: quantized-qvm-split-k-1, family: quantized-qvm-split-k, shard: 1}
-          - {group: quantized-qvm-split-k-2, family: quantized-qvm-split-k, shard: 2}
-          - {group: quantized-qvm-split-k-3, family: quantized-qvm-split-k, shard: 3}
-          - {group: quantized-qmm-t-0, family: quantized-qmm-t, shard: 0}
-          - {group: quantized-qmm-t-1, family: quantized-qmm-t, shard: 1}
-          - {group: quantized-qmm-t-2, family: quantized-qmm-t, shard: 2}
-          - {group: quantized-qmm-t-3, family: quantized-qmm-t, shard: 3}
-          - {group: quantized-qmm-t-4, family: quantized-qmm-t, shard: 4}
-          - {group: quantized-qmm-t-5, family: quantized-qmm-t, shard: 5}
-          - {group: quantized-qmm-t-6, family: quantized-qmm-t, shard: 6}
-          - {group: quantized-qmm-n-0, family: quantized-qmm-n, shard: 0}
-          - {group: quantized-qmm-n-1, family: quantized-qmm-n, shard: 1}
-          - {group: quantized-qmm-n-2, family: quantized-qmm-n, shard: 2}
-          - {group: quantized-qmm-n-3, family: quantized-qmm-n, shard: 3}
-          - {group: quantized-qmm-n-4, family: quantized-qmm-n, shard: 4}
-          - {group: quantized-qmm-t-splitk-0, family: quantized-qmm-t-splitk, shard: 0}
-          - {group: quantized-qmm-t-splitk-1, family: quantized-qmm-t-splitk, shard: 1}
-          - {group: quantized-qmm-t-splitk-2, family: quantized-qmm-t-splitk, shard: 2}
-          - {group: quantized-qmm-t-splitk-3, family: quantized-qmm-t-splitk, shard: 3}
-          - {group: quantized-qmm-t-splitk-4, family: quantized-qmm-t-splitk, shard: 4}
-          - {group: quantized-gather-qmm-0, family: quantized-gather-qmm, shard: 0}
-          - {group: quantized-gather-qmm-1, family: quantized-gather-qmm, shard: 1}
-          - {group: quantized-gather-qmm-2, family: quantized-gather-qmm, shard: 2}
-          - {group: quantized-gather-qmm-3, family: quantized-gather-qmm, shard: 3}
-          - {group: quantized-gather-qmm-4, family: quantized-gather-qmm, shard: 4}
-          - {group: quantized-gather-qmm-5, family: quantized-gather-qmm, shard: 5}
-          - {group: quantized-gather-qmm-6, family: quantized-gather-qmm, shard: 6}
-          - {group: quantized-qmv-quad-0, family: quantized-qmv-quad, shard: 0}
-          - {group: quantized-qmv-quad-1, family: quantized-qmv-quad, shard: 1}
-          - {group: quantized-qmv-quad-2, family: quantized-qmv-quad, shard: 2}
-          - {group: gemm-family-0, family: gemm-family, shard: 0}
-          - {group: gemm-family-1, family: gemm-family, shard: 1}
-          - {group: gemm-family-2, family: gemm-family, shard: 2}
-          - {group: gemm-family-3, family: gemm-family, shard: 3}
-          - {group: gemm-family-4, family: gemm-family, shard: 4}
-          - {group: gemm-splitk-0, family: gemm-splitk, shard: 0}
-          - {group: gemm-splitk-1, family: gemm-splitk, shard: 1}
-          - {group: gemm-splitk-2, family: gemm-splitk, shard: 2}
-          - {group: gemm-splitk-3, family: gemm-splitk, shard: 3}
-          - {group: gemm-splitk-4, family: gemm-splitk, shard: 4}
-          - {group: gemm-splitk-5, family: gemm-splitk, shard: 5}
-          - {group: gemm-splitk-6, family: gemm-splitk, shard: 6}
-          - {group: gemm-gather-0, family: gemm-gather, shard: 0}
-          - {group: gemm-gather-1, family: gemm-gather, shard: 1}
-          - {group: gemm-gather-2, family: gemm-gather, shard: 2}
-          - {group: gemm-gather-3, family: gemm-gather, shard: 3}
-          - {group: gemm-gather-4, family: gemm-gather, shard: 4}
-          - {group: gemm-gather-5, family: gemm-gather, shard: 5}
-          - {group: gemm-gather-6, family: gemm-gather, shard: 6}
-          - {group: steel-conv-0, family: steel-conv, shard: 0}
-          - {group: steel-conv-1, family: steel-conv, shard: 1}
-          - {group: steel-conv-2, family: steel-conv, shard: 2}
-          - {group: steel-conv-3, family: steel-conv, shard: 3}
-          - {group: steel-conv-4, family: steel-conv, shard: 4}
-          - {group: steel-conv-5, family: steel-conv, shard: 5}
-          - {group: steel-conv-general-0, family: steel-conv-general, shard: 0}
-          - {group: steel-conv-general-1, family: steel-conv-general, shard: 1}
-          - {group: steel-conv-general-2, family: steel-conv-general, shard: 2}
-          - {group: gemm-masked-0, family: gemm-masked, shard: 0}
-          - {group: gemm-masked-1, family: gemm-masked, shard: 1}
-          - {group: gemm-masked-2, family: gemm-masked, shard: 2}
-          - {group: gemm-masked-3, family: gemm-masked, shard: 3}
-          - {group: gemm-masked-4, family: gemm-masked, shard: 4}
-          - {group: gemm-masked-5, family: gemm-masked, shard: 5}
-          - {group: gemm-masked-6, family: gemm-masked, shard: 6}
-          - {group: gemm-masked-7, family: gemm-masked, shard: 7}
-          - {group: gemm-masked-8, family: gemm-masked, shard: 8}
-          - {group: gemm-masked-9, family: gemm-masked, shard: 9}
-          - {group: gemm-masked-10, family: gemm-masked, shard: 10}
-          - {group: gemm-masked-11, family: gemm-masked, shard: 11}
-          - {group: gemm-masked-12, family: gemm-masked, shard: 12}
-          - {group: gemm-segmented-0, family: gemm-segmented, shard: 0}
-          - {group: gemm-segmented-1, family: gemm-segmented, shard: 1}
-          - {group: gemm-segmented-2, family: gemm-segmented, shard: 2}
-          - {group: gemm-segmented-3, family: gemm-segmented, shard: 3}
-          - {group: gemm-segmented-4, family: gemm-segmented, shard: 4}
-          - {group: gemm-segmented-5, family: gemm-segmented, shard: 5}
-          - {group: gemm-segmented-6, family: gemm-segmented, shard: 6}
 
-    steps:
+    steps: &mlx-current-parity-steps
       - name: Checkout CrossTL
         uses: actions/checkout@v7
         with:
@@ -8680,6 +8585,160 @@ jobs:
           path: mlx-current-results
           if-no-files-found: warn
           retention-days: 14
+
+  mlx-current-quantized-parity:
+    needs: ci-plan
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-quantized-parity-${{ strategy.job-index }}
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+
+    name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 153 legs here, a third of them on macOS; the three jobs
+      # together run at most 24 legs at once.
+      max-parallel: 8
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        group: [quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2]
+        include:
+          - {group: quantized-qmv-0, family: quantized-qmv, shard: 0}
+          - {group: quantized-qmv-1, family: quantized-qmv, shard: 1}
+          - {group: quantized-qmv-unaligned-0, family: quantized-qmv-unaligned, shard: 0}
+          - {group: quantized-qmv-unaligned-1, family: quantized-qmv-unaligned, shard: 1}
+          - {group: quantized-qmv-unaligned-2, family: quantized-qmv-unaligned, shard: 2}
+          - {group: quantized-qmv-unaligned-3, family: quantized-qmv-unaligned, shard: 3}
+          - {group: quantized-qmv-wide-0, family: quantized-qmv-wide, shard: 0}
+          - {group: quantized-qmv-wide-1, family: quantized-qmv-wide, shard: 1}
+          - {group: quantized-qmv-wide-2, family: quantized-qmv-wide, shard: 2}
+          - {group: quantized-qmv-wide-3, family: quantized-qmv-wide, shard: 3}
+          - {group: quantized-qmv-wide-4, family: quantized-qmv-wide, shard: 4}
+          - {group: quantized-qmv-wide-5, family: quantized-qmv-wide, shard: 5}
+          - {group: quantized-qmv-wide-6, family: quantized-qmv-wide, shard: 6}
+          - {group: quantized-qmv-wide-7, family: quantized-qmv-wide, shard: 7}
+          - {group: quantized-qmv-wide-8, family: quantized-qmv-wide, shard: 8}
+          - {group: quantized-qvm-0, family: quantized-qvm, shard: 0}
+          - {group: quantized-qvm-1, family: quantized-qvm, shard: 1}
+          - {group: quantized-qvm-2, family: quantized-qvm, shard: 2}
+          - {group: quantized-qvm-3, family: quantized-qvm, shard: 3}
+          - {group: quantized-qvm-split-k-0, family: quantized-qvm-split-k, shard: 0}
+          - {group: quantized-qvm-split-k-1, family: quantized-qvm-split-k, shard: 1}
+          - {group: quantized-qvm-split-k-2, family: quantized-qvm-split-k, shard: 2}
+          - {group: quantized-qvm-split-k-3, family: quantized-qvm-split-k, shard: 3}
+          - {group: quantized-qmm-t-0, family: quantized-qmm-t, shard: 0}
+          - {group: quantized-qmm-t-1, family: quantized-qmm-t, shard: 1}
+          - {group: quantized-qmm-t-2, family: quantized-qmm-t, shard: 2}
+          - {group: quantized-qmm-t-3, family: quantized-qmm-t, shard: 3}
+          - {group: quantized-qmm-t-4, family: quantized-qmm-t, shard: 4}
+          - {group: quantized-qmm-t-5, family: quantized-qmm-t, shard: 5}
+          - {group: quantized-qmm-t-6, family: quantized-qmm-t, shard: 6}
+          - {group: quantized-qmm-n-0, family: quantized-qmm-n, shard: 0}
+          - {group: quantized-qmm-n-1, family: quantized-qmm-n, shard: 1}
+          - {group: quantized-qmm-n-2, family: quantized-qmm-n, shard: 2}
+          - {group: quantized-qmm-n-3, family: quantized-qmm-n, shard: 3}
+          - {group: quantized-qmm-n-4, family: quantized-qmm-n, shard: 4}
+          - {group: quantized-qmm-t-splitk-0, family: quantized-qmm-t-splitk, shard: 0}
+          - {group: quantized-qmm-t-splitk-1, family: quantized-qmm-t-splitk, shard: 1}
+          - {group: quantized-qmm-t-splitk-2, family: quantized-qmm-t-splitk, shard: 2}
+          - {group: quantized-qmm-t-splitk-3, family: quantized-qmm-t-splitk, shard: 3}
+          - {group: quantized-qmm-t-splitk-4, family: quantized-qmm-t-splitk, shard: 4}
+          - {group: quantized-gather-qmm-0, family: quantized-gather-qmm, shard: 0}
+          - {group: quantized-gather-qmm-1, family: quantized-gather-qmm, shard: 1}
+          - {group: quantized-gather-qmm-2, family: quantized-gather-qmm, shard: 2}
+          - {group: quantized-gather-qmm-3, family: quantized-gather-qmm, shard: 3}
+          - {group: quantized-gather-qmm-4, family: quantized-gather-qmm, shard: 4}
+          - {group: quantized-gather-qmm-5, family: quantized-gather-qmm, shard: 5}
+          - {group: quantized-gather-qmm-6, family: quantized-gather-qmm, shard: 6}
+          - {group: quantized-qmv-quad-0, family: quantized-qmv-quad, shard: 0}
+          - {group: quantized-qmv-quad-1, family: quantized-qmv-quad, shard: 1}
+          - {group: quantized-qmv-quad-2, family: quantized-qmv-quad, shard: 2}
+
+    # The steps of mlx-current-native-parity. Each runs only in its own groups.
+    steps: *mlx-current-parity-steps
+
+  mlx-current-gemm-parity:
+    needs: ci-plan
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-gemm-parity-${{ strategy.job-index }}
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+
+    name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 144 legs here, a third of them on macOS; the three jobs
+      # together run at most 24 legs at once.
+      max-parallel: 8
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        group: [gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        include:
+          - {group: gemm-family-0, family: gemm-family, shard: 0}
+          - {group: gemm-family-1, family: gemm-family, shard: 1}
+          - {group: gemm-family-2, family: gemm-family, shard: 2}
+          - {group: gemm-family-3, family: gemm-family, shard: 3}
+          - {group: gemm-family-4, family: gemm-family, shard: 4}
+          - {group: gemm-splitk-0, family: gemm-splitk, shard: 0}
+          - {group: gemm-splitk-1, family: gemm-splitk, shard: 1}
+          - {group: gemm-splitk-2, family: gemm-splitk, shard: 2}
+          - {group: gemm-splitk-3, family: gemm-splitk, shard: 3}
+          - {group: gemm-splitk-4, family: gemm-splitk, shard: 4}
+          - {group: gemm-splitk-5, family: gemm-splitk, shard: 5}
+          - {group: gemm-splitk-6, family: gemm-splitk, shard: 6}
+          - {group: gemm-gather-0, family: gemm-gather, shard: 0}
+          - {group: gemm-gather-1, family: gemm-gather, shard: 1}
+          - {group: gemm-gather-2, family: gemm-gather, shard: 2}
+          - {group: gemm-gather-3, family: gemm-gather, shard: 3}
+          - {group: gemm-gather-4, family: gemm-gather, shard: 4}
+          - {group: gemm-gather-5, family: gemm-gather, shard: 5}
+          - {group: gemm-gather-6, family: gemm-gather, shard: 6}
+          - {group: steel-conv-0, family: steel-conv, shard: 0}
+          - {group: steel-conv-1, family: steel-conv, shard: 1}
+          - {group: steel-conv-2, family: steel-conv, shard: 2}
+          - {group: steel-conv-3, family: steel-conv, shard: 3}
+          - {group: steel-conv-4, family: steel-conv, shard: 4}
+          - {group: steel-conv-5, family: steel-conv, shard: 5}
+          - {group: steel-conv-general-0, family: steel-conv-general, shard: 0}
+          - {group: steel-conv-general-1, family: steel-conv-general, shard: 1}
+          - {group: steel-conv-general-2, family: steel-conv-general, shard: 2}
+          - {group: gemm-masked-0, family: gemm-masked, shard: 0}
+          - {group: gemm-masked-1, family: gemm-masked, shard: 1}
+          - {group: gemm-masked-2, family: gemm-masked, shard: 2}
+          - {group: gemm-masked-3, family: gemm-masked, shard: 3}
+          - {group: gemm-masked-4, family: gemm-masked, shard: 4}
+          - {group: gemm-masked-5, family: gemm-masked, shard: 5}
+          - {group: gemm-masked-6, family: gemm-masked, shard: 6}
+          - {group: gemm-masked-7, family: gemm-masked, shard: 7}
+          - {group: gemm-masked-8, family: gemm-masked, shard: 8}
+          - {group: gemm-masked-9, family: gemm-masked, shard: 9}
+          - {group: gemm-masked-10, family: gemm-masked, shard: 10}
+          - {group: gemm-masked-11, family: gemm-masked, shard: 11}
+          - {group: gemm-masked-12, family: gemm-masked, shard: 12}
+          - {group: gemm-segmented-0, family: gemm-segmented, shard: 0}
+          - {group: gemm-segmented-1, family: gemm-segmented, shard: 1}
+          - {group: gemm-segmented-2, family: gemm-segmented, shard: 2}
+          - {group: gemm-segmented-3, family: gemm-segmented, shard: 3}
+          - {group: gemm-segmented-4, family: gemm-segmented, shard: 4}
+          - {group: gemm-segmented-5, family: gemm-segmented, shard: 5}
+          - {group: gemm-segmented-6, family: gemm-segmented, shard: 6}
+
+    # The steps of mlx-current-native-parity. Each runs only in its own groups.
+    steps: *mlx-current-parity-steps
 
   mlx-unary-metal-sources:
     needs: ci-plan
@@ -10190,6 +10249,8 @@ jobs:
       - reductions
       - mlx-metal-porting
       - mlx-current-native-parity
+      - mlx-current-quantized-parity
+      - mlx-current-gemm-parity
       - mlx-unary-metal-sources
       - mlx-unary-metal-roundtrip
       - mlx-unary-complete-opengl-translation

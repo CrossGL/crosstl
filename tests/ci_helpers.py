@@ -10,10 +10,29 @@ from tests import workflow_text
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The longest current-tree MLX kernel families run in their own job, one matrix
-# leg per runner and family group.
+# The longest current-tree MLX kernel families run in their own jobs, one matrix
+# leg per runner and family group. GitHub expands at most 256 legs from one
+# matrix, so the groups are split over several jobs. The first job defines the
+# steps and the others alias them.
 CURRENT_PARITY_JOB = "mlx-current-native-parity"
+CURRENT_PARITY_JOBS = (
+    CURRENT_PARITY_JOB,
+    "mlx-current-quantized-parity",
+    "mlx-current-gemm-parity",
+)
 CURRENT_PARITY_UPLOAD = "Upload current MLX native parity evidence"
+MAX_MATRIX_LEGS = 256
+
+
+def current_parity_matrix(workflow):
+    """Return the groups and include entries of every current-tree parity job."""
+    jobs = yaml.safe_load(workflow)["jobs"]
+    groups, include = [], []
+    for name in CURRENT_PARITY_JOBS:
+        matrix = jobs[name]["strategy"]["matrix"]
+        groups += matrix["group"]
+        include += matrix.get("include", [])
+    return {"group": groups, "include": include}
 
 
 def bounded_step_deadline(step, runner_os):
@@ -121,8 +140,7 @@ def current_parity_step(workflow, name, *, group):
     step = workflow_text.workflow_step_section(job, name)
     assert step, name
     assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, group=group)
-    matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]
-    assert group in matrix["matrix"]["group"]
+    assert group in current_parity_matrix(workflow)["group"]
     return _checked_parity_step(workflow, job, name, step)
 
 
@@ -137,7 +155,7 @@ def current_parity_shard_step(workflow, name, *, family, count):
     step = workflow_text.workflow_step_section(job, name)
     assert step, name
     assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, family=family)
-    matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]["matrix"]
+    matrix = current_parity_matrix(workflow)
     shards = {
         entry["group"]: entry["shard"]
         for entry in matrix.get("include", [])
