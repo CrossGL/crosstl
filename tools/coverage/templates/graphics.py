@@ -5,7 +5,19 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import composites, constructors, functions, operators
+from . import (
+    assignments,
+    branches,
+    calls,
+    composites,
+    constructors,
+    declarations,
+    evaluation,
+    functions,
+    operators,
+    scopes,
+    shapes,
+)
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -154,6 +166,10 @@ HLSL = {
     **operators.HLSL,
     **composites.HLSL,
     **constructors.HLSL,
+    **scopes.HLSL,
+    **calls.HLSL,
+    **shapes.HLSL,
+    **evaluation.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -296,6 +312,10 @@ METAL = {
     **C_FAMILY,
     **functions.METAL,
     **constructors.METAL,
+    **scopes.METAL,
+    **calls.METAL,
+    **evaluation.METAL,
+    **assignments.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -482,6 +502,13 @@ WGSL = {
     **composites.WGSL,
     **functions.WGSL,
     **constructors.WGSL,
+    **scopes.WGSL,
+    **declarations.WGSL,
+    **calls.WGSL,
+    **branches.WGSL,
+    **shapes.WGSL,
+    **evaluation.WGSL,
+    **assignments.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
