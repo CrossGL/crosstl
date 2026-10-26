@@ -1298,9 +1298,9 @@ class SlangToCrossGLConverter:
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
-        if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+        allowed_qualifiers = {"in", "out", "inout"}
+        if preserve_qualifiers:
+            allowed_qualifiers |= self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
