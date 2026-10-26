@@ -50,6 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- CUDA and HIP output apply the scalar math built-ins, such as `sin`, `exp`, `inversesqrt` and `pow`, to `f16vec3` and `f16vec4` values through per-component helpers that widen each `__half` to `float`, as in `__float2half(sinf(__half2float(value.x)))`. They used to pass the half vector straight to the float function, as in `sinf(h)`, which does not compile because no overload accepts the generated `cgl_half3` and `cgl_half4` structures.
 - CUDA and HIP output combine a half vector with a `half` scalar under `+`, `-`, `*` and `/` through the existing vector-scalar helpers, such as `cgl_cgl_half3_mul_scalar(v, h)`. They used to keep the native operator, as in `(v * h)`, which does not compile because the generated `cgl_half3` and `cgl_half4` structures define no arithmetic operators.
 - CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
 - WGSL output discards the value of a call statement to a `@must_use` built-in such as `min(a, 4u);` or a structure constructor such as `Pair(a, b);` with a phony assignment, `_ = min(a, 4u);`. The call used to be written as a statement, which WGSL rejects. Atomics, barriers, `textureStore` and functions the shader declares are written unchanged.

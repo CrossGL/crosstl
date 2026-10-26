@@ -1838,6 +1838,44 @@ class TestHipCodeGen:
         assert " = ivec3(" not in hip_code
         assert " = uvec4(" not in hip_code
 
+    def test_half_vector_math_builtins_use_component_helpers(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 f(f16vec3 h, f16vec4 q, f16vec3 e, half s) {
+                    f16vec3 a = sin(h);
+                    f16vec4 b = exp(q);
+                    f16vec3 c = inversesqrt(h);
+                    f16vec3 d = pow(h, e);
+                    f16vec3 g = pow(h, s);
+                    return a + b.xyz + c + d + g;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "cgl_half3 a = cgl_cgl_half3_sin(h);" in hip_code
+        assert "cgl_half4 b = cgl_cgl_half4_exp(q);" in hip_code
+        assert "cgl_half3 c = cgl_cgl_half3_inversesqrt(h);" in hip_code
+        assert "cgl_half3 d = cgl_cgl_half3_pow_vector(h, e);" in hip_code
+        assert "cgl_half3 g = cgl_cgl_half3_pow_scalar(h, s);" in hip_code
+        assert "__float2half(sinf(__half2float(value.x)))" in hip_code
+        assert "__float2half(rsqrtf(__half2float(value.z)))" in hip_code
+        assert (
+            "__float2half(powf(__half2float(base.y), __half2float(exponent.y)))"
+            in hip_code
+        )
+        assert (
+            "__device__ inline cgl_half3 cgl_cgl_half3_pow_scalar"
+            "(cgl_half3 base, half exponent)" in hip_code
+        )
+        assert "sinf(h)" not in hip_code
+        assert "expf(q)" not in hip_code
+        assert "powf(h" not in hip_code
+
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {
