@@ -23,8 +23,17 @@ The initial WGSL target surface covers common portable shader output:
 
 * vertex, fragment, and compute entry point generation
 * scalar, vector, matrix, array, struct, function, and local variable syntax
+* generic functions, monomorphized into one concrete WGSL function per
+  instantiation the module calls; calls whose type arguments cannot be
+  deduced, ambiguous generic overloads and generic resource parameters are
+  refused
 * stage input/output semantics mapped to ``@location`` and ``@builtin``
-  attributes
+  attributes; unbound vertex and fragment entry parameters take the lowest
+  free ``@location``, integer user IO is marked ``@interpolate(flat)``, and a
+  ``gl_*``/``SV_*`` system semantic without a WGSL built-in value (for example
+  ``SV_PrimitiveID`` or ``SV_ClipDistance0``) is refused with
+  ``project.translate.wgsl-stage-io-unsupported`` instead of becoming a user
+  location
 * explicit WGSL ``@location``, ``@builtin``, ``@interpolate``, and
   ``@invariant`` attributes preserved from CrossGL declarations
 * compute workgroup size metadata from CrossGL layout qualifiers
@@ -36,6 +45,9 @@ The initial WGSL target surface covers common portable shader output:
 * deterministic diagnostics for CrossGL combined texture/sampler resources,
   and texture sampling calls that need explicit WebGPU binding lowering before
   they can emit valid WGSL
+* typed diagnostics (``project.translate.wgsl-numeric-type-unsupported``) for
+  64-bit floating-point, 64-bit integer and bfloat16 types, which WGSL cannot
+  represent; they are never narrowed to ``f32`` or ``i32``
 
 Implementation Notes
 --------------------

@@ -18,16 +18,17 @@ def test_hazard_inventory_and_oracles():
     # The 66 evidence kernels, the binary16 division, square-root, fma and conversion cases, the OpenCL
     # saturated conversions to uint (round to nearest even) and to char, the HLSL and GLSL workgroup-memory
     # exchanges, the CUDA warp shuffles called from CrossGL, GLSL and SPIR-V runtime-array lengths, and GLSL matrix
-    # orientation in values and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
+    # orientation in values, in matrix-valued expressions and in storage blocks, the GLSL packing, bit-field, boolean-mix and frexp/ldexp/modf
     # built-ins, SPIR-V's FrexpStruct and ModfStruct, GLSL and SPIR-V extended integer arithmetic, and SPIR-V
-    # integer instructions whose opcode signedness differs from their operand types, SPIR-V structured control
+    # integer instructions whose opcode signedness differs from their operand types, Metal clz/ctz and GLSL
+    # findMSB/findLSB bit scans, SPIR-V structured control
     # flow with function variables and with phis, GLSL short-circuit operators, an HLSL structured buffer of structs with vector members, a
     # Metal buffer of structs with packed vector members, Metal buffers of float3, float3x3 and structs in the
     # natural MSL layout, Metal helper functions that take packed and natural buffer pointers, a CUDA buffer of
     # structs with a three-component vector member, and constants
     # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing, HLSL row_major cbuffer
     # matrices and MSL layout.
-    assert len(CASES) == len(BY_ID) == 110
+    assert len(CASES) == len(BY_ID) == 113
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

@@ -3930,13 +3930,14 @@ jobs:
           $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Prove native artifact contract refresh
+        shell: bash
         env:
           CROSTL_REQUIRE_ARTIFACT_REFRESH_COMPILER: "1"
-        run: >-
-          python -m pytest -q -n auto
-          tests/test_artifact_contract_refresh.py
-          --basetemp support/generated/artifact-refresh-native
-          --junitxml support/generated/artifact-refresh-native.xml
+        run: |
+          mkdir -p build/reports
+          python -m pytest -q -n auto tests/test_artifact_contract_refresh.py \
+            --basetemp build/reports/artifact-refresh-native \
+            --junitxml build/reports/artifact-refresh-native.xml
 
       - name: Upload native artifact refresh evidence
         if: always()
@@ -3944,8 +3945,8 @@ jobs:
         with:
           name: artifact-refresh-native-${{ runner.os }}
           path: |
-            support/generated/artifact-refresh-native
-            support/generated/artifact-refresh-native.xml
+            build/reports/artifact-refresh-native
+            build/reports/artifact-refresh-native.xml
           if-no-files-found: warn
           retention-days: 14
 
@@ -8517,6 +8518,7 @@ jobs:
           --output-dir .unary-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain unary Metal native compilation evidence
         if: always()
@@ -8809,6 +8811,7 @@ jobs:
           --output-dir .binary-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain binary Metal native compilation evidence
         if: always()
@@ -8945,6 +8948,7 @@ jobs:
           --output-dir .copy-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain copy Metal native compilation evidence
         if: always()
@@ -9081,6 +9085,7 @@ jobs:
           --output-dir .reduce-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain reduce Metal native compilation evidence
         if: always()
@@ -9230,6 +9235,7 @@ jobs:
           --output-dir .quantized-metal-native
           --compiler-command '["xcrun", "-sdk", "macosx", "metal", "-std=metal3.1", "-Werror", "-c", "{artifact}", "-o", "{output}"]'
           --jobs 2 --timeout 120
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Verify affine Metal numerical roundtrip
         run: >-
@@ -9240,6 +9246,7 @@ jobs:
           --bundle-root .quantized-metal-sources
           --contract demos/integrations/mlx/contracts/quantized.metal-roundtrip.json
           --output-dir .quantized-metal-native/affine
+          ${{ env.CROSSTL_MLX_PIN_MODE == 'report' && '--allow-drift' || '' }}
 
       - name: Retain quantized Metal native compilation evidence
         if: always()

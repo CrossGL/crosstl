@@ -461,6 +461,35 @@ def render_constructor_arguments(generator, constructor_name, expr, fields):
     return rendered_args
 
 
+def named_struct_constructor_arguments(constructor_name, expr, fields):
+    """Order a complete named initializer without silently losing or zeroing fields."""
+    positional = list(expr.arguments)
+    named = dict(expr.named_arguments)
+    names = [name for name, _type in fields]
+    unknown = sorted(set(named) - set(names))
+    if unknown:
+        raise ValueError(
+            f"Struct constructor {constructor_name} has no field {', '.join(unknown)}"
+        )
+    duplicates = sorted(set(names[: len(positional)]) & set(named))
+    if duplicates:
+        raise ValueError(
+            f"Struct constructor {constructor_name} initializes more than once: "
+            f"{', '.join(duplicates)}"
+        )
+    arguments = constructor_argument_expressions(expr, fields)
+    if arguments is None:
+        raise ValueError(
+            f"Struct constructor {constructor_name} expects at most {len(fields)} arguments"
+        )
+    missing = [name for name in names if name not in arguments]
+    if missing:
+        raise ValueError(
+            f"Struct constructor {constructor_name} is missing fields: {', '.join(missing)}"
+        )
+    return [(arguments[name], field_type) for name, field_type in fields]
+
+
 def constructor_argument_expressions(expr, fields):
     positional_args = list(getattr(expr, "arguments", []) or [])
     named_args = dict(getattr(expr, "named_arguments", {}) or {})

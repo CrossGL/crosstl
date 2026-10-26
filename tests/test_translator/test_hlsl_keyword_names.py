@@ -14,6 +14,8 @@ import subprocess
 
 import crosstl
 from crosstl.translator import parse
+from crosstl.translator.ast import MemberAccessNode
+from crosstl.translator.codegen import hlsl_keyword_names
 from crosstl.translator.codegen.hlsl_keyword_names import (
     HLSL_KEYWORD_NAMES,
     HLSL_TYPE_KEYWORD_NAMES,
@@ -110,6 +112,36 @@ void main() {
     sample_value.vertices += 1.0;
     float indices = sample_value.vertices;
     values[0] = indices;
+}
+"""
+
+MSL_TWO_KERNELS = """#include <metal_stdlib>
+using namespace metal;
+
+kernel void first_kernel(device float* point [[buffer(0)]],
+                         uint id [[thread_position_in_grid]]) {
+    float line = 1.0;
+    point[id] = line;
+}
+
+kernel void second_kernel(device float* triangle [[buffer(1)]],
+                          uint id [[thread_position_in_grid]]) {
+    float register = 2.0;
+    triangle[id] = register;
+}
+"""
+
+CGL_METHOD_CALL = """shader Names {
+    struct Shape {
+        float line;
+    };
+    compute {
+        void main() {
+            Shape s;
+            s.line = 1.0;
+            s.line(2.0);
+        }
+    }
 }
 """
 
@@ -298,3 +330,55 @@ def test_keyword_set_covers_each_declaration_class():
         assert name not in HLSL_KEYWORD_NAMES, name
         assert name in HLSL_TYPE_KEYWORD_NAMES, name
     assert HLSL_KEYWORD_NAMES < HLSL_TYPE_KEYWORD_NAMES
+
+
+def test_every_entry_point_of_a_stage_is_renamed(tmp_path):
+    hlsl = _translate(tmp_path, MSL_TWO_KERNELS, ".metal")
+    for name in ("point", "line", "triangle", "register"):
+        assert f"{name}_" in hlsl, name
+        assert not re.search(rf"\b{name}\b(?!\()", hlsl), name
+    _compile(tmp_path, hlsl, "cs_6_0", "CSMain")
+    _compile(tmp_path, hlsl, "cs_6_0", "CSMain_2")
+
+
+def test_member_renames_skip_method_callees_in_the_copy():
+    renamed = legalize_hlsl_keyword_names(parse(CGL_METHOD_CALL))
+    members = [
+        node.member
+        for node in hlsl_keyword_names._iter_nodes(renamed)
+        if isinstance(node, MemberAccessNode)
+    ]
+    # The field access is renamed; the method callee keeps its spelling.
+    assert members == ["line_", "line"]
+
+
+def _count_walks(monkeypatch):
+    walks = []
+    walk = hlsl_keyword_names._iter_nodes
+
+    def counting_walk(root, **options):
+        walks.append(options.get("include_opaque", False))
+        return walk(root, **options)
+
+    monkeypatch.setattr(hlsl_keyword_names, "_iter_nodes", counting_walk)
+    return walks
+
+
+def test_programs_without_keyword_names_are_walked_once(monkeypatch):
+    plain = parse(
+        CGL_PROGRAM.replace("line", "Line")
+        .replace("vector", "value")
+        .replace("triangle", "shape")
+    )
+    walks = _count_walks(monkeypatch)
+    assert legalize_hlsl_keyword_names(plain) is plain
+    assert walks == [False]
+
+
+def test_renaming_walks_each_tree_a_bounded_number_of_times(monkeypatch):
+    ast = parse(CGL_PROGRAM)
+    walks = _count_walks(monkeypatch)
+    assert legalize_hlsl_keyword_names(ast) is not ast
+    # Declarations, then the one function body (``vector`` is reserved only
+    # at program scope), the names in use, and the rename of the copy.
+    assert walks == [False, False, True, False]

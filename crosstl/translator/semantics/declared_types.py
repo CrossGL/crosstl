@@ -7,10 +7,16 @@ type of the same spelling. :func:`refuse_undeclared_types` raises :class:`Undecl
 name, so the translation fails with a typed diagnostic instead.
 
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
-trait bounds of generic parameters are not types. Names with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
+trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
+``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
+other argument there is still read as a type, and :mod:`.feedback_textures` refuses one that is not a kind. Names
+with generic arguments (``Texture2D<float4>``), namespace or member qualifiers
 (``metal::texture2d``, ``Outer.Inner``) and parenthesised parts are resource or library spellings the generators
 resolve themselves. The template argument of ``RayQuery<FLAGS>`` is a ray flag value, not a type (DXR, "RayQuery"),
-and the generators check it themselves.
+and the generators check it themselves. The Metal, HLSL and GLSL generators emit a generic structure only as the
+instantiations the program names (``Box<int>``), so for those targets a generic structure live code never names is
+not read either: an importer keeps the template next to the specializations it materialized, and member aliases of
+the template (``using complex_T = vec<scalar_T, 2>;``) have no CrossGL declaration.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .builtin_type_names import BUILTIN_TYPE_NAMES
+from .feedback_textures import FEEDBACK_TEXTURE_TYPES, is_sampler_feedback_kind
 
 __all__ = [
     "UndeclaredTypeError",
@@ -31,6 +38,21 @@ __all__ = [
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Built-in types whose template arguments are values rather than types.
 VALUE_TEMPLATE_TYPES = frozenset({"RayQuery"})
+# Targets whose generators emit a generic structure only through the instantiations the program names.
+INSTANTIATING_TARGETS = frozenset(
+    {
+        "metal",
+        "directx",
+        "hlsl",
+        "dx11",
+        "dx12",
+        "d3d11",
+        "d3d12",
+        "opengl",
+        "glsl",
+        "webgl",
+    }
+)
 
 
 class UndeclaredTypeError(TranslationDiagnostic):
@@ -83,6 +105,13 @@ def _nodes(program, skip=frozenset()):
 
 def _short(name):
     return str(name).rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _is_value_argument(node, argument):
+    """Whether ``argument`` of the generic type ``node`` is a value rather than a type."""
+    if node.name in VALUE_TEMPLATE_TYPES:
+        return True
+    return node.name in FEEDBACK_TEXTURE_TYPES and is_sampler_feedback_kind(argument)
 
 
 def declared_type_names(program) -> frozenset:
@@ -156,12 +185,59 @@ def _dead_functions(program):
     return every - live
 
 
-def undeclared_type_uses(program):
+def _type_references(node, skip):
+    """The base names of the types and callees named under ``node``, not descending into the nodes in ``skip``."""
+    names = set()
+    for child in _nodes(node, skip):
+        if isinstance(child, A.NamedType):
+            name = child.name
+        elif isinstance(child, A.FunctionCallNode):
+            name = child.function
+        else:
+            continue
+        if isinstance(name, str):
+            base = name.split("<", 1)[0].strip()
+            names.update((base, _short(base)))
+    return names
+
+
+def _uninstantiated_templates(program, skip):
+    """Ids of the generic structures that no live code names, directly or through another named template."""
+    templates = {}
+    for node in _nodes(program, skip):
+        if (
+            isinstance(node, A.StructNode)
+            and getattr(node, "generic_params", None)
+            and isinstance(node.name, str)
+        ):
+            templates.setdefault(node.name, []).append(node)
+    every = {id(template) for group in templates.values() for template in group}
+    if not every:
+        return set()
+    hidden = set(skip) | every
+    live = set()
+    pending = sorted(_type_references(program, hidden))
+    seen = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for template in templates.get(name, []):
+            if id(template) in live:
+                continue
+            live.add(id(template))
+            pending.extend(sorted(_type_references(template, hidden - {id(template)})))
+    return every - live
+
+
+def undeclared_type_uses(program, target=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
     Functions no stage entry reaches are not read: they cannot change what the program computes, and translation
     for a selected entry point drops them (a project's explicit specialization that was materialized under another
-    name keeps its unresolved parameter types, for example).
+    name keeps its unresolved parameter types, for example). For a ``target`` in :data:`INSTANTIATING_TARGETS`, the
+    generic structures no live code names are not read either, because those generators never emit them.
     """
     declared = declared_type_names(program)
     # Trait bounds (``generic<T: Numeric + Copy>``) constrain a parameter; they are not types any generator emits.
@@ -171,15 +247,20 @@ def undeclared_type_uses(program):
         if isinstance(node, A.GenericParameterNode)
         for bound in node.constraints
     }
-    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags.
+    # RayQuery<RAY_FLAG_FORCE_OPAQUE> takes ray flags; the generators refuse operands that are not ray flags. A feedback
+    # texture's argument is a value only when it is a sampler feedback kind; any other name is still read as a type.
     values = {
         id(argument)
         for node in _nodes(program)
-        if isinstance(node, A.NamedType) and node.name in VALUE_TEMPLATE_TYPES
+        if isinstance(node, A.NamedType)
         for argument in node.generic_args
+        if _is_value_argument(node, argument)
     }
     uses = []
-    for node in _nodes(program, _dead_functions(program) | bounds | values):
+    skip = _dead_functions(program) | bounds | values
+    if str(target or "").lower() in INSTANTIATING_TARGETS:
+        skip |= _uninstantiated_templates(program, skip)
+    for node in _nodes(program, skip):
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name
@@ -193,7 +274,7 @@ def undeclared_type_uses(program):
 
 def refuse_undeclared_types(program, target):
     """Raise :class:`UndeclaredTypeError` for the first undeclared plain type name in ``program``."""
-    for name, node in undeclared_type_uses(program):
+    for name, node in undeclared_type_uses(program, target):
         raise UndeclaredTypeError(
             target, name, source_location=getattr(node, "source_location", None)
         )

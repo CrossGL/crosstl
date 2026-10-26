@@ -2470,8 +2470,9 @@ def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     output = generate_crossgl(hlsl)
 
     assert "MOD" not in output
-    assert "void MakeNop(in dx_HitObject obj[2])" in output
-    assert "dx_HitObject obj[2]" in output
+    assert "void MakeNop(in dx::HitObject obj[2])" in output
+    assert "dx::HitObject obj[2]" in output
+    assert "dx_HitObject" not in output
     parse_crossgl(output)
 
 
@@ -2555,6 +2556,29 @@ def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
     assert "ivec4 up3 = unpack_s8s32(unsignedPacked);" in output
     assert "u16vec4 up5 = unpack_u8u16(signedPacked);" in output
     assert "uvec4 up7 = unpack_u8u32(signedPacked);" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
+def test_codegen_packed_8bit_alias_structured_buffer_element_reparse():
+    # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured
+    # buffer of them is a structured buffer of uint in CrossGL.
+    hlsl = textwrap.dedent("""
+        StructuredBuffer<uint8_t4_packed> pin;
+        RWStructuredBuffer<int8_t4_packed> pout;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            pout[id.x] = pin[id.x];
+            outp[id.x] = pin[id.x];
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "StructuredBuffer<uint> pin;" in output
+    assert "RWStructuredBuffer<uint> pout;" in output
     assert "int8_t4_packed" not in output
     assert "uint8_t4_packed" not in output
     parse_crossgl(output)
@@ -3479,7 +3503,9 @@ def test_codegen_attributes_emitted():
     assert "@ outputtopology" in lowered
     assert "@ outputcontrolpoints" in lowered
     assert "@ patchconstantfunc" in lowered
-    assert "@ earlydepthstencil" in lowered
+    # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout, not a function attribute.
+    assert "layout(early_fragment_tests) in;" in lowered
+    assert "@ earlydepthstencil" not in lowered
 
 
 def test_codegen_extra_attributes_emitted():
@@ -3930,6 +3956,32 @@ def test_codegen_is_helper_lane_intrinsic_from_sm66_imports_fragment_builtin():
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "bool helper = gl_HelperInvocation;" in glsl
     assert "IsHelperLane(" not in glsl
+
+
+def test_codegen_is_helper_lane_round_trips_to_hlsl():
+    # gl_HelperInvocation has no HLSL variable; DXC rejects it as undeclared, so the
+    # HLSL generator has to emit the Shader Model 6.6 intrinsic again.
+    fragment = generate_crossgl("""
+        float4 main(float4 color : COLOR0) : SV_Target0 {
+            bool helper = IsHelperLane();
+            return helper ? float4(0.0) : color;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(fragment))
+    assert "bool helper = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
+
+    compute = generate_crossgl("""
+        RWStructuredBuffer<int> outp : register(u1);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            bool r = IsHelperLane();
+            outp[id.x] = r ? 1 : 0;
+        }
+    """)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
+    assert "bool r = IsHelperLane();" in hlsl
+    assert "gl_HelperInvocation" not in hlsl
 
 
 def test_codegen_interlocked_mapping():
@@ -7934,6 +7986,26 @@ def test_codegen_fixed_array_value_initializer_rejects_resource_members():
     diagnostic = exc_info.value
     assert diagnostic.reason == "value-initialization-unsupported"
     assert diagnostic.expected_type == "Texture2D"
+
+
+def test_hlsl_import_keeps_dx_hit_object_namespace():
+    code = textwrap.dedent("""
+        RWStructuredBuffer<uint> outp : register(u0);
+        [shader("raygeneration")]
+        void main() {
+            uint i = 0u;
+            dx::HitObject obj;
+            uint r = obj.GetHitKind();
+            outp[i] = r;
+        }
+    """)
+
+    crossgl = generate_crossgl(code)
+
+    assert "dx::HitObject obj;" in crossgl
+    assert "dx_HitObject" not in crossgl
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "dx::HitObject obj;" in hlsl
 
 
 def test_codegen_invalid_hlsl_raises():

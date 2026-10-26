@@ -115,6 +115,7 @@ _UNSPELLED = {
     "Vec3::write_to_slice": (
         "no CrossGL function writes a vector's elements to an array"
     ),
+    "Vec3::map": "CrossGL has no closures or function values",
 }
 # CrossGL builds vectors with constructors, and reads or replaces an element with the subscript operator, rather than
 # with functions.
@@ -135,6 +136,8 @@ _TRAIT_METHOD = re.compile(r"^    (unsafe )?fn (\w+)", re.M)
 _IMPL_METHOD = re.compile(r"^    pub (?:const )?(unsafe )?fn (\w+)", re.M)
 _MACRO = re.compile(r"^macro_rules! (\w+) \{", re.M)
 _TEMPLATE = re.compile(r"pub (?:const )?(?:unsafe )?fn \$name")
+# A closure bound, ``Fn(f32) -> f32``: the trait, its argument types and its result type.
+_CLOSURE = re.compile(r"(Fn(?:Mut|Once)?)\s*\(([^()]*)\)\s*->\s*(\w+)")
 # A slice parameter, ``&[T]`` or ``&mut [T]``. The probe passes its input buffer for one the function reads.
 _SLICE = re.compile(r"&\s*(mut\s+)?\[([^;\]]+)\]")
 
@@ -229,8 +232,16 @@ def _generic_types(generics: str) -> tuple[dict[str, Type], list[tuple[str, bool
             # A parameter of any type takes a struct of the probe's own: the payload a task or hit shader declares.
             types[name] = Type.other("udt")
             continue
+        closure = _CLOSURE.fullmatch(bounds.strip())
+        if closure:
+            # A closure keeps its bound as its type, from which a probe writes one (kernels.Rust.handle).
+            arguments = ", ".join(_split(closure.group(2)))
+            types[name] = Type.other(
+                f"{closure.group(1)}({arguments}) -> {closure.group(3)}"
+            )
+            continue
         if re.search(r"\bFn(?:Mut|Once)?\s*\(", bounds):
-            # A closure has no probe; its signature's scalars are not the parameter's type.
+            # Any other closure bound has no probe; its signature's scalars are not the parameter's type.
             continue
         scalar = re.search(r"Scalar\s*=\s*(?:impl\s+)?(\w+)", bounds)
         if re.search(r"\bVector<\s*bool\b", bounds):

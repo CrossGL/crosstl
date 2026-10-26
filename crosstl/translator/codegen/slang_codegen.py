@@ -50,6 +50,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
     collect_literal_int_constants,
@@ -60,7 +61,10 @@ from .array_utils import (
     prepend_array_dimension,
     split_array_type_suffix,
 )
+from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .builtin_result_types import C_FAMILY, builtin_call_result_type
+from .c_family_operands import postfix_operand, prefix_unary_operand
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -86,6 +90,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -98,6 +103,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .generic_struct_utils import named_struct_constructor_arguments
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -343,12 +349,18 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.function_map = {
             "mix": "lerp",
             "fract": "frac",
+            "bitCount": "countbits",
+            "bitfieldReverse": "reversebits",
+            "findLSB": "firstbitlow",
+            "findMSB": "firstbithigh",
             "dFdx": "ddx",
             "dFdy": "ddy",
             "dFdxCoarse": "ddx_coarse",
             "dFdxFine": "ddx_fine",
             "dFdyCoarse": "ddy_coarse",
             "dFdyFine": "ddy_fine",
+            "fwidthCoarse": "fwidth_coarse",
+            "fwidthFine": "fwidth_fine",
             "inversesqrt": "rsqrt",
             "inverseSqrt": "rsqrt",
             "floatBitsToInt": "asint",
@@ -1784,10 +1796,64 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         return f"{resource_type}{array_suffix or ''}"
 
+    def slang_storage_buffer_resource_type(self, node, vtype=None):
+        """Return the structured-buffer type a CrossGL storage buffer declares.
+
+        ``buffer T* name`` names bound storage, so it becomes ``RWStructuredBuffer<T>``
+        (``StructuredBuffer<T>`` when it is declared ``readonly``). Slang has no pointer to
+        bound memory: a global pointer is an implicit shader parameter, one
+        ``PhysicalStorageBuffer`` address per buffer, which a host cannot bind as a
+        storage buffer on any slangc target (#2921).
+        """
+        if node is None:
+            return None
+
+        qualifiers = {
+            str(value).lower() for value in getattr(node, "qualifiers", []) or []
+        }
+        if "buffer" not in qualifiers:
+            return None
+        if self.glsl_buffer_block_attribute(node) is not None:
+            return None
+
+        if vtype is None:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            if vtype is None:
+                vtype = getattr(node, "param_type", None)
+        if vtype is None:
+            return None
+
+        element_type = self.slang_storage_buffer_element_type(vtype)
+        if element_type is None:
+            return None
+
+        resource_type = (
+            "StructuredBuffer"
+            if self.explicit_resource_access(node) == "readonly"
+            else "RWStructuredBuffer"
+        )
+        return f"{resource_type}<{element_type}>"
+
+    def slang_storage_buffer_element_type(self, vtype):
+        """Return the element type ``buffer T* name`` declares, or ``None``.
+
+        ``buffer BlockName instance`` (an interface block instance, whose members are read directly) is not this
+        form: it keeps the emitter's block lowering.
+        """
+        element_type = self.pointer_pointee_type_name(vtype)
+        if element_type is None:
+            return None
+
+        element_type = str(element_type).strip()
+        if element_type.startswith("atomic<") and element_type.endswith(">"):
+            element_type = element_type[len("atomic<") : -1].strip()
+        return self.convert_type(element_type) if element_type else None
+
     def slang_resource_declaration_type(self, node):
         return (
             self.slang_glsl_buffer_array_resource_type(node)
             or self.slang_glsl_buffer_block_resource_type(node)
+            or self.slang_storage_buffer_resource_type(node)
             or self.variable_declaration_type(node)
         )
 
@@ -2934,7 +3000,29 @@ class SlangCodeGen(LoweringRefusalMixin):
                 or self.slang_mesh_output_parameter_role(attr)
             ):
                 continue
+            if str(getattr(attr, "name", "")).lower() == "builtin":
+                # ``@builtin(global_invocation_id)`` names the same value as ``@gl_GlobalInvocationID``.
+                builtin_name = glsl_builtin_name(attr)
+                if builtin_name == "gl_SampleMask":
+                    # WGSL's sample_mask is a fragment input and an output, like SV_Coverage; GLSL splits it into
+                    # gl_SampleMaskIn and the output-only gl_SampleMask.
+                    return "SV_Coverage"
+                if builtin_name is not None:
+                    return builtin_name
+                arguments = getattr(attr, "arguments", None) or [""]
+                written = getattr(arguments[0], "name", None) or getattr(
+                    arguments[0], "value", arguments[0]
+                )
+                self.refuse_lowering(
+                    f"Slang has no system value for the unknown built-in @builtin({written}) "
+                    f"on '{getattr(node, 'name', '')}'"
+                )
+                return None
             if hasattr(attr, "name"):
+                if attr.name == "gl_FragData":
+                    index = frag_data_attachment_index(node)
+                    if index is not None:
+                        return f"gl_FragData[{index}]"
                 return attr.name
         return None
 
@@ -3916,6 +4004,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             target_index = semantic_name[len("gl_FragColor") :]
             if target_index.isdigit():
                 return f"SV_Target{target_index}"
+        frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
+        if frag_data:
+            return f"SV_Target{frag_data.group(1)}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
     def slang_semantic_output_kind(self, semantic):
@@ -4178,6 +4269,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
             if semantic is None:
+                continue
+            # An ``out`` parameter carries a stage output, as in HLSL.
+            if "out" in {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", None) or []
+            }:
                 continue
             if (
                 self.slang_ray_semantic_role(parameter, shader_type)
@@ -4674,7 +4771,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return f"uvec{type_node.size}"
             if element_type == "bool":
                 return f"bvec{type_node.size}"
-            if element_type in {"i8", "u8", "i16", "u16"}:
+            if element_type in {"i8", "u8", "i16", "u16", "i64", "u64"}:
                 return f"vec{type_node.size}<{element_type}>"
             return f"{element_type}{type_node.size}"
         return str(type_node)
@@ -5701,6 +5798,23 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             return f"{declaration};\n"
 
+        storage_buffer_type = self.slang_storage_buffer_resource_type(node)
+        if storage_buffer_type is not None:
+            self.register_variable_type(node.name, storage_buffer_type, node)
+            if self.skip_duplicate_slang_global_variable(node, storage_buffer_type):
+                return ""
+            declaration = format_c_style_array_declaration(
+                storage_buffer_type, node.name
+            )
+            declaration = (
+                self.slang_resource_memory_qualifier_prefix(storage_buffer_type, node)
+                + declaration
+            )
+            declaration = self.apply_slang_resource_binding_decorations(
+                declaration, node, storage_buffer_type, auto_assign=True
+            )
+            return f"{declaration};\n"
+
         if self.is_glsl_buffer_block_variable(node, glsl_buffer_block_node_type(node)):
             vtype = self.type_name_string(glsl_buffer_block_node_type(node))
             diagnostic = self.glsl_buffer_block_diagnostic(
@@ -5965,6 +6079,13 @@ class SlangCodeGen(LoweringRefusalMixin):
                         if shader_type == "compute"
                         else None
                     )
+                    num_workgroups_alias = self.slang_num_workgroups_parameter_alias(
+                        param, param_type, semantic, shader_type
+                    )
+                    if num_workgroups_alias is not None:
+                        local_alias_declarations.append(num_workgroups_alias)
+                        emitted_param_names.add(param.name)
+                        continue
                     if dispatch_thread_id_bridge is not None:
                         declaration, local_alias, native_name = (
                             dispatch_thread_id_bridge
@@ -6585,6 +6706,34 @@ class SlangCodeGen(LoweringRefusalMixin):
             local_alias = f"uint2 {source_name} = {native_name}.xy;"
         return declaration, local_alias, native_name
 
+    def slang_num_workgroups_parameter_alias(
+        self, parameter, param_type, semantic, shader_type
+    ):
+        """Bind a ``gl_NumWorkGroups`` entry parameter from ``WorkgroupCount()``.
+
+        Slang has no system-value semantic for the dispatch size, so the parameter becomes a local read from the
+        ``WorkgroupCount()`` intrinsic in a compute entry point and is refused in other entry points.
+        """
+        if semantic is None or str(semantic).lower() != "gl_numworkgroups":
+            return None
+        name = getattr(parameter, "name", None)
+        if shader_type is None:
+            return None
+        if shader_type != "compute":
+            self.refuse_lowering(
+                f"Slang has no system value for the gl_NumWorkGroups parameter '{name}' "
+                f"of a {shader_type} entry point; WorkgroupCount() is read in compute "
+                "entry points only"
+            )
+            return None
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix or base_type != "uint3":
+            self.refuse_lowering(
+                f"Slang gl_NumWorkGroups parameter '{name}' must be a uvec3, not {param_type}"
+            )
+            return None
+        return f"uint3 {name} = WorkgroupCount();"
+
     def slang_unique_local_identifier(self, candidate, used_names):
         while candidate in used_names:
             candidate = f"{candidate}_"
@@ -6594,28 +6743,39 @@ class SlangCodeGen(LoweringRefusalMixin):
         self, body_statements, shader_type, param_list
     ):
         candidates = self.slang_intrinsic_builtin_candidates(shader_type)
-        if not candidates:
-            return {}
 
         declared_names = {
             getattr(param, "name", None)
             for param in param_list or []
             if getattr(param, "name", None)
         }
+        identifiers = []
         for node in self.walk_ast(body_statements):
             if isinstance(node, VariableNode):
                 declared_names.add(node.name)
+            elif isinstance(node, IdentifierNode):
+                identifiers.append(node)
 
         aliases = {}
-        for node in self.walk_ast(body_statements):
-            if not isinstance(node, IdentifierNode):
+        for node in identifiers:
+            if node.name in declared_names:
                 continue
-            if node.name not in candidates or node.name in declared_names:
-                continue
-
-            return_type, intrinsic = candidates[node.name]
-            aliases[node.name] = intrinsic
-            self.register_variable_type(node.name, return_type)
+            if node.name in candidates:
+                return_type, intrinsic = candidates[node.name]
+                aliases[node.name] = intrinsic
+                self.register_variable_type(node.name, return_type)
+            elif node.name == "gl_NumWorkGroups":
+                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
+                # alias above is only made for a compute entry point.
+                where = (
+                    f"a {shader_type} entry point"
+                    if shader_type
+                    else "a helper function"
+                )
+                self.refuse_lowering(
+                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"in a compute entry point, not in {where}"
+                )
         return aliases
 
     def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
@@ -7725,6 +7885,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "compute":
+            # Slang has no SV_ system value for the dispatch size; it exposes
+            # the number of workgroups through the WorkgroupCount() intrinsic.
+            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 
@@ -8646,6 +8810,51 @@ class SlangCodeGen(LoweringRefusalMixin):
         helper_name = self.require_slang_matrix_inverse_helper(matrix_info)
         return f"{helper_name}({arg_expr})"
 
+    def generate_slang_matrix_builtin_call(self, func_name, args):
+        """``matrixCompMult`` or ``outerProduct``, which Slang does not declare (GLSL 4.60 section 8.6)."""
+        fallback_type = self.current_expression_expected_type or "float"
+        if func_name == "outerProduct":
+            # slangc rejects the DirectX form mul(float3x1(c), float1x2(r)), so a helper builds the rows.
+            result_type = self.hlsl_matrix_orientation.call_type(
+                func_name, [self.expression_result_type(arg) for arg in args]
+            )
+            matrix_info = self.matrix_value_info(result_type)
+            if matrix_info is None:
+                return self.refuse_lowering(
+                    "Slang outerProduct: requires two float or double vectors",
+                    self.zero_value_for_type(fallback_type),
+                )
+            helper_name = self.require_slang_outer_product_helper(matrix_info)
+            column, row = (self.generate_expression_without_expected(a) for a in args)
+            return f"{helper_name}({column}, {row})"
+        matrix_builtin = self.hlsl_matrix_orientation.builtin_call(func_name, args)
+        if matrix_builtin is not None:
+            return matrix_builtin
+        return self.refuse_lowering(
+            "Slang matrixCompMult: requires a matrix of a known shape",
+            self.zero_value_for_type(fallback_type),
+        )
+
+    def require_slang_outer_product_helper(self, matrix_info):
+        matrix_type = matrix_info["type"]
+        helper_name = self.helper_function_name(f"_crossgl_outer_product_{matrix_type}")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        component_type = matrix_info["component_type"]
+        # Row i of the result is c[i] * r, so CrossGL column j is c * r[j].
+        rows = ", ".join(f"c[{row}] * r" for row in range(matrix_info["rows"]))
+        helper = (
+            f"{matrix_type} {helper_name}("
+            f"{component_type}{matrix_info['rows']} c, "
+            f"{component_type}{matrix_info['columns']} r)\n"
+            "{\n"
+            f"    return {matrix_type}({rows});\n"
+            "}"
+        )
+        self.register_helper_function(helper_name, helper)
+        return helper_name
+
     def require_slang_matrix_inverse_helper(self, matrix_info):
         matrix_type = matrix_info["type"]
         helper_name = self.helper_function_name(f"_crossgl_inverse_{matrix_type}")
@@ -8747,6 +8956,17 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.comparison_expression_result_type(left_type, right_type)
         if expr.op in {"&&", "||"}:
             return self.logical_expression_result_type(left_type, right_type)
+        if expr.op == "*":
+            product_type = self.hlsl_matrix_orientation.product_type(
+                left_type, right_type
+            )
+            if product_type is not None:
+                return product_type
+        matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+            expr.op, left_type, right_type
+        )
+        if matrix_type is not None:
+            return matrix_type
         if self.is_vector_value_type(left_type):
             return left_type
         if self.is_vector_value_type(right_type):
@@ -8830,10 +9050,19 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 return f"{operand_type}*"
             if expr.op == "*" and operand_type is not None:
+                if self.is_structured_buffer_resource_type(operand_type):
+                    return self.structured_buffer_element_type(operand_type)
                 return self.pointer_pointee_type_name(operand_type) or operand_type
             return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type is None:
+                return None
+            same_type = self.convert_type(true_type) == self.convert_type(false_type)
+            return true_type if same_type else None
         if isinstance(expr, ConstructorNode):
             constructor_type = self.type_name_string(
                 getattr(expr, "constructor_type", None)
@@ -8857,6 +9086,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
                 return self.array_element_type(array_type)
+            if self.is_structured_buffer_resource_type(array_type):
+                return self.structured_buffer_element_type(array_type)
             pointer_element_type = self.pointer_pointee_type_name(array_type)
             if pointer_element_type is not None:
                 return pointer_element_type
@@ -9063,6 +9294,8 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name in {
             "fract",
+            "bitfieldReverse",
+            "reversebits",
             "dFdx",
             "dFdy",
             "dFdxCoarse",
@@ -9070,6 +9303,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "dFdyCoarse",
             "dFdyFine",
             "fwidth",
+            "fwidthCoarse",
+            "fwidthFine",
             "inversesqrt",
             "inverseSqrt",
         }:
@@ -9078,7 +9313,81 @@ class SlangCodeGen(LoweringRefusalMixin):
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
 
+        if func_name in {"transpose", "inverse"}:
+            return builtin_call_result_type(
+                func_name,
+                [self.type_name_string(self.expression_result_type(a)) for a in args],
+                C_FAMILY,
+            )
+        if func_name in {"matrixCompMult", "outerProduct"}:
+            return self.hlsl_matrix_orientation.call_type(
+                func_name, [self.expression_result_type(arg) for arg in args]
+            )
+
+        bit_query_type = self.slang_bit_query_result_type(func_name, args)
+        if bit_query_type is not None:
+            return bit_query_type
+
         return self.glsl_bitcast_result_type(func_name, args)
+
+    def slang_bit_query_result_type(self, func_name, args):
+        # Slang's countbits, firstbitlow and firstbithigh return uint components for any integer operand; CrossGL's
+        # bitCount, findLSB and findMSB return int components (GLSL 4.60 section 8.8).
+        result_scalar = {
+            "bitCount": "int",
+            "findLSB": "int",
+            "findMSB": "int",
+            "countbits": "uint",
+            "firstbitlow": "uint",
+            "firstbithigh": "uint",
+        }.get(func_name)
+        if result_scalar is None or len(args or ()) != 1:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            return None
+
+        mapped = self.convert_type(arg_type)
+        integer_scalars = {
+            "int",
+            "uint",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int64_t",
+            "uint64_t",
+        }
+        if mapped in integer_scalars:
+            return result_scalar
+        for scalar in sorted(integer_scalars, key=len, reverse=True):
+            if mapped.startswith(scalar):
+                suffix = mapped[len(scalar) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"{result_scalar}{suffix}"
+        vector_match = re.fullmatch(
+            r"vector<\s*([A-Za-z0-9_]+)\s*,\s*([234])\s*>", mapped
+        )
+        if vector_match and vector_match.group(1) in integer_scalars:
+            return f"{result_scalar}{vector_match.group(2)}"
+        return None
+
+    def generate_slang_bit_query_call(self, func_name, args, generated_args):
+        """``bitCount``, ``findLSB`` or ``findMSB`` as the Slang intrinsic converted to CrossGL's ``int`` result.
+
+        The conversion keeps -1 for a scan that finds no bit, where the bare intrinsic would give 0xFFFFFFFF.
+        Returns ``None`` for any other call.
+        """
+        if func_name not in {"bitCount", "findLSB", "findMSB"}:
+            return None
+        result_type = self.slang_bit_query_result_type(func_name, args)
+        if result_type is None:
+            return self.refuse_lowering(
+                f"Slang {func_name}: the operand is not a known integer scalar or vector",
+                "0",
+            )
+        return f"{result_type}({self.function_map[func_name]}({generated_args}))"
 
     def glsl_bitcast_result_type(self, func_name, args):
         component_type = {
@@ -9207,7 +9516,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression)
         elif isinstance(node, AssignmentNode):
-            return self.generate_assignment(node)
+            return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):
             hull_output_alias = self.slang_hull_output_array_alias(node)
             if hull_output_alias is not None:
@@ -9222,7 +9531,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if matrix_access is not None:
                 return matrix_access
-            array = self.generate_expression(array_expr)
+            array = postfix_operand(self.generate_expression(array_expr))
             index = self.format_array_access_index(index_expr)
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
@@ -9253,10 +9562,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if member_info is not None:
                 return member_info["global_name"]
-            obj = self.generate_expression_without_expected(node.object)
+            obj = postfix_operand(
+                self.generate_expression_without_expected(node.object)
+            )
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
-            pointer = self.generate_expression(node.pointer_expr)
+            pointer = postfix_operand(self.generate_expression(node.pointer_expr))
             return f"{pointer}->{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
@@ -9358,6 +9669,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                         self.zero_value_for_type(fallback_type),
                     )
                 return self.generate_slang_matrix_inverse_call(node.args[0])
+            if (
+                callee in {"matrixCompMult", "outerProduct"}
+                and callee not in self.user_function_names
+            ):
+                return self.generate_slang_matrix_builtin_call(callee, node.args)
             if callee == "lambda":
                 lambda_expr = self.generate_lambda_expression(node.args)
                 if lambda_expr is not None:
@@ -9412,6 +9728,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             ):
                 callee = "atan2"
             if callee not in self.user_function_names:
+                bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
+                if bit_query is not None:
+                    return bit_query
                 callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
         elif isinstance(node, ConstructorNode):
@@ -9419,6 +9738,18 @@ class SlangCodeGen(LoweringRefusalMixin):
             if enum_constructor is not None:
                 return enum_constructor
             constructor_type = self.type_name_string(node.constructor_type)
+            if node.named_arguments:
+                fields = list(
+                    self.struct_member_types.get(constructor_type, {}).items()
+                )
+                arguments = named_struct_constructor_arguments(
+                    constructor_type, node, fields
+                )
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, field_type)
+                    for arg, field_type in arguments
+                )
+                return f"{self.convert_type(constructor_type)}({args})"
             matrix_constructor = self.hlsl_matrix_orientation.constructor(
                 constructor_type,
                 node.arguments,
@@ -9432,12 +9763,17 @@ class SlangCodeGen(LoweringRefusalMixin):
         elif isinstance(node, RayTracingOpNode):
             return self.generate_slang_ray_tracing_op_expression(node)
         elif isinstance(node, UnaryOpNode):
+            if node.op == "*" and self.is_structured_buffer_resource_type(
+                self.expression_result_type(node.operand)
+            ):
+                # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
+                return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
             operand = self.generate_expression(node.operand)
             if isinstance(node.operand, BinaryOpNode):
                 operand = f"({operand})"
             if getattr(node, "is_postfix", False):
-                return f"{operand}{node.op}"
-            return f"{node.op}{operand}"
+                return f"{postfix_operand(operand)}{node.op}"
+            return f"{node.op}{prefix_unary_operand(node.op, operand)}"
         elif isinstance(node, TernaryOpNode):
             bool_vector_select = self.generate_bool_vector_select_expression(
                 node.condition, node.true_expr, node.false_expr
@@ -10685,8 +11021,42 @@ class SlangCodeGen(LoweringRefusalMixin):
             "u8": "uint8_t",
             "i16": "int16_t",
             "u16": "uint16_t",
+            "int16": "int16_t",
+            "uint16": "uint16_t",
+            "i16vec2": "vector<int16_t, 2>",
+            "i16vec3": "vector<int16_t, 3>",
+            "i16vec4": "vector<int16_t, 4>",
+            "u16vec2": "vector<uint16_t, 2>",
+            "u16vec3": "vector<uint16_t, 3>",
+            "u16vec4": "vector<uint16_t, 4>",
             "i32": "int",
             "u32": "uint",
+            "int32": "int",
+            "uint32": "uint",
+            "i64": "int64_t",
+            "u64": "uint64_t",
+            "int8": "int8_t",
+            "uint8": "uint8_t",
+            "int64": "int64_t",
+            "uint64": "uint64_t",
+            "i8vec2": "vector<int8_t, 2>",
+            "i8vec3": "vector<int8_t, 3>",
+            "i8vec4": "vector<int8_t, 4>",
+            "u8vec2": "vector<uint8_t, 2>",
+            "u8vec3": "vector<uint8_t, 3>",
+            "u8vec4": "vector<uint8_t, 4>",
+            "i64vec2": "vector<int64_t, 2>",
+            "i64vec3": "vector<int64_t, 3>",
+            "i64vec4": "vector<int64_t, 4>",
+            "u64vec2": "vector<uint64_t, 2>",
+            "u64vec3": "vector<uint64_t, 3>",
+            "u64vec4": "vector<uint64_t, 4>",
+            "vec2<i64>": "vector<int64_t, 2>",
+            "vec3<i64>": "vector<int64_t, 3>",
+            "vec4<i64>": "vector<int64_t, 4>",
+            "vec2<u64>": "vector<uint64_t, 2>",
+            "vec3<u64>": "vector<uint64_t, 3>",
+            "vec4<u64>": "vector<uint64_t, 4>",
             "half": "half",
             "half2": "half2",
             "half3": "half3",
@@ -14026,6 +14396,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if coord_spec is None:
             return None
         numerator, divisor = coord_spec
+        coord = postfix_operand(coord)
         return f"{coord}.{numerator} / {coord}.{divisor}"
 
     def unsupported_texture_projected_call(self, func_name, reason):

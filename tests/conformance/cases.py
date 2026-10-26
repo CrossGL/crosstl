@@ -1,6 +1,6 @@
 """Compute hazards with independent source-rule oracles.
 
-Every case is a compute kernel with an input buffer at binding 0 and an output buffer at binding 1, written in one
+Every case is a compute kernel with input buffers at bindings 0 through n-1 and an output at binding n, written in one
 source language (cases/<id>/src.<ext>). The oracle models the SOURCE language's rule under its reference
 configuration; `readings` records, per reading of the source semantics, whether the rule creates an obligation
 (HLSL: reading A = FXC/DXBC rules of D3D11.3; reading B = DXC 1.9 / DXIL; every other language: "spec").
@@ -46,7 +46,7 @@ class Case:
     cls: str
     title: str
     rule: str
-    inputs: np.ndarray
+    inputs: np.ndarray | tuple[np.ndarray, ...] | list[np.ndarray]
     out_dtype: type
     oracle: Callable | None = None  # inputs -> expected output array
     compare: str = "exact"  # exact | bits | ulp:<k> | ulp:<k>+sign
@@ -66,7 +66,22 @@ class Case:
     lang: str = ""
     src: Path | None = None
 
+    @property
+    def input_buffers(self):
+        """Arrays in binding order; keep single-array oracle and check arguments unchanged."""
+        return (
+            (self.inputs,)
+            if isinstance(self.inputs, np.ndarray)
+            else tuple(self.inputs)
+        )
+
     def __post_init__(self):
+        if not self.input_buffers or not all(
+            isinstance(buffer, np.ndarray) for buffer in self.input_buffers
+        ):
+            raise ValueError(
+                "Case inputs must be an array or a non-empty sequence of arrays"
+            )
         if self.src is None:
             d = CASES_DIR / self.id
             srcs = sorted(p for p in d.iterdir() if p.suffix in EXT_LANG)
@@ -319,6 +334,27 @@ def o_hlsl_matrix_orientation(inp):
         fm = np.array([[1.0, 2.0], [3.0, a[0]]])
         row.append(fm[1, 0] + fm[0, 1] * 10.0 + fm[1, 1] * 100.0)
         out += row
+    return np.array(out, dtype=np.float32)
+
+
+def o_matrix_expression_columns(inp):
+    """GLSL 4.60 sections 5.6, 5.9 and 8.6: columns of matrix-valued expressions built from six inputs per thread."""
+    out = []
+    for i in range(inp.size // 6):
+        a = inp[6 * i : 6 * i + 6].astype(np.float64)
+        k = i & 1
+        m = a.reshape(2, 3).T  # 3 rows, 2 columns; column c is m[:, c]
+        n = np.array([[1.0, 2.0, 3.0], [a[5], a[0], 4.0]]).T
+        c = np.array([a[0], a[2], a[4]])
+        r = np.array([a[1], 10.0])
+        q, s, t = (m / 2.0)[:, 1], (m + 1.0)[:, k], (10.0 - m)[:, 1]
+        u, v = (m * n)[:, 1], np.outer(c, r)[:, k]
+        x, y = (m - 1.0) @ r, c @ (m + n)
+        out += [q[0], q[2], s[1], s[2], t[0], t[1], u[0], u[2], v[0], v[1], x[0], x[2]]
+        out += [y[0], y[1], (m * 2.0)[1, 1], (2.0 * m - n)[2, k]]
+        d = np.array([[2.0, 4.0, 0.5], [8.0, 1.0, 0.25]]).T * float(1 << k)
+        h = (m + 1.0 - n - 0.5) / d
+        out += [-m[0, 1], h[1, k], (4.0 / d)[2, 1], (m / d)[0, k]]
     return np.array(out, dtype=np.float32)
 
 
@@ -1501,6 +1537,17 @@ CASES = [
         compare="ulp:0",
     ),
     Case(
+        "g_matrix_expression_columns",
+        "S11",
+        "columns of mat2x3 sums, quotients, negations, compound updates, matrixCompMult and outerProduct results",
+        "GLSL 4.60 sections 5.6, 5.9 and 8.6",
+        np.tile(np.arange(1, 7, dtype=np.float32), 64)
+        + np.repeat(np.arange(64) % 4, 6).astype(np.float32),
+        np.float32,
+        o_matrix_expression_columns,
+        compare="ulp:0",
+    ),
+    Case(
         "g_matrix_storage",
         "S11",
         "std430 mat2x3 storage loads and matrix initializer lists",
@@ -1769,6 +1816,24 @@ CASES = [
         np.float32,
         pack_cases.hlsl_exponent_reference,
         compare="ulp:8",
+    ),
+    Case(
+        "m_bit_scans",
+        "integer",
+        "clz and ctz of uint, int and vector components, qualified and unqualified",
+        "MSL 3.2 §6.13: leading or trailing zero bits per component; a zero component counts its bit width",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.metal_bit_scan_reference,
+    ),
+    Case(
+        "g_bit_scans",
+        "integer",
+        "findMSB and findLSB of uint, int and vector components",
+        "GLSL 4.60 §8.8: bit index or -1 for zero; findMSB of a negative int finds the highest clear bit",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.glsl_bit_scan_reference,
     ),
     Case(
         "g_extended_arithmetic",

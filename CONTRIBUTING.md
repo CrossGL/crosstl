@@ -55,10 +55,10 @@ the same pull request.
 
 Coverage is measured, so there is no support table to edit. The Coverage
 workflow writes a probe for every built-in in each language's pinned upstream
-feature list and for a set of language constructs (types, control flow,
-resources, compute and stages), translates it, and checks the result with the
-language's reference tool. It reports the coverage change on your pull
-request, as a comment or, for a pull request from a fork, in the job summary.
+feature list and for a set of language constructs (types, operators, control
+flow, resources, compute and stages), translates it, and checks the result
+with the language's reference tool. A comment on your pull request lists how
+it changes coverage against `main`.
 Once the change is on `main`, it closes the `coverage` issues whose probes now
 pass. Each of those issues gives the command that reproduces it, for example:
 
@@ -71,7 +71,8 @@ python -m tools.coverage tools    # which reference tools are installed
 `probes/<language>-<direction>/<feature>/`. A language whose reference tool is
 not installed comes out untested. With `--execute`, the Metal, GLSL and SPIR-V
 compute probes also run on a local GPU or Mesa runtime through the conformance
-harness, as CI does; a result the native probe does not compute is wrong.
+harness, as CI does, and so do the HLSL, Slang and WGSL ones, compiled to SPIR-V
+by DXC, slangc or naga; a result the native probe does not compute is wrong.
 
 ## Picking an issue
 
@@ -87,8 +88,10 @@ Open the pull request against `main`. Required checks run on every push:
 translator, backend, complete-suite, example and demo tests on Linux, macOS and
 Windows, plus Lint and Coverage. Once they pass and a maintainer has reviewed
 the change, it joins the merge queue, which tests the exact commit that will
-land, and is squash-merged. A pull request with no activity for 14 days is
-marked `stale` and closed 7 days later; any push or comment resets the clock.
+land, and is squash-merged. When the next change lands on `main`, a pull request
+without labels gets the `backend:`, `direction:` and `area:` labels of the files
+it changes. A pull request with no activity for 14 days is marked `stale` and
+closed 7 days later; any push or comment resets the clock.
 
 Keep a pull request to one change. Write commit messages and the pull request
 title in the imperative, describing the behavior that changes ("Reject

@@ -21,6 +21,7 @@ __all__ = [
     "FixedSamplerBindingError",
     "fixed_sampler_records",
     "parse_fixed_sampler_contract",
+    "with_glsl_fixed_samplers",
     "with_hlsl_fixed_samplers",
     "with_spirv_fixed_samplers",
 ]
@@ -78,6 +79,42 @@ def with_hlsl_fixed_samplers(code, records, ast):
         if match is None:
             raise FixedSamplerBindingError("directx", record["name"])
         record.update(register=match.group(1), space=int(match.group(2) or 0))
+        resolved.append(record)
+    if not resolved:
+        return code
+    return with_artifact_contract_header(code, fixed_sampler_header(resolved))
+
+
+def with_glsl_fixed_samplers(code, records, pairs, ast):
+    """GLSL ``code`` with a ``// crosstl-fixed-samplers:`` header naming the combined uniforms of each sampler.
+
+    OpenGL GLSL has no separate samplers: each texture read through a sampler state is a combined uniform
+    (:mod:`.sampler_pairs`), and the host binds a sampler object with that state to the uniform's texture unit
+    (OpenGL 4.6 section 8.2). Each record lists those uniforms, with the unit the declaration names.
+    """
+    resolved = []
+    for record in _used(records, ast):
+        uniforms = []
+        for pair in pairs or ():
+            if pair.get("sampler") != record["name"] or pair["uniform"] in (
+                entry["uniform"] for entry in uniforms
+            ):
+                continue
+            match = re.search(
+                rf"layout\([^)]*\bbinding\s*=\s*(\d+)[^)]*\)\s*uniform\s+\w+\s+"
+                rf"{re.escape(pair['uniform'])}\b",
+                code,
+            )
+            uniforms.append(
+                {
+                    "uniform": pair["uniform"],
+                    "texture": pair["texture"],
+                    "unit": int(match.group(1)) if match else None,
+                }
+            )
+        if not uniforms:
+            raise FixedSamplerBindingError("opengl", record["name"])
+        record.update(uniforms=uniforms)
         resolved.append(record)
     if not resolved:
         return code

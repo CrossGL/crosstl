@@ -162,13 +162,16 @@ def test_opencl_parameter_names_are_not_types():
     assert opencl.parameter("int8", False, False)[0] == Param(Type.other("int8"))
 
 
+KERNEL = "__kernel __attribute__((reqd_work_group_size(1, 1, 1))) void probe("
+
+
 def _probe(name):
     return probes.build(by_name(opencl.parse(HEADER))[name], "opencl").source
 
 
 def test_opencl_probe_is_a_kernel_over_global_buffers():
     source = _probe("sincos")
-    assert "__kernel void probe(__global float* fin, __global float* outp) {" in source
+    assert f"{KERNEL}__global float* fin, __global float* outp) {{" in source
     assert "    uint i = get_global_id(0);" in source
     assert "float r = sincos(a0, &a1);" in source
 
@@ -227,7 +230,7 @@ def test_opencl_passes_2d_images_as_kernel_arguments():
         Type("float", (2,)),
     ]
     source = _probe("read_imagef")
-    kernel = source.index("__kernel void probe(")
+    kernel = source.index(KERNEL)
     assert source.index("__constant sampler_t u1 = ") < kernel
     assert ", read_only image2d_t u0) {" in source
     assert "float4 r = read_imagef(u0, u1, a2);" in source
@@ -257,7 +260,7 @@ def test_opencl_passes_local_and_global_pointers_by_their_address_space():
     # The pointers are opaque, so the type they point at ranks the overload.
     assert feature.signature.params[0] == Param(Type.other("__local float *"))
     source = _probe("async_work_group_copy")
-    kernel = source.index("__kernel void probe(")
+    kernel = source.index(KERNEL)
     assert source.index("__local float a0[1];") > kernel
     assert (
         "event_t r = async_work_group_copy(a0, (const __global float *)outp, a2, a3);"
@@ -288,7 +291,7 @@ def test_opencl_declares_workgroup_variables_inside_the_kernel():
         Signature(Type("float"), (Param(Type("float"), "workgroup"),)),
     )
     source = probes.build(shared, "opencl").source
-    kernel = source.index("__kernel void probe(")
+    kernel = source.index(KERNEL)
     assert source.index("__local float a0;") > kernel
 
 
@@ -319,6 +322,14 @@ def test_opencl_probes_are_valid_opencl_c():
     ):
         verdict = validators.validate("opencl", _probe(name))
         assert verdict.accepted, (name, verdict.log)
+
+
+def test_opencl_probe_fixes_the_work_group_size_the_hlsl_check_needs():
+    # Without reqd_work_group_size the host chooses the size at dispatch, and CrossTL refuses a kernel whose
+    # barrier depends on it for HLSL, which fixes the size in the shader.
+    hlsl = runner.translate(_probe("barrier"), ".cl", "directx", "opencl")
+    assert "[numthreads(1, 1, 1)]" in hlsl
+    assert "GroupMemoryBarrierWithGroupSync();" in hlsl
 
 
 def test_opencl_input_is_emitted_as_hlsl_and_checked_by_dxc(monkeypatch):
