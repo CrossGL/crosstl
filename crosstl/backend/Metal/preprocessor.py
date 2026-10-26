@@ -36,6 +36,7 @@ from .function_specialization import (
 )
 from .template_constants import unresolved_constant_references
 from .text_scanners import (
+    find_named_type_declarations,
     function_parameter_start,
     split_top_level_assignment,
     split_top_level_commas,
@@ -973,6 +974,12 @@ class _PromotedFunctionDefinition:
     function: _MetalFunctionDefinition
     parameter_count: int
     promoted_parameters: Tuple[_PromotedFunctionParameter, ...]
+
+
+# Characters `_find_static_constexpr_calls` acts on: quotes, a slash that may
+# open a comment, and every word character that is not a decimal digit (a
+# superset of the identifier starts it reads).
+_CONSTEXPR_CALL_SCAN_STOPS = re.compile(r"[\"'/]|[^\W\d]")
 
 
 class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
@@ -11039,21 +11046,33 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         function_names: Set[str],
     ) -> List[_MetalConstexprCall]:
         calls: List[_MetalConstexprCall] = []
+        if not any(name in expression for name in function_names):
+            return calls
+        search = _CONSTEXPR_CALL_SCAN_STOPS.search
         i = 0
-        while i < len(expression):
-            if expression[i] in "\"'":
+        while True:
+            # Jump to the next character the scan acts on: a quote, a slash
+            # that may open a comment, or a possible identifier start.
+            stop = search(expression, i)
+            if stop is None:
+                break
+            i = stop.start()
+            character = expression[i]
+            if character in "\"'":
                 _literal, consumed = self._read_string(expression, i)
                 i += consumed
                 continue
-            if expression.startswith("//", i):
-                end = expression.find("\n", i)
-                i = len(expression) if end == -1 else end + 1
+            if character == "/":
+                if expression.startswith("//", i):
+                    end = expression.find("\n", i)
+                    i = len(expression) if end == -1 else end + 1
+                elif expression.startswith("/*", i):
+                    end = expression.find("*/", i + 2)
+                    i = len(expression) if end == -1 else end + 2
+                else:
+                    i += 1
                 continue
-            if expression.startswith("/*", i):
-                end = expression.find("*/", i + 2)
-                i = len(expression) if end == -1 else end + 2
-                continue
-            if not (expression[i].isalpha() or expression[i] == "_"):
+            if not (character.isalpha() or character == "_"):
                 i += 1
                 continue
 
@@ -20704,35 +20723,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # declaration with its source offset makes call-site resolution
         # deterministic and selects the nearest preceding declaration.
         declarations: Dict[str, List[Tuple[int, str]]] = {}
-        # Iterate struct names in a STABLE (sorted) order so the per-name lists,
-        # before sorting, do not depend on set iteration order; the final sort by
-        # position is what callers rely on, but a stable scan keeps ties stable.
-        for struct_name in sorted(struct_names):
-            pattern = re.compile(
-                rf"\b{re.escape(struct_name)}\b"
-                r"(?:\s+(?:const|volatile)\b)*\s*"
-                r"(?P<indirection>[*&]+)?\s*"
-                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
-                r"(?=[;,)=\[{(])"
+        # One position-ordered scan for every struct name keeps each per-name
+        # list sorted by offset without depending on set iteration order.
+        for struct_name, match in find_named_type_declarations(code, struct_names):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            # Skip a match that is itself a member access (`x.S var` cannot
+            # happen, but guard scoped `Ns::S` by checking the preceding char).
+            preceding = match.start() - 1
+            while preceding >= 0 and code[preceding].isspace():
+                preceding -= 1
+            if preceding >= 0 and code[preceding] in ".>":
+                continue
+            indirection = match.group("indirection") or ""
+            if indirection and not include_indirect:
+                continue
+            declarations.setdefault(match.group("name"), []).append(
+                (match.start(), f"{struct_name}{indirection}")
             )
-            for match in pattern.finditer(code):
-                if self._containing_span(match.start(), struct_spans) is not None:
-                    continue
-                # Skip a match that is itself a member access (`x.S var` cannot
-                # happen, but guard scoped `Ns::S` by checking the preceding char).
-                preceding = match.start() - 1
-                while preceding >= 0 and code[preceding].isspace():
-                    preceding -= 1
-                if preceding >= 0 and code[preceding] in ".>":
-                    continue
-                indirection = match.group("indirection") or ""
-                if indirection and not include_indirect:
-                    continue
-                declarations.setdefault(match.group("name"), []).append(
-                    (match.start(), f"{struct_name}{indirection}")
-                )
-        for entries in declarations.values():
-            entries.sort(key=lambda item: item[0])
         return declarations
 
     def _collect_aliased_struct_variable_types(
@@ -20742,28 +20750,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         struct_spans: List[Tuple[int, int]],
     ) -> Dict[str, List[Tuple[int, str]]]:
         declarations: Dict[str, List[Tuple[int, str]]] = {}
-        for alias in sorted(type_aliases):
-            pattern = re.compile(
-                rf"\b{re.escape(alias)}\b"
-                r"(?:\s+(?:const|volatile)\b)*\s*"
-                r"(?P<indirection>[*&]+)?\s*"
-                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
-                r"(?=[;,)=\[{(])"
+        for alias, match in find_named_type_declarations(code, type_aliases):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            resolved = self._resolve_struct_type_alias_at(
+                type_aliases, alias, match.start()
             )
-            for match in pattern.finditer(code):
-                if self._containing_span(match.start(), struct_spans) is not None:
-                    continue
-                resolved = self._resolve_struct_type_alias_at(
-                    type_aliases, alias, match.start()
-                )
-                if resolved is None:
-                    continue
-                indirection = match.group("indirection") or ""
-                declarations.setdefault(match.group("name"), []).append(
-                    (match.start(), f"{resolved}{indirection}")
-                )
-        for entries in declarations.values():
-            entries.sort(key=lambda item: item[0])
+            if resolved is None:
+                continue
+            indirection = match.group("indirection") or ""
+            declarations.setdefault(match.group("name"), []).append(
+                (match.start(), f"{resolved}{indirection}")
+            )
         return declarations
 
     def _resolve_declared_type_at(
