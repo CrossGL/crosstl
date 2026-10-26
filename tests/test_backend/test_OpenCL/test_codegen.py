@@ -1203,11 +1203,19 @@ def test_opencl_mem_fence_and_scoped_fences_lower_to_crossgl_fences():
             ],
         ),
         ("work_group_barrier(0)", ["workgroupExecutionBarrier();"]),
+        (
+            "barrier(mask)",
+            ["allMemoryBarrier();", "workgroupBarrier();", "allMemoryBarrier();"],
+        ),
+        (
+            "barrier(CLK_LOCAL_MEM_FENCE | mask)",
+            ["allMemoryBarrier();", "workgroupBarrier();", "allMemoryBarrier();"],
+        ),
     ],
 )
 def test_opencl_barriers_order_the_memory_their_flags_name(call, statements):
     crossgl = generate_crossgl(f"""
-        kernel void probe(global uint *outp) {{
+        kernel void probe(global uint *outp, uint mask) {{
             uint i = get_global_id(0);
             outp[i] = 1u;
             {call};

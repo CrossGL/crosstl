@@ -941,10 +941,13 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         flags_text = self.visit(args[0])
         flags = set(re.findall(r"\bCLK_\w+\b", flags_text))
         known_flags = set(self.OPENCL_MEM_FENCE_FLAG_BARRIERS)
-        if not flags and flags_text.strip() == "0":
+        # Only CLK_ names joined with | are literal flags, so a value such as
+        # CLK_LOCAL_MEM_FENCE | mask may name more memory than its CLK_ names.
+        literal = not re.sub(r"\bCLK_\w+\b|[\s()|]", "", flags_text)
+        if re.sub(r"[\s()]", "", flags_text) == "0":
             # No memory is ordered: an execution barrier only.
             return ["workgroupExecutionBarrier()"]
-        if not flags or not flags <= known_flags:
+        if not literal or not flags or not flags <= known_flags:
             # Flags that are not literals may name any memory.
             return ["allMemoryBarrier()", "workgroupBarrier()", "allMemoryBarrier()"]
         device_flags = frozenset(flags - {"CLK_LOCAL_MEM_FENCE"})
