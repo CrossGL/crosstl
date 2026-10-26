@@ -7483,7 +7483,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 helpers.append(func)
         for stage_node in self._stage_nodes(ast, target_stage):
             helpers.extend(getattr(stage_node, "local_functions", []) or [])
-        return self._dedupe_functions(helpers)
+        # WGSL permits forward calls, but not declarations without a body.
+        # Discard prototypes before deduplication so they cannot hide definitions.
+        return self._dedupe_functions(
+            func for func in helpers if getattr(func, "body", None) is not None
+        )
 
     def _stage_nodes(self, ast, target_stage):
         nodes = []
