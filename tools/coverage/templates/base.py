@@ -208,6 +208,32 @@ C_FAMILY = {
     "matrix-vector-product": Template(
         "$mat2 m = $mat2(fin[i], 1.0, 2.0, 3.0);\n$vec2 v = m * $vec2(1.0, fin[i]);\noutp[i] = v.y;"
     ),
+    # v takes a vector and two scalars, s splats one scalar, and each component of v scales its own power of ten.
+    "vector-constructor": Template(
+        "float f = fin[i];\n$vec2 h = $vec2(f, 1.0);\n$vec4 v = $vec4(h, 2.0, f);\n$vec3 s = $vec3(f + 1.0);\n"
+        "outp[i] = v.x * 1000.0 + v.y * 100.0 + v.z * 10.0 + v.w + s.z * 0.5;"
+    ),
+    # The columns are (f, 1) and (2, 3), so m[0][1] is 1 and m[1][0] is 2.
+    "matrix-from-vectors": Template(
+        "float f = float(iin[i]);\n$mat2 m = $mat2($vec2(f, 1.0), $vec2(2.0, 3.0));\n"
+        "outp[i] = m[0][1] * 100.0 + m[1][0] * 10.0 + m[0][0];"
+    ),
+    # lt is (fin[i] < 0, iin[i] < 8) and eq is (true, iin[i] == 4); each test that holds adds its own power of two.
+    "vector-comparison": Template(
+        "$vec2 a = $vec2(fin[i], float(iin[i]));\n$bvec2 lt = a < $vec2(0.0, 8.0);\n"
+        "$bvec2 eq = a == $vec2(fin[i], 4.0);\nfloat r = 0.0;\nif (lt.x) {\n    r += 1.0;\n}\n"
+        "if (any(lt)) {\n    r += 2.0;\n}\nif (all(lt)) {\n    r += 4.0;\n}\nif (all(eq)) {\n    r += 8.0;\n}\n"
+        "outp[i] = r;"
+    ),
+    "struct-constructor": Template(
+        "Pair p = Pair(fin[i], 2.0);\nPair q = Pair(p.b, p.a * 3.0);\noutp[i] = p.a + q.a * 10.0 + q.b * 100.0;",
+        PAIR,
+    ),
+    # Assigning a struct copies it, so the write to b.a must not reach a.a.
+    "struct-copy": Template(
+        "Pair a;\na.a = fin[i];\na.b = 2.0;\nPair b = a;\nb.a = 9.0;\noutp[i] = a.a * 10.0 + b.a + b.b;",
+        PAIR,
+    ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
 }

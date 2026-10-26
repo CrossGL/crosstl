@@ -12510,6 +12510,33 @@ class TestHipCodeGen:
         assert "for (; (i < 2); i++)" in hip_code
         assert "++i++" not in hip_code
 
+    def test_postfix_update_keeps_parentheses_around_dereference(self):
+        source_code = """
+        shader main {
+            buffer float* results;
+            void inc(float* p) { (*p)++; }
+            void dec(float* p) { (*p)--; }
+            compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                float a = 1.0;
+                inc(&a);
+                dec(&a);
+                int i = 0;
+                i++;
+                results[i] = a;
+            }
+            }
+        }
+        """
+        code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "(*p)++;" in code
+        assert "(*p)--;" in code
+        assert "*p++" not in code
+        assert "*p--" not in code
+        assert "i++;" in code
+
     def test_multiple_functions(self):
         source_code = """
         shader TestShader {

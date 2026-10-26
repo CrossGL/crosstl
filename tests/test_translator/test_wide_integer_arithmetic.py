@@ -272,6 +272,58 @@ def test_compound_copy_in_rejects_potential_rhs_alias_modification():
         HLSLCodeGen().generate(parse(source))
 
 
+METAL_BUFFER_COMPOUND = """#include <metal_stdlib>
+using namespace metal;
+kernel void offsets(
+    constant const uint64_t* indices [[buffer(0)]],
+    device int64_t& offset [[buffer(1)]],
+    constant const int64_t* strides [[buffer(2)]],
+    constant const int* axes [[buffer(3)]],
+    uint index [[thread_position_in_grid]]) {
+  int64_t acc = 0;
+  for (int i = 0; i < 2; ++i) {
+    acc += VALUE;
+  }
+  offset = acc;
+}
+"""
+
+
+def test_compound_copy_in_accepts_buffer_load_operands(tmp_path):
+    from crosstl import translate
+
+    # Metal pointer reads import as buffer loads. They write nothing, so the
+    # copied-in target cannot change while the right operand is evaluated.
+    source = tmp_path / "offsets.metal"
+    source.write_text(
+        METAL_BUFFER_COMPOUND.replace("VALUE", "indices[i] * strides[axes[i]]")
+    )
+    generated = translate(str(source), backend="directx", format_output=False)
+    assert (
+        "int64_t __crossgl_integer_compound(inout int64_t target, uint64_t value)"
+        in generated
+    )
+    assert "target = int64_t(uint64_t(target) + value);" in generated
+    assert re.search(
+        r"__crossgl_integer_compound\(acc, \(indices\.Load\(i\) \* "
+        r"uint64_t\(strides\.Load\(axes\.Load\(i\)\)\)\)\);",
+        generated,
+    ), generated
+    _compile(generated, "directx", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "value", ["indices[i++] * strides[0]", "indices[0] * strides[axes[i++]]"]
+)
+def test_compound_copy_in_checks_buffer_load_arguments(tmp_path, value):
+    from crosstl import translate
+
+    source = tmp_path / "offsets.metal"
+    source.write_text(METAL_BUFFER_COMPOUND.replace("VALUE", value))
+    with pytest.raises(DirectXContextualConversionError, match="right operand"):
+        translate(str(source), backend="directx", format_output=False)
+
+
 def test_optimized_dxc_preserves_indexed_copyback_values(tmp_path):
     from crosstl import translate
 

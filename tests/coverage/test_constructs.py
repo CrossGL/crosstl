@@ -379,6 +379,14 @@ _HLSL_BY_COLUMNS = {
             "outp[i] = m[1][0] * 100.0 + m[0].y * 10.0 + c.x + 0.5 * c.y;",
         ],
     ),
+    "matrix-from-vectors": (
+        [("int", "iin"), ("float", "outp")],
+        [
+            "float f = float(iin[i]);",
+            "float2x2 m = transpose(float2x2(float2(f, 1.0), float2(2.0, 3.0)));",
+            "outp[i] = m[1][0] * 100.0 + m[0][1] * 10.0 + m[0][0];",
+        ],
+    ),
     "matrix-vector-product": (
         [("float", "fin"), ("float", "outp")],
         [

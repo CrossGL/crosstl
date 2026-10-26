@@ -87,6 +87,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - A program with several stages of one kind, such as a Metal library with several vertex functions, has every stage rewritten, not only the first.
 - Translating a malformed shader no longer takes time that grows much faster than its length.
 - An assignment used as a value keeps its own parentheses: `int f = (e = 4) + 1;` used to become `e = 4 + 1` on several targets, which assigns 5.
+- CUDA, HIP and Metal output keep the parentheses around the operand of a postfix `++` or `--` unless it is a name, member access, index or call, so `(*p)++` stays `(*p)++`. It used to be written `*p++`, which increments the pointer and discards the value because postfix `++` binds tighter than unary `*`, and does not compile for an array, as in `(*v)++` on a `float v[2]`.
 - SPIR-V output short-circuits `&&`, `||` and `?:`. The right operand and both arms used to run unconditionally.
 - GLSL output declares `long`, `ulong`, `size_t` and `ptrdiff_t` as 64-bit integers instead of 32-bit ones, which changed arithmetic and block layouts; GLSL ES and WebGL refuse them. SPIR-V output converts `size_t(x)` and `ptrdiff_t(x)` and widens `uint` without sign extension.
 - 8- and 16-bit integer vector arithmetic wraps at its own width on GLSL and Metal, and Metal widens native `ushort2` and similar fields and buffer elements when it reads them.

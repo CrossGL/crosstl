@@ -4951,6 +4951,34 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0]->value" not in generated_code
 
 
+def test_metal_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code
+
+
 def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
     shader = """
     shader MetalConstantStructuredBuffer {

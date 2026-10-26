@@ -738,6 +738,19 @@ def o_mirror(inp):
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
 
 
+def o_array_constants(inp):
+    """Constant arrays of floats, of structs and of two-element vector arrays, indexed by bits of the input."""
+    weights = [1.0, 2.0, 4.0, 8.0]
+    table = [(1.5, 3), (-2.5, 7)]
+    grid = [[(1.0, 0.5), (2.0, 0.25)], [(3.0, 4.0), (5.0, 6.0)]]
+    out = []
+    for k in inp.astype(np.int64):
+        scale, bias = table[(k >> 2) & 1]
+        gx, gy = grid[(k >> 3) & 1][(k >> 4) & 1]
+        out.append(weights[k & 3] * scale + bias + gx * 16.0 + gy * 64.0)
+    return np.array(out, dtype=np.float32)
+
+
 def o_warp(inp):
     return inp.astype(np.int64).reshape(-1, 32).sum(axis=1).astype(np.int32)
 
@@ -1901,6 +1914,15 @@ CASES = [
         control_flow_cases.structured_control_flow_inputs(),
         np.uint32,
         control_flow_cases.structured_control_flow_reference,
+    ),
+    Case(
+        "s_array_constants",
+        "composite",
+        "OpConstantComposite of array, struct and nested array types, read with dynamic indices",
+        "SPIR-V 1.6 §3.52.7: OpConstantComposite of an array or structure type takes its constituents in order",
+        np.arange(64, dtype=np.uint32) % 32,
+        np.float32,
+        o_array_constants,
     ),
     Case(
         "g_short_circuit",

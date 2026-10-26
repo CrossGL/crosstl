@@ -501,6 +501,8 @@ CONSTRUCTS: dict[str, Template] = {
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
     "struct-return": Template(C_FAMILY["struct-return"].body, MAKE_PAIR, prelude=PAIR),
+    "struct-constructor": Template(C_FAMILY["struct-constructor"].body, prelude=PAIR),
+    "struct-copy": Template(C_FAMILY["struct-copy"].body, prelude=PAIR),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),

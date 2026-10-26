@@ -16419,7 +16419,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{lhs} {operator} {rhs}"
         if self.hlsl_expression_has_observable_side_effects(
-            value, allow_integer_constructors=True
+            value, allow_integer_constructors=True, allow_buffer_loads=True
         ):
             raise DirectXContextualConversionError(
                 "DirectX cannot preserve mixed-width compound assignment when "
@@ -49702,6 +49702,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         allow_integer_constructors=False,
         allow_bfloat_constructors=False,
         allow_numeric_constructors=False,
+        allow_buffer_loads=False,
     ):
         for node in self.walk_ast(expr):
             if isinstance(node, AssignmentNode):
@@ -49734,6 +49735,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if getattr(definition, "resource_aggregate_nonmutating", False):
                     # Lowering proves handle reads and private-value helpers.
                     # The walk still checks all argument evaluation below them.
+                    continue
+                if (
+                    allow_buffer_loads
+                    and name == "buffer_load"
+                    and len(arguments) == 2
+                    and not self.hlsl_function_name_is_shadowed(name)
+                ):
+                    # A buffer load reads one element and writes nothing. The
+                    # walk still checks the buffer and index expressions.
                     continue
                 if (
                     isinstance(name, str)
