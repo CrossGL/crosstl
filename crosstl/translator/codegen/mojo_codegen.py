@@ -15801,14 +15801,41 @@ class MojoCodeGen:
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)
 
+    def bool_cast_text(self, expr_text, target_dtype):
+        # Mojo's Bool has no .cast method, so a bool value going to a numeric
+        # type goes through Int first: Float32(Int(s)). Returns None when the
+        # target has no scalar constructor form here, leaving the old output.
+        constructor = {
+            "DType.float16": "Float16",
+            "DType.float32": "Float32",
+            "DType.float64": "Float64",
+            "DType.int8": "Int8",
+            "DType.int16": "Int16",
+            "DType.int32": "Int32",
+            "DType.uint8": "UInt8",
+            "DType.uint16": "UInt16",
+            "DType.uint32": "UInt32",
+        }.get(target_dtype)
+        if constructor is None:
+            return None
+        return f"{constructor}(Int({expr_text}))"
+
     def cast_scalar_text(self, expr_text, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return expr_text
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(expr_text, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"({expr_text}).cast[{target_dtype}]()"
 
     def cast_vector_component(self, component, source_dtype, target_dtype):
         if target_dtype is None or source_dtype is None or source_dtype == target_dtype:
             return component
+        if source_dtype == "DType.bool":
+            bool_cast = self.bool_cast_text(component, target_dtype)
+            if bool_cast is not None:
+                return bool_cast
         return f"{component}.cast[{target_dtype}]()"
 
     def generate_constructor_scalar_expression(
