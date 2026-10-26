@@ -2751,51 +2751,6 @@ class TestCudaCodeGen:
         assert "o.xy" not in cuda_code
         assert "o.zw" not in cuda_code
 
-    def test_half_vector_geometric_builtins_use_float_helpers(self):
-        source_code = """
-        shader G {
-            half f(f16vec3 s, f16vec3 r, f16vec4 q) {
-                half b = length(s);
-                f16vec3 n = normalize(s);
-                half d = distance(s, r);
-                f16vec3 c = cross(s, r);
-                half e = length(q);
-                f16vec3 m = r * distance(s, r);
-                return b + n.x + d + c.x + e + m.x;
-            }
-            float g(vec3 a, vec3 b) {
-                return distance(a, b);
-            }
-        }
-        """
-
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert "half b = cgl_cgl_half3_length(s);" in cuda_code
-        assert "cgl_half3 n = cgl_cgl_half3_normalize(s);" in cuda_code
-        assert "half d = cgl_cgl_half3_distance(s, r);" in cuda_code
-        assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in cuda_code
-        assert "half e = cgl_cgl_half4_length(q);" in cuda_code
-        assert (
-            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
-            in cuda_code
-        )
-        assert "return cgl_float3_distance(a, b);" in cuda_code
-        assert (
-            "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in cuda_code
-        )
-        assert "__float2half(sqrtf((__half2float(value.x) *" in cuda_code
-        assert "float inv_length = 1.0f / sqrtf(" in cuda_code
-        assert "float dx = __half2float(lhs.x) - __half2float(rhs.x);" in cuda_code
-        assert "float dx = lhs.x - rhs.x;" in cuda_code
-        assert (
-            "(__half2float(lhs.y) * __half2float(rhs.z) - "
-            "__half2float(lhs.z) * __half2float(rhs.y))" in cuda_code
-        )
-        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
-            assert f" = {bare};" not in cuda_code
-        assert "return distance(a, b);" not in cuda_code
-
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {
@@ -3891,6 +3846,51 @@ class TestCudaCodeGen:
         assert "cgl_float3_normalize(a) * weight" not in cuda_code
         assert "2.0 * cgl_float3_fract" not in cuda_code
         assert "float l = length(a);" not in cuda_code
+
+    def test_half_vector_geometric_builtins_use_float_helpers(self):
+        source_code = """
+        shader G {
+            half f(f16vec3 s, f16vec3 r, f16vec4 q) {
+                half b = length(s);
+                f16vec3 n = normalize(s);
+                half d = distance(s, r);
+                f16vec3 c = cross(s, r);
+                half e = length(q);
+                f16vec3 m = r * distance(s, r);
+                return b + n.x + d + c.x + e + m.x;
+            }
+            float g(vec3 a, vec3 b) {
+                return distance(a, b);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "half b = cgl_cgl_half3_length(s);" in cuda_code
+        assert "cgl_half3 n = cgl_cgl_half3_normalize(s);" in cuda_code
+        assert "half d = cgl_cgl_half3_distance(s, r);" in cuda_code
+        assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in cuda_code
+        assert "half e = cgl_cgl_half4_length(q);" in cuda_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
+            in cuda_code
+        )
+        assert "return cgl_float3_distance(a, b);" in cuda_code
+        assert (
+            "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in cuda_code
+        )
+        assert "__float2half(sqrtf((__half2float(value.x) *" in cuda_code
+        assert "float inv_length = 1.0f / sqrtf(" in cuda_code
+        assert "float dx = __half2float(lhs.x) - __half2float(rhs.x);" in cuda_code
+        assert "float dx = lhs.x - rhs.x;" in cuda_code
+        assert (
+            "(__half2float(lhs.y) * __half2float(rhs.z) - "
+            "__half2float(lhs.z) * __half2float(rhs.y))" in cuda_code
+        )
+        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
+            assert f" = {bare};" not in cuda_code
+        assert "return distance(a, b);" not in cuda_code
 
     def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
         source_code = """
