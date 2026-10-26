@@ -3473,3 +3473,81 @@ def test_wgsl_call_statement_phony_assigns_only_must_use_calls(expression, expec
     from crosstl.translator.codegen.wgsl_must_use import wgsl_call_statement
 
     assert wgsl_call_statement(expression) == expected
+
+
+SCALAR_MATRIX_CONSTRUCTOR_SHADER = """
+shader Diag {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int k = int(i);
+            mat2 a = mat2(fin[i]);
+            mat2x3 b = mat2x3(2.0);
+            mat3x2 c = mat3x2(fin[i] + 1.0);
+            mat3 d = mat3(k);
+            mat2 e = mat2(1);
+            mat2 f = mat2(-fin[i]);
+            mat2 g = mat2(-1.0);
+            mat3 h = mat3(-k);
+            mat2 n = mat2(1u);
+            outp[i] = a[1].y + b[1].y + c[2].y + d[1].y + e[0].x + f[1].y + g[0].x
+                + h[2].z + n[1].y;
+        }
+    }
+}
+"""
+
+
+def test_wgsl_codegen_expands_one_scalar_matrix_constructor_to_diagonal(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader(SCALAR_MATRIX_CONSTRUCTOR_SHADER))
+
+    assert (
+        "var a: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(fin[i], 0.0), vec2<f32>(0.0, fin[i]));"
+    ) in generated
+    assert (
+        "var b: mat2x3<f32> = mat2x3<f32>("
+        "vec3<f32>(2.0, 0.0, 0.0), vec3<f32>(0.0, 2.0, 0.0));"
+    ) in generated
+    assert (
+        "var c: mat3x2<f32> = mat3x2<f32>(vec2<f32>((fin[i] + 1.0), 0.0), "
+        "vec2<f32>(0.0, (fin[i] + 1.0)), vec2<f32>(0.0, 0.0));"
+    ) in generated
+    assert "vec3<f32>(f32(k), 0.0, 0.0)" in generated
+    assert "mat2x2<f32>(vec2<f32>(1, 0.0), vec2<f32>(0.0, 1))" in generated
+    assert (
+        "var f: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-fin[i], 0.0), vec2<f32>(0.0, -fin[i]));"
+    ) in generated
+    assert (
+        "var g: mat2x2<f32> = mat2x2<f32>("
+        "vec2<f32>(-1.0, 0.0), vec2<f32>(0.0, -1.0));"
+    ) in generated
+    assert "vec3<f32>(0.0, 0.0, f32(-k))" in generated
+    assert "vec2<f32>(f32(1u), 0.0)" in generated
+    assert "mat2x2<f32>(fin[i])" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_one_scalar_matrix_constructor_with_side_effects():
+    shader = """
+    shader Diag {
+        float next(float x) { return x * 2.0; }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                mat2 a = mat2(next(fin[i]));
+                outp[i] = a[1].y;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="one-scalar matrix constructor"):
+        WGSLCodeGen().generate(parse_shader(shader))
