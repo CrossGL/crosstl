@@ -50,6 +50,9 @@ from .trigonometric_reduction import HLSLTrigonometricReductionMixin
 from .unorm_store_rounding import HLSLUnormStoreRoundingMixin
 from .value_shapes import HLSLValueShapeMixin
 
+# Namespaced HLSL types that CrossGL keeps under the same scoped spelling.
+_SCOPED_BUILTIN_TYPE_NAMES = frozenset({"dx::HitObject"})
+
 
 class HLSLSelectOverloadError(ValueError):
     """Reject select calls whose source overload ownership is unresolved."""
@@ -5657,6 +5660,10 @@ class HLSLToCrossGLConverter(
         raw = str(type_name)
         if raw in self.type_identifier_renames:
             return self.type_identifier_renames[raw]
+        if raw in _SCOPED_BUILTIN_TYPE_NAMES:
+            # CrossGL spells these Shader Model types with their namespace, and the
+            # DirectX generator writes them back unchanged.
+            return raw
         sanitized = raw.replace("::", "_")
         if sanitized in self.type_identifier_renames:
             return self.type_identifier_renames[sanitized]
