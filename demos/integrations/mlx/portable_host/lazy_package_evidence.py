@@ -1,8 +1,9 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
 Scans, small row reductions, small column reductions, GEMV, dot-product,
-steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM and
-convolution kernels are translated from the pinned sources on first use, so no static index lists
+steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution
+and affine and floating-point quantized matrix-vector and matrix-matrix
+kernels are translated from the pinned sources on first use, so no static index lists
 their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
 metadata, and by comparing the recorded artifact with the unchanged cached
@@ -20,11 +21,15 @@ from demos.integrations.mlx.portable_host import (
     column_small_layout,
     conv_layout,
     dot_layout,
+    fp_matmul_layout,
+    fp_qmm_layout,
     gather_mm_layout,
     gather_mv_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
+    matmul_layout,
+    qmm_layout,
     scan_layout,
     segmented_mm_layout,
 )
@@ -48,6 +53,18 @@ from demos.integrations.mlx.portable_host.dot_packages import (
     CACHE_DIRECTORY as DOT_CACHE,
 )
 from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_MV_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    FpQuantizedMatmulPackageCache,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_MM_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    FpQuantizedQmmPackageCache,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -72,6 +89,16 @@ from demos.integrations.mlx.portable_host.gemv_packages import (
     CACHE_DIRECTORY as GEMV_CACHE,
 )
 from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    CACHE_DIRECTORY as QUANTIZED_MV_CACHE,
+)
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    QuantizedMatmulPackageCache,
+)
+from demos.integrations.mlx.portable_host.qmm_packages import (
+    CACHE_DIRECTORY as QUANTIZED_MM_CACHE,
+)
+from demos.integrations.mlx.portable_host.qmm_packages import QuantizedQmmPackageCache
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
 from demos.integrations.mlx.portable_host.segmented_mm_packages import (
     SEGMENTED_MM_CACHE,
@@ -99,7 +126,17 @@ MATRIX_FAMILIES = {
     "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
     "conv": conv_layout.ENTRY_PREFIXES,
 }
-FAMILIES = ("scan", "small-row", "small-column", *MATRIX_FAMILIES)
+# Quantized products run through the same executor. Their own upstream
+# verifiers translate their packages ahead; any other test that reaches one
+# translates it on demand.
+QUANTIZED_FAMILIES = {
+    "quantized-mv": matmul_layout.ENTRY_PREFIXES,
+    "fp-quantized-mv": fp_matmul_layout.ENTRY_PREFIXES,
+    "quantized-mm": qmm_layout.ENTRY_PREFIXES,
+    "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
+}
+EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
+FAMILIES = ("scan", "small-row", "small-column", *EXECUTED_FAMILIES)
 GEOMETRY = ("workgroupCount", "workgroupSize")
 
 
@@ -113,7 +150,7 @@ def family(entry):
         return "small-row"
     if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
         return "small-column"
-    for name, prefixes in MATRIX_FAMILIES.items():
+    for name, prefixes in EXECUTED_FAMILIES.items():
         if name == "gather-mm-offsets":
             if entry in prefixes:
                 return name
@@ -161,6 +198,18 @@ class LazyPackages:
                 mlx_root, packages / SPLITK_CACHE, target
             ),
             "conv": ConvPackageCache(mlx_root, packages / CONV_CACHE, target),
+            "quantized-mv": QuantizedMatmulPackageCache(
+                mlx_root, packages / QUANTIZED_MV_CACHE, target
+            ),
+            "fp-quantized-mv": FpQuantizedMatmulPackageCache(
+                mlx_root, packages / FP_QUANTIZED_MV_CACHE, target
+            ),
+            "quantized-mm": QuantizedQmmPackageCache(
+                mlx_root, packages / QUANTIZED_MM_CACHE, target
+            ),
+            "fp-quantized-mm": FpQuantizedQmmPackageCache(
+                mlx_root, packages / FP_QUANTIZED_MM_CACHE, target
+            ),
         }
 
     def packages(self, event):
@@ -179,7 +228,7 @@ class LazyPackages:
                     workgroup_size=event["workgroupSize"],
                 )
             )
-        if name in MATRIX_FAMILIES:
+        if name in EXECUTED_FAMILIES:
             return [cache.get(entry)]
         key = column_small_layout.variant(entry, tuple(event["workgroupSize"]))
         return [cache.get(key)]
@@ -244,7 +293,7 @@ def audit_event(event, lazy, modules):
         audit_regions(event, packages, Path(modules).resolve())
         return True
     require(len(packages) == 1, "Lazy dispatch skipped its regions")
-    executed = name == "scan" or name in MATRIX_FAMILIES
+    executed = name == "scan" or name in EXECUTED_FAMILIES
     require(
         ("packageRoot" in event or not executed)
         and Path(event.get("packageRoot", packages[0][1])).resolve()
@@ -256,7 +305,7 @@ def audit_event(event, lazy, modules):
     request = event["details"]["request"]
     entry_point = (
         packages[0][0]["entryPoint"]["name"]
-        if name in MATRIX_FAMILIES
+        if name in EXECUTED_FAMILIES
         else {"metal": event["entry"], "opengl": "main", "directx": "CSMain"}[
             lazy.target
         ]

@@ -193,6 +193,30 @@ def test_matrix_caches_are_derived_per_entry(tmp_path):
     assert requested == list(zip(lazy.MATRIX_FAMILIES, entries))
 
 
+def test_quantized_products_are_audited_against_their_own_caches(tmp_path):
+    # A quantized layer outside the quantized verifiers reaches these kernels;
+    # each dispatch must name the package its family's cache derives again.
+    lazy_packages = lazy.LazyPackages(tmp_path / "mlx", tmp_path / "packages", "metal")
+    assert set(lazy.QUANTIZED_FAMILIES) <= set(lazy_packages.caches)
+    assert not set(lazy.QUANTIZED_FAMILIES) & set(lazy.MATRIX_FAMILIES)
+    requested = []
+    for name in lazy.QUANTIZED_FAMILIES:
+        lazy_packages.caches[name] = SimpleNamespace(
+            get=lambda entry, name=name: requested.append((name, entry)) or ("d", "p")
+        )
+    entries = [
+        "affine_qmv_fast_float_gs_64_b_8_batch_0",
+        "mxfp4_qmv_float_gs_32_b_4_batch_0",
+        "affine_qmm_t_float_gs_64_b_4_alN_true_batch_0",
+        "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_1",
+    ]
+    for entry in entries:
+        assert lazy.family(entry) in lazy.QUANTIZED_FAMILIES
+        assert lazy_packages.packages({"entry": entry}) == [("d", "p")]
+    assert requested == list(zip(lazy.QUANTIZED_FAMILIES, entries))
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("fault", ["none", "count", "module", "outside", "root"])
 def test_small_row_regions_name_each_package_and_module(tmp_path, fault):
     modules = tmp_path / "native-modules"

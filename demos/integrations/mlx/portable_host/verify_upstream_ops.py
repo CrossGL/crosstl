@@ -731,14 +731,21 @@ NO_DISPATCH_TESTS = frozenset(
 )
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
 # skip each of them and the native worker must run them. They compare the
-# products with NumPy's, so the CPU run is not their reference.
+# products with NumPy's or the CPU stream's, so the CPU run is not their
+# reference.
 GPU_ONLY_TESTS = frozenset(
-    "test_blas.TestBlas." + name
-    for name in (
-        "test_dot_product",
-        "test_wide_matmul",
-        "test_wide_addmm",
-        "test_gather_mm_blocks",
+    (
+        *(
+            "test_blas.TestBlas." + name
+            for name in (
+                "test_dot_product",
+                "test_wide_matmul",
+                "test_wide_addmm",
+                "test_gather_mm_blocks",
+            )
+        ),
+        # Evaluates GPU and CPU streams that wait on each other.
+        "test_eval.TestEval.test_multistream_deadlock",
     )
 )
 # CI runs each group in its own job. The normalization gradients move tens of

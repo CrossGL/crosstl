@@ -2361,7 +2361,9 @@ Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch, except `test_layer_norm_dim_check`, which rejects its
 arguments before building a graph, and `test_zero_size`, which must dispatch
-nothing. Every dispatch must belong to exactly one of the
+nothing. The CPU worker must skip the tests that need a GPU, such as
+`test_multistream_deadlock`, which the native worker runs. Every dispatch must
+belong to exactly one of the
 base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
 indexes and pass that family's artifact and native-identity checks, or be a
 lazily translated kernel. Gather, scatter and DivMod kernels specialized from
@@ -2372,8 +2374,9 @@ covers (see "Casts and copies of every GPU dtype", "Unary, binary and selection
 vectors of every GPU dtype" and "Aranges of every GPU dtype"). Lazy floating and
 complex vectors and 16-bit float aranges must name the package their cache derives
 again and pass the native-identity checks. Scans, small row and column
-reductions, GEMV, steel GEMM and split-K GEMM kernels must name the package
-their cache derives again from the recorded entry, launch and metadata (and,
+reductions, GEMV, steel GEMM and split-K GEMM kernels, and the affine and
+floating-point quantized products a quantized layer reaches, must name the
+package their cache derives again from the recorded entry, launch and metadata (and,
 for scans, matrix kernels and Direct3D or OpenGL dispatch regions, the
 package's entry point and retained native modules). A test that reaches the 16-bit package families, or row and
 column reductions with a static index, therefore fails instead of running an
