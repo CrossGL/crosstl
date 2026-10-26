@@ -1405,7 +1405,71 @@ class GLSLToCrossGLConverter:
                 name = getattr(item, "name", None)
                 if name:
                     names.add(name)
+        # A function-local or parameter name shadows the instance inside that function,
+        # so the instance name must avoid those declarations too.
+        for function in getattr(node, "functions", []) or []:
+            self.collect_function_declaration_names(function, names)
         return names
+
+    def collect_function_declaration_names(self, function, names):
+        for param in getattr(function, "params", []) or []:
+            if isinstance(param, tuple) and len(param) == 2:
+                names.add(param[1])
+                continue
+            name = getattr(param, "name", None)
+            if name:
+                names.add(name)
+        self.collect_statement_declaration_names(getattr(function, "body", None), names)
+
+    def collect_statement_declaration_names(self, statement, names):
+        if statement is None:
+            return
+        if isinstance(statement, (list, tuple)):
+            for item in statement:
+                self.collect_statement_declaration_names(item, names)
+        elif isinstance(statement, VariableNode):
+            if getattr(statement, "name", None):
+                names.add(statement.name)
+        elif isinstance(statement, AssignmentNode):
+            # generate_assignment renders a typed left-hand side as a declaration.
+            lhs = getattr(statement, "left", None)
+            if isinstance(lhs, VariableNode) and getattr(lhs, "vtype", None):
+                names.add(lhs.name)
+        elif isinstance(statement, StructNode):
+            if getattr(statement, "name", None):
+                names.add(statement.name)
+        elif isinstance(statement, BlockNode):
+            for child in statement.statements:
+                self.collect_statement_declaration_names(child, names)
+        elif isinstance(statement, IfNode):
+            self.collect_statement_declaration_names(
+                getattr(statement, "if_body", None), names
+            )
+            else_if_chain = []
+            if hasattr(statement, "else_if_conditions") and hasattr(
+                statement, "else_if_bodies"
+            ):
+                else_if_chain = list(
+                    zip(statement.else_if_conditions, statement.else_if_bodies)
+                )
+            elif hasattr(statement, "else_if_chain"):
+                else_if_chain = statement.else_if_chain
+            for _, elif_body in else_if_chain:
+                self.collect_statement_declaration_names(elif_body, names)
+            for _, chain_body in getattr(statement, "if_chain", None) or []:
+                self.collect_statement_declaration_names(chain_body, names)
+            self.collect_statement_declaration_names(
+                getattr(statement, "else_body", None), names
+            )
+        elif isinstance(statement, ForNode):
+            self.collect_statement_declaration_names(statement.init, names)
+            self.collect_statement_declaration_names(statement.condition, names)
+            self.collect_statement_declaration_names(statement.body, names)
+        elif isinstance(statement, (WhileNode, DoWhileNode)):
+            self.collect_statement_declaration_names(statement.body, names)
+        elif isinstance(statement, SwitchNode):
+            for _, clause_statements in ordered_switch_clauses(statement):
+                self.collect_statement_declaration_names(clause_statements, names)
 
     def is_anonymous_ssbo_struct(self, struct):
         qualifiers = {
