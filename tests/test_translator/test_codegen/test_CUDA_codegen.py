@@ -3960,6 +3960,37 @@ class TestCudaCodeGen:
         assert "distance(f1, 1)" not in cuda_code
         assert "distance(h1, i1)" not in cuda_code
 
+    def test_scalar_normalize_evaluates_operand_once_and_distance_is_typed(self):
+        source_code = """
+        shader TestShader {
+            float next(float x) {
+                return x * 3.0 + 1.0;
+            }
+            float f(vec3 v, float a, half h) {
+                float n = normalize(next(a));
+                half hn = normalize(half(next(a)));
+                vec3 m = v * distance(h, a);
+                return n + float(hn) + m.x;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float n = cgl_normalize_float(next(a));" in cuda_code
+        assert "half hn = cgl_normalize_half(__float2half(next(a)));" in cuda_code
+        assert "return value / fabsf(value);" in cuda_code
+        assert "return __float2half(widened / fabsf(widened));" in cuda_code
+        assert cuda_code.count("next(a)") == 2
+        assert (
+            "float3 m = cgl_float3_mul_scalar(v, fabsf(__half2float(h) - a));"
+            in cuda_code
+        )
+
     def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
         source_code = """
         shader TestShader {

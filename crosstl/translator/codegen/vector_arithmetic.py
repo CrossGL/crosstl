@@ -213,7 +213,7 @@ class VectorArithmeticMixin:
                 return self.expression_result_type(raw_args[0])
             if func_name == "cross" and raw_args:
                 return self.expression_result_type(raw_args[0])
-            if func_name in {"dot", "length"} and raw_args:
+            if func_name in {"dot", "distance", "length"} and raw_args:
                 vector_info = self.vector_type_info(
                     self.expression_result_type(raw_args[0])
                 )
@@ -221,13 +221,10 @@ class VectorArithmeticMixin:
                     return vector_info["component_type"]
                 if func_name == "length":
                     return self.expression_result_type(raw_args[0])
-            if func_name == "distance" and raw_args:
-                vector_info = self.vector_type_info(
-                    self.expression_result_type(raw_args[0])
-                )
-                if vector_info is not None:
-                    return vector_info["component_type"]
-                return self.expression_result_type(raw_args[0])
+                if func_name == "distance":
+                    operand_types = self.scalar_distance_operand_types(raw_args)
+                    if operand_types is not None:
+                        return self.scalar_distance_result_type(operand_types)
             if (
                 func_name in {
                     "abs",
@@ -1719,6 +1716,14 @@ class VectorArithmeticMixin:
                 return f"{helper_name}({args[0]})"
 
             scalar_type = self.map_vector_arithmetic_type(arg_type)
+            if (
+                func_name == "normalize"
+                and scalar_type in FLOAT_SCALARS
+                and not self.is_repeat_safe_expression(raw_args[0])
+            ):
+                # x / |x| names its operand twice; the helper evaluates it once.
+                helper_name = self.require_scalar_normalize_helper(scalar_type)
+                return f"{helper_name}({args[0]})"
             if scalar_type == "float":
                 if func_name == "length":
                     return f"fabsf({args[0]})"
@@ -1737,41 +1742,24 @@ class VectorArithmeticMixin:
             return None
 
         if func_name == "distance":
-            if len(raw_args) != 2:
-                return None
-            left_type = self.expression_result_type(
-                raw_args[0]
-            ) or self.scalar_cast_result_type(raw_args[0])
-            right_type = self.expression_result_type(
-                raw_args[1]
-            ) or self.scalar_cast_result_type(raw_args[1])
-            if (
-                left_type is None
-                or right_type is None
-                or self.vector_type_info(left_type) is not None
-                or self.vector_type_info(right_type) is not None
-            ):
-                return None
-            left_scalar = self.map_vector_arithmetic_type(left_type)
-            right_scalar = self.map_vector_arithmetic_type(right_type)
-            if (
-                left_scalar not in NUMERIC_SCALARS
-                or right_scalar not in NUMERIC_SCALARS
-                or (left_scalar in INTEGER_SCALARS and right_scalar in INTEGER_SCALARS)
-            ):
-                return None
-            if left_scalar == "half" and right_scalar == "half":
-                return (
-                    f"__float2half(fabsf(__half2float({args[0]}) - "
-                    f"__half2float({args[1]})))"
+            operand_types = self.scalar_distance_operand_types(raw_args)
+            if operand_types is not None:
+                left_scalar, right_scalar = operand_types
+                result_type = self.scalar_distance_result_type(operand_types)
+                if result_type == "half":
+                    return (
+                        f"__float2half(fabsf(__half2float({args[0]}) - "
+                        f"__half2float({args[1]})))"
+                    )
+                left_expr = (
+                    f"__half2float({args[0]})" if left_scalar == "half" else args[0]
                 )
-            left_expr = f"__half2float({args[0]})" if left_scalar == "half" else args[0]
-            right_expr = (
-                f"__half2float({args[1]})" if right_scalar == "half" else args[1]
-            )
-            if "double" in (left_scalar, right_scalar):
-                return f"fabs({left_expr} - {right_expr})"
-            return f"fabsf({left_expr} - {right_expr})"
+                right_expr = (
+                    f"__half2float({args[1]})" if right_scalar == "half" else args[1]
+                )
+                if result_type == "double":
+                    return f"fabs({left_expr} - {right_expr})"
+                return f"fabsf({left_expr} - {right_expr})"
 
         if func_name in {"dot", "cross"}:
             if len(raw_args) != 2:
@@ -1794,6 +1782,37 @@ class VectorArithmeticMixin:
             return f"{helper_name}({args[0]}, {args[1]})"
 
         return None
+
+    def scalar_distance_operand_types(self, raw_args):
+        """Return the mapped scalar types of ``distance(a, b)``, or None.
+
+        None when an operand is a vector, unresolved or not numeric, or when both
+        are integers, which ``distance`` has no overload for.
+        """
+        if len(raw_args) != 2:
+            return None
+        operand_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(
+                raw_arg
+            ) or self.scalar_cast_result_type(raw_arg)
+            if arg_type is None or self.vector_type_info(arg_type) is not None:
+                return None
+            scalar_type = self.map_vector_arithmetic_type(arg_type)
+            if scalar_type not in NUMERIC_SCALARS:
+                return None
+            operand_types.append(scalar_type)
+        if all(scalar_type in INTEGER_SCALARS for scalar_type in operand_types):
+            return None
+        return tuple(operand_types)
+
+    def scalar_distance_result_type(self, operand_types):
+        """Return the type scalar ``distance`` lowers to for its operand types."""
+        if "double" in operand_types:
+            return "double"
+        if all(scalar_type == "half" for scalar_type in operand_types):
+            return "half"
+        return "float"
 
     def generate_abs_call(self, raw_args, args):
         """Lower abs with scalar type awareness and vector helper support."""
@@ -2284,6 +2303,28 @@ class VectorArithmeticMixin:
             "{\n"
             f"    {component_type} inv_length = {one_literal} / {length_helper}(value);\n"
             f"    return {vector_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_scalar_normalize_helper(self, scalar_type):
+        helper_name = f"cgl_normalize_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        if scalar_type == "half":
+            body = (
+                "    float widened = __half2float(value);\n"
+                "    return __float2half(widened / fabsf(widened));\n"
+            )
+        else:
+            fabs_name = "fabs" if scalar_type == "double" else "fabsf"
+            body = f"    return value / {fabs_name}(value);\n"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}({scalar_type} value)\n"
+            "{\n"
+            f"{body}"
             "}"
         )
         self.helper_functions[helper_name] = helper
