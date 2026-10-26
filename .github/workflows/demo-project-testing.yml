@@ -1542,6 +1542,7 @@ jobs:
         env:
           CROSTL_REQUIRE_SUBGROUP_GUARDED_RETURNS: "1"
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_EXITS: "1"
+          CROSTL_REQUIRE_SUBGROUP_DIVERGENT_BARRIER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_SELF_COMPARISONS: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1558,6 +1559,7 @@ jobs:
               tests/test_translator/test_opengl_vector_comparisons.py \
               tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
               tests/test_translator/test_subgroup_uniform_exits.py \
+              tests/test_translator/test_subgroup_divergent_barriers.py \
               2>&1 | tee .mlx-portable-host/subgroup-returns.log
       - name: Validate collective helper arguments
         id: collective-helpers

@@ -42,6 +42,11 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from .constant_guards import (
+    guarded_dead_nodes,
+    lexical_constant_guards,
+    literal_guard_value,
+)
 from .loop_induction import (
     checked_induction_value,
     fixed_stride_loop_terminates,
@@ -3533,9 +3538,32 @@ def _varying_names(function, varying_parameters, walk_ast):
             return names
 
 
-def _divergent_barrier_plan(function, varying, effects, walk_ast):
-    """Top-level ``if (c) { ... barrier ... }`` statements whose ``c`` may vary."""
-    if any(isinstance(node, ReturnNode) for node in walk_ast(function.body)):
+def _constant_dead_nodes(function, walk_ast, map_operator):
+    """Ids of the nodes in branches that boolean constants of ``function`` rule out."""
+    guards = lexical_constant_guards(
+        function,
+        {},
+        written=_written_roots(function.body, walk_ast),
+        fold=lambda expression, constants: literal_guard_value(
+            expression, constants, map_operator
+        ),
+        tracked=lambda declaration: _type_name(declaration.var_type) == "bool",
+    )
+    return guarded_dead_nodes(function, guards, walk_ast)
+
+
+def _divergent_barrier_plan(function, varying, effects, walk_ast, map_operator):
+    """Top-level ``if (c) { ... barrier ... }`` statements whose ``c`` may vary.
+
+    A return inside a branch that a boolean constant rules out, such as a
+    folded template guard ``if (false) { ...; return; }``, never runs, so
+    the function still has no exit and its barriers converge here.
+    """
+    dead = _constant_dead_nodes(function, walk_ast, map_operator)
+    if any(
+        isinstance(node, ReturnNode) and id(node) not in dead
+        for node in walk_ast(function.body)
+    ):
         return None  # converge_subgroup_early_exits owns functions that exit
     indices = tuple(
         index
@@ -3629,7 +3657,9 @@ def converge_subgroup_divergent_barriers(ast, entries, walk_ast, map_operator):
             function, "generic_params", None
         ):
             continue
-        indices = _divergent_barrier_plan(function, varying[key], effects, walk_ast)
+        indices = _divergent_barrier_plan(
+            function, varying[key], effects, walk_ast, map_operator
+        )
         if indices is not None:
             plans.append((function, indices))
     if not plans:
