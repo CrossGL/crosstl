@@ -15,7 +15,7 @@ Direct3D with :class:`ShaderExecutionReorderingUnsupportedError` before generati
 threads never reaches a target as a call its compiler cannot resolve.
 
 The overloads that take a hit object share the name and are refused by this rule as well. The ``dx::HitObject``
-type they use and the ``dx::HitObject::`` static methods are refused by :mod:`.hit_objects`.
+type they use and the ``dx::HitObject::`` static methods are outside this rule.
 """
 
 from __future__ import annotations

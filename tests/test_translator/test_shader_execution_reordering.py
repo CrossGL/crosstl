@@ -1,7 +1,7 @@
 """HLSL Shader Model 6.9 shader execution reordering: kept for Direct3D, refused for every other target.
 
 ``dx::MaybeReorderThread(hint, bits)`` is the reorder overload that takes no hit object, so it names neither
-``dx::HitObject`` nor a ``dx::HitObject::`` method, and the hit object refusal does not cover it. The Metal, GLSL,
+``dx::HitObject`` nor a ``dx::HitObject::`` method, and a hit object refusal would not cover it. The Metal, GLSL,
 Slang, CUDA, HIP, Rust and Mojo generators used to copy the call into their output, where the target compiler
 rejects it: ``xcrun metal`` reports ``error: use of undeclared identifier 'dx'`` and ``glslangValidator`` reports
 ``'::' : not supported``. See :mod:`crosstl.translator.semantics.shader_execution_reordering`.
