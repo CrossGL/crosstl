@@ -48,6 +48,8 @@ from demos.integrations.mlx.portable_host import (
     dynamic_offset_dispatch,
     dynamic_offset_packages,
     elementwise_dispatch,
+    fft_dispatch,
+    fft_packages,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
@@ -632,6 +634,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # FFT's Stockham kernels, one per fft.cpp pipeline hash name.
+        self.ffts = (
+            fft_packages.FftPackageCache(
+                mlx_root, self.directory / fft_packages.CACHE_DIRECTORY, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -881,6 +891,8 @@ class HostRuntime:
                 return int(block_masked_mm_dispatch.cache_for(self, kind) is not None)
             if conv_dispatch.is_entry(name):
                 return int(self.convs is not None)
+            if fft_dispatch.is_entry(name):
+                return int(self.ffts is not None)
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
@@ -1122,6 +1134,8 @@ class HostRuntime:
             )
         if conv_dispatch.is_entry(entry):
             return conv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if fft_dispatch.is_entry(entry):
+            return fft_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
             return gather_mm_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

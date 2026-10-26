@@ -1,8 +1,8 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
 Scans, small row reductions, small column reductions, GEMV, dot-product,
-steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution
-and affine and floating-point quantized matrix-vector and matrix-matrix
+steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution,
+Stockham FFT and affine and floating-point quantized matrix-vector and matrix-matrix
 kernels are translated from the pinned sources on first use, so no static index lists
 their packages. Each dispatch is checked by deriving its
 package again from the same cache, from the event's entry, launch and
@@ -21,6 +21,7 @@ from demos.integrations.mlx.portable_host import (
     column_small_layout,
     conv_layout,
     dot_layout,
+    fft_layout,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_mm_layout,
@@ -53,6 +54,10 @@ from demos.integrations.mlx.portable_host.dot_packages import (
     CACHE_DIRECTORY as DOT_CACHE,
 )
 from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
+from demos.integrations.mlx.portable_host.fft_packages import (
+    CACHE_DIRECTORY as FFT_CACHE,
+)
+from demos.integrations.mlx.portable_host.fft_packages import FftPackageCache
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MV_CACHE,
 )
@@ -125,6 +130,7 @@ MATRIX_FAMILIES = {
     "gemm": gemm_layout.ENTRY_PREFIXES,
     "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
     "conv": conv_layout.ENTRY_PREFIXES,
+    "fft": fft_layout.ENTRY_PREFIXES,
 }
 # Quantized products run through the same executor. Their own upstream
 # verifiers translate their packages ahead; any other test that reaches one
@@ -198,6 +204,7 @@ class LazyPackages:
                 mlx_root, packages / SPLITK_CACHE, target
             ),
             "conv": ConvPackageCache(mlx_root, packages / CONV_CACHE, target),
+            "fft": FftPackageCache(mlx_root, packages / FFT_CACHE, target),
             "quantized-mv": QuantizedMatmulPackageCache(
                 mlx_root, packages / QUANTIZED_MV_CACHE, target
             ),

@@ -4772,3 +4772,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_conv.inc"
 // And the port of the fused cross-entropy, which shares the row helpers.
 #include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"
+// And the port of FFT, whose inputs take the strided copy.
+#include "mlx/backend/no_gpu/crosstl_fft.inc"

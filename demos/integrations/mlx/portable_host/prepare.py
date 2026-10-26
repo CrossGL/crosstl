@@ -84,6 +84,7 @@ def adapted_sources(original, primitives, events):
         "SegmentedMM",
         "BlockMaskedMM",
         "Convolution",
+        "FFT",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -174,6 +175,7 @@ else()
         "crosstl_scatter.inc": (HERE / "scatter.inc").read_bytes(),
         "crosstl_conv.inc": (HERE / "conv.inc").read_bytes(),
         "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
+        "crosstl_fft.inc": (HERE / "fft.inc").read_bytes(),
     }
 
 
