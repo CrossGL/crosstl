@@ -16,7 +16,15 @@ from crosstl.translator.diagnostics import TranslationDiagnostic
 from tests.conformance.fuzz import campaign, mutate, outcomes, worker
 from tests.conformance.fuzz.preprocessor import units
 from tests.conformance.fuzz.printers import PRINTERS, GLSLPrinter
-from tests.conformance.fuzz.program import Config, programs
+from tests.conformance.fuzz.program import (
+    FLOAT_TO_INTEGER_RANGE,
+    Builtin,
+    Config,
+    Construct,
+    Convert,
+    Literal,
+    programs,
+)
 from tests.conformance.fuzz.spirv import SpirvPrinter
 from tests.conformance.fuzz.targets import IMPORTERS
 from tests.conformance.process import run
@@ -107,6 +115,50 @@ def test_printing_is_deterministic(program):
             continue
         assert printer().print(program) == printer().print(program)
     assert SpirvPrinter().print(program) == SpirvPrinter().print(program)
+
+
+def _nodes(node):
+    yield node
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _nodes(item)
+    elif hasattr(node, "__dataclass_fields__"):
+        for name in node.__dataclass_fields__:
+            yield from _nodes(getattr(node, name))
+
+
+def _literal_values(node):
+    """The values of a literal or of a vector built only from literals, else ``None``."""
+    if isinstance(node, Literal):
+        return [node.value]
+    if isinstance(node, Construct):
+        parts = [_literal_values(arg) for arg in node.args]
+        return None if None in parts else [value for part in parts for value in part]
+    return None
+
+
+@given(programs())
+def test_float_to_integer_conversions_are_defined(program):
+    # DXC folds a constant float-to-int conversion of NaN or of a value out of range to undef (#3109).
+    for node in _nodes(program):
+        if (
+            not isinstance(node, Convert)
+            or node.type.kind not in FLOAT_TO_INTEGER_RANGE
+            or node.operand.type.kind != "float"
+        ):
+            continue
+        low, high = FLOAT_TO_INTEGER_RANGE[node.type.kind]
+        values = _literal_values(node.operand)
+        if values is not None:
+            assert all(low <= value <= high for value in values)
+            continue
+        # Anything else is min(max(x, low), high).
+        outer = node.operand
+        assert isinstance(outer, Builtin) and outer.name == "min"
+        inner = outer.args[0]
+        assert isinstance(inner, Builtin) and inner.name == "max"
+        assert set(_literal_values(inner.args[1])) == {low}
+        assert set(_literal_values(outer.args[1])) == {high}
 
 
 def test_scalar_printers_refuse_vectors():
