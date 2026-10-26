@@ -5285,7 +5285,7 @@ class MetalCodeGen(
             self.validate_metal_fragment_invocation_density(func, shader_type)
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
-        if shader_type in {"compute", "ray_generation"}:
+        if shader_type in self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS:
             self.validate_metal_kernel_derivatives(func, shader_type)
         self.current_unsupported_glsl_buffer_block_parameters = (
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
@@ -6977,13 +6977,25 @@ class MetalCodeGen(
                 return name
         return None
 
-    def validate_metal_kernel_derivatives(self, func, shader_type):
-        """Refuse derivatives reached from a Metal ``kernel`` function.
+    # The Metal function kind each non-fragment stage is written as. None of
+    # them has derivatives.
+    METAL_DERIVATIVE_FREE_FUNCTION_KINDS = {
+        "compute": "kernel",
+        "ray_generation": "kernel",
+        "mesh": "mesh",
+        "object": "object",
+        "task": "object",
+        "amplification": "object",
+    }
 
-        MSL has ``dfdx``, ``dfdy`` and ``fwidth`` only in fragment functions, so a kernel that calls them,
-        directly or through a helper, does not compile. SPIR-V derivative groups and Shader Model 6.6 compute
-        derivatives have no Metal equivalent.
+    def validate_metal_kernel_derivatives(self, func, shader_type):
+        """Refuse derivatives reached from a Metal ``kernel``, ``mesh`` or ``object`` function.
+
+        MSL has ``dfdx``, ``dfdy`` and ``fwidth`` only in fragment functions, so a kernel, mesh or object function
+        that calls them, directly or through a helper, does not compile. SPIR-V derivative groups and Shader Model
+        6.6 compute derivatives have no Metal equivalent.
         """
+        function_kind = self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS[shader_type]
         for reachable_func in self.metal_reachable_functions(func):
             derivative_name = self.metal_kernel_derivative_call_name(reachable_func)
             if derivative_name is None:
@@ -6996,9 +7008,10 @@ class MetalCodeGen(
                 (
                     f"Metal {shader_type} entry point '{entry_name}' calls "
                     f"{derivative_name}{via}; Metal has derivatives only in fragment "
-                    "functions, so a kernel function cannot call dfdx, dfdy or fwidth."
+                    f"functions, so a {function_kind} function cannot call dfdx, dfdy "
+                    "or fwidth."
                 ),
-                missing_capabilities=("metal.kernel-derivatives",),
+                missing_capabilities=(f"metal.{function_kind}-derivatives",),
                 operation=derivative_name,
                 reason="derivatives are fragment-only in Metal",
             )

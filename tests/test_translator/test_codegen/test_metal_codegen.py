@@ -2538,6 +2538,64 @@ def test_metal_fragment_derivatives_still_lower_beside_a_kernel():
     assert "fwidth(uv.x)" in generated_code
 
 
+@pytest.mark.parametrize(
+    "stage, function_kind",
+    [
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "object"),
+        ("amplification", "object"),
+    ],
+)
+def test_metal_mesh_and_object_functions_refuse_derivatives(stage, function_kind):
+    shader = f"""
+    shader MeshDerivative {{
+        buffer float values[];
+
+        float slope(float x) {{
+            return dFdx(x);
+        }}
+
+        {stage} {{
+            void main() {{
+                values[0] = slope(values[0]);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == "dFdx"
+    assert error.missing_capabilities == (f"metal.{function_kind}-derivatives",)
+    assert f"Metal {stage} entry point 'main' calls dFdx through 'slope';" in str(error)
+    assert f"so a {function_kind} function cannot call dfdx" in str(error)
+
+
+def test_metal_hlsl_mesh_shader_refuses_ddx(tmp_path):
+    source = tmp_path / "m.hlsl"
+    source.write_text(
+        """
+struct V { float4 pos : SV_Position; };
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(uint3 tid : SV_GroupThreadID, out vertices V verts[3], out indices uint3 tris[1]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(ddx((float)tid.x), 0, 0, 1);
+    tris[0] = uint3(0, 1, 2);
+}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        crosstl.translate(str(source), backend="metal", format_output=False)
+
+    assert excinfo.value.missing_capabilities == ("metal.mesh-derivatives",)
+
+
 def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
     # The GLSL importer writes dFdxFine as ddx_fine and fwidthFine as fwidth_fine.
     shader = """
