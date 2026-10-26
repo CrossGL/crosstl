@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,6 +105,12 @@ def find_mojo_compiler():
             f"mojo compiler is not installed or not executable ({mojo}): {output}"
         )
 
+    version = (result.stdout or result.stderr).strip()
+    if not re.match(r"mojo\s+1\.", version, re.IGNORECASE):
+        # Calendar-versioned Mojo (24.x, 25.x) predates `comptime`; like
+        # tools/coverage/validators.py, treat it as absent.
+        pytest.skip(f"mojo compiler predates Mojo 1.x ({mojo}): {version}")
+
     return mojo
 
 
@@ -119,6 +126,19 @@ def test_find_mojo_compiler_skips_non_compiler_on_path(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedProbe())
 
     with pytest.raises(pytest.skip.Exception):
+        find_mojo_compiler()
+
+
+def test_find_mojo_compiler_skips_calendar_versioned_mojo(monkeypatch):
+    class LegacyProbe:
+        returncode = 0
+        stdout = "mojo 24.4.0 (59977802)\n"
+        stderr = ""
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/mojo")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: LegacyProbe())
+
+    with pytest.raises(pytest.skip.Exception, match="predates Mojo 1.x"):
         find_mojo_compiler()
 
 
@@ -596,10 +616,10 @@ def test_unit_enums_lower_to_mojo_aliases():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Mode = Int32" in generated_code
-    assert "alias Mode_Add = 0" in generated_code
-    assert "alias Mode_Multiply = 4" in generated_code
-    assert "alias Mode_Screen = 5" in generated_code
+    assert "comptime Mode = Int32" in generated_code
+    assert "comptime Mode_Add = 0" in generated_code
+    assert "comptime Mode_Multiply = 4" in generated_code
+    assert "comptime Mode_Screen = 5" in generated_code
     assert "fn choose(mode: Mode) -> Int32:" in generated_code
     assert "if (mode == Mode_Multiply):" in generated_code
     assert "return Int32(Mode_Screen)" in generated_code
@@ -654,11 +674,11 @@ def test_enum_flag_values_reference_previous_aliases_and_auto_increment():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Flags = UInt32" in generated_code
-    assert "alias Flags_Read = (1 << 0)" in generated_code
-    assert "alias Flags_Write = (1 << 1)" in generated_code
-    assert "alias Flags_ReadWrite = (Flags_Read | Flags_Write)" in generated_code
-    assert "alias Flags_Next = 4" in generated_code
+    assert "comptime Flags = UInt32" in generated_code
+    assert "comptime Flags_Read = (1 << 0)" in generated_code
+    assert "comptime Flags_Write = (1 << 1)" in generated_code
+    assert "comptime Flags_ReadWrite = (Flags_Read | Flags_Write)" in generated_code
+    assert "comptime Flags_Next = 4" in generated_code
     assert "return UInt32((Flags_ReadWrite | Flags_Next))" in generated_code
     assert "Read | Write" not in generated_code
     assert "Flags::" not in generated_code
@@ -709,8 +729,8 @@ def test_integer_enum_underlying_types_are_preserved():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias Small = UInt16" in generated_code
-    assert "alias Small_Auto = 3" in generated_code
+    assert "comptime Small = UInt16" in generated_code
+    assert "comptime Small_Auto = 3" in generated_code
     assert "fn pick() -> UInt16:" in generated_code
     assert "return UInt16(Small_Auto)" in generated_code
 
@@ -743,9 +763,9 @@ def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
     assert "var Some_0: Int32" in generated_code
     assert "var value: Float32" in generated_code
     assert "var flag: Bool" in generated_code
-    assert "alias MaybeInt_Some = 0" in generated_code
-    assert "alias MaybeInt_Named = 1" in generated_code
-    assert "alias MaybeInt_None = 2" in generated_code
+    assert "comptime MaybeInt_Some = 0" in generated_code
+    assert "comptime MaybeInt_Named = 1" in generated_code
+    assert "comptime MaybeInt_None = 2" in generated_code
     assert "fn MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
     assert (
         "return MaybeInt(variant=MaybeInt_Some, Some_0=payload0, value=0.0, flag=False)"
@@ -1591,9 +1611,9 @@ def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += "\nfn main():\n    print(readScale())\n"
 
-    assert "alias SCALE = 2.0" in generated_code
-    assert "alias LIMIT = 4" in generated_code
-    assert "alias UP = SIMD[DType.float32, 4](0.0, 1.0, 0.0, 0.0)" in generated_code
+    assert "comptime SCALE = 2.0" in generated_code
+    assert "comptime LIMIT = 4" in generated_code
+    assert "comptime UP = SIMD[DType.float32, 4](0.0, 1.0, 0.0, 0.0)" in generated_code
 
     source_path = tmp_path / "constants.mojo"
     source_path.write_text(generated_code)
@@ -1626,7 +1646,7 @@ def test_keyword_like_crossgl_bindings_are_escaped_for_mojo():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias alias_ = 2" in generated_code
+    assert "comptime alias_ = 2" in generated_code
     assert "    var return_: Int32" in generated_code
     assert "    var fn_: Int32" in generated_code
     assert "fn fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
@@ -5989,8 +6009,8 @@ def test_generic_payload_enum_variants_lower_to_specialized_mojo_structs():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "@value\nstruct Result_int_int:" in generated_code
-    assert "alias Result_Ok = 0" in generated_code
-    assert "alias Result_Err = 1" in generated_code
+    assert "comptime Result_Ok = 0" in generated_code
+    assert "comptime Result_Err = 1" in generated_code
     assert (
         "fn Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
         in generated_code
@@ -11762,7 +11782,7 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert "struct TextureBox[T: Copyable]:" in generated_code
     assert "struct BufferBox[T: Copyable]:" in generated_code
     assert "struct SamplerBox[T: Copyable]:" in generated_code
-    assert "alias TextureMode = Int32" in generated_code
+    assert "comptime TextureMode = Int32" in generated_code
     assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
     assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
     assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
@@ -27309,11 +27329,11 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "alias comptime_ = 2" in generated_code
+    assert "comptime comptime_ = 2" in generated_code
     assert "fn comptime_(var_: Int32) -> Int32:" in generated_code
     assert "var ref_: Int32 = (var_ + comptime_)" in generated_code
     assert "return ref_" in generated_code
-    assert "alias comptime = 2" not in generated_code
+    assert "comptime comptime = 2" not in generated_code
     assert "fn comptime(" not in generated_code
     assert "var ref:" not in generated_code
 

@@ -17017,7 +17017,15 @@ def _metal_local_using_alias(
 def _metal_rewrite_identifier_tokens(
     text: str,
     replacements: Mapping[str, str],
+    *,
+    skip_template_names: bool = False,
 ) -> tuple[str, bool]:
+    """Replace identifier tokens outside member and scope contexts.
+
+    With ``skip_template_names``, a token followed by ``<`` is kept: a plain
+    alias cannot take template arguments, so such a token names the template an
+    alias like ``using Op = Op<T>;`` refers to.
+    """
     if not replacements:
         return text, False
 
@@ -17042,6 +17050,12 @@ def _metal_rewrite_identifier_tokens(
                     "->",
                 }
             replacement = None if member_context else replacements.get(token)
+            if replacement is not None and skip_template_names:
+                following = j
+                while following < len(text) and text[following].isspace():
+                    following += 1
+                if following < len(text) and text[following] == "<":
+                    replacement = None
             if replacement is None:
                 parts.append(token)
             else:
@@ -17079,9 +17093,20 @@ def _metal_rewrite_embedded_identifier_parts(
                 i = j
                 continue
             embedded_parts = token.split("_")
-            rewritten_parts = [
-                str(replacements.get(part, part)) for part in embedded_parts
-            ]
+            rewritten_parts = []
+            for index, part in enumerate(embedded_parts):
+                replacement = str(replacements.get(part, part))
+                replacement_parts = replacement.split("_")
+                if (
+                    len(replacement_parts) > 1
+                    and replacement_parts[0] == part
+                    and embedded_parts[index : index + len(replacement_parts)]
+                    == replacement_parts
+                ):
+                    # ``using Op = Op<T>;`` mangles to ``Op_T``: a part already
+                    # followed by its replacement's arguments is resolved.
+                    replacement = part
+                rewritten_parts.append(replacement)
             rewritten = "_".join(rewritten_parts)
             parts.append(rewritten)
             changed = changed or rewritten != token
@@ -17196,7 +17221,11 @@ def _metal_resolve_type_identifiers(
     seen_texts = {text}
     for rewrite_pass in range(1, rewrite_pass_limit + 1):
         previous = text
-        text, alias_changed = _metal_rewrite_identifier_tokens(text, alias_values)
+        text, alias_changed = _metal_rewrite_identifier_tokens(
+            text,
+            alias_values,
+            skip_template_names=True,
+        )
         text, constant_changed = _metal_rewrite_identifier_tokens(
             text,
             constant_values,
@@ -18200,6 +18229,21 @@ def _infer_plain_template_helper_arguments(
         if inference_template_arguments
         else ({}, {})
     )
+    if inference_template_arguments and not explicit_variadic_bindings:
+        # Only the supplied arguments are explicit. A parameter after them is
+        # deduced from the call first and takes its default only when it cannot
+        # be deduced; the default may also name a deduced parameter
+        # (``typename Indexer::IndexT``). Defaults are applied after deduction.
+        supplied = set(
+            (getattr(template, "template_parameters", []) or [])[
+                : len(inference_template_arguments)
+            ]
+        )
+        explicit_bindings = {
+            parameter: value
+            for parameter, value in explicit_bindings.items()
+            if parameter in supplied
+        }
     # Explicit template arguments are fixed before function-parameter overload
     # viability is checked. A by-value parameter that is exactly one fixed type
     # parameter may therefore accept ordinary source scalar conversion
@@ -21287,22 +21331,30 @@ def _unresolved_metal_template_placeholders_in_type(
     type_text: str,
     template_parameter_names: set[str],
     concrete_type_names: set[str] | None = None,
+    template_type_names: set[str] | None = None,
 ) -> list[str]:
     normalized = _strip_metal_type_qualifiers(type_text)
     if "." in normalized or "->" in normalized:
         return []
 
     concrete_names = concrete_type_names or set()
+    # A declared struct or template name is a type, whatever its spelling
+    # (``MD<float>``, ``RGB``), not a placeholder for a template argument.
+    declared_names = concrete_names | (template_type_names or set())
+
+    def looks_like_placeholder(identifier: str) -> bool:
+        return (
+            identifier not in declared_names
+            and _metal_looks_like_template_placeholder_identifier(identifier)
+        )
+
     missing: list[str] = []
     for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
         if token in concrete_names:
             embedded_missing = [
                 part
                 for part in token.split("_")[1:]
-                if (
-                    part in template_parameter_names
-                    or _metal_looks_like_template_placeholder_identifier(part)
-                )
+                if (part in template_parameter_names or looks_like_placeholder(part))
             ]
             for part in embedded_missing:
                 if part not in missing:
@@ -21310,8 +21362,7 @@ def _unresolved_metal_template_placeholders_in_type(
             if not embedded_missing:
                 continue
         if (
-            token in template_parameter_names
-            or _metal_looks_like_template_placeholder_identifier(token)
+            token in template_parameter_names or looks_like_placeholder(token)
         ) and token not in missing:
             missing.append(token)
     return missing
@@ -21550,6 +21601,7 @@ def _unresolved_metal_standalone_template_type_records(
             type_text,
             template_parameter_names,
             concrete_type_names,
+            declared_template_type_names,
         )
         if not missing:
             return

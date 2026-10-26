@@ -1,6 +1,6 @@
 """The harness's buffer contract and its discovery in each target language.
 
-Every conformance kernel reads one storage buffer bound at slot 0 and writes one bound at slot 1, in the binding
+Every conformance kernel reads storage buffers at slots 0 through n-1 and writes one at slot n, in the binding
 namespace of its language: ``[[buffer(n)]]`` in Metal, ``register(tN)``/``register(uN)`` in HLSL, ``binding = N``
 in GLSL and ``Binding N`` in descriptor set 0 in SPIR-V.
 
@@ -23,7 +23,7 @@ INPUT, OUTPUT = 0, 1
 
 
 class InterfaceChanged(ValueError):
-    """The artifact does not expose the two-buffer compute interface of its source."""
+    """The artifact does not expose the storage-buffer compute interface of its source."""
 
 
 ENTRY_PATTERNS = {
@@ -70,11 +70,12 @@ def _parameter_list(text, start):
     return text[start : index - 1]
 
 
-def _slots(found, what):
+def _slots(found, what, input_count):
     slots = sorted(found)
-    if slots != [INPUT, OUTPUT]:
-        raise InterfaceChanged(f"Expected {what} slots [0, 1], found {slots}")
-    return INPUT, OUTPUT
+    expected = list(range(input_count + 1))
+    if slots != expected:
+        raise InterfaceChanged(f"Expected {what} slots {expected}, found {slots}")
+    return tuple(expected)
 
 
 def _split_parameters(text):
@@ -102,7 +103,7 @@ def _constants(found, expected, what):
     return found[0]
 
 
-def _metal(text, group, constants):
+def _metal(text, group, constants, input_count):
     entry = _single(ENTRY_PATTERNS["metal"], text)
     storage, blocks, kinds = [], [], set()
     for parameter in _split_parameters(_parameter_list(text, entry.end())):
@@ -121,14 +122,14 @@ def _metal(text, group, constants):
     if kinds:
         raise InterfaceChanged(f"Unexpected Metal resource kinds: {sorted(kinds)}")
     block = _constants(blocks, constants, "Metal constant buffers")
-    if block is not None and block["slot"] in (INPUT, OUTPUT):
+    if block is not None and block["slot"] in range(input_count + 1):
         raise InterfaceChanged(
             "The Metal constants block shares a storage-buffer index"
         )
     return {
         "entry": entry.group(1),
         "group": group,
-        "bindings": _slots(storage, "Metal buffer"),
+        "bindings": _slots(storage, "Metal buffer", input_count),
         "constants": block,
     }
 
@@ -175,7 +176,9 @@ def _hlsl_constant_buffers(text):
     return blocks
 
 
-def _hlsl(text, group, constants):
+def _hlsl(text, group, constants, input_count):
+    if input_count != 1:
+        raise InterfaceChanged("The D3D12 harness supports one input buffer")
     entry = _single(ENTRY_PATTERNS["hlsl"], text)
     blocks = _hlsl_constant_buffers(text)
     declared = re.findall(
@@ -200,7 +203,7 @@ def _hlsl(text, group, constants):
             "kind": "structured" if kind == "StructuredBuffer" else "raw",
             "stride": _hlsl_stride(element, text) if element else 0,
         }
-    bindings = _slots(list(resources), "HLSL register")
+    bindings = _slots(list(resources), "HLSL register", input_count)
     if resources[OUTPUT]["register"] != "u1":
         raise InterfaceChanged("The output buffer must be the UAV u1")
     return {
@@ -212,7 +215,7 @@ def _hlsl(text, group, constants):
     }
 
 
-def _glsl(text, _group, constants):
+def _glsl(text, _group, constants, input_count):
     layout = _single(ENTRY_PATTERNS["glsl"], text).group(1)
     size = {
         axis: int(value)
@@ -241,7 +244,7 @@ def _glsl(text, _group, constants):
     return {
         "entry": "main",
         "group": (size.get("x", 1), size.get("y", 1), size.get("z", 1)),
-        "bindings": _slots(slots, "GLSL storage binding"),
+        "bindings": _slots(slots, "GLSL storage binding", input_count),
         "constants": _constants(uniform_blocks, constants, "GLSL uniform blocks"),
     }
 
@@ -267,7 +270,7 @@ def _spirv_constant_blocks(text):
     return found
 
 
-def _spirv(text, _group, constants):
+def _spirv(text, _group, constants, input_count):
     entry = _single(ENTRY_PATTERNS["spirv"], text)
     size = re.search(
         r"OpExecutionMode\s+%\S+\s+LocalSize\s+(\d+)\s+(\d+)\s+(\d+)", text
@@ -296,6 +299,7 @@ def _spirv(text, _group, constants):
         "bindings": _slots(
             [int(value) for name, value in bound if name not in uniform],
             "SPIR-V binding",
+            input_count,
         ),
         "constants": _constants(blocks, constants, "SPIR-V constant blocks"),
     }
@@ -304,14 +308,28 @@ def _spirv(text, _group, constants):
 DISCOVER = {"metal": _metal, "hlsl": _hlsl, "glsl": _glsl, "spirv": _spirv}
 
 
-def interface(path, target, source_group, constants=False):
-    """Entry point, one-dimensional workgroup size, (input, output) binding slots and constants block of an artifact.
+def interface(path, target, source_group, constants=False, *, input_count=1):
+    """Entry point, one-dimensional workgroup size, ordered storage slots and constants block of an artifact.
+
+    ``input_count`` storage inputs occupy slots 0 through n-1, followed by the output at slot n.
+    D3D12 retains its single-input contract.
 
     ``constants`` says whether the case gives the host a constants block; the result's ``constants`` is then the
     block's ``slot`` (``None`` for push constants) and ``kind`` (``uniform`` or ``push``), and ``None`` otherwise.
     """
+    if (
+        not isinstance(input_count, int)
+        or isinstance(input_count, bool)
+        or input_count < 1
+    ):
+        raise InterfaceChanged("Expected a positive input-buffer count")
     text = _strip_comments(Path(path).read_text())
-    found = DISCOVER[target](text, (source_group, 1, 1), constants)
+    found = DISCOVER[target](text, (source_group, 1, 1), constants, input_count)
+    block = found["constants"]
+    if target == "spirv" and block is not None and block["slot"] in found["bindings"]:
+        raise InterfaceChanged(
+            "The SPIR-V constants block shares a storage-buffer binding"
+        )
     group = tuple(found["group"])
     if min(group) < 1 or group[1:] != (1, 1):
         raise InterfaceChanged(

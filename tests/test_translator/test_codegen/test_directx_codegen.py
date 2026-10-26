@@ -6650,6 +6650,97 @@ def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
     assert "dFdyCoarse(" not in generated_code
 
 
+def test_directx_fine_and_coarse_fwidth_lower_to_hlsl_derivatives():
+    shader = """
+    shader FineCoarseFwidth {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec2 fine = fwidthFine(uv);
+                vec2 coarse = fwidthCoarse(uv * 2.0);
+                return vec4(fine, coarse);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 fine = (abs(ddx_fine(uv)) + abs(ddy_fine(uv)));" in generated_code
+    assert (
+        "float2 coarse = (abs(ddx_coarse((uv * 2.0))) + "
+        "abs(ddy_coarse((uv * 2.0))));"
+    ) in generated_code
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fwidth_fine_name_is_not_lowered():
+    shader = """
+    shader FwidthFineShadowing {
+        float fwidthFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = fwidthFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fine = fwidthFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "declaration, call, reason",
+    [
+        (
+            "float abs = 1.0;",
+            "fwidthFine(uv) * abs",
+            "would name the shader's own 'abs'",
+        ),
+        (
+            "float ddy_coarse = 1.0;",
+            "fwidthCoarse(uv) * ddy_coarse",
+            "would name the shader's own 'ddy_coarse'",
+        ),
+        (
+            "int i = 0;",
+            "fwidthFine(uv * float(i++))",
+            "would evaluate an argument with side effects twice",
+        ),
+    ],
+)
+def test_directx_fine_and_coarse_fwidth_refuse_unfaithful_lowering(
+    declaration, call, reason
+):
+    shader = f"""
+    shader FineCoarseFwidthRefusal {{
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                {declaration}
+                vec2 r = {call};
+                return vec4(r, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated_code, message = hlsl_partial_output(
+        generate_code, parse_code(tokenize_code(shader))
+    )
+
+    assert "HLSL has no fwidth" in message
+    assert "fwidthFine(" not in generated_code
+    assert "fwidthCoarse(" not in generated_code
+    assert reason in message
+
+
 def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     shader = """
     shader FineDerivativeShadowing {
@@ -6683,6 +6774,10 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "dFdyFine",
         "dFdyCoarse",
         "fwidth",
+        "fwidthFine",
+        "fwidthCoarse",
+        "fwidth_fine",
+        "fwidth_coarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
@@ -7092,8 +7187,11 @@ def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
     assert "return (int(lhs) + rhs);" in generated
     assert "return (int(lhs) << rhs);" in generated
     assert "return (lhs >> int(rhs));" in generated
-    assert "return (int2(lhs) << int2(rhs));" in generated
-    assert "return (int2(lhs) >> rhs);" in generated
+    # MSL does not promote vectors: a narrow vector shift keeps its left operand type and wraps at 16 bits.
+    assert "return (lhs << rhs);" in generated
+    assert "return (lhs >> rhs);" in generated
+    assert "int2(lhs) <<" not in generated
+    assert "int2(lhs) >>" not in generated
     assert "return (uint(lhs) << rhs);" not in generated
     assert "return (__crossgl_round_half1(float(index)) * step);" in generated
     assert "return (lhs + int16_t(rhs));" in generated
@@ -7482,9 +7580,10 @@ def test_hlsl_generic_vector_constructors_emit_hlsl_names():
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
-    assert "int2 inc = int2(1, 2);" in generated_code
+    # 8-bit vectors widen to 32 bits and wrap like i8vec2 and u8vec4.
+    assert "return (int2(uint2((input + inc)) << 24u) >> 24);" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
-    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "return (uint4((input + inc)) & 255u);" in generated_code
     assert "int16_t3 signedShorts(int16_t3 input)" in generated_code
     assert "int16_t3 inc = int16_t3(1, 2, 3);" in generated_code
     assert "uint16_t2 unsignedShorts(uint16_t2 input)" in generated_code
@@ -23611,10 +23710,12 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         }
     }
     """
-    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(missing_semantic_code), "mesh"
-        )
+    # A member without a semantic takes the TEXCOORD<n> default that vertex outputs and pixel inputs use
+    # (hlsl_mesh_semantics.py).
+    defaulted = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(missing_semantic_code), "mesh"
+    )
+    assert re.search(r"float2 uv\s*:\s*TEXCOORD0;", defaulted)
 
     primitive_only_vertex_semantic_code = """
     shader MeshPrimitiveOnlyVertexSemantic {
@@ -51828,3 +51929,31 @@ def test_hlsl_hip_unsafe_record_layouts_fail_closed(
             format_output=False,
             source_backend="hip",
         )
+
+
+def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "(abs(ddx_fine(input.uv)) + abs(ddy_fine(input.uv)))" in generated_code
+    assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
+    assert "fwidth_fine(" not in generated_code
+    assert "fwidth_coarse(" not in generated_code

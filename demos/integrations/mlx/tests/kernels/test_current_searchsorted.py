@@ -853,14 +853,14 @@ def test_current_mlx_searchsorted_native_parity(
 
 
 def test_ci_requires_native_searchsorted_parity():
+    from tests import workflow_text
     from tests.ci_helpers import (
         assert_native_step_prerequisites,
         assert_workflow_triggers,
     )
-    from tools import ci_coverage
 
     workflow = (ROOT / ".github/workflows/demo-project-testing.yml").read_text()
-    step = ci_coverage.workflow_job_step_section(
+    step = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Prove current MLX searchsorted native parity"
     )
     assert_native_step_prerequisites(step, job="mlx-metal-porting")
@@ -881,7 +881,7 @@ def test_ci_requires_native_searchsorted_parity():
     assert_workflow_triggers(
         workflow, "demos/integrations/mlx/tests/kernels/test_current_searchsorted.py"
     )
-    upload = ci_coverage.workflow_job_step_section(
+    upload = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
     )
     assert "if: always()" in upload

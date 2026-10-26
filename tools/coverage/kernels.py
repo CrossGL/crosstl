@@ -110,6 +110,7 @@ class OpenCL(Dialect):
     }
     _HALF = re.compile(r"\bhalf\d*\b")
     _FP16 = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
+    _GROUP_SIZE = "__attribute__((reqd_work_group_size(1, 1, 1)))"
     # An image or a pipe is a kernel argument, declared with its access qualifier.
     _IMAGE = re.compile(r"(?:read_only|write_only|read_write) (?:image|pipe)")
     # A sampler every image read accepts: integer and floating-point coordinates, and integer image formats.
@@ -228,7 +229,8 @@ class OpenCL(Dialect):
         lines = [
             *parts.get("prelude", ()),
             *(line for line in declarations if line not in shared + images),
-            f"__kernel void probe({', '.join(params)}) {{",
+            # Like the other languages' probes, the kernel fixes its work-group size at one invocation.
+            f"__kernel {self._GROUP_SIZE} void probe({', '.join(params)}) {{",
             "    uint i = get_global_id(0);",
         ]
         lines += [f"    {line}" for line in [*shared, *body]]
@@ -254,6 +256,7 @@ class Mojo(Dialect):
         "uint": "UInt32",
         "bool": "Bool",
         "int64": "Int",
+        "uint64": "UInt64",
     }
     _DTYPES = {
         "float": "float32",
@@ -262,6 +265,7 @@ class Mojo(Dialect):
         "uint": "uint32",
         "bool": "bool",
         "int64": "int64",
+        "uint64": "uint64",
     }
     # A pair of values, as Mojo's frexp, modf and divmod return; the probe reads the first.
     _PAIR = re.compile(r"Tuple\[(\w+), \1\]|StaticTuple\[(\w+), 2\]")
@@ -289,9 +293,13 @@ class Mojo(Dialect):
     def literal(self, kind: Type) -> str:
         if kind.shape:
             raise ProbeError("no constant probe argument of a vector or matrix type")
-        return {"bool": "False", "int": "0", "uint": "0", "int64": "0"}.get(
-            kind.scalar, "0.0"
-        )
+        return {
+            "bool": "False",
+            "int": "0",
+            "uint": "0",
+            "int64": "0",
+            "uint64": "0",
+        }.get(kind.scalar, "0.0")
 
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         initial = f" = {value}" if value else ""
@@ -372,6 +380,18 @@ class Rust(Dialect):
         "FpCategory": (Type("uint"), "({}) as u32"),
         "Vec3A": (Type("float", (3,)), "Vec3::from({})"),
     }
+    # A closure parameter's type, as features/rust.py keeps its bound: one argument and a result of the same type.
+    _CLOSURE = re.compile(r"Fn(?:Mut|Once)?\((\w+)\) -> \1")
+
+    def handle(self, kind: Type, name: str) -> Handle | None:
+        closure = self._CLOSURE.fullmatch(kind.opaque)
+        numeric = {
+            spelled for scalar, spelled in self._SCALARS.items() if scalar != "bool"
+        }
+        if not closure or closure.group(1) not in numeric:
+            return None
+        # The closure doubles its argument, so a translation that drops the call computes something else.
+        return Handle(f"|x: {closure.group(1)}| x + x")
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
         if opaque in self._CONVERTED:

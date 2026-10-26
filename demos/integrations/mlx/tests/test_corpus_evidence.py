@@ -1293,8 +1293,10 @@ def test_metal_bundle_export_requires_translation_and_host_interface(
         calls.append("reflection")
         return manifest
 
-    def export(source, contract, entry, root):
+    def export(source, contract, entry, root, *, allow_drift):
         assert calls == ["translation", "reflection"]
+        # Pull requests and dispatched runs enforce the pins strictly.
+        assert allow_drift is False
         assert source == tmp_path / "source.metal"
         assert contract == getattr(module, f"{family.upper()}_METAL_CONTRACT_PATH")
         assert entry == workload.entry_point

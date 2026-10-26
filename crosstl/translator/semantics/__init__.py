@@ -21,15 +21,25 @@ from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_buffer_size import (
+    ConstantBufferTooLargeError,
+    refuse_large_constant_buffers,
+)
+from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .declaration_scopes import separate_initializer_scopes
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
+)
+from .device_references import (
+    DeviceReferenceUnsupportedError,
+    lower_device_struct_references,
 )
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
@@ -37,8 +47,13 @@ from .dxr_ray_interfaces import (
 )
 from .enum_values import lower_enum_values
 from .fixed_samplers import bind_fixed_samplers
+from .fragment_colour_outputs import (
+    FragmentColourOutputUnsupportedError,
+    name_fragment_colour_outputs,
+)
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
+from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hit_objects import HitObjectUnsupportedError, refuse_hit_objects
 from .hlsl_geometry_streams import (
@@ -56,6 +71,10 @@ from .hlsl_stage_interfaces import (
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .interface_block_instances import (
+    InterfaceBlockInstanceUnsupportedError,
+    declare_interface_block_instances,
+)
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
@@ -65,6 +84,10 @@ from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
     lower_metal_ray_dispatch,
+)
+from .metal_runtime_types import (
+    MetalRuntimeTypeUnsupportedError,
+    refuse_metal_runtime_types,
 )
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
@@ -79,11 +102,13 @@ from .shader_records import (
     refuse_shader_record_buffers,
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
+from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .stage_interface_structs import (
     StageInterfaceUnsupportedError,
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
@@ -94,15 +119,23 @@ from .structured_layouts import (
     legalize_structured_layouts,
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
+from .task_payload_storage import declare_task_payload_storage
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
 )
+from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .vector_logic import lower_vector_logic
+from .vertex_input_positions import (
+    VertexInputPositionUnsupportedError,
+    attribute_vertex_input_positions,
+)
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
@@ -113,21 +146,27 @@ __all__ = [
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
+    "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
+    "DeviceReferenceUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FixedSamplerStateUnsupportedError",
+    "FragmentColourOutputUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "MetalRayDispatchUnsupportedError",
+    "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
@@ -136,8 +175,11 @@ __all__ = [
     "SOURCE_RULES",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
+    "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
+    "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "UndeclaredTypeError",
@@ -179,12 +221,17 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
     declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in, and GLSL's
+    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
+    then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
+    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
-    scalars become vector constructors (:mod:`.scalar_swizzles`). For OpenGL, SPIR-V
+    scalars become vector constructors (:mod:`.scalar_swizzles`). ``&&``/``||`` on boolean vectors become ``and``/``or``
+    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Built-in value
+    HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
+    attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
+    names the ``Position`` vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
     target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
@@ -194,8 +241,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
     inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
-    becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
-    become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
+    becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
+    output arrays and task payload become entry parameters (:mod:`.glsl_mesh_stages`), while for GLSL and SPIR-V a
+    module-scope ``groupshared`` task payload is declared in task-payload storage (:mod:`.task_payload_storage`).
+    HLSL-style hull and domain stages become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
     hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
@@ -207,9 +256,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
     (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
-    (:mod:`.array_parameters`). ``a.length()`` of a sized
+    (:mod:`.array_parameters`). For GLSL, an entry point's stage inputs and built-in values that its body writes are
+    copied into locals, since GLSL inputs are read-only (:mod:`.written_stage_inputs`). ``a.length()`` of a sized
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
-    (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D and Vulkan
+    (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D, Vulkan and OpenGL
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
@@ -220,6 +270,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
+    texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
@@ -245,18 +297,29 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
     refuse_hit_objects(program, report.target)
+    refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
+    fold_constant_extents(program, report.target)
+    fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_static_locals(program, report.target)
+    legalize_texel_offsets(program, report.target)
+    fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
+    lower_device_struct_references(program, report.target)
+    separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
+    lower_vector_logic(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
     pass_builtin_inputs(program, report.target)
+    name_fragment_colour_outputs(program, report.target)
+    attribute_vertex_input_positions(program, report.target)
     canonicalize_builtin_values(program, report.target)
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
@@ -267,8 +330,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
+    raise_glsl_mesh_stages(program, report.target)
+    declare_task_payload_storage(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
     lower_metal_ray_dispatch(program, report.target)
+    declare_interface_block_instances(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
@@ -277,6 +343,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)
     copy_written_array_parameters(program, report.target)
+    copy_written_stage_inputs(program, report.target)
     refuse_per_vertex_inputs(program, report.target)
     bind_fixed_samplers(program, report.target)
     refuse_colour_attachment_inputs(program, report.target)
@@ -287,6 +354,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_texture_residency(program, report.target)
     declare_hlsl_residency_status(program, report.target)
     fold_array_lengths(program, report.target)
+    refuse_large_constant_buffers(program, report.target)
     legalize_hlsl_stage_interfaces(program, report.target)
     annotate_hlsl_ray_payloads(program, report.target)
     legalize_opaque_struct_members(program, report.target)
