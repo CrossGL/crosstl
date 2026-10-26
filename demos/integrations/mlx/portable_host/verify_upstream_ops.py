@@ -36,7 +36,11 @@ gradient placeholder unwritten, and the upstream tests compare their values
 with MLX's composed normalization. GEMV, dot-product, steel GEMM, split-K,
 GatherMM and SegmentedMM kernels are translated per entry on first use; each
 dispatch must name the package its cache derives again and its native
-modules, and the upstream tests compare the products with NumPy's. Every
+modules, and the upstream tests compare the products with NumPy's. Affine and
+block quantization kernels are translated per entry on first use; each
+dispatch must name its cached package and native modules, cover complete
+quantization groups and keep its output guards, and the upstream tests
+compare the values with MLX's CPU quantization. Every
 other dispatch must come from one of those indexes, so a test that reaches an uninstalled
 family fails the trace instead of passing on an unchecked package.
 """
@@ -64,6 +68,7 @@ from demos.integrations.mlx.portable_host import (
     lazy_package_evidence,
     norm_evidence,
     norm_layout,
+    quantization_evidence,
     random_evidence,
     scatter_axis_evidence,
     scatter_evidence,
@@ -249,6 +254,184 @@ CONV_TESTS = tuple(
         "numpy_conv",
         "repeated_conv",
     )
+)
+
+# test_array methods that reach the GPU: indexing and its gradients, item
+# assignment and functional .at[] updates, slice updates of 2-D contiguous
+# arrays, copies, casts, views and the buffer, DLPack and pickle round trips
+# of device arrays, and the array equality operators.
+ARRAY_TESTS = (
+    *(
+        "test_array.TestArray.test_" + name
+        for name in (
+            "add_numpy",
+            "api",
+            "array_at",
+            "array_comparison",
+            "array_copy",
+            "array_from_noncontiguous_np",
+            "array_np_dtype_conversion",
+            "array_pickle",
+            "array_repr_precision",
+            "array_subclass",
+            "array_unary_ops",
+            "array_view_ref_counting",
+            "asarray",
+            "buffer_protocol",
+            "buffer_protocol_eval_error",
+            "buffer_protocol_ref_counting",
+            "construction_from_lists",
+            "construction_from_lists_wide_ints",
+            "dlpack",
+            "dlpack_cpu_dtype_mapping",
+            "format",
+            "getitem_with_list",
+            "indexing",
+            "indexing_grad",
+            "init_from_array",
+            "inplace",
+            "load_from_pickled_np",
+            "logical_overloads",
+            "matrix_transpose",
+            "memoryless_copy",
+            "multi_output_leak",
+            "np_array_conversion_copies_by_default",
+            "real_imag",
+            "setitem",
+            "slice_bounds_with_array_index",
+            "slice_update_contiguous_2d",
+        )
+    ),
+    *(
+        "test_array.TestEquality.test_" + name
+        for name in (
+            "array_eq_array",
+            "array_eq_scalar",
+        )
+    ),
+    *(
+        "test_array.TestInequality.test_" + name
+        for name in (
+            "array_ne_array",
+            "array_ne_scalar",
+        )
+    ),
+)
+
+# test_autograd methods: VJPs and JVPs of the composed ops, including the
+# complex ones, scans, sorts, scatters, slices and every slice update
+# reduction, custom functions and gradient trees.
+AUTOGRAD_TESTS = (
+    *(
+        "test_autograd.TestAutograd.test_" + name
+        for name in (
+            "autograd_types",
+            "auxiliary_values",
+            "captured",
+            "complex_abs_grad",
+            "complex_exp_vjp",
+            "complex_log_vjp",
+            "complex_prod_vjp",
+            "complex_unary_vjps",
+            "complex_vjps",
+            "concatenate_vjps",
+            "cummax_grad",
+            "cummin_grad",
+            "cumprod_grad",
+            "custom_function",
+            "eval_in_grad",
+            "grad",
+            "grad_kwargs",
+            "grad_trees",
+            "jvp",
+            "jvp_through_bitwise_ops",
+            "logsumexp_grad",
+            "matmul_jvps",
+            "power_grad",
+            "put_along_axis_grads",
+            "reduce_jvp",
+            "scatter_add_vjp",
+            "scatter_max_vjp",
+            "scatter_min_vjp",
+            "scatter_vjp",
+            "slice_grads",
+            "slice_grads_single_element",
+            "slice_update_add_vjp",
+            "slice_update_max_vjp",
+            "slice_update_min_vjp",
+            "slice_update_multiply_vjp",
+            "sort_grad",
+            "split_against_slice",
+            "stop_gradient",
+            "stop_gradient_computed_indices",
+            "topk_grad",
+            "transform_releases_captures",
+            "update_state",
+            "vjp",
+        )
+    ),
+)
+
+# test_compile methods: compiled tapes of every dtype, captured state and
+# random keys, compiled gradients, and shapeless graphs, including the ones
+# that count reduced elements with NumberOfElements on the host.
+COMPILE_TESTS = (
+    *(
+        "test_compile.TestCompile.test_" + name
+        for name in (
+            "compile_abs_unsigned",
+            "compile_capture",
+            "compile_changing_outputs",
+            "compile_changing_outputs_with_state",
+            "compile_create_list",
+            "compile_different_log_bases",
+            "compile_equal_nan",
+            "compile_float_constant_precision",
+            "compile_grad",
+            "compile_inf",
+            "compile_inputs_with_primitives",
+            "compile_kwargs",
+            "compile_large_graph_with_broadcasts",
+            "compile_many_outputs",
+            "compile_multi_output",
+            "compile_nonfinite_constants",
+            "compile_output_with_siblings",
+            "compile_release_on_another_thread",
+            "compile_rng",
+            "compile_sigmoid_matches_eager",
+            "compile_state_capture_with_rng_updates_in_place",
+            "compile_tuple_output_in_thread",
+            "compile_two_input_grad",
+            "compile_types",
+            "compile_vjp",
+            "compile_with_closure",
+            "compile_with_constant",
+            "compile_with_long_name",
+            "compile_with_none",
+            "compiled_subnormal_bool_cast",
+            "dtypes",
+            "function_creates_array",
+            "inf_constant",
+            "max_into_equal",
+            "multiple_compile_same_capture",
+            "outputs_changing",
+            "shapeless_compile",
+            "shapeless_compile_addmm",
+            "shapeless_compile_gather_mm",
+            "shapeless_compile_gather_qmm",
+            "shapeless_compile_matmul",
+            "shapeless_compile_reduce_after_gather",
+            "shapeless_compile_slice_update",
+            "shapeless_compile_with_broadcasts",
+            "shapeless_compile_with_reduction",
+            "shapeless_mean",
+            "shared_broadcast",
+            "simple_compile",
+            "transform_over_eval_compiled",
+            "vjp_vjp_compiled",
+            "vmap_compiled",
+        )
+    ),
 )
 
 UPSTREAM_TESTS = (
@@ -472,7 +655,7 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS + CONV_TESTS
+    ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -496,6 +679,7 @@ FAMILIES = (
     "selection",
     "absolute",
     "integer64",
+    "slice_updates",
 )
 # Families loaded from a translated index; the random family has its own loader.
 INDEXED_FAMILIES = FAMILIES[2:]
@@ -583,6 +767,11 @@ GROUP_TESTS = {
     # The convolution tests translate their conv.metal, steel_conv and GEMM
     # kernels on demand, so they run in a job of their own.
     "conv": CONV_TESTS,
+    # The array, autograd and compile modules each run in a job of their own;
+    # each translates its lazy vectors, copies and compiled tapes on demand.
+    "array": ARRAY_TESTS,
+    "autograd": AUTOGRAD_TESTS,
+    "compile": COMPILE_TESTS,
 }
 
 
@@ -646,6 +835,7 @@ def install(args, output):
         selection=args.selection,
         absolute=args.absolute,
         integer64=args.integer64,
+        slice_updates=args.slice_updates,
         reductions=list(args.reductions),
         mlx_root=args.mlx_root,
         # The audits recompute these dispatches from their values; the other
@@ -998,6 +1188,16 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         compiled_evidence.audit_event(event, compiled)
         executed.add(i)
         owners[i] += 1
+    quantizations = quantization_evidence.cache(args.mlx_root, args.packages, target)
+    for i, event in enumerate(trace):
+        if not quantization_evidence.is_quantization(event["entry"]):
+            continue
+        # Derives the cached package again and checks the complete groups,
+        # output guards and native modules; the upstream tests compare the
+        # values with MLX's CPU quantization.
+        quantization_evidence.audit_event(event, quantizations)
+        executed.add(i)
+        owners[i] += 1
     verify_native_identity(
         [
             event
@@ -1172,6 +1372,7 @@ def parse(argv=None):
         "selection",
         "absolute",
         "integer64",
+        "slice-updates",
         "output-dir",
     ):
         parser.add_argument("--" + name, type=Path, required=True)

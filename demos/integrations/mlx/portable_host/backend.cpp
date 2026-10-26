@@ -1438,6 +1438,8 @@ CROSSTL_SHARED_VIEW_GPU(ExpandDims)
 CROSSTL_SHARED_VIEW_GPU(Squeeze)
 CROSSTL_SHARED_VIEW_GPU(StopGradient)
 CROSSTL_SHARED_VIEW_GPU(Transpose)
+// mlx/backend/gpu/primitives.cpp evaluates the element count on the host too.
+CROSSTL_SHARED_VIEW_GPU(NumberOfElements)
 
 #undef CROSSTL_SHARED_VIEW_GPU
 

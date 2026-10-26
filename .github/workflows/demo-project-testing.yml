@@ -2789,7 +2789,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Thirty-six jobs, twelve of them on macOS: run them in four waves.
+      # Forty-five jobs, fifteen of them on macOS: run them in five waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2807,6 +2807,9 @@ jobs:
             blas-masked,
             modules,
             conv,
+            array,
+            autograd,
+            compile,
           ]
         target: [opengl, directx, metal]
         include:
@@ -2935,6 +2938,11 @@ jobs:
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
               2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
+          # The 24 slice update entries translate in under a minute locally.
+          python tools/run_bounded_command.py --timeout-seconds 270 --label "MLX slice update translation" -- \
+            python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family slice-update --jobs 4 --output-dir .mlx-portable-upstream-ops/slice-updates-packages \
+              2>&1 | tee .mlx-portable-upstream-ops/slice-update-translation.log
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX lazy vector translation" -- \
             python -m demos.integrations.mlx.portable_host.elementwise_warm --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages \
@@ -2996,6 +3004,7 @@ jobs:
               --packages .mlx-portable-upstream-ops/base/packages --random .mlx-portable-upstream-ops/random-packages \
               --bitwise .mlx-portable-upstream-ops/bitwise-packages --selection .mlx-portable-upstream-ops/selection-packages \
               --absolute .mlx-portable-upstream-ops/absolute-packages --integer64 .mlx-portable-upstream-ops/integer64-packages \
+              --slice-updates .mlx-portable-upstream-ops/slice-updates-packages \
               --reductions .mlx-portable-upstream-ops/init-packages \
               --reductions .mlx-portable-upstream-ops/all-reductions --reductions .mlx-portable-upstream-ops/row-reductions \
               --reductions .mlx-portable-upstream-ops/column-reductions \

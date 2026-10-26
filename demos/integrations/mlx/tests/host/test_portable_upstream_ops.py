@@ -9,7 +9,9 @@ import yaml
 from demos.integrations.mlx.portable_host import (
     verify,
     verify_random,
+    verify_scatter,
     verify_selection,
+    verify_slice_updates,
     verify_upstream_ops,
 )
 
@@ -65,7 +67,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 215
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 349
     assert all(
         name.startswith(
             (
@@ -81,17 +83,29 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_tree.TestTreeUtils.test_",
                 "test_fft.TestFFT.test_",
                 "test_conv.TestConv.test_",
+                "test_array.TestArray.test_",
+                "test_array.TestEquality.test_",
+                "test_array.TestInequality.test_",
+                "test_autograd.TestAutograd.test_",
+                "test_compile.TestCompile.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
     )
-    assert ops.UPSTREAM_TESTS[-len(ops.MODULE_TESTS) - len(ops.CONV_TESTS) :] == (
-        ops.MODULE_TESTS + ops.CONV_TESTS
+    tail = (
+        ops.MODULE_TESTS
+        + ops.CONV_TESTS
+        + ops.ARRAY_TESTS
+        + ops.AUTOGRAD_TESTS
+        + ops.COMPILE_TESTS
     )
+    assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
         set(verify.UPSTREAM_TESTS)
         | set(verify_random.UPSTREAM_TESTS)
         | {verify_selection.UPSTREAM_TEST}
+        | set(verify_scatter.UPSTREAM_TESTS)
+        | set(verify_slice_updates.UPSTREAM_TESTS)
     )
     assert not elsewhere & set(ops.UPSTREAM_TESTS)
 
@@ -111,7 +125,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 210 and not set(opengl) & set(excluded)
+    assert len(opengl) == 344 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -134,6 +148,9 @@ def test_upstream_op_groups_partition_the_inventory():
         "blas-masked",
         "modules",
         "conv",
+        "array",
+        "autograd",
+        "compile",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -189,6 +206,25 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
     assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 7
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
+    # The array, autograd and compile modules each run alone in their group.
+    for group, tests, module, count in (
+        ("array", ops.ARRAY_TESTS, "test_array.", 40),
+        ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 43),
+        ("compile", ops.COMPILE_TESTS, "test_compile.", 51),
+    ):
+        assert ops.GROUPS[group] == tests and len(tests) == count
+        assert all(name.startswith(module) for name in tests)
+        assert ops.upstream_tests("opengl", group) == tests
+    # Every slice update reduction's gradient and both shapeless tests that
+    # count reduced elements with NumberOfElements run here.
+    assert {
+        "test_autograd.TestAutograd.test_slice_update_" + name + "_vjp"
+        for name in ("add", "max", "min", "multiply")
+    } <= set(ops.AUTOGRAD_TESTS)
+    assert {
+        "test_compile.TestCompile.test_shapeless_mean",
+        "test_compile.TestCompile.test_shapeless_compile_reduce_after_gather",
+    } <= set(ops.COMPILE_TESTS)
     for target in ("metal", "directx", "opengl"):
         grouped = [
             name for group in ops.GROUPS for name in ops.upstream_tests(target, group)
@@ -230,6 +266,7 @@ def test_upstream_op_workers_receive_their_group(tmp_path, monkeypatch):
                     "selection",
                     "absolute",
                     "integer64",
+                    "slice-updates",
                     "output-dir",
                 )
                 for item in ("--" + name, str(tmp_path / name))
@@ -342,6 +379,7 @@ def audit(monkeypatch, tmp_path):
         "selection": {"descriptors": {"v_Selectfloat32": {}}},
         "absolute": {"descriptors": {"v_Absfloat32float32": {}}},
         "integer64": {"descriptors": {"vv_Addint64": {}}},
+        "slice_updates": {"descriptors": {"slice_update_maxfloat32": {}}},
     }
     reductions = [
         {"descriptors": {"w32/init_reduce_andbool_": {}}},
@@ -358,6 +396,7 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         event("v_Selectfloat32"),
         event("v_Absfloat32float32"),
         event("vv_Addint64"),
+        event("slice_update_maxfloat32"),
         event("init_reduce_andbool_", 32),
         event("all_reduce_andbool_", 32),
         event("gatherint32int32_2_1_int"),
@@ -375,6 +414,7 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
     assert count == 2
     assert audit.seen["packages"] == ["vv_Equalint32"]
     assert audit.seen["integer64"] == ["vv_Addint64"]
+    assert audit.seen["slice_updates"] == ["slice_update_maxfloat32"]
     assert audit.seen["red-checked"] == ["all_reduce_andbool_"]
     assert audit.seen["gather_evidence"] == ["gatherint32int32_2_1_int"]
     assert audit.seen["scatter_evidence"] == [

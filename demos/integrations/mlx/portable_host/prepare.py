@@ -34,6 +34,10 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
+# Primitives that MLX's GPU backend (mlx/backend/gpu/primitives.cpp) evaluates
+# with the shared host eval instead of a kernel, such as NumberOfElements,
+# which shapeless compiled graphs use to count reduced elements.
+HOST_EVAL_PRIMITIVES = ("NumberOfElements",)
 COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
 CAST_PRIMITIVES = ("AsType",)
 # Unary primitives MLX instantiates only for complex64 operands.
@@ -90,6 +94,7 @@ def adapted_sources(original, primitives, events):
         "Compiled",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
+        *HOST_EVAL_PRIMITIVES,
         *COPY_PRIMITIVES,
         *BINARY_OPERATIONS,
         "Power",

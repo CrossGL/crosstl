@@ -85,6 +85,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "FFT",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
+                    *prepare.HOST_EVAL_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
                     *packages.BINARY_OPERATIONS,
                     *prepare.CAST_PRIMITIVES,
@@ -195,6 +196,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
             f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         )
         assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
+    for name in prepare.HOST_EVAL_PRIMITIVES:
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     for name in ("Power", "ArcTan2"):
         assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
@@ -1446,6 +1450,8 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
                 else "CROSSTL_SHARED_VIEW_GPU"
             )
             assert f"{macro}({name})" in source
+    for name in prepare.HOST_EVAL_PRIMITIVES:
+        assert f"CROSSTL_SHARED_VIEW_GPU({name})" in source
     assert "prepare_reshape(in, out)" in source
     assert "shared_buffer_reshape(in, strides, out)" in source
     assert "slice(inputs[0], out, start_indices_, strides_)" in source
