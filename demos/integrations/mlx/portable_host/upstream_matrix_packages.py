@@ -39,6 +39,7 @@ ORDER = (
     "masked-mv",
     "gather-mv",
     "conv",
+    "fft",
 )
 _CACHES = {}
 

@@ -288,8 +288,8 @@ def extents(info, total):
 def launch(info, total):
     """fft.cpp's dispatch_threads grid as whole threadgroups."""
     groups = (total + info["threadgroupBatchSize"] - 1) // info["threadgroupBatchSize"]
-    if info["transform"] == "r2c":
-        # Two real transforms share one complex transform.
+    if info["transform"] in {"r2c", "c2r"}:
+        # Two real transforms share one complex transform, either way.
         groups = (groups + 1) // 2
     return {
         "workgroupCount": [groups, 1, 1],

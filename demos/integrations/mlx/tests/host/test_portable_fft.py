@@ -121,6 +121,11 @@ def test_launches_follow_fft_cpp_grids_and_extents():
     assert fft_layout.extents(r2c, 65) == {"in": 520, "out": 325}
     c2r = fft_layout.signature("fft_mem_256_float2_float_n8_inv_1")
     assert fft_layout.extents(c2r, 3) == {"in": 15, "out": 24}
+    # Inverse real transforms pair their rows too: 100 rows of 100 take 50
+    # threadgroups of two, and two rows share each one.
+    c2r = fft_layout.signature("fft_mem_256_float2_float_n100_inv_1")
+    assert fft_layout.launch(c2r, 100)["workgroupCount"] == [25, 1, 1]
+    assert fft_layout.launch(c2r, 3)["workgroupCount"] == [1, 1, 1]
     entry = "fft_mem_256_float2_float2_n100_inv_1"
     execution = fft_layout.launch(c2c, 5)
     metadata = fft_layout.plan_launch(

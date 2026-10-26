@@ -2397,12 +2397,19 @@ void Full::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_copy(inputs[0], out);
 }
 
+// Padding and plain slice updates only copy elements, as storage words for
+// the storage types and complex64, through their own kernels for the half
+// types; narrow integers stay refused until their word copies are audited.
+static bool copied_update_type(Dtype dtype) {
+  return storage_type(dtype) || dtype == float16 || dtype == bfloat16 ||
+      dtype == complex64;
+}
+
 void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 2 || inputs[0].ndim() != out.ndim() ||
       inputs[1].size() != 1 || inputs[0].dtype() != out.dtype() ||
-      inputs[1].dtype() != out.dtype() ||
-      (!storage_type(out.dtype()) && out.dtype() != float16 && out.dtype() != bfloat16) ||
+      inputs[1].dtype() != out.dtype() || !copied_update_type(out.dtype()) ||
       out.size() > max_slice_update_elements || out.ndim() > 64 ||
       axes_.size() != low_pad_size_.size() || axes_.size() != high_pad_size_.size()) {
     throw std::invalid_argument(
@@ -2441,7 +2448,7 @@ void SliceUpdate::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (inputs.size() != 2 || inputs[0].shape() != out.shape() ||
       inputs[1].ndim() != out.ndim() || inputs[0].dtype() != out.dtype() ||
       inputs[1].dtype() != out.dtype() ||
-      (!storage_type(out.dtype()) && !(out.dtype() == bfloat16 && reduce_type_ == None)) ||
+      !(reduce_type_ == None ? copied_update_type(out.dtype()) : bool(storage_type(out.dtype()))) ||
       out.size() > max_slice_update_elements || out.ndim() > 64 ||
       start_indices_.size() != out.ndim() || end_indices_.size() != out.ndim() ||
       strides_.size() != out.ndim()) {

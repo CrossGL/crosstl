@@ -654,7 +654,9 @@ def test_runtime_and_host_adapter_route_normalization():
         "// And the port of Convolution, whose explicit GEMM routes use the steel GEMM.\n"
         '#include "mlx/backend/no_gpu/crosstl_conv.inc"\n'
         "// And the port of the fused cross-entropy, which shares the row helpers.\n"
-        '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"\n'
+        "// And the port of FFT, whose inputs take the strided copy.\n"
+        '#include "mlx/backend/no_gpu/crosstl_fft.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

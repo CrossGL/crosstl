@@ -9,7 +9,11 @@ from demos.integrations.mlx.portable_host.runtime import (
     DISPATCH_VERSION,
 )
 
-DTYPES = ("float32", "int32", "uint32", "bool_", "int64", "uint64")
+# Slice update reductions cover the storage types; padding and plain
+# replacement also copy complex64, as one uint64 storage word per element.
+STORAGE_DTYPES = ("float32", "int32", "uint32", "bool_", "int64", "uint64")
+DTYPES = (*STORAGE_DTYPES, "complex64")
+WORD64 = {"int64", "uint64", "complex64"}
 PAD_LAYOUTS = (
     "matrix",
     "transpose",
@@ -41,6 +45,13 @@ def cases():
                 yield {"dtype": dtype, "operation": operation, "layout": layout}
 
 
+def copy_type(dtype):
+    """The storage type of the copy kernel that moves ``dtype`` elements."""
+    if dtype == "complex64":
+        return "uint64"
+    return dtype if dtype in {"bool_", "int64", "uint64"} else "uint32"
+
+
 def payload(np, value):
     return np.ascontiguousarray(value).tobytes().hex()
 
@@ -53,7 +64,7 @@ def inputs(np, case):
     )
     if dtype == "bool_":
         data = (words & 1).astype("bool")
-    elif dtype in {"int64", "uint64"}:
+    elif dtype in WORD64:
         data = np.asarray(
             [0, 2**63, 1, 2**64 - 1, 2**53 + 1, 2**63 - 1, 17, 2**63 + 9],
             dtype="uint64",
@@ -149,7 +160,11 @@ def words(np, value):
     return (
         array.reshape(-1).tolist()
         if array.dtype in (np.bool_, np.int64, np.uint64)
-        else array.view("uint32").reshape(-1).tolist()
+        else (
+            array.view("uint64").reshape(-1).tolist()
+            if array.dtype == np.complex64
+            else array.view("uint32").reshape(-1).tolist()
+        )
     )
 
 
@@ -201,9 +216,7 @@ def validate(records, trace, *, native):
         cursor += len(operations)
         if len(events) != len(operations):
             raise ValueError("Padding copy trace is incomplete")
-        dtype = (
-            case["dtype"] if case["dtype"] in {"bool_", "int64", "uint64"} else "uint32"
-        )
+        dtype = copy_type(case["dtype"])
         for event, operation in zip(events, operations):
             source, _, _, _, destination = operation
             info = metadata(*operation)
