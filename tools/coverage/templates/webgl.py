@@ -8,6 +8,7 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 
 from __future__ import annotations
 
+from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
 from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
@@ -49,6 +50,7 @@ _ABSENT = (
 
 WEBGL = {
     **C_FAMILY,
+    **_AGGREGATES,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

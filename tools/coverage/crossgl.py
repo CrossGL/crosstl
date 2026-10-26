@@ -28,6 +28,8 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.aggregates import ABSORB
+from .templates.aggregates import FAMILY as AGGREGATES
 from .templates.base import (
     BAG,
     BINS,
@@ -506,6 +508,7 @@ _MESH_STAGES = {
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
+    **AGGREGATES,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
@@ -524,6 +527,9 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "inout-argument-lvalues": Template(
         C_FAMILY["inout-argument-lvalues"].body, GROW, prelude=PAIR
+    ),
+    "aggregate-inout-parameter": Template(
+        AGGREGATES["aggregate-inout-parameter"].body, ABSORB, prelude=PAIR
     ),
     "constant-array": Template(
         C_FAMILY["constant-array"].body, prelude=C_FAMILY["constant-array"].declarations

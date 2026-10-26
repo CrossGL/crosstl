@@ -23,14 +23,15 @@ _CHAINED_SUM = "a + b * 32.0 + c * 1024.0"
 _LOOP_SUM = "acc + {0}(k) * 16384.0 + {0}(j) * 262144.0"
 
 
+def c_text(text: str, unsigned: str) -> str:
+    """C-family source with casts in place of conversions, ``unsigned`` for uint and single-precision literals."""
+    text = text.replace("float(", "(float)(").replace("uint(", f"({unsigned})(")
+    return _LITERAL.sub(r"\1f", re.sub(r"\buint\b", unsigned, text))
+
+
 def c_body(name: str, unsigned: str) -> str:
-    """The C family's probe with casts in place of conversions, ``unsigned`` for uint and single-precision literals."""
-    body = (
-        C_FAMILY[name]
-        .body.replace("float(", "(float)(")
-        .replace("uint(", f"({unsigned})(")
-    )
-    return _LITERAL.sub(r"\1f", re.sub(r"\buint\b", unsigned, body))
+    """The C family's probe as :func:`c_text` writes it."""
+    return c_text(C_FAMILY[name].body, unsigned)
 
 
 def c_vector_body(name: str, unsigned: str, construct: str) -> str:

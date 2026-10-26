@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import (
+    aggregates,
     assignments,
     branches,
     calls,
@@ -40,6 +41,7 @@ _GRAPHICS = (
 
 CUDA = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "function-call": Template(
         C_FAMILY["function-call"].body,
         "__device__ float twice(float x) {\n    return x * 2.0f;\n}",
@@ -65,6 +67,7 @@ CUDA = {
     **assignments.CUDA,
     **statements.CUDA,
     **lvalues.CUDA,
+    **aggregates.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -138,6 +141,7 @@ _OPENCL_PAIR = "typedef struct {\n    float a;\n    float b;\n} Pair;"
 # structs, no matrices, and buffers whose length the kernel is not told.
 OPENCL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "short-circuit-logic": Template(
         "if (iin[i] > 0 && fin[i] / (float)iin[i] > 1.0f) {\n    outp[i] = 1.0f;\n}"
         " else if (iin[i] < 0 || fin[i] < 0.0f) {\n    outp[i] = 2.0f;\n}"
@@ -172,6 +176,7 @@ OPENCL = {
     **assignments.OPENCL,
     **statements.OPENCL,
     **lvalues.OPENCL,
+    **aggregates.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -299,6 +304,7 @@ MOJO = {
     **assignments.MOJO,
     **statements.MOJO,
     **lvalues.MOJO,
+    **aggregates.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -493,6 +499,7 @@ RUST = {
     **assignments.RUST,
     **statements.RUST,
     **lvalues.RUST,
+    **aggregates.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),
