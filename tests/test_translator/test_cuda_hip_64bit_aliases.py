@@ -10,8 +10,7 @@ import crosstl
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
 def test_hlsl_64bit_locals_and_shared_variables_have_native_types(tmp_path, backend):
     source = tmp_path / "wide.hlsl"
-    source.write_text(
-        """
+    source.write_text("""
 RWStructuredBuffer<uint64_t> results : register(u0);
 RWStructuredBuffer<int64_t> signed_results : register(u1);
 groupshared uint64_t total;
@@ -22,8 +21,7 @@ groupshared uint64_t total;
     results[0] = total + v;
     signed_results[0] = s;
 }
-"""
-    )
+""")
     output = crosstl.translate(str(source), backend=backend, format_output=False)
     assert "__shared__ unsigned long long total;" in output, output
     assert "unsigned long long v = results[1];" in output, output
