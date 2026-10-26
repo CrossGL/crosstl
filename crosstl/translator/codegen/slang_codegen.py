@@ -63,6 +63,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
@@ -8809,6 +8810,51 @@ class SlangCodeGen(LoweringRefusalMixin):
         helper_name = self.require_slang_matrix_inverse_helper(matrix_info)
         return f"{helper_name}({arg_expr})"
 
+    def generate_slang_matrix_builtin_call(self, func_name, args):
+        """``matrixCompMult`` or ``outerProduct``, which Slang does not declare (GLSL 4.60 section 8.6)."""
+        fallback_type = self.current_expression_expected_type or "float"
+        if func_name == "outerProduct":
+            # slangc rejects the DirectX form mul(float3x1(c), float1x2(r)), so a helper builds the rows.
+            result_type = self.hlsl_matrix_orientation.call_type(
+                func_name, [self.expression_result_type(arg) for arg in args]
+            )
+            matrix_info = self.matrix_value_info(result_type)
+            if matrix_info is None:
+                return self.refuse_lowering(
+                    "Slang outerProduct: requires two float or double vectors",
+                    self.zero_value_for_type(fallback_type),
+                )
+            helper_name = self.require_slang_outer_product_helper(matrix_info)
+            column, row = (self.generate_expression_without_expected(a) for a in args)
+            return f"{helper_name}({column}, {row})"
+        matrix_builtin = self.hlsl_matrix_orientation.builtin_call(func_name, args)
+        if matrix_builtin is not None:
+            return matrix_builtin
+        return self.refuse_lowering(
+            "Slang matrixCompMult: requires a matrix of a known shape",
+            self.zero_value_for_type(fallback_type),
+        )
+
+    def require_slang_outer_product_helper(self, matrix_info):
+        matrix_type = matrix_info["type"]
+        helper_name = self.helper_function_name(f"_crossgl_outer_product_{matrix_type}")
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        component_type = matrix_info["component_type"]
+        # Row i of the result is c[i] * r, so CrossGL column j is c * r[j].
+        rows = ", ".join(f"c[{row}] * r" for row in range(matrix_info["rows"]))
+        helper = (
+            f"{matrix_type} {helper_name}("
+            f"{component_type}{matrix_info['rows']} c, "
+            f"{component_type}{matrix_info['columns']} r)\n"
+            "{\n"
+            f"    return {matrix_type}({rows});\n"
+            "}"
+        )
+        self.register_helper_function(helper_name, helper)
+        return helper_name
+
     def require_slang_matrix_inverse_helper(self, matrix_info):
         matrix_type = matrix_info["type"]
         helper_name = self.helper_function_name(f"_crossgl_inverse_{matrix_type}")
@@ -8910,6 +8956,17 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.comparison_expression_result_type(left_type, right_type)
         if expr.op in {"&&", "||"}:
             return self.logical_expression_result_type(left_type, right_type)
+        if expr.op == "*":
+            product_type = self.hlsl_matrix_orientation.product_type(
+                left_type, right_type
+            )
+            if product_type is not None:
+                return product_type
+        matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+            expr.op, left_type, right_type
+        )
+        if matrix_type is not None:
+            return matrix_type
         if self.is_vector_value_type(left_type):
             return left_type
         if self.is_vector_value_type(right_type):
@@ -8999,6 +9056,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type is None:
+                return None
+            same_type = self.convert_type(true_type) == self.convert_type(false_type)
+            return true_type if same_type else None
         if isinstance(expr, ConstructorNode):
             constructor_type = self.type_name_string(
                 getattr(expr, "constructor_type", None)
@@ -9248,6 +9312,17 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name in {"mix", "mod"}:
             return self.expression_result_type(args[0]) if args else None
+
+        if func_name in {"transpose", "inverse"}:
+            return builtin_call_result_type(
+                func_name,
+                [self.type_name_string(self.expression_result_type(a)) for a in args],
+                C_FAMILY,
+            )
+        if func_name in {"matrixCompMult", "outerProduct"}:
+            return self.hlsl_matrix_orientation.call_type(
+                func_name, [self.expression_result_type(arg) for arg in args]
+            )
 
         bit_query_type = self.slang_bit_query_result_type(func_name, args)
         if bit_query_type is not None:
@@ -9594,6 +9669,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                         self.zero_value_for_type(fallback_type),
                     )
                 return self.generate_slang_matrix_inverse_call(node.args[0])
+            if (
+                callee in {"matrixCompMult", "outerProduct"}
+                and callee not in self.user_function_names
+            ):
+                return self.generate_slang_matrix_builtin_call(callee, node.args)
             if callee == "lambda":
                 lambda_expr = self.generate_lambda_expression(node.args)
                 if lambda_expr is not None:
