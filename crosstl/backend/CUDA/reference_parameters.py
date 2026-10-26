@@ -293,7 +293,10 @@ class ReferenceParameters:
             parts = _ALIAS_WORDS.split(text)
             if not any(part in self.aliases for part in parts):
                 break
-            text = "".join(self.aliases.get(part, part) for part in parts)
+            # Only alias names are replaced; every other word and separator is the rest of the declarator.
+            text = "".join(
+                self.aliases[part] if part in self.aliases else part for part in parts
+            )
         return text
 
     # Modes -------------------------------------------------------------------------------------------------------
