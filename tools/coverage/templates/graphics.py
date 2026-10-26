@@ -20,6 +20,7 @@ from . import (
     scopes,
     shapes,
     statements,
+    values,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
 
@@ -63,6 +64,7 @@ _GLSL_RAYTRACING_STAGES = {
 GLSL = {
     **C_FAMILY,
     **aggregates.FAMILY,
+    **values.FAMILY,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -175,6 +177,8 @@ HLSL = {
     **calls.HLSL,
     **shapes.HLSL,
     **evaluation.HLSL,
+    **values.FAMILY,
+    **values.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -325,6 +329,8 @@ METAL = {
     **statements.METAL,
     **lvalues.METAL,
     **aggregates.METAL,
+    **values.FAMILY,
+    **values.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -521,6 +527,7 @@ WGSL = {
     **statements.WGSL,
     **lvalues.WGSL,
     **aggregates.WGSL,
+    **values.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

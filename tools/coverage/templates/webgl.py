@@ -15,6 +15,7 @@ from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .evaluation import WEBGL as _EVALUATION
 from .scopes import WEBGL as _SCOPES
+from .values import FAMILY as _VALUES
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -51,6 +52,7 @@ _ABSENT = (
 WEBGL = {
     **C_FAMILY,
     **_AGGREGATES,
+    **_VALUES,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

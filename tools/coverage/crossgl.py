@@ -40,6 +40,8 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.values import BASIS
+from .templates.values import FAMILY as VALUES
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -509,6 +511,11 @@ _MESH_STAGES = {
 CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
     **AGGREGATES,
+    **VALUES,
+    "struct-matrix-member": Template(
+        VALUES["struct-matrix-member"].body, prelude=BASIS
+    ),
+    "struct-conditional": Template(VALUES["struct-conditional"].body, prelude=PAIR),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
