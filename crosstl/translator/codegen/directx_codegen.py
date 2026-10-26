@@ -53991,11 +53991,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_name, args[3], "location", expected_dimension
         )
         if method_name == "WriteSamplerFeedbackGrad":
+            # The location carries the array slice, but the gradients do
+            # not: DXC declares ddx and ddy as float2 for both
+            # FeedbackTexture2D and FeedbackTexture2DArray.
             self.validate_hlsl_feedback_coordinate_dimension(
-                func_name, args[4], "ddx", expected_dimension
+                func_name, args[4], "ddx", 2
             )
             self.validate_hlsl_feedback_coordinate_dimension(
-                func_name, args[5], "ddy", expected_dimension
+                func_name, args[5], "ddy", 2
             )
 
     def validate_hlsl_feedback_coordinate_dimension(
