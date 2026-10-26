@@ -15,6 +15,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - HLSL output refuses a constant buffer larger than Direct3D's 64 KiB limit, such as a large Metal `constant T&` argument or GLSL uniform block, with `ConstantBufferTooLargeError`, and matrix varyings whose semantic indices overlap with `InterfaceLocationConflictError`. DXC used to reject the generated shader.
 - The GLSL importer refuses `tensorARM` uniforms with `GLSLTypeUnsupportedError`. It used to drop them, so every target referenced an undeclared name. GLSL output refuses string literals outside `#include`, `#line` and `debugPrintfEXT` formats.
 - The Metal importer refuses ray-tracing functions, and the uses of mesh and object functions it cannot import, such as `set_indices`, with `MetalImportRefused`. They used to be printed as plain helpers that still called Metal methods.
+- HLSL output for the `dx10` and `dx11` profiles, as selected by `backend="dx11"`, `"d3d11"` or `"directx-11"`, refuses ray generation, intersection, any-hit, closest-hit, miss and callable stages with `DirectXRayTracingStageProfileError`, because DirectX Raytracing needs Direct3D 12 and Shader Model 6.3. They used to be written unchanged, as `[shader("raygeneration")]` entry points that Direct3D 11 cannot run. The default `dx12` profile is unchanged.
 
 ### Added
 
