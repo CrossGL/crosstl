@@ -12,6 +12,82 @@ from ..ast import (
     VariableNode,
 )
 
+# C scalar types the CUDA and HIP generators write, keyed by the type names
+# their own mappings produce. ``min`` and ``max`` pick their intrinsic from
+# this, because ``fminf``/``fmaxf`` would round integer operands through
+# ``float``. Both compilers have ``min`` and ``max`` for ``int``,
+# ``unsigned int``, ``long long`` and ``unsigned long long`` only, so the
+# other integer spellings are widened to the one they promote to.
+MIN_MAX_SCALAR_TYPES = {
+    "bool": "bool",
+    "float": "float",
+    "f32": "float",
+    "half": "float",
+    "f16": "float",
+    "bfloat16": "float",
+    "double": "double",
+    "f64": "double",
+    "char": "char",
+    "signed char": "char",
+    "int8_t": "char",
+    "unsigned char": "unsigned char",
+    "uchar": "unsigned char",
+    "uint8_t": "unsigned char",
+    "short": "short",
+    "short int": "short",
+    "int16_t": "short",
+    "unsigned short": "unsigned short",
+    "unsigned short int": "unsigned short",
+    "ushort": "unsigned short",
+    "uint16_t": "unsigned short",
+    "int": "int",
+    "int32_t": "int",
+    "unsigned int": "unsigned int",
+    "uint": "unsigned int",
+    "uint32_t": "unsigned int",
+    "long": "long long",
+    "long int": "long long",
+    "unsigned long": "unsigned long long",
+    "ulong": "unsigned long long",
+    "long long": "long long",
+    "long long int": "long long",
+    "int64_t": "long long",
+    "unsigned long long": "unsigned long long",
+    "unsigned long long int": "unsigned long long",
+    "uint64_t": "unsigned long long",
+    "ptrdiff_t": "long long",
+    "size_t": "unsigned long long",
+}
+
+# Spellings that are the same C type as the entry they point at, so a min/max
+# operand written this way needs no cast. ``int64_t`` and ``uint64_t`` are not
+# here: they are ``long`` on LP64 Linux, and ``long`` next to ``long long``
+# makes the CUDA and HIP overloads ambiguous.
+MIN_MAX_SCALAR_ALIASES = {
+    "int32_t": "int",
+    "uint": "unsigned int",
+    "uint32_t": "unsigned int",
+}
+
+# Integer rank and signedness of the types above, as C++ orders them.
+MIN_MAX_INTEGER_SCALAR_RANKS = {
+    "char": 1,
+    "unsigned char": 1,
+    "short": 2,
+    "unsigned short": 2,
+    "int": 3,
+    "unsigned int": 3,
+    "long long": 4,
+    "unsigned long long": 4,
+}
+
+MIN_MAX_INTEGER_SCALAR_TYPES = {
+    1: ("char", "unsigned char"),
+    2: ("short", "unsigned short"),
+    3: ("int", "unsigned int"),
+    4: ("long long", "unsigned long long"),
+}
+
 
 class VectorArithmeticMixin:
     """Helpers for inferring and lowering vector arithmetic expressions."""
@@ -212,6 +288,11 @@ class VectorArithmeticMixin:
                 return struct_members[member]
             vector_info = self.vector_type_info(object_type)
             if not vector_info:
+                native_component_type = self.native_vector_component_type(object_type)
+                if native_component_type is not None and (
+                    len(member) == 1 and member in "xyzwrgba"
+                ):
+                    return native_component_type
                 return None
             if len(member) == 1:
                 return vector_info["component_type"]
@@ -248,6 +329,11 @@ class VectorArithmeticMixin:
         if remaining_suffix:
             return f"{base_type}{remaining_suffix}"
         return base_type
+
+    def native_vector_component_type(self, type_name):
+        """Return the component type of a native vector that ``vector_type_info``
+        deliberately leaves undescribed (so its arithmetic stays native), or None."""
+        return None
 
     def vector_type_info(self, type_name):
         """Return constructor and component metadata for a vector type."""
@@ -306,7 +392,9 @@ class VectorArithmeticMixin:
         if len(args) != 1:
             return None
 
-        arg_type = self.expression_result_type(raw_args[0])
+        arg_type = self.expression_result_type(
+            raw_args[0]
+        ) or self.scalar_cast_result_type(raw_args[0])
         if arg_type is None or self.vector_type_info(arg_type):
             return None
         if self.is_repeat_safe_expression(raw_args[0]):
@@ -314,6 +402,30 @@ class VectorArithmeticMixin:
 
         helper_name = self.require_vector_splat_helper(vector_info)
         return f"{helper_name}({args[0]})"
+
+    def scalar_cast_result_type(self, expr):
+        """Return the target type of a one-argument scalar cast such as ``int(x)``.
+
+        Scalar casts are parsed as calls and have no inferred type, so a vector
+        constructor such as ``ivec3(int(x))`` would otherwise not be splatted.
+        """
+        if not isinstance(expr, FunctionCallNode):
+            return None
+        raw_args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        if len(raw_args) != 1:
+            return None
+        function_expr = getattr(expr, "function", getattr(expr, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.vector_type_info(type_name) is not None:
+            return None
+        if (
+            self.scalar_component_type(type_name) is None
+            and self.map_vector_arithmetic_type(type_name) != "half"
+        ):
+            return None
+        return type_name
 
     def require_vector_splat_helper(self, vector_info):
         """Register a helper that splats one scalar into a CUDA/HIP vector."""
@@ -801,14 +913,14 @@ class VectorArithmeticMixin:
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if left_info and self.scalar_component_type(right_type) is not None:
+        if left_info and self.vector_binary_scalar_operand(left_info, right_type):
             helper_name = self.require_vector_binary_helper(
                 left_info, operator, "scalar_right"
             )
             if helper_name is None:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
-        if right_info and self.scalar_component_type(left_type) is not None:
+        if right_info and self.vector_binary_scalar_operand(right_info, left_type):
             helper_name = self.require_vector_binary_helper(
                 right_info, operator, "scalar_left"
             )
@@ -816,6 +928,21 @@ class VectorArithmeticMixin:
                 return None
             return f"{helper_name}({left_expr}, {right_expr})"
         return None
+
+    def vector_binary_scalar_operand(self, vector_info, scalar_type):
+        """Return whether a scalar operand can use the vector-scalar helpers.
+
+        ``half`` is not a general scalar component type, but a half vector
+        combined with a ``half`` scalar still needs the helper, because the
+        generated ``cgl_halfN`` structures define no arithmetic operators.
+        """
+        if self.scalar_component_type(scalar_type) is not None:
+            return True
+        if vector_info.get("component_type") != "half" or scalar_type is None:
+            return False
+        if not isinstance(scalar_type, str):
+            scalar_type = self.convert_type_node_to_string(scalar_type)
+        return self.map_vector_arithmetic_type(scalar_type) in {"half", "float16_t"}
 
     def lower_scalar_modulo_operation(
         self,
@@ -836,10 +963,20 @@ class VectorArithmeticMixin:
         return None
 
     def generate_min_max_call(self, func_name, raw_args, args):
-        left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-        right_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
-        if not left_info and not right_info:
+        if len(raw_args) != 2 or len(args) != 2:
             return None
+
+        left_type = self.expression_result_type(raw_args[0])
+        right_type = self.expression_result_type(raw_args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if not left_info and not right_info:
+            return self.generate_scalar_min_max_call(
+                func_name,
+                left_type,
+                right_type,
+                args,
+            )
 
         if left_info and right_info:
             if len(left_info["components"]) != len(right_info["components"]):
@@ -1328,6 +1465,84 @@ class VectorArithmeticMixin:
         operator = "<" if func_name == "min" else ">"
         return f"(({left}) {operator} ({right}) ? ({left}) : ({right}))"
 
+    def generate_scalar_min_max_call(self, func_name, left_type, right_type, args):
+        """Lower a scalar ``min``/``max`` onto the intrinsic its operands need.
+
+        ``fminf`` and ``fmaxf`` convert their arguments to ``float``, which
+        rounds integers above 2^24, so integer operands keep CUDA's and HIP's
+        overloaded integer ``min``/``max`` and ``double`` operands use the
+        ``fmin``/``fmax`` forms.
+        """
+        left_spelling = self.min_max_scalar_spelling(left_type)
+        right_spelling = self.min_max_scalar_spelling(right_type)
+        scalar_types = {
+            MIN_MAX_SCALAR_TYPES.get(left_spelling),
+            MIN_MAX_SCALAR_TYPES.get(right_spelling),
+        }
+        if "bool" in scalar_types:
+            return None
+        if "double" in scalar_types:
+            return self.format_scalar_min_max(func_name, "double", *args)
+        if "float" in scalar_types:
+            return self.format_scalar_min_max(func_name, "float", *args)
+        if None in scalar_types:
+            return None
+        if left_spelling == right_spelling:
+            # Two operands of one type match an overload as written.
+            return self.format_scalar_min_max(func_name, "integer", *args)
+
+        unified_type = self.unified_integer_scalar_type(
+            MIN_MAX_SCALAR_TYPES[left_spelling],
+            MIN_MAX_SCALAR_TYPES[right_spelling],
+        )
+        return self.format_scalar_min_max(
+            func_name,
+            "integer",
+            self.min_max_integer_operand(left_spelling, args[0], unified_type),
+            self.min_max_integer_operand(right_spelling, args[1], unified_type),
+        )
+
+    def format_scalar_min_max(self, func_name, scalar_class, left, right):
+        """Format a scalar ``min``/``max`` call for its operand class."""
+        if scalar_class == "integer":
+            return f"{func_name}({left}, {right})"
+        prefix = "fmin" if func_name == "min" else "fmax"
+        suffix = "f" if scalar_class == "float" else ""
+        return f"{prefix}{suffix}({left}, {right})"
+
+    def min_max_scalar_spelling(self, type_name):
+        """Return the C type name a min/max operand is written with, or None."""
+        if type_name is None:
+            return None
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = self.map_vector_arithmetic_type(type_name)
+        if not isinstance(mapped_type, str):
+            return None
+        return " ".join(mapped_type.split())
+
+    def min_max_integer_operand(self, spelling, arg, unified_type):
+        """Cast an integer operand to the type both min/max operands promote to."""
+        if spelling == unified_type:
+            return arg
+        if MIN_MAX_SCALAR_ALIASES.get(spelling) == unified_type:
+            return arg
+        return f"static_cast<{unified_type}>({arg})"
+
+    def unified_integer_scalar_type(self, left_scalar, right_scalar):
+        """Return the C integer type two operands promote to, as in C++."""
+        if left_scalar == right_scalar:
+            return left_scalar
+        left_rank = MIN_MAX_INTEGER_SCALAR_RANKS[left_scalar]
+        right_rank = MIN_MAX_INTEGER_SCALAR_RANKS[right_scalar]
+        signed_type, unsigned_type = MIN_MAX_INTEGER_SCALAR_TYPES[
+            max(left_rank, right_rank)
+        ]
+        if left_rank == right_rank:
+            return unsigned_type
+        wider_scalar = left_scalar if left_rank > right_rank else right_scalar
+        return signed_type if wider_scalar == signed_type else unsigned_type
+
     def require_vector_binary_helper(self, vector_info, operator, operand_shape):
         """Register and return a helper function for vector binary arithmetic."""
         if vector_info["component_type"] == "bool":
@@ -1809,6 +2024,8 @@ class VectorArithmeticMixin:
             "pow": {"float": "powf", "double": "pow"},
             "sin": {"float": "sinf", "double": "sin"},
             "cos": {"float": "cosf", "double": "cos"},
+            "sinpi": {"float": "sinpif", "double": "sinpi"},
+            "cospi": {"float": "cospif", "double": "cospi"},
             "tan": {"float": "tanf", "double": "tan"},
             "asin": {"float": "asinf", "double": "asin"},
             "acos": {"float": "acosf", "double": "acos"},

@@ -95,6 +95,11 @@ def test_probe_refuses_what_it_cannot_express():
         probes.build(feature("abs", Type("double"), Type("double")), "metal")
 
 
+def test_an_operation_crossgl_writes_as_an_expression_fills_its_holes():
+    clamp = feature("NClamp", VEC3, VEC3, VEC3, VEC3, crossgl="fmin(fmax({}, {}), {})")
+    assert "vec3 r = fmin(fmax(a0, a1), a2);" in probes.build(clamp, "crossgl").source
+
+
 def test_an_interpolant_is_read_straight_from_a_shader_input():
     vec2 = Type("float", (2,))
     centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")
@@ -304,6 +309,15 @@ def test_function_probe_declares_the_samplers_and_images_it_passes():
     crossgl = probes.build(IMAGE_ATOMIC, "crossgl").source
     assert "        layout(r32ui) uniform uimage2D u0;" in crossgl
     assert "uint r = imageAtomicAdd(u0, a1, a2);" in crossgl
+
+
+def test_a_glsl_probe_passes_a_shadow_sampler_for_a_depth_comparison():
+    shadow = feature(
+        "texture", Type("float"), Type.other("sampler2DShadow"), Type("float", (3,))
+    )
+    source = probes.build(shadow, "glsl").source
+    assert "layout(binding = 8) uniform sampler2DShadow u0;" in source
+    assert "float r = texture(u0, a1);" in source
 
 
 def test_a_subpass_input_names_its_input_attachment():

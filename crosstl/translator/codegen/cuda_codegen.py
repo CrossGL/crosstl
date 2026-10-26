@@ -28,6 +28,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..diagnostics import TranslationDiagnostic
 from ..matrix_shape import matrix_type_spelling
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
@@ -38,6 +39,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
+from .cuda_refusals import CudaLoweringRefused
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -143,6 +145,11 @@ CUDA_BITCAST_FUNCTION_TARGETS = {
     "asfloat": "float",
     "asint": "int",
     "asuint": "uint",
+}
+
+CUDA_64BIT_BITCAST_FUNCTIONS = {
+    "doubleBitsToLong": ("__double_as_longlong", "long long"),
+    "longBitsToDouble": ("__longlong_as_double", "double"),
 }
 
 CUDA_INTEGER_BIT_FUNCTION_ALIASES = {
@@ -1073,6 +1080,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
         self.emit("#include <cuda_fp16.h>")
+        # CrossGL's fixed-width integers lower to uint8_t, int64_t and friends, which none of the
+        # CUDA headers above declares.
+        self.emit("#include <cstdint>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
@@ -2809,6 +2819,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 node.name,
@@ -3512,6 +3524,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         args_str = ", ".join(args)
 
+        euclidean_norm_name = self.cuda_euclidean_norm_function_name(
+            func_name, raw_args
+        )
+        if euclidean_norm_name is not None:
+            return f"{euclidean_norm_name}({args_str})"
+
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
 
@@ -3524,6 +3542,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if (
+            wide_bitcast is not None
+            and not self.is_user_defined_function(func_name)
+            and len(raw_args or []) == 1
+        ):
+            return wide_bitcast[1]
         target_component = CUDA_BITCAST_FUNCTION_TARGETS.get(func_name)
         if (
             target_component is None
@@ -3552,6 +3577,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if result_type is None:
             return None
 
+        wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
+        if wide_bitcast is not None:
+            intrinsic = wide_bitcast[0]
+            # The intrinsic takes one scalar, and CUDA converts any arithmetic scalar to
+            # its parameter type. It has no vector or matrix form.
+            source_type = self.expression_result_type(raw_args[0])
+            if (
+                source_type is not None
+                and self.scalar_component_type(source_type) is None
+            ):
+                raise CudaLoweringRefused(
+                    [
+                        f"bit reinterpretation: {func_name} of "
+                        f"{self.type_name_string(source_type)}: "
+                        f"{intrinsic} takes one scalar"
+                    ]
+                )
+            return f"{intrinsic}({args[0]})"
+
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
@@ -3578,6 +3622,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "bitfieldReverse",
             "findLSB",
             "findMSB",
+            "countLeadingZeros",
         } or self.is_user_defined_function(original_func_name):
             return None
 
@@ -3586,6 +3631,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         source_type = self.expression_result_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
+        if func_name == "countLeadingZeros":
+            # __clz and __clzll both return int.
+            if source_info is not None:
+                return self.vector_type_for_components(
+                    "int",
+                    len(source_info["components"]),
+                )
+            return "int"
         if source_info is not None:
             if source_info["component_type"] not in {"int", "uint"}:
                 return self.vector_type_for_components(
@@ -3617,6 +3670,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         operation = self.normalize_cuda_integer_bit_function(func_name)
         source_type = self.expression_result_type(raw_args[0])
+        if source_type is None and operation == "countLeadingZeros":
+            # A sized cast such as u64(x) has no inferred type; read its width from the cast so that
+            # __clz does not truncate a 64-bit value.
+            source_type = self.cuda_integer_cast_type(raw_args[0])
         source_info = self.vector_type_info(source_type)
         result_info = self.vector_type_info(result_type)
         if source_info is not None:
@@ -3643,6 +3700,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             source_type,
             result_type,
         )
+
+    def cuda_integer_cast_type(self, node):
+        """The target type of a scalar integer cast such as ``u64(x)``, or None."""
+        if not isinstance(node, FunctionCallNode):
+            return None
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        type_name = getattr(function_expr, "name", function_expr)
+        if not isinstance(type_name, str) or self.is_user_defined_function(type_name):
+            return None
+        if self.scalar_component_type(type_name) in {"int", "uint"}:
+            return type_name
+        return None
 
     def require_cuda_integer_bit_vector_helper(
         self,
@@ -3700,6 +3769,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if result_component == "int":
                 return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
+        if operation == "countLeadingZeros":
+            intrinsic_name = "__clzll" if bit_width == 64 else "__clz"
+            return f"{intrinsic_name}({value})"
         if operation == "findLSB":
             return f"(__ffs({value}) - 1)"
         if operation == "findMSB":
@@ -4625,7 +4697,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         integer_kinds = {"int", "uint"}
         add_kinds = {*integer_kinds, "uint64", "float"}
         add_exchange_kinds = {*integer_kinds, "float"}
-        return {
+        operations = {
             "atomicAdd": ("atomicAdd", 2, add_kinds, "int/uint/u64/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
@@ -4639,6 +4711,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
+        # CUDA's block- and system-scoped atomics (atomicAdd_block,
+        # atomicCAS_system, ...) take the same operands as the device-wide
+        # intrinsic they are named after.
+        for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
+            for scope in ("_block", "_system"):
+                operations.setdefault(
+                    f"{intrinsic}{scope}",
+                    (f"{intrinsic}{scope}", arg_count, kinds, kinds_label),
+                )
+        return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
         """Lower atomics on RWStructuredBuffer element lvalues to CUDA atomics."""
@@ -6339,6 +6421,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 code = generate_ordered_conditional_match(
                     self, node, self.indent_level, "CUDA"
                 )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             reason = self.cuda_match_error_reason(error)
             code = (
@@ -6517,6 +6601,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
+        except TranslationDiagnostic:
+            raise
         except ValueError as error:
             assignment = self.generate_match_expression_diagnostic_assignment(
                 result_name,
@@ -9791,6 +9877,50 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return False
 
+    def cuda_euclidean_norm_function_name(self, func_name, raw_args):
+        """Name CrossGL ``norm``/``rnorm`` of an array for its element type.
+
+        CrossGL spells both precisions without the ``f`` suffix. CUDA's ``norm``/``rnorm``
+        take ``const double*`` and ``normf``/``rnormf`` take ``const float*``, so an array
+        of any other element type, or of one the generator cannot resolve, is refused.
+        """
+        if (
+            func_name not in {"norm", "rnorm"}
+            or len(raw_args or []) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+
+        array_expr = raw_args[1]
+        lvalue = self.strip_address_of_expression(array_expr)
+        if lvalue is not array_expr:
+            # ``&x`` points at ``x`` itself.
+            element_type = self.type_name_string(self.expression_result_type(lvalue))
+        else:
+            array_type = self.type_name_string(self.expression_result_type(array_expr))
+            base_type, array_suffix = split_array_type_suffix(array_type or "")
+            pointer = self.cuda_indirect_type_info(array_type)
+            if array_suffix.count("[") == 1:
+                # A one-dimensional array decays to a pointer to its first element.
+                element_type = base_type
+            elif pointer is not None and pointer["kind"] == "pointer":
+                element_type = pointer["pointee_type"]
+            else:
+                element_type = None
+
+        component = self.scalar_component_type(element_type) if element_type else None
+        if component == "float":
+            return f"{func_name}f"
+        if component == "double":
+            return func_name
+        elements = f"{element_type} elements" if element_type else "unresolved elements"
+        raise CudaLoweringRefused(
+            [
+                f"Euclidean norm: {func_name} of {elements}: CUDA has normf and "
+                "rnormf for float arrays and norm and rnorm for double arrays"
+            ]
+        )
+
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
         function_mapping = {
@@ -10959,6 +11089,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if narrow_info is not None:
             return narrow_info
         return super().vector_type_info(type_name)
+
+    def native_vector_component_type(self, type_name):
+        # half2 maps to the native half2 type, which vector_type_info leaves
+        # undescribed; its components are still half
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in {
+            "half2",
+            "f16vec2",
+            "float16vec2",
+            "vec2<f16>",
+            "vec2<float16>",
+            "vec2<half>",
+        }:
+            return "half"
+        return None
 
     def cuda_half_vector_type_info(self, type_name):
         type_text = self.type_name_string(type_name)

@@ -14,6 +14,13 @@ expression of the program's integer constants and enumerators (combined with C's
 constants in every generator's output and keep their spelling. An extent that names anything else is left to the
 generators: a specialization constant, which GLSL and SPIR-V keep symbolic and the others refuse, a name the program
 does not declare, or a name that a parameter or local declaration could shadow.
+
+:func:`fold_stage_layout_counts` does the same for the element counts a stage's ``layout(...) in|out`` qualifiers
+and entry-point attributes give (``max_vertices``, ``max_primitives``, ``vertices``, ``invocations`` and their
+HLSL spellings). GLSL 4.60 section 4.4 makes each a constant integral expression, and ``GL_EXT_mesh_shader`` samples
+write ``max_vertices = 4 * groupSizeX * groupSizeY`` over ``const uint`` declarations. The count sizes the stage's
+implicitly sized output arrays (:mod:`.stage_io_arrays`) and the emitters' stage declarations, which accepted only a
+literal or a single constant name, so those shaders were refused although their counts are known.
 """
 
 from __future__ import annotations
@@ -24,9 +31,24 @@ from .declared_types import _nodes
 from .hub_types import iter_structs
 from .storage_blocks import _declared_names, _walk
 
-__all__ = ["fold_constant_extents"]
+__all__ = ["fold_constant_extents", "fold_stage_layout_counts"]
 
 _CARRYING = frozenset({"cgl", "crossgl"})
+# Stage layout entries and entry-point attributes whose single argument is an element count.
+_STAGE_COUNTS = frozenset(
+    {
+        "max_vertices",
+        "max_primitives",
+        "maxvertexcount",
+        "maxprimitivecount",
+        "vertices",
+        "outputcontrolpoints",
+        "invocations",
+        "instance",
+    }
+)
+# The largest count folded: a larger value would depend on the width of the constants' unsigned type.
+_LARGEST_COUNT = 2**31 - 1
 
 
 def fold_constant_extents(program, target) -> int:
@@ -63,4 +85,71 @@ def fold_constant_extents(program, target) -> int:
             continue
         node.size = A.LiteralNode(value, A.PrimitiveType("int"))
         changed += 1
+    return changed
+
+
+def _stage_count_arguments(stage):
+    """The count arguments of ``stage``'s layout qualifiers and entry-point attributes, as ``(owner, index)``."""
+    entries = [
+        entry
+        for qualifier in getattr(stage, "layout_qualifiers", None) or []
+        for entry in getattr(qualifier, "entries", None) or []
+    ]
+    entry_point = getattr(stage, "entry_point", None)
+    entries += list(getattr(entry_point, "attributes", None) or [])
+    return [
+        entry
+        for entry in entries
+        if str(getattr(entry, "name", "")).lower() in _STAGE_COUNTS
+        and len(getattr(entry, "arguments", None) or []) == 1
+    ]
+
+
+def _stage_scope_names(stage):
+    """Names a stage declares at its own scope, which would shadow a program constant in its layout."""
+    names = set()
+    for field in (
+        "local_variables",
+        "local_functions",
+        "local_structs",
+        "local_cbuffers",
+    ):
+        names.update(
+            getattr(node, "name", None) for node in getattr(stage, field, None) or []
+        )
+    return names
+
+
+def fold_stage_layout_counts(program, target) -> int:
+    """Replace stage count arguments that are integer expressions of the program's constants by their values."""
+    if str(target or "").lower() in _CARRYING or not isinstance(program, A.ShaderNode):
+        return 0
+    stages = getattr(program, "stages", None) or {}
+    table = None
+    changed = 0
+    for stage in stages.values() if isinstance(stages, dict) else stages:
+        local_names = None
+        for entry in _stage_count_arguments(stage):
+            argument = entry.arguments[0]
+            if not isinstance(argument, A.ASTNode) or not _refers_to_names(argument):
+                continue
+            if local_names is None:
+                local_names = _stage_scope_names(stage)
+            names = {
+                item.name
+                for item in _walk(argument)
+                if isinstance(item, A.IdentifierNode)
+            }
+            if names & local_names:
+                continue
+            if table is None:
+                table = _ConstantTable(program)
+            try:
+                value = table.evaluate(argument)
+            except _Unresolved:
+                continue
+            if not 0 < value <= _LARGEST_COUNT:
+                continue
+            entry.arguments[0] = A.LiteralNode(value, A.PrimitiveType("int"))
+            changed += 1
     return changed

@@ -28,6 +28,7 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.base import NESTED_STRUCTS
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -324,6 +325,9 @@ class CrossGL(Dialect):
         if name == SUBSCRIPT:
             vector, index = arguments
             return f"{vector}[{index}]"
+        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument.
+        if "{}" in name:
+            return name.format(*arguments)
         return super().call(name, arguments)
 
     def reading(self, opaque: str) -> tuple[Type, str] | None:
@@ -496,6 +500,7 @@ CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
     "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),

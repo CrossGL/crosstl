@@ -685,7 +685,7 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 position @ Out_Position;" in generated_code
+    assert "vec4 position @ gl_Position;" in generated_code
     assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
@@ -1041,7 +1041,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
 
     assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
     assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
     cgl_translator.parse(generated_code)
 
@@ -1117,7 +1117,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ Out_Position)"
+        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
@@ -3844,6 +3844,72 @@ def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_hlsl_barrier_intrinsics_map_like_the_hlsl_importer():
+    # Slang accepts the HLSL barrier intrinsics; they must lower to the same
+    # CrossGL barriers the HLSL importer emits instead of passing through.
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(4, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        GroupMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+        DeviceMemoryBarrier();
+        AllMemoryBarrier();
+        DeviceMemoryBarrierWithGroupSync();
+        AllMemoryBarrierWithGroupSync();
+        if (id.x == 0u) {
+            hlsl::DeviceMemoryBarrierWithGroupSync();
+        }
+        outp[id.x] = 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    lines = [line.strip() for line in generated_code.splitlines()]
+    barrier_lines = [line for line in lines if "arrier" in line]
+
+    assert barrier_lines == [
+        "workgroupBarrier();",
+        "memoryBarrierShared();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+        "allMemoryBarrier();",
+        "workgroupBarrier();",
+        "allMemoryBarrier();",
+        "deviceMemoryBarrier();",
+        "workgroupExecutionBarrier();",
+        "deviceMemoryBarrier();",
+    ]
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
+    code = """
+    void AllMemoryBarrierWithGroupSync() {}
+    void GroupMemoryBarrier() {}
+
+    void main() {
+        AllMemoryBarrierWithGroupSync();
+        GroupMemoryBarrier();
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "allMemoryBarrier" not in generated_code
+    assert "workgroupBarrier" not in generated_code
+    assert "memoryBarrierShared" not in generated_code
+
+
 def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
     # Source: Slang core module reference for sincos.
     # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html
@@ -3867,6 +3933,55 @@ def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignment
     assert "        s = sin(c);" in generated_code
     assert "        c = cos(c);" in generated_code
     assert "sincos(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_vector_types_map_to_uint_like_the_hlsl_importer():
+    # CrossGL has no int8_t4_packed/uint8_t4_packed; the HLSL importer maps
+    # both to uint, and pack_s8/pack_u8 return uint in CrossGL.
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        uint i = id.x;
+        int4 a0 = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+        int8_t4_packed r = pack_s8(a0);
+        uint8_t4_packed u = (uint8_t4_packed)outp[i];
+        outp[i] = (uint)r + (uint)u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int8_t4_packed" not in generated_code
+    assert "uint r = pack_s8(a0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_packed_8bit_structured_buffer_elements_map_to_uint():
+    # A structured buffer of int8_t4_packed/uint8_t4_packed is a structured
+    # buffer of uint in CrossGL, as in the HLSL importer.
+    code = """
+    StructuredBuffer<uint8_t4_packed> pin;
+    RWStructuredBuffer<int8_t4_packed> pout;
+    RWStructuredBuffer<uint> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID) {
+        pout[id.x] = pin[id.x];
+        outp[id.x] = pin[id.x];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "StructuredBuffer<uint> pin;" in generated_code
+    assert "RWStructuredBuffer<uint> pout;" in generated_code
+    assert "int8_t4_packed" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -3901,6 +4016,48 @@ def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests()
     assert "fwidth_fine" not in generated_code
     assert "fwidth_coarse" not in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_bit_manipulation_intrinsics_lower_to_crossgl_builtins_and_round_trip():
+    code = """
+    RWStructuredBuffer<int> iin;
+    RWStructuredBuffer<uint2> outp;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main(uint3 id : SV_DispatchThreadID)
+    {
+        uint i = id.x;
+        int2 a0 = int2(iin[i], iin[i + 1u]);
+        uint2 c = countbits(a0);
+        uint2 hi = firstbithigh(a0);
+        uint2 lo = firstbitlow(a0);
+        int2 rev = reversebits(a0);
+        uint qualified = hlsl::countbits(i) + hlsl::firstbithigh(i) + hlsl::firstbitlow(i) + hlsl::reversebits(i);
+        outp[i] = c + hi + lo + uint2(rev) + uint2(qualified, qualified);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uvec2 c = bitCount(a0);" in generated_code
+    assert "uvec2 hi = findMSB(a0);" in generated_code
+    assert "uvec2 lo = findLSB(a0);" in generated_code
+    assert "ivec2 rev = bitfieldReverse(a0);" in generated_code
+    assert (
+        "bitCount(i) + findMSB(i) + findLSB(i) + bitfieldReverse(i)" in generated_code
+    )
+    for slang_name in ("countbits(", "firstbithigh(", "firstbitlow(", "reversebits("):
+        assert slang_name not in generated_code
+
+    ast = cgl_translator.parse(generated_code)
+    from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+
+    round_tripped = SlangCodeGen().generate(ast)
+    assert "countbits(a0)" in round_tripped
+    assert "firstbithigh(a0)" in round_tripped
+    assert "firstbitlow(a0)" in round_tripped
+    assert "reversebits(a0)" in round_tripped
 
 
 def test_standalone_function_call_statement_codegen():

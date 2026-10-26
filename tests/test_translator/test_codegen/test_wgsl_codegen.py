@@ -749,6 +749,70 @@ def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
     ) in generated
 
 
+def test_wgsl_codegen_locates_slang_importer_target_semantics(tmp_path):
+    # The Slang importer spells SV_Target<n> as Out_Color<n>; n is the colour
+    # attachment, whatever the declaration order.
+    struct_shader = """
+    shader WGSLSlangTargetMembers {
+        struct FragmentOutput {
+            vec4 extra @ Out_Color1;
+            vec4 color @ Out_Color;
+        }
+        fragment {
+            FragmentOutput main(vec4 color @ Color0) {
+                FragmentOutput output;
+                output.color = color;
+                output.extra = color;
+                return output;
+            }
+        }
+    }
+    """
+    result_shader = """
+    shader WGSLSlangTargetResult {
+        fragment {
+            vec4 main(vec4 color @ Color0) @ Out_Color2 {
+                return color;
+            }
+        }
+    }
+    """
+
+    members = WGSLCodeGen().generate(parse_shader(struct_shader))
+    result = WGSLCodeGen().generate(parse_shader(result_shader))
+
+    assert "@location(1) extra: vec4<f32>," in members
+    assert "@location(0) color: vec4<f32>," in members
+    assert ") -> @location(2) vec4<f32> {" in result
+    validate_wgsl_with_naga(tmp_path, members)
+    validate_wgsl_with_naga(tmp_path, result)
+
+
+def test_wgsl_codegen_locates_slang_position_input_and_sv_target_result(tmp_path):
+    vertex_path = tmp_path / "vertex.slang"
+    vertex_path.write_text(
+        '[shader("vertex")]\n'
+        "float4 main(float3 position : POSITION) : SV_Position "
+        "{ return float4(position, 1.0); }\n",
+        encoding="utf-8",
+    )
+    fragment_path = tmp_path / "fragment.slang"
+    fragment_path.write_text(
+        '[shader("fragment")]\n'
+        "float4 main(float4 c : COLOR0) : SV_Target { return c; }\n",
+        encoding="utf-8",
+    )
+
+    vertex = crosstl.translate(str(vertex_path), backend="wgsl")
+    fragment = crosstl.translate(str(fragment_path), backend="wgsl")
+
+    assert "fn vertex_main(@location(0) position: vec3<f32>)" in vertex
+    assert (
+        "fn fragment_main(@location(13) c: vec4<f32>) -> @location(0) vec4<f32>"
+    ) in fragment
+    validate_wgsl_with_naga(tmp_path, fragment)
+
+
 def test_wgsl_codegen_emits_resource_address_spaces_and_bindings():
     shader = """
     shader WGSLResources {
@@ -1411,7 +1475,7 @@ def test_wgsl_codegen_lowers_structured_buffers_to_storage_bindings():
 
     assert "@group(2) @binding(4)\nvar<storage, read> values: array<f32>;" in generated
     assert (
-        "@group(0) @binding(5)\n"
+        "@group(0) @binding(0)\n"
         "var<storage, read_write> outValues: array<f32>;" in generated
     )
     assert "outValues[gid.x] = values[gid.x];" in generated
@@ -3147,3 +3211,265 @@ def test_wgsl_codegen_rejects_mismatched_matrix_comp_mult_operands():
         match=r"matrixCompMult\(\) operands to be two float matrices of the same type",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_translate_hlsl_8bit_pack_intrinsics_to_wgsl_pack_builtins(tmp_path):
+    source_path = tmp_path / "pack.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            uint i = id.x;
+            int4 a = int4(iin[i + 0u], iin[i + 1u], iin[i + 2u], iin[i + 3u]);
+            uint4 b = uint4(a);
+            uint r0 = pack_s8(a);
+            uint r1 = pack_u8(b);
+            uint r2 = pack_clamp_s8(a);
+            uint r3 = pack_clamp_u8(a);
+            int4 u0 = unpack_s8s32(r0);
+            uint4 u1 = unpack_u8u32(r1);
+            outp[i] = r0 + r1 + r2 + r3 + uint(u0.x) + u1.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "var r0: u32 = pack4xI8(a);" in generated
+    assert "var r1: u32 = pack4xU8(b);" in generated
+    assert "var r2: u32 = pack4xI8Clamp(a);" in generated
+    assert "var r3: u32 = pack4xU8Clamp(vec4<u32>(max(a, vec4<i32>(0))));" in generated
+    assert "var u0: vec4<i32> = unpack4xI8(r0);" in generated
+    assert "var u1: vec4<u32> = unpack4xU8(r1);" in generated
+    for name in ("pack_s8", "pack_u8", "pack_clamp_", "unpack_s8s32", "unpack_u8u32"):
+        assert name not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_8bit_pack_converts_argument_signedness(tmp_path):
+    source_path = tmp_path / "pack_sign.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<uint> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int4 a = int4(1, -2, 3, -4);
+            uint4 b = uint4(5u, 6u, 7u, 8u);
+            outp[id.x] = pack_u8(a) + pack_s8(b) + pack_clamp_u8(b);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "pack4xU8(vec4<u32>(a))" in generated
+    assert "pack4xI8(vec4<i32>(b))" in generated
+    assert "pack4xU8Clamp(b)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_8bit_pack_converts_int_operands_and_results(tmp_path):
+    source_path = tmp_path / "pack_int.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<int> iin;
+        RWStructuredBuffer<int> outp;
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            int p = iin[id.x];
+            int4 v = unpack_s8s32(p);
+            int r = pack_s8(v);
+            outp[id.x] = pack_clamp_s8(v);
+            outp[id.x + 1u] = r;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="webgpu")
+
+    assert "var v: vec4<i32> = unpack4xI8(u32(p));" in generated
+    assert "var r: i32 = i32(pack4xI8(v));" in generated
+    assert "outp[id.x] = i32(pack4xI8Clamp(v));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_8bit_pack_requires_one_argument():
+    shader = parse_shader("""
+        shader PackedEightBit {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    ivec4 a = ivec4(1, 2, 3, 4);
+                    uint r = pack_s8(a, a);
+                }
+            }
+        }
+        """)
+
+    with pytest.raises(ValueError, match="pack_s8\\(\\) with exactly 1 argument"):
+        WGSLCodeGen().generate(shader)
+
+
+def test_two_argument_atan_lowers_to_atan2(tmp_path):
+    # WGSL atan() takes one argument; GLSL's two-argument atan(y, x) is atan2 (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                vec3 r = atan(a0, a0) + atan(a0);
+                float s = atan(fin[i], 2.0);
+                outp[i] = r + vec3(s);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "atan2(a0, a0)" in generated
+    assert "atan(a0)" in generated
+    assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
+    assert "atan(a0, a0)" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_maps_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="wgsl",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "fwidthFine(input.uv) + fwidthCoarse(input.uv)" in generated
+    assert "fwidth_fine(" not in generated
+    assert "fwidth_coarse(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize("name", ["fwidth_fine", "ddx_fine", "dFdx"])
+def test_wgsl_user_function_with_derivative_name_is_not_mapped(tmp_path, name):
+    shader = f"""
+    shader DerivativeShadowing {{
+        float {name}(float value) {{
+            return value + 1.0;
+        }}
+
+        fragment {{
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {{
+                float shifted = {name}(value);
+                return vec4(shifted, 0.0, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"fn {name}(value: f32) -> f32" in generated
+    assert f"var shifted: f32 = {name}(value);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_discards_must_use_builtin_call_statements(tmp_path):
+    # WGSL declares these built-ins @must_use, so a bare call statement is rejected (issue #3090).
+    shader = """
+    __kernel __attribute__((reqd_work_group_size(1, 1, 1))) void probe(__global uint* uin, __global uint* outp) {
+        uint i = get_global_id(0);
+        min(uin[i], 4u);
+        outp[i] = 2u;
+    }
+    """
+    shader_path = tmp_path / "probe.cl"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="wgsl",
+        format_output=False,
+    )
+
+    assert "_ = min(uin[i], 4u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
+    shader = """
+    shader MustUse {
+        struct Pair {
+            float a;
+            float b;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void sign(uint i) {
+                outp[i] = 1.0;
+            }
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                sign(i);
+                max(fin[i], 1.0);
+                vec2(fin[i]);
+                clamp(fin[i], 0.0, 1.0);
+                Pair(fin[i], 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "    sign(i);" in generated
+    assert "_ = sign(i);" not in generated
+    assert "_ = max(fin[i], 1.0);" in generated
+    assert "_ = vec2<f32>(fin[i]);" in generated
+    assert "_ = clamp(fin[i], 0.0, 1.0);" in generated
+    assert "_ = Pair(fin[i], 1.0);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("min(a, 4u)", "_ = min(a, 4u)"),
+        ("vec2<f32>(a)", "_ = vec2<f32>(a)"),
+        (
+            "textureLoad(t, vec2<i32>(0, 0), 0)",
+            "_ = textureLoad(t, vec2<i32>(0, 0), 0)",
+        ),
+        ("atomicAdd(&counter, 1u)", "atomicAdd(&counter, 1u)"),
+        ("workgroupBarrier()", "workgroupBarrier()"),
+        ("textureStore(t, vec2<i32>(0, 0), v)", "textureStore(t, vec2<i32>(0, 0), v)"),
+        ("min(a, b) + min(c, d)", "min(a, b) + min(c, d)"),
+        ("helper(min(a, b))", "helper(min(a, b))"),
+    ],
+)
+def test_wgsl_call_statement_phony_assigns_only_must_use_calls(expression, expected):
+    from crosstl.translator.codegen.wgsl_must_use import wgsl_call_statement
+
+    assert wgsl_call_statement(expression) == expected

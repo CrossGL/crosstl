@@ -249,6 +249,7 @@ from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlock
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
+from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
 from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
@@ -1993,6 +1994,8 @@ class HLSLCodeGen(
         "fwidth": "fwidth",
         "fwidthCoarse": "ddx_coarse/ddy_coarse",
         "fwidthFine": "ddx_fine/ddy_fine",
+        "fwidth_coarse": "ddx_coarse/ddy_coarse",
+        "fwidth_fine": "ddx_fine/ddy_fine",
     }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
@@ -2554,6 +2557,7 @@ class HLSLCodeGen(
         self.fragment_entry_input_struct_names = set()
         self.fragment_entry_output_struct_names = set()
         self.geometry_entry_vertex_struct_names = set()
+        self.hlsl_mesh_output_struct_offsets = {}
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -3934,6 +3938,7 @@ class HLSLCodeGen(
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.geometry_entry_vertex_struct_names = set()
+        self.hlsl_mesh_output_struct_offsets = {}
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -4143,6 +4148,11 @@ class HLSLCodeGen(
         )
         self.geometry_entry_vertex_struct_names = (
             self.collect_hlsl_geometry_entry_vertex_struct_names(ast, target_stage)
+        )
+        self.hlsl_mesh_output_struct_offsets = (
+            collect_hlsl_mesh_output_struct_offsets(self, ast)
+            if stage_matches(target_stage, "mesh")
+            else {}
         )
         self.function_return_types = {
             func.name: self.hlsl_function_return_type_name(
@@ -18228,6 +18238,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+                mapped_operator, left_type, right_type
+            )
+            if matrix_type is not None:
+                return matrix_type
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -18523,6 +18538,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
+            if func_name in {"matrixCompMult", "outerProduct"} and func_name not in (
+                getattr(self, "function_return_types", {})
+            ):
+                matrix_call_type = self.hlsl_matrix_orientation.call_type(
+                    func_name, [self.expression_result_type(arg) for arg in args]
+                )
+                if matrix_call_type is not None:
+                    return matrix_call_type
             if (
                 func_name in {
                     "frac",
@@ -18541,6 +18564,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "fwidth",
                     "fwidthFine",
                     "fwidthCoarse",
+                    "fwidth_fine",
+                    "fwidth_coarse",
                     "ddx",
                     "ddy",
                     "ddx_fine",
@@ -26808,6 +26833,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_assignment(expr)
         return self.generate_expression(expr)
 
+    def hlsl_helper_invocation_expression(self, expr):
+        """Lower CrossGL's ``gl_HelperInvocation`` to Shader Model 6.6 ``IsHelperLane()``.
+
+        HLSL has no helper-invocation variable; the query is the intrinsic. A local or
+        global that happens to use the name is left alone. The dx10 and dx11 profiles
+        (Shader Model 4 and 5) have no such intrinsic, so the read is refused there.
+        """
+        if not isinstance(expr, (IdentifierNode, VariableNode)):
+            return None
+        if getattr(expr, "name", None) != "gl_HelperInvocation":
+            return None
+        for table in ("local_variable_types", "global_variable_types"):
+            if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
+                return None
+        if self.target_profile in {"dx10", "dx11"}:
+            return self.refuse_lowering(
+                "gl_HelperInvocation: IsHelperLane() requires Shader Model 6.6, "
+                f"which DirectX profile {self.target_profile} does not provide",
+                "false",
+            )
+        return "IsHelperLane()"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         storage_read = self.hlsl_half_storage.read(expr)
@@ -26819,6 +26866,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         unavailable = hlsl_unavailable_builtin(self, expr)
         if unavailable is not None:
             return unavailable
+        helper_lane = self.hlsl_helper_invocation_expression(expr)
+        if helper_lane is not None:
+            return helper_lane
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -28119,10 +28169,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "asfloat(0x7fc00000)"
         if not args and func_name == "infinity":
             return "asfloat(0x7f800000)"
-        if func_name in {"fwidthFine", "fwidthCoarse"} and len(args) == 1:
+        if (
+            func_name in {"fwidthFine", "fwidthCoarse", "fwidth_fine", "fwidth_coarse"}
+            and len(args) == 1
+        ):
             # HLSL has no fine or coarse fwidth; GLSL 4.60 section 8.14
             # defines fwidthFine(p) as abs(dFdxFine(p)) + abs(dFdyFine(p)).
-            granularity = "fine" if func_name == "fwidthFine" else "coarse"
+            # The GLSL importer writes fwidthFine as fwidth_fine.
+            granularity = (
+                "fine" if func_name in {"fwidthFine", "fwidth_fine"} else "coarse"
+            )
             targets = ("abs", f"ddx_{granularity}", f"ddy_{granularity}")
             lowering = f"abs(ddx_{granularity}(p)) + abs(ddy_{granularity}(p))"
             shadowed = [
@@ -33425,6 +33481,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "fragment",
             "instance",
             "max_total_threads_per_threadgroup",
+            "max_total_threadgroups_per_mesh_grid",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -35886,7 +35943,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         has_position = False
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", "<anonymous>")
-            semantic = self.semantic_from_struct_member(member)
+            semantic = self.semantic_from_struct_member(
+                member
+            ) or self.hlsl_default_mesh_output_member_semantics(struct_node).get(
+                member_name
+            )
             if semantic is None:
                 raise ValueError(
                     f"DirectX mesh stage {role} output struct "
@@ -38760,11 +38821,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return {}
         return self.hlsl_default_location_member_semantics(struct_node)
 
-    def hlsl_default_location_member_semantics(self, struct_node):
+    def hlsl_default_location_member_semantics(self, struct_node, first_texcoord=0):
         used_ranges = self.hlsl_declared_struct_semantic_ranges(struct_node)
 
         defaults = {}
-        next_texcoord = 0
+        next_texcoord = first_texcoord
         for member in getattr(struct_node, "members", []) or []:
             member_name = getattr(member, "name", None)
             if not member_name:
@@ -38880,7 +38941,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         defaults.update(self.hlsl_default_fragment_input_member_semantics(struct_node))
         defaults.update(self.hlsl_default_fragment_output_member_semantics(struct_node))
         defaults.update(self.hlsl_default_geometry_vertex_member_semantics(struct_node))
+        defaults.update(self.hlsl_default_mesh_output_member_semantics(struct_node))
         return defaults
+
+    def hlsl_default_mesh_output_member_semantics(self, struct_node):
+        # Mesh vertex and primitive outputs link with the pixel inputs, which default to TEXCOORD<location>;
+        # hlsl_mesh_semantics.py starts the primitive members after the vertex members.
+        first_texcoord = self.hlsl_mesh_output_struct_offsets.get(
+            getattr(struct_node, "name", None)
+        )
+        if first_texcoord is None:
+            return {}
+        return self.hlsl_default_location_member_semantics(struct_node, first_texcoord)
 
     def default_hlsl_stage_return_semantic(self, shader_type, return_type):
         if shader_type == "vertex" and return_type == "float4":
@@ -39241,7 +39313,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             attr_name = self.hlsl_stage_attribute_name(attr)
             if not attr_name:
                 continue
-            if attr_name == "numthreads":
+            # Metal's max_total_threads_per_threadgroup only bounds the size that numthreads fixes in HLSL, and
+            # max_total_threadgroups_per_mesh_grid only bounds the DispatchMesh grid.
+            if attr_name in {
+                "numthreads",
+                "max_total_threads_per_threadgroup",
+                "max_total_threadgroups_per_mesh_grid",
+            }:
                 continue
 
             arguments = getattr(attr, "arguments", []) or []
@@ -43171,6 +43249,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 constants,
                 local_types,
             )
+            if binding is None:
+                return None
             delta_expression = operand.index
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             binding = self.hlsl_private_pointer_static_binding(

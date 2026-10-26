@@ -32,6 +32,7 @@ from crosstl.translator.codegen.hip_codegen import (
     HipCodeGen,
     UnsupportedHIPAstNodeError,
 )
+from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -1268,6 +1269,94 @@ class TestHipCodeGen:
         assert "intBitsToFloat(" not in hip_code
         assert "uintBitsToFloat(" not in hip_code
 
+    def test_64bit_bitcast_builtins_lower_to_hip_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    double d = 1.0;
+                    int64_t l = 1;
+                    int64_t bits = doubleBitsToLong(d);
+                    double fromBits = longBitsToDouble(l);
+                    let inferredBits = doubleBitsToLong(d);
+                    let inferredFromBits = longBitsToDouble(l);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__double_as_longlong(d)" in hip_code
+        assert "__longlong_as_double(l)" in hip_code
+        assert "long long inferredBits = __double_as_longlong(d);" in hip_code
+        assert "double inferredFromBits = __longlong_as_double(l);" in hip_code
+        assert "doubleBitsToLong(" not in hip_code
+        assert "longBitsToDouble(" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("declaration", "call", "reason"),
+        [
+            (
+                "dvec2 v = dvec2(1.0, 2.0);",
+                "int64_t bits = doubleBitsToLong(v);",
+                "doubleBitsToLong of double2",
+            ),
+            (
+                "i64vec2 v = i64vec2(1, 2);",
+                "double value = longBitsToDouble(v);",
+                "longBitsToDouble of i64vec2",
+            ),
+        ],
+    )
+    def test_64bit_bitcast_of_a_vector_is_refused(self, declaration, call, reason):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                void main() {{
+                    {declaration}
+                    {call}
+                }}
+            }}
+        }}
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match=reason) as refusal:
+            HipCodeGen().generate(ast)
+        assert refusal.value.code == "project.translate.hip-lowering-unsupported"
+
+    def test_64bit_bitcast_refusal_inside_a_match_arm_is_raised(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int mode = 1;
+                    dvec2 v = dvec2(1.0, 2.0);
+                    int64_t bits = match mode {
+                        0 => doubleBitsToLong(v),
+                        _ => int64_t(1),
+                    };
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        with pytest.raises(HipLoweringRefused, match="doubleBitsToLong of double2"):
+            HipCodeGen().generate(ast)
+
     def test_hlsl_as_bitcast_aliases_lower_to_hip_intrinsics(self):
         source_code = """
         shader TestShader {
@@ -1507,6 +1596,10 @@ class TestHipCodeGen:
                 return value + 14u;
             }
 
+            uint countLeadingZeros(uint value) {
+                return value + 15u;
+            }
+
             compute {
                 void main(uint3 tid @ gl_GlobalInvocationID) {
                     uint a = bitCount(tid.x);
@@ -1517,6 +1610,7 @@ class TestHipCodeGen:
                     uint f = firstbitlow(tid.z);
                     uint g = findMSB(tid.x);
                     uint h = firstbithigh(tid.y);
+                    uint k = countLeadingZeros(tid.z);
                 }
             }
         }
@@ -1524,6 +1618,10 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+        assert "__device__ unsigned int countLeadingZeros(unsigned int value)" in (
+            hip_code
+        )
+        assert "unsigned int k = countLeadingZeros(" in hip_code
         assert "__device__ unsigned int bitCount(unsigned int value)" in hip_code
         assert "__device__ unsigned int countbits(unsigned int value)" in hip_code
         assert "__device__ unsigned int bitfieldReverse(unsigned int value)" in hip_code
@@ -1544,6 +1642,39 @@ class TestHipCodeGen:
         assert "__brev(" not in hip_code
         assert "__ffs(" not in hip_code
         assert "__clz(" not in hip_code
+
+    def test_count_leading_zeros_lowers_to_hip_clz_intrinsics(self, tmp_path):
+        source_code = """
+        shader Clz {
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* uin;
+                buffer int* outp;
+
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    int a0 = int(uin[i]);
+                    uint64_t w = uint64_t(uin[i]);
+                    int r = countLeadingZeros(a0);
+                    int r64 = countLeadingZeros(w);
+                    int cast64 = countLeadingZeros(uint64_t(i));
+                    int signedCast64 = countLeadingZeros(int64_t(i));
+                    ivec2 v = countLeadingZeros(uvec2(uin[i], uin[i]));
+                    outp[i] = r + r64 + cast64 + signedCast64 + v.x;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "int r = __clz(a0);" in hip_code
+        assert "int r64 = __clzll(w);" in hip_code
+        assert "int cast64 = __clzll(uint64_t(i));" in hip_code
+        assert "int signedCast64 = __clzll(int64_t(i));" in hip_code
+        assert "make_int2(__clz(value.x), __clz(value.y))" in hip_code
+        assert "= countLeadingZeros(" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_user_defined_rsqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
@@ -1707,6 +1838,27 @@ class TestHipCodeGen:
         assert " = ivec3(" not in hip_code
         assert " = uvec4(" not in hip_code
 
+    def test_half_vector_constructor_splats_native_half2_component(self):
+        source_code = """
+        shader Widen {
+            f16vec3 widen(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec3(b.x);
+            }
+            f16vec4 widen4(float x) {
+                f16vec2 b = f16vec2(x);
+                return f16vec4(b.y);
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "return cgl_make_half3(b.x, b.x, b.x);" in hip_code
+        assert "return cgl_make_half4(b.y, b.y, b.y, b.y);" in hip_code
+        assert "cgl_make_half3(b.x);" not in hip_code
+        assert "cgl_make_half4(b.y);" not in hip_code
+
     def test_fp16_aliases_emit_hip_half_types_and_intrinsics(self):
         source_code = """
         shader TestShader {
@@ -1817,6 +1969,39 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "f16vec3" not in hip_code
+
+    def test_half_vector_with_half_scalar_uses_scalar_helpers(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec3 scale(f16vec3 v, half h) {
+                    f16vec3 a = v * h;
+                    f16vec3 b = h * v;
+                    f16vec3 c = v / h;
+                    f16vec3 d = v - h;
+                    f16vec4 e = f16vec4(v, h) + h;
+                    return a + b + c + d + e.xyz;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "cgl_half3 a = cgl_cgl_half3_mul_scalar(v, h);" in hip_code
+        assert "cgl_half3 b = cgl_scalar_mul_cgl_half3(h, v);" in hip_code
+        assert "cgl_half3 c = cgl_cgl_half3_div_scalar(v, h);" in hip_code
+        assert "cgl_half3 d = cgl_cgl_half3_sub_scalar(v, h);" in hip_code
+        assert "cgl_cgl_half4_add_scalar(" in hip_code
+        assert (
+            "__device__ inline cgl_half3 cgl_cgl_half3_mul_scalar"
+            "(cgl_half3 lhs, half rhs)" in hip_code
+        )
+        assert "(v * h)" not in hip_code
+        assert "(h * v)" not in hip_code
+        assert "(v / h)" not in hip_code
+        assert "(v - h)" not in hip_code
 
     @pytest.mark.parametrize(
         "vector_type",
@@ -3333,6 +3518,58 @@ class TestHipCodeGen:
         assert "float3 hi = fmaxf(a, b);" not in hip_code
         assert "float3 complexCapped = fminf(a, nextWeight());" not in hip_code
         assert "int3 ilo = fminf(ia, ib);" not in hip_code
+
+    def test_scalar_min_max_keeps_integer_and_double_operands(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint x = gl_GlobalInvocationID.x;
+                    int y = int(x);
+                    uint a = min(x, 32u);
+                    int b = max(y, 3);
+                    uint mixed = min(y, 32u);
+                    int64_t w = 7;
+                    uint64_t uw = 7u;
+                    double d = 1.5;
+                    double wide = max(d, 2.0);
+                    float f = 0.5;
+                    float narrow = min(f, 1.0);
+                    int64_t wide64 = max(w, 3);
+                    uint64_t big = min(uw, 3u);
+                    int64_t same64 = min(w, w);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int a = min(x, 32u);" in hip_code
+        assert "int b = max(y, 3);" in hip_code
+        assert (
+            "unsigned int mixed = min(static_cast<unsigned int>(y), 32u);" in hip_code
+        )
+        assert "double wide = fmax(d, 2.0);" in hip_code
+        assert "float narrow = fminf(f, 1.0);" in hip_code
+        # int64_t is long on LP64 Linux, so both operands are cast to one type.
+        assert (
+            "int64_t wide64 = max(static_cast<long long>(w), "
+            "static_cast<long long>(3));" in hip_code
+        )
+        assert (
+            "uint64_t big = min(static_cast<unsigned long long>(uw), "
+            "static_cast<unsigned long long>(3u));" in hip_code
+        )
+        assert "int64_t same64 = min(w, w);" in hip_code
+        assert "fminf(x, 32u)" not in hip_code
+        assert "fmaxf(y, 3)" not in hip_code
+        assert "fminf(d, 2.0)" not in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_vector_clamp_expands_hip_components(self):
         source_code = """
@@ -9899,6 +10136,131 @@ class TestHipCodeGen:
         if shutil.which("hipcc") is not None:
             compile_hip_if_hipcc_available(hip_code, tmp_path)
 
+    def test_system_scoped_structured_buffer_atomics_emit_hip_pointer_atomics(
+        self, tmp_path
+    ):
+        """HIP _system forms take a pointer first argument, like the unscoped ones."""
+        source_code = """
+        shader SystemScopedStructuredBufferAtomicsHIP {
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+
+            void process(uint index, uint value, int signedValue) {
+                uint oldAdd = atomicAdd_system(counters[index], value);
+                uint oldSub = atomicSub_system(counters[index], value);
+                uint oldMin = atomicMin_system(counters[index], value);
+                uint oldMax = atomicMax_system(counters[index], value);
+                uint oldAnd = atomicAnd_system(counters[index], value);
+                uint oldOr = atomicOr_system(counters[index], value);
+                uint oldXor = atomicXor_system(counters[index], value);
+                uint oldExchange = atomicExch_system(counters[index], value);
+                uint oldCas = atomicCAS_system(counters[index], oldAdd, value);
+                int oldSigned = atomicAdd_system(signedCounters[index], signedValue);
+                uint badCas = atomicCAS_system(counters[index], oldAdd);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        for name, intrinsic in (
+            ("oldAdd", "atomicAdd_system"),
+            ("oldSub", "atomicSub_system"),
+            ("oldMin", "atomicMin_system"),
+            ("oldMax", "atomicMax_system"),
+            ("oldAnd", "atomicAnd_system"),
+            ("oldOr", "atomicOr_system"),
+            ("oldXor", "atomicXor_system"),
+            ("oldExchange", "atomicExch_system"),
+        ):
+            assert (
+                f"unsigned int {name} = {intrinsic}(&counters[index], value);"
+                in hip_code
+            )
+        assert (
+            "unsigned int oldCas = atomicCAS_system(&counters[index], oldAdd, value);"
+            in hip_code
+        )
+        assert (
+            "int oldSigned = atomicAdd_system(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "unsigned int badCas = /* unsupported HIP structured buffer atomic: "
+            "atomicCAS_system on RWStructuredBuffer<uint> requires "
+            "3 argument(s) */ 0u;" in hip_code
+        )
+        # Never the by-value form the bug produced.
+        assert "_system(counters[" not in hip_code
+        assert "_system(signedCounters[" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_system_scoped_atomics_emit_hip_pointer_atomics(self, tmp_path):
+        """System-scoped atomics on buffer pointers get the element's address."""
+        source_code = """
+        shader SystemScopedAtomicsHIP {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                buffer int* signedOut;
+                buffer float* floatOut;
+                void main() {
+                    shared uint2 vectorCounters[4];
+                    uint i = gl_GlobalInvocationID.x;
+                    uint a = atomicAdd(outp[i], 1u);
+                    uint b = atomicAdd_system(outp[i], 1u);
+                    uint c = atomicCAS_system(outp[i], a, b);
+                    int d = atomicMax_system(signedOut[i], -1);
+                    int e = atomicExch_system(signedOut[i], 2);
+                    float f = atomicAdd_system(floatOut[i], 1.0);
+                    float badAnd = atomicAnd_system(floatOut[i], 1.0);
+                    uint missing = atomicSub_system(outp[i]);
+                    uint2 badVector = atomicAdd_system(
+                        vectorCounters[i],
+                        uint2(1u, 2u)
+                    );
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int a = atomicAdd(&outp[i], 1u);" in hip_code
+        assert "unsigned int b = atomicAdd_system(&outp[i], 1u);" in hip_code
+        assert "unsigned int c = atomicCAS_system(&outp[i], a, b);" in hip_code
+        assert "int d = atomicMax_system(&signedOut[i], -1);" in hip_code
+        assert "int e = atomicExch_system(&signedOut[i], 2);" in hip_code
+        assert "float f = atomicAdd_system(&floatOut[i], 1.0);" in hip_code
+        assert (
+            "float badAnd = /* unsupported HIP atomic: atomicAnd_system on float "
+            "requires supported scalar int/uint target */ 0.0f;" in hip_code
+        )
+        assert (
+            "unsigned int missing = /* unsupported HIP atomic: atomicSub_system "
+            "requires 2 argument(s) */ 0u;" in hip_code
+        )
+        assert (
+            "uint2 badVector = /* unsupported HIP atomic: atomicAdd_system on "
+            "uint2 requires supported scalar int/uint/float target */ "
+            "make_uint2(0u, 0u);" in hip_code
+        )
+        assert "_system(outp[" not in hip_code
+        assert "_system(signedOut[" not in hip_code
+        assert "_system(floatOut[" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     def test_float_structured_buffer_add_and_exchange_atomics_emit_hip_atomics(
         self, tmp_path
     ):
@@ -13764,3 +14126,35 @@ class TestHipCodeGen:
         spec_idx = hip_code.index("hipTextureObject_t specular;")
         amb_idx = hip_code.index("hipTextureObject_t ambient;")
         assert diff_idx < spec_idx < amb_idx
+
+
+def test_hip_vector_constructor_splats_a_scalar_cast():
+    source_code = """
+    shader Splat {
+        ivec3 widen(uint x) {
+            ivec3 a = ivec3(int(x));
+            vec4 c = vec4(float(x));
+            return a + ivec3(c.x);
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "int3 a = cgl_int3_splat(int(x));" in hip_code
+    assert "float4 c = cgl_float4_splat(float(x));" in hip_code
+    assert "make_int3(int(x))" not in hip_code
+    assert "make_float4(float(x))" not in hip_code
+
+
+def test_hip_half_vector_constructor_splats_a_half_cast():
+    source_code = """
+    shader Splat {
+        f16vec3 widen(float x) {
+            return f16vec3(half(x));
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "return cgl_cgl_half3_splat(__float2half(x));" in hip_code
+    assert "cgl_make_half3(__float2half(x))" not in hip_code
