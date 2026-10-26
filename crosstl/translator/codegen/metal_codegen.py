@@ -6996,6 +6996,7 @@ class MetalCodeGen(
         6.6 compute derivatives have no Metal equivalent.
         """
         function_kind = self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS[shader_type]
+        article = "an" if function_kind == "object" else "a"
         for reachable_func in self.metal_reachable_functions(func):
             derivative_name = self.metal_kernel_derivative_call_name(reachable_func)
             if derivative_name is None:
@@ -7008,7 +7009,7 @@ class MetalCodeGen(
                 (
                     f"Metal {shader_type} entry point '{entry_name}' calls "
                     f"{derivative_name}{via}; Metal has derivatives only in fragment "
-                    f"functions, so a {function_kind} function cannot call dfdx, dfdy "
+                    f"functions, so {article} {function_kind} function cannot call dfdx, dfdy "
                     "or fwidth."
                 ),
                 missing_capabilities=(f"metal.{function_kind}-derivatives",),

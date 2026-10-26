@@ -2571,7 +2571,8 @@ def test_metal_mesh_and_object_functions_refuse_derivatives(stage, function_kind
     assert error.feature == "dFdx"
     assert error.missing_capabilities == (f"metal.{function_kind}-derivatives",)
     assert f"Metal {stage} entry point 'main' calls dFdx through 'slope';" in str(error)
-    assert f"so a {function_kind} function cannot call dfdx" in str(error)
+    article = "an" if function_kind == "object" else "a"
+    assert f"so {article} {function_kind} function cannot call dfdx" in str(error)
 
 
 def test_metal_hlsl_mesh_shader_refuses_ddx(tmp_path):
