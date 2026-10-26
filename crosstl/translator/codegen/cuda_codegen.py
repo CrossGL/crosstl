@@ -63,6 +63,7 @@ from .reference_parameters import (
     is_reference_value_type,
     parameter_is_writable,
     reference_declarator,
+    refuse_swizzle_reference_arguments,
 )
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
@@ -3394,6 +3395,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             raise_unresolved_generic_function_call(self, func_name, "CUDA")
 
+        refuse_swizzle_reference_arguments(
+            node,
+            raw_args,
+            self.function_parameters_by_name,
+            self.member_swizzle_components,
+            "CUDA",
+        )
         args = [self.visit(arg) for arg in raw_args]
 
         half_constructor = self.cuda_half_constructor_expression(
