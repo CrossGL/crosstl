@@ -18,9 +18,6 @@ from ..ast import (
 # ``float``. Both compilers have ``min`` and ``max`` for ``int``,
 # ``unsigned int``, ``long long`` and ``unsigned long long`` only, so the
 # other integer spellings are widened to the one they promote to.
-# Component types of the generated half vector structures.
-HALF_COMPONENT_TYPES = {"half", "__half", "float16_t"}
-
 MIN_MAX_SCALAR_TYPES = {
     "bool": "bool",
     "float": "float",
@@ -1620,13 +1617,15 @@ class VectorArithmeticMixin:
         if operator == "%" and component_type in {"float", "double"}:
             func_name = "fmod" if component_type == "double" else "fmodf"
             return f"{func_name}({left}, {right})"
-        if operator == "%" and component_type in HALF_COMPONENT_TYPES:
-            # ``__half`` has no ``%`` operator, and ``%`` is not a
-            # floating-point remainder anyway: compute ``fmodf`` in ``float``
-            # and round the result back to half.
-            return (
-                f"__float2half(fmodf(__half2float({left}), " f"__half2float({right})))"
+        if operator == "%" and component_type == "half":
+            # ``__half`` has no ``%`` operator: take the remainder of the
+            # components converted to ``float`` the way float vectors do, so
+            # the GLSL floor semantics of the CUDA and HIP generators carry
+            # over, and round the result back to half.
+            remainder = self.format_vector_binary_component(
+                "float", operator, f"__half2float({left})", f"__half2float({right})"
             )
+            return f"__float2half({remainder})"
         return f"({left} {operator} {right})"
 
     def generate_mod_call(self, raw_args, args):

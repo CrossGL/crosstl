@@ -2619,7 +2619,7 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
-    def test_half_vector_modulo_uses_float_fmodf(self):
+    def test_half_vector_modulo_uses_float_mod_helper(self):
         source_code = """
         shader Mod {
             f16vec3 f(f16vec3 v, f16vec3 w) {
@@ -2638,11 +2638,17 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert (
-            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs.x)))" in cuda_code
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
         )
         assert (
-            "__float2half(fmodf(__half2float(lhs.z), __half2float(rhs)))" in cuda_code
+            "__float2half(cgl_mod_float(__half2float(lhs.x), __half2float(rhs.x)))"
+            in cuda_code
         )
+        assert (
+            "__float2half(cgl_mod_float(__half2float(lhs.z), __half2float(rhs)))"
+            in cuda_code
+        )
+        assert "fmodf(__half2float" not in cuda_code
         assert "return cgl_cgl_half3_mod(v, w);" in cuda_code
         assert "return cgl_cgl_half3_mod_scalar(v, h);" in cuda_code
         assert "(lhs.x % rhs.x)" not in cuda_code
