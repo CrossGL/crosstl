@@ -6,9 +6,10 @@ evaluated after ``a[0]`` has been overwritten. ``a = {a[1], a[0]}`` then leaves 
 ``a[1]`` instead of swapping them, and a call in the list may observe the partly written array.
 
 The list is evaluated first, as the source language requires. When no element reads the destination's root
-variable and every element is free of effects, the element stores are kept, because no store can be observed.
-Otherwise the list initializes a temporary and the array is assigned whole, which HLSL permits for arrays of the
-same type::
+variable, and either every element is free of effects or the root is a local variable or parameter of the function
+being generated, the element stores are kept, because no store can be observed: HLSL has no references, so a callee
+sees a local only through an argument, and an argument that names it reads it. Otherwise the list initializes a
+temporary and the array is assigned whole, which HLSL permits for arrays of the same type::
 
     float __crossgl_array_list_0[2] = {a[1], a[0]};
     a = __crossgl_array_list_0;
@@ -65,14 +66,26 @@ def _mentions(node, name):
     )
 
 
+def _is_function_local(codegen, name):
+    """True when ``name`` is a local or parameter of the function being generated and shadows no global.
+
+    A name that is also a global stays observable, so the answer errs towards a temporary.
+    """
+    local_types = getattr(codegen, "local_variable_types", None) or {}
+    global_types = getattr(codegen, "global_variable_types", None) or {}
+    return name in local_types and name not in global_types
+
+
 def hlsl_list_needs_temporary(codegen, target, value):
     """True when storing ``value``'s elements one by one into ``target`` could change the result."""
     root = hlsl_root_name(target)
     elements = list(getattr(value, "elements", []) or [])
     if root is None:
         return bool(elements)
+    observable = not _is_function_local(codegen, root)
     return any(
-        not _is_pure_value(codegen, element) or _mentions(element, root)
+        _mentions(element, root)
+        or (observable and not _is_pure_value(codegen, element))
         for element in elements
     )
 

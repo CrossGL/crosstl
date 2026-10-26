@@ -1,9 +1,9 @@
 """HLSL assignment of a brace list to a fixed array.
 
 HLSL takes brace lists only in declarations, so ``a = {...}`` becomes element stores. A list whose elements read
-the array, or may have effects, has to be evaluated before the first store: it initializes a temporary that is
-then assigned whole. Indexing a nested array removes one extent, so ``g[1]`` of ``int g[2][2]`` is an ``int[2]``
-that can initialize a row.
+the array, or may have effects a callee could observe, has to be evaluated before the first store: it initializes
+a temporary that is then assigned whole. Indexing a nested array removes one extent, so ``g[1]`` of
+``int g[2][2]`` is an ``int[2]`` that can initialize a row.
 """
 
 import re
@@ -119,7 +119,25 @@ def test_struct_and_nested_arrays_are_assigned_whole(tmp_path):
     _compile(tmp_path, code)
 
 
-def test_a_list_that_calls_a_function_is_evaluated_before_the_stores(tmp_path):
+def test_a_list_that_calls_a_function_is_evaluated_before_shared_stores(tmp_path):
+    """A callee can see a groupshared array, so its stores wait until the whole list is evaluated."""
+    code = _hlsl(
+        _shader(
+            """
+            sa = {bump(x), 1};
+            outp[0] = sa[0] + sa[1];
+""",
+            helpers="shared int sa[2];\n    int bump(int v) { return v + 1; }",
+        )
+    )
+    assert re.search(
+        r"int (__crossgl_array_list_\d+)\[2\] = \{bump\(x\), 1\};\s*sa = \1;", code
+    ), code
+    _compile(tmp_path, code)
+
+
+def test_a_call_cannot_observe_a_local_array(tmp_path):
+    """A local is visible to a callee only through an argument that names it, so plain stores are kept."""
     code = _hlsl(
         _shader(
             """
@@ -130,9 +148,8 @@ def test_a_list_that_calls_a_function_is_evaluated_before_the_stores(tmp_path):
             helpers="int bump(int v) { return v + 1; }",
         )
     )
-    assert re.search(
-        r"int (__crossgl_array_list_\d+)\[2\] = \{bump\(x\), 1\};\s*a = \1;", code
-    ), code
+    assert "__crossgl_array_list_" not in code
+    assert re.search(r"a\[0\] = bump\(x\);", code), code
     _compile(tmp_path, code)
 
 
@@ -183,6 +200,42 @@ def test_temporary_decision(statement, needs):
     (assignment,) = _assignments(_parse(source))
     assert hlsl_root_name(assignment.target) == "a"
     assert hlsl_list_needs_temporary(None, assignment.target, assignment.value) is needs
+
+
+class _Scope:
+    """The parts of the HLSL generator's scope the decision reads."""
+
+    def __init__(self, locals_, globals_=()):
+        self.local_variable_types = {name: "int[2]" for name in locals_}
+        self.global_variable_types = {name: "int[2]" for name in globals_}
+
+
+@pytest.mark.parametrize(
+    "statement, scope, needs",
+    [
+        ("a = {bump(1), 0};", _Scope(["a"]), False),
+        ("a = {b[0]++, 0};", _Scope(["a", "b"]), False),
+        ("a = {bump(a[0]), 0};", _Scope(["a"]), True),
+        ("a = {bump(1), 0};", _Scope(["a"], ["a"]), True),
+        ("a = {bump(1), 0};", _Scope([]), True),
+    ],
+)
+def test_effects_matter_only_for_a_destination_a_callee_can_see(
+    statement, scope, needs
+):
+    source = _shader(
+        f"""
+            int a[2] = {{x, x}};
+            int b[2] = {{x, x}};
+            {statement}
+            outp[0] = a[0];
+""",
+        helpers="int bump(int v) { return v + 1; }",
+    )
+    (assignment,) = _assignments(_parse(source))
+    assert (
+        hlsl_list_needs_temporary(scope, assignment.target, assignment.value) is needs
+    )
 
 
 def test_rendered_destinations_have_no_root():
