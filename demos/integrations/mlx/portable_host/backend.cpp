@@ -1499,18 +1499,26 @@ void AsType::eval_gpu(const std::vector<array>& inputs, array& out) {
   dispatch_astype(inputs, out);
 }
 
-void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
+// Ports scan.cpp scan_gpu_inplace: one translated contiguous or strided scan
+// of ``input`` along ``axis`` into ``out``, which it allocates.
+void dispatch_scan(
+    const array& input,
+    array& out,
+    Scan::ReduceType reduce_type,
+    int axis,
+    bool reverse,
+    bool inclusive) {
   require_runtime();
-  if (inputs.size() != 1 || inputs[0].shape() != out.shape() ||
-      axis_ < 0 || axis_ >= inputs[0].ndim() || out.size() > 65535) {
+  if (input.shape() != out.shape() || axis < 0 || axis >= input.ndim() ||
+      out.size() > 65535) {
     throw std::invalid_argument("CrossTL scan requires matching bounded array shapes.");
   }
   if (out.size() == 0) {
     out.set_data(allocator::malloc(0));
     return;
   }
-  auto in = inputs[0];
-  if (!in.flags().contiguous || in.strides()[axis_] == 0) {
+  auto in = input;
+  if (!in.flags().contiguous || in.strides()[axis] == 0) {
     if (in.dtype() != out.dtype()) {
       array converted(in.shape(), out.dtype(), nullptr, {});
       dispatch_cast({in}, converted);
@@ -1526,17 +1534,18 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
   const char* output_type = scan_type(out.dtype());
   if (!source_type || !output_type ||
       (out.dtype() != in.dtype() &&
-       !(reduce_type_ == Sum && in.dtype() == bool_ && out.dtype() == int32))) {
+       !(reduce_type == Scan::Sum && in.dtype() == bool_ &&
+         (out.dtype() == int32 || out.dtype() == uint32)))) {
     throw std::invalid_argument("CrossTL scan requires supported matching scalar types or Boolean sum promotion.");
   }
   if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
       in.data_size() > (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
     throw std::invalid_argument("CrossTL scan input exceeds its allocation.");
   }
-  uint64_t axis_size = in.shape(axis_);
+  uint64_t axis_size = in.shape(axis);
   // A size-one axis may carry any stride while the array stays contiguous, and
   // its scan is elementwise: run it as one-element contiguous rows.
-  const auto source_stride = axis_size == 1 ? 1 : in.strides()[axis_];
+  const auto source_stride = axis_size == 1 ? 1 : in.strides()[axis];
   if (source_stride < 1 || source_stride > 65535 ||
       !axis_size || !in.data_size() || in.data_size() > 65535) {
     throw std::invalid_argument("CrossTL scan storage metadata exceeds its bounds.");
@@ -1557,11 +1566,11 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
     const uint64_t reduced = axis_size <= reads * 1024 ? axis_size : axis_size / 2;
     width = uint32_t((reduced + reads * 32 - 1) / (reads * 32)) * 32;
   }
-  const char* operation = reduce_type_ == Sum ? "sum" :
-      reduce_type_ == Prod ? "prod" : reduce_type_ == Min ? "min" :
-      reduce_type_ == Max ? "max" : "logaddexp";
+  const char* operation = reduce_type == Scan::Sum ? "sum" :
+      reduce_type == Scan::Prod ? "prod" : reduce_type == Scan::Min ? "min" :
+      reduce_type == Scan::Max ? "max" : "logaddexp";
   const std::string entry = std::string(contiguous ? "contig_scan_" : "strided_scan_") +
-      (reverse_ ? "reverse_" : "") + (inclusive_ ? "inclusive_" : "exclusive_") +
+      (reverse ? "reverse_" : "") + (inclusive ? "inclusive_" : "exclusive_") +
       operation + "_" + source_type + "_" + output_type;
   require_entry(entry);
   if (in.is_donatable() && in.itemsize() == out.itemsize()) {
@@ -1585,6 +1594,13 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native scan failed: ") + error);
   }
+}
+
+void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
+  if (inputs.size() != 1) {
+    throw std::invalid_argument("CrossTL scan requires one input.");
+  }
+  dispatch_scan(inputs[0], out, reduce_type_, axis_, reverse_, inclusive_);
 }
 
 void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {

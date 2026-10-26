@@ -84,6 +84,7 @@ TRANSFORM_TESTS = _tests(
         "vmap_gather",
         "vmap_indexing",
         "vmap_inverse",
+        "vmap_masked_scatter",
         "vmap_matmul",
         "vmap_mean",
         "vmap_pad",

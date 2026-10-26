@@ -68,7 +68,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 498
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 501
     assert all(
         name.startswith(
             (
@@ -145,7 +145,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 493 and not set(opengl) & set(excluded)
+    assert len(opengl) == 496 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -233,8 +233,8 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
-        ("array", ops.ARRAY_TESTS, "test_array.", 40),
-        ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 44),
+        ("array", ops.ARRAY_TESTS, "test_array.", 41),
+        ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 45),
         ("compile", ops.COMPILE_TESTS, "test_compile.", 51),
     ):
         assert ops.GROUPS[group] == tests and len(tests) == count
@@ -244,7 +244,7 @@ def test_upstream_op_groups_partition_the_inventory():
     # a group of its own.
     for group, modules, count in (
         ("nn", ("test_nn.",), 39),
-        ("transforms", ("test_vmap.", "test_eval."), 34),
+        ("transforms", ("test_vmap.", "test_eval."), 35),
         ("serialization", ("test_export_import.", "test_load."), 30),
         (
             "training",
@@ -283,6 +283,13 @@ def test_upstream_op_groups_partition_the_inventory():
         "test_autograd.TestAutograd.test_jvp_with_partly_traced_inputs"
         in ops.AUTOGRAD_TESTS
     )
+    # Boolean-mask assignment, its vmap and a jvp through it reach the
+    # translated masked_assign kernel.
+    assert {
+        "test_array.TestArray.test_setitem_with_boolean_mask",
+        "test_autograd.TestAutograd.test_jvp_with_constant_inputs",
+        "test_vmap.TestVmap.test_vmap_masked_scatter",
+    } <= set(ops.UPSTREAM_TESTS)
     for target in ("metal", "directx", "opengl"):
         grouped = [
             name for group in ops.GROUPS for name in ops.upstream_tests(target, group)

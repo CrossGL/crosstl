@@ -25,6 +25,9 @@ namespace {
 
 constexpr uint64_t max_scatter_storage = (uint64_t(1) << 28) - 33;
 constexpr uint64_t max_scatter_rows = 65535;
+// A masked scatter runs one launch of one thread per mask element along x,
+// after a scan that the host bounds by the same extent.
+constexpr uint64_t max_masked_scatter_elements = 65535;
 
 // A launch covers ``extent`` index rows along ``split`` and every row after
 // it, starting at flat row ``first``.
@@ -411,6 +414,84 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (status != 0) {
       throw std::runtime_error(std::string("CrossTL native scatter failed: ") + error);
     }
+  }
+}
+
+// Ports indexing.cpp MaskedScatter::eval_gpu. The output starts as a copy of
+// the destination, an exclusive Sum scan of the mask, flattened to one row per
+// batch, numbers its set elements in uint32, and the translated
+// masked_assign kernel MLX generates for the value type and the source's row
+// contiguity writes source element ``batch * src_batch_size + offset`` to each
+// set element. The kernel reads only thread_position_in_grid, so it runs as
+// one-thread workgroups over indexing.cpp's exact grid of one thread per mask
+// element: Direct3D and OpenGL cannot clip the partial workgroup that
+// dispatch_threads leaves.
+void MaskedScatter::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 3) {
+    throw std::invalid_argument(
+        "CrossTL masked scatter requires a destination, a mask and a source.");
+  }
+  const auto& dst = inputs[0];
+  const auto& mask = inputs[1];
+  const auto& src = inputs[2];
+  const char* value_type = cast_type(out.dtype());
+  // MLX broadcasts the mask to the destination and gives every operand a
+  // leading batch axis, so each mask element names one output element.
+  if (!value_type || dst.dtype() != out.dtype() || src.dtype() != out.dtype() ||
+      mask.dtype() != bool_ || dst.shape() != out.shape() || mask.size() != out.size() ||
+      mask.ndim() < 1 || mask.ndim() > out.ndim() || src.ndim() < 1 || src.ndim() > 64 ||
+      out.size() > max_masked_scatter_elements || src.size() > max_scatter_storage) {
+    throw std::invalid_argument(
+        "CrossTL masked scatter requires a Boolean mask over the bounded destination "
+        "and a source of its type.");
+  }
+  dispatch_copy(dst, out);
+  const uint64_t total = mask.size();
+  if (total == 0) {
+    return;
+  }
+  if (src.size() == 0 || mask.shape(0) != src.shape(0)) {
+    throw std::invalid_argument(
+        "CrossTL masked scatter requires one source batch per mask batch.");
+  }
+  // flatten_in_eval(mask, 1, -1) of the row-contiguous mask.
+  const array dense = dense_input(mask);
+  const int batches = mask.shape(0);
+  array mask_flat({batches, static_cast<int>(total / batches)}, bool_, nullptr, {});
+  mask_flat.copy_shared_buffer(
+      dense, {static_cast<int64_t>(total / batches), 1}, dense.flags(), dense.data_size());
+  array scatter_offsets(mask_flat.shape(), uint32, nullptr, {});
+  dispatch_scan(mask_flat, scatter_offsets, Scan::Sum, 1, false, false);
+  const bool contiguous = src.flags().row_contiguous;
+  const std::string entry = std::string("masked_assign_") + value_type + "_" +
+      (contiguous ? "true" : "false");
+  require_entry(entry);
+  const uint64_t span = gather_span(src, max_scatter_storage);
+  std::vector<int32_t> src_shape(src.shape().begin(), src.shape().end());
+  std::vector<int64_t> src_strides(src.strides().begin(), src.strides().end());
+  int32_t src_ndim = static_cast<int32_t>(src.ndim());
+  int64_t src_batch_size = src.size() / src.shape(0);
+  int64_t mask_batch_size = mask_flat.size() / mask.shape(0);
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  CrosstlMlxBuffer buffers[] = {
+      {"mask", "bool_", data(mask_flat), total, 0},
+      {"scatter_offsets", "uint32", data(scatter_offsets), total, 0},
+      {"src", value_type, data(src), span, 0},
+      {"out", value_type, out.data<void>(), out.size(), 1},
+      {"src_shapes", "int32", src_shape.data(), src_shape.size(), 0},
+      {"src_strides", "int64", src_strides.data(), src_strides.size(), 0},
+      {"src_ndim", "int32", &src_ndim, 1, 0},
+      {"src_batch_size", "int64", &src_batch_size, 1, 0},
+      {"mask_batch_size", "int64", &mask_batch_size, 1, 0},
+  };
+  const CrosstlMlxLaunch launch{{static_cast<uint32_t>(total), 1, 1}, {1, 1, 1}};
+  char error[2048] = {};
+  const int status = dispatch_callback.load()(
+      entry.c_str(), buffers, 9, total, &launch, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (status != 0) {
+    throw std::runtime_error(std::string("CrossTL native masked scatter failed: ") + error);
   }
 }
 

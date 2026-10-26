@@ -68,6 +68,8 @@ from demos.integrations.mlx.portable_host import (
     elementwise_evidence,
     gather_evidence,
     lazy_package_evidence,
+    masked_scatter_evidence,
+    masked_scatter_packages,
     norm_evidence,
     norm_layout,
     quantization_evidence,
@@ -303,6 +305,7 @@ ARRAY_TESTS = (
             "np_array_conversion_copies_by_default",
             "real_imag",
             "setitem",
+            "setitem_with_boolean_mask",
             "slice_bounds_with_array_index",
             "slice_update_contiguous_2d",
         )
@@ -350,6 +353,7 @@ AUTOGRAD_TESTS = (
             "grad_trees",
             "jvp",
             "jvp_through_bitwise_ops",
+            "jvp_with_constant_inputs",
             "jvp_with_partly_traced_inputs",
             "logsumexp_grad",
             "matmul_jvps",
@@ -707,6 +711,8 @@ RETAINED_VALUES = (
     cross_entropy_layout.PREFIX,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
+    # Masked scatter audits recompute the output from the mask and source.
+    masked_scatter_packages.ENTRY_PREFIX,
     "all_reduce_",
     "init_reduce_",
     # Wide small-row and small-column audits derive every upload from the
@@ -1075,6 +1081,19 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         # Derives the package again from the pinned template, checks the
         # native modules and recomputes the offset from the start indices.
         dynamic_offset_evidence.audit_event(event, offsets)
+        lazy_checked.add(i)
+        owners[i] += 1
+    masked = masked_scatter_packages.MaskedScatterPackageCache(
+        args.mlx_root, args.packages / masked_scatter_packages.CACHE, target
+    )
+    for i, event in enumerate(trace):
+        if event["entry"] not in masked_scatter_packages.ENTRIES:
+            continue
+        if event["target"] != target:
+            raise ValueError("Upstream op masked scatter targets another backend")
+        # Derives the package again from the pinned template, checks the
+        # native modules and recomputes the output from the mask and source.
+        masked_scatter_evidence.audit_event(event, masked)
         lazy_checked.add(i)
         owners[i] += 1
     wide = wide_reduction_packages.cache(

@@ -59,6 +59,8 @@ from demos.integrations.mlx.portable_host import (
     gemv_dispatch,
     gemv_layout,
     half_storage,
+    masked_scatter_dispatch,
+    masked_scatter_packages,
     matmul_dispatch,
     matmul_layout,
     norm_dispatch,
@@ -670,6 +672,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # So do the masked_assign kernels MLX generates for masked scatters.
+        self.masked_scatters = (
+            masked_scatter_packages.MaskedScatterPackageCache(
+                mlx_root, self.directory / masked_scatter_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         # So do whole-array reductions of the 8-byte and 16-bit float types.
         self.wide_reductions = (
             wide_reduction_packages.cache(
@@ -830,6 +840,11 @@ class HostRuntime:
             if (
                 name in dynamic_offset_packages.ENTRIES
                 and self.dynamic_offsets is not None
+            ):
+                return 1
+            if (
+                name in masked_scatter_packages.ENTRIES
+                and self.masked_scatters is not None
             ):
                 return 1
             if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
@@ -1019,6 +1034,10 @@ class HostRuntime:
             )
         if entry in dynamic_offset_packages.ENTRIES:
             return dynamic_offset_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in masked_scatter_packages.ENTRIES:
+            return masked_scatter_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if entry in arg_reduce_layout.ENTRIES:

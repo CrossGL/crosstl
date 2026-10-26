@@ -1359,6 +1359,30 @@ floating-point atomics and floating-point product updates; passing the list-inde
 test does not establish that broader coverage. No output is computed or corrected
 on the CPU by this adapter.
 
+### Masked Scatter
+
+`MaskedScatter`, which boolean-mask assignment (`a[mask] = values`) and its
+`vmap` produce, ports the pinned `indexing.cpp`. The output starts as a copy of
+the destination; a translated exclusive Sum scan of the mask, flattened to one
+row per batch, numbers its set elements in uint32; and the `masked_assign`
+kernel MLX generates writes source element `batch * src_batch_size + offset`
+to each set element, or keeps the destination where the offset passes its
+batch's source. `masked_scatter_packages.py` builds each kernel as
+`indexing.cpp` does: the unchanged `utils.h` and `indexing/masked_scatter.h`
+headers followed by the `masked_assign_kernel` template of the unchanged
+`jit/indexing.h`, formatted exactly as `fmt::format` does, one entry per dtype
+and source row contiguity (26 in all). OpenGL lowers the contiguous read's
+int64 index to a signed int; the host bounds the source span by `INT32_MAX`,
+so that read carries a host-enforced index range assertion. The kernel reads
+only its grid position, so it runs as one-thread workgroups over one thread
+per mask element, at most 65,535 of them, which the scan also bounds.
+
+The upstream op audit derives each package again from the pinned template,
+checks the native module hashes, requires the scan offsets to be the
+exclusive per-batch counts of the mask and recomputes the output from the
+destination copy, the mask and the source, reading strided sources through
+`elem_to_loc<uint>`.
+
 ## Axis Scatter
 
 `ScatterAxis::eval_gpu` dispatches the unchanged pinned
@@ -2320,11 +2344,11 @@ GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
 port (see "Convolution") and its gradients, and translate their kernels on
 demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
 the general implicit GEMM and small-depth 3-D routes.
-The `array`, `autograd` and `compile` groups run the `test_array` (40),
-`test_autograd` (44) and `test_compile` (51) methods that reach the GPU. Five
+The `array`, `autograd` and `compile` groups run the `test_array` (41),
+`test_autograd` (45) and `test_compile` (51) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (39 `test_nn` methods: module state, weight files and the layers),
-`transforms` (23 `test_vmap` and 11 `test_eval` methods), `serialization` (16
+`transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
 `test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
 and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
 samplers, four `test_bf16` sweeps and the device, stream, memory and constant

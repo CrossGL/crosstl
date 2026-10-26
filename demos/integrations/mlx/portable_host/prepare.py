@@ -93,6 +93,7 @@ def adapted_sources(original, primitives, events):
         "GatherAxis",
         "ScatterAxis",
         "Scatter",
+        "MaskedScatter",
         "DivMod",
         "Compiled",
         *UNARY_OPERATIONS,

@@ -77,6 +77,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "GatherAxis",
                     "ScatterAxis",
                     "Scatter",
+                    "MaskedScatter",
                     "DivMod",
                     "Compiled",
                     "Power",
