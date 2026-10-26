@@ -224,11 +224,11 @@ MODULE_TESTS = tuple(
             "TestFFT",
             ("fftfreq", "fftshift", "fftshift_errors", "ifftshift", "rfftfreq"),
         ),
-        # This reaches the fused cross-entropy rows of every float dtype from
-        # one to the most simdgroups. test_cross_entropy_grad's composed
-        # reference gradient scatters along axes of more than 65,535 elements,
-        # which the host's axis scatter does not tile yet.
-        ("test_fast", "TestFast", ("cross_entropy",)),
+        # These reach the fused cross-entropy rows of every float dtype from
+        # one to the most simdgroups, and the fused gradient rows.
+        # test_cross_entropy_grad's composed reference gradient scatters
+        # (4, 7, 4096) outputs, which the host's axis scatter splits.
+        ("test_fast", "TestFast", ("cross_entropy", "cross_entropy_grad")),
     )
     for name in names
 )

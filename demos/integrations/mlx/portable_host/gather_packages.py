@@ -24,7 +24,6 @@ from demos.integrations.mlx.portable_host import (
     scatter_axis_layout,
     scatter_layout,
 )
-from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 JIT_HEADER = "mlx/backend/metal/jit/indexing.h"
@@ -183,12 +182,7 @@ class GatherPackageCache:
 
     def get(self, entry, maximum_index):
         signature(entry)
-        # Axis scatters keep their 65535-element contract.
-        capacity = (
-            MAX_ELEMENTS
-            if entry.startswith("scatter_axis")
-            else gather_layout.MAX_STORAGE_ELEMENTS
-        )
+        capacity = gather_layout.MAX_STORAGE_ELEMENTS
         if type(maximum_index) is not int or not 0 <= maximum_index < capacity:
             raise ValueError("Gather index bound exceeds the validated host contract")
         with self._lock:

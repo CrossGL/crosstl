@@ -798,11 +798,8 @@ def test_gather_cache_reuses_covering_range_and_rechecks_source(
         ),
     )
     first = cache.get(entry, 11)
-    capacity = (
-        65535
-        if entry.startswith("scatter_axis")
-        else gather_layout.MAX_STORAGE_ELEMENTS
-    )
+    # Storage is bounded independently of each launch axis for every entry.
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS
     for bound in (0, 11, 14, 19, 65534, capacity - 1):
         assert cache.get(entry, bound) == first and len(calls) == 1
     assert calls[0]["maximumIndex"] == capacity - 1
@@ -846,11 +843,7 @@ def test_gather_covering_assertion_matches_validated_host_capacity(
         raise RuntimeError("configuration captured")
 
     monkeypatch.setattr(gather_packages, "translate_project", translate)
-    capacity = (
-        65535
-        if entry.startswith("scatter_axis")
-        else gather_layout.MAX_STORAGE_ELEMENTS
-    )
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS
     with pytest.raises(RuntimeError, match="configuration captured"):
         cache._build(
             entry,

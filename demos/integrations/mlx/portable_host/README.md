@@ -1365,10 +1365,18 @@ the source even when updates alias it. Positive and zero strides retain their
 views; negative update or index strides are materialized by translated copies.
 The removed-axis shape, strides, contiguity flags and three-dimensional launch
 follow upstream MLX. Update and output element counts are checked separately:
-the number of updates need not equal the destination size. Each input storage
-span, update count and output count is bounded to 65,535 elements; rank is at
-most 64. Every reachable index and allocation span is validated before dispatch.
-Empty updates retain the copied source and do not submit a scatter kernel.
+the number of updates need not equal the destination size. Storage spans,
+update counts and output counts share the general gather's storage bound of
+2^28 - 33 elements; rank is at most 64. Each launch keeps the portable limit of
+65,535 workgroups per axis. MLX's grid is [trailing extent, index rows, leading
+extent]; the kernel strides its output by the trailing extent, which must fit
+one launch axis. The host splits index rows and leading extents into
+rectangular slabs, and a launch that splits index rows covers one leading
+position, because the contiguous specializations stride leading positions by
+the row count. Each launch's views start at its first element and are checked
+against their allocations. Every reachable index and allocation span is
+validated before dispatch. Empty updates retain the copied source and do not
+submit a scatter kernel.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
@@ -1376,10 +1384,14 @@ python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
   --integer64 integer64-packages --output-dir scatter-axis-evidence
 ```
 
-The required three-OS CI step runs 112 workloads in separate CPU and native
+The required three-OS CI step runs 132 workloads in separate CPU and native
 processes. They cover both operations and storage types, all four index types,
 dense and transposed sources, strided and broadcast views, reversed views,
-negative indices, flattened inputs, aliasing updates and empty updates. Duplicate
+negative indices, flattened inputs, aliasing updates and empty updates. Twenty
+of them split their launches: the fused cross-entropy gradient reference's
+(4, 7, 4096) output, 70,001 index rows, 131,073 leading positions, a 300 x 300
+leading slab and a split of both. The audit replays the host's launch plan
+and checks each launch's uploads and slab of the result. Duplicate
 replacement indices carry identical values so the expected result does not
 depend on thread ordering. Additive cases retain duplicate destinations to
 exercise atomic accumulation.
@@ -2265,15 +2277,15 @@ The `modules` group runs whole-module tests beyond the core operations
 determinants, solves, cross products and the real and complex norms),
 `test_tree`'s `test_merge` and `test_supported_trees`, `test_fft`'s
 `test_fftfreq`, `test_fftshift`, `test_fftshift_errors`, `test_ifftshift` and
-`test_rfftfreq`, and `test_fast`'s `test_cross_entropy`. The linear-algebra factorizations run on the MLX
-CPU stream, as upstream directs; their operands, products and checks run
-through the host. The other tests of these modules are not part of the group:
-the FFT tests need an FFT port, `test_init`'s identity and sparse initializers
-need scatters of more element types, the einsum test sweep needs long-column
-reductions, and `test_fast`'s `test_cross_entropy_grad` composes its reference
-gradient from axis scatters of more than 65,535 elements, which the host does
-not tile yet. The host's own cross-entropy gradient matches the MLX CPU's
-composed one for those shapes.
+`test_rfftfreq`, and `test_fast`'s `test_cross_entropy` and
+`test_cross_entropy_grad`. The gradient test compares the fused gradient rows
+with a reference gradient composed from axis scatters of (4, 7, 4096) outputs,
+which the host splits into launches. The linear-algebra factorizations run on
+the MLX CPU stream, as upstream directs; their operands, products and checks
+run through the host. The other tests of these modules are not part of the
+group: the FFT tests need an FFT port, `test_init`'s identity and sparse
+initializers need scatters of more element types, and the einsum test sweep
+needs long-column reductions.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
 `test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
 `cross_entropy.metal`:
