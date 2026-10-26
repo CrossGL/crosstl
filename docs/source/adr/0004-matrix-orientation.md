@@ -62,4 +62,6 @@ Per target:
   integer counterpart of `mat2x3`. The GLSL and Metal emitters emulate them as structs of columns.
 - MSL takes only whole columns or one scalar per element in a matrix constructor, so the Metal emitter spreads the
   components of a mixed argument list, such as `mat2(vec4)`, through a helper.
-- Still open: Slang keeps its previous spelling until it gets the HLSL lowering.
+- The Slang importer (`crosstl/backend/slang/slang_matrix_import.py`) applies the same lowering as the HLSL
+  importer with default packing, since Slang matrices follow HLSL: `floatRxC` becomes `matCxR` and `mul(a, b)` stays
+  `a * b`. `row_major` and `column_major` declarations become `@ row_major` and `@ column_major`.
