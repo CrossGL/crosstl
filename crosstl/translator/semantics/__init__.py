@@ -46,6 +46,7 @@ from .dxr_ray_interfaces import (
     lower_dxr_ray_interfaces,
 )
 from .enum_values import lower_enum_values
+from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
@@ -157,6 +158,7 @@ __all__ = [
     "DeviceReferenceUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
+    "FeedbackTextureUnsupportedError",
     "FixedSamplerStateUnsupportedError",
     "FragmentColourOutputUnsupportedError",
     "GeometryStreamUnsupportedError",
@@ -271,6 +273,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
     and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
+    Sampler feedback textures are refused for every target but Direct3D (:mod:`.feedback_textures`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
     Shader Model 6.9 shader execution reordering (``dx::MaybeReorderThread``) is refused for every target but
@@ -360,6 +363,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
+    refuse_feedback_textures(program, report.target)
     declare_hlsl_residency_status(program, report.target)
     fold_array_lengths(program, report.target)
     refuse_large_constant_buffers(program, report.target)
