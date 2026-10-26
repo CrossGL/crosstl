@@ -3,16 +3,21 @@
 // size as fft.cpp's plan_fft does. Plans that fit one threadgroup's Stockham
 // decomposition run the translated fft kernel with fft.cpp's buffers,
 // constants, threadgroups and grid: complex-to-complex, real-to-complex (two
-// real rows per transform) and complex-to-real. Rader, Bluestein and
-// four-step plans are refused by name before any allocation or launch.
+// real rows per transform) and complex-to-real. Plans with one Rader factor
+// run the translated rader_fft kernel the same way, with the tables
+// compute_raders_constants builds on the CPU. Bluestein and four-step plans
+// are refused by name before any allocation or launch.
 // fft_layout checks each launch against the same plan; the host names each
 // pipeline by fft.cpp's hash name, whose translated entry has the function
 // constants that name implies frozen. crosstl_backend.cpp includes this file
 // after the copy ports, so it shares that translation unit's strided copy.
 
+#include <complex>
 #include <numeric>
 #include <set>
 #include <sstream>
+
+#include "mlx/3rdparty/pocketfft.h"
 
 namespace mlx::core {
 namespace {
@@ -175,6 +180,75 @@ int fft_elems_per_thread(const HostFFTPlan& plan) {
   return radix_vec[1];
 }
 
+// fft.cpp's Rader helpers: mod_exp, primitive_root and the tables
+// compute_raders_constants returns, as host vectors.
+int fft_mod_exp(int x, int y, int n) {
+  int out = 1;
+  while (y) {
+    if (y & 1) {
+      out = out * x % n;
+    }
+    y >>= 1;
+    x = x * x % n;
+  }
+  return out;
+}
+
+int fft_primitive_root(int n) {
+  auto factors = fft_prime_factors(n - 1);
+  for (int r = 2; r < n - 1; r++) {
+    bool found = true;
+    for (int factor : factors) {
+      if (fft_mod_exp(r, (n - 1) / factor, n) == 1) {
+        found = false;
+        break;
+      }
+    }
+    if (found) {
+      return r;
+    }
+  }
+  return -1;
+}
+
+struct FFTRaderTables {
+  std::vector<std::complex<float>> b_q;
+  std::vector<int16_t> g_q;
+  std::vector<int16_t> g_minus_q;
+};
+
+FFTRaderTables fft_rader_tables(int rader_n) {
+  int proot = fft_primitive_root(rader_n);
+  // Fermat's little theorem
+  int inv = fft_mod_exp(proot, rader_n - 2, rader_n);
+  FFTRaderTables tables;
+  tables.g_q.resize(rader_n - 1);
+  tables.g_minus_q.resize(rader_n - 1);
+  for (int i = 0; i < rader_n - 1; i++) {
+    tables.g_q[i] = fft_mod_exp(proot, i, rader_n);
+    tables.g_minus_q[i] = fft_mod_exp(inv, i, rader_n);
+  }
+  std::vector<std::complex<float>> b_q(rader_n - 1);
+  for (int i = 0; i < rader_n - 1; i++) {
+    float pi_i = (float)tables.g_minus_q[i] * -2.0 * M_PI / rader_n;
+    b_q[i] = std::exp(std::complex<float>(0, pi_i));
+  }
+  tables.b_q.resize(rader_n - 1);
+  std::ptrdiff_t item_size = sizeof(std::complex<float>);
+  size_t fft_size = rader_n - 1;
+  // fft.cpp runs this small FFT on the CPU too.
+  pocketfft::c2c(
+      /* shape= */ {fft_size},
+      /* stride_in= */ {item_size},
+      /* stride_out= */ {item_size},
+      /* axes= */ {0},
+      /* forward= */ true,
+      /* data_in= */ b_q.data(),
+      /* data_out= */ tables.b_q.data(),
+      /* scale= */ 1.0f);
+  return tables;
+}
+
 void fft_launch(
     const std::string& entry,
     std::vector<CrosstlMlxBuffer>& buffers,
@@ -262,9 +336,6 @@ void fft_op(
   if (plan.bluestein_n > 0) {
     fft_unported("fused Bluestein plans");
   }
-  if (plan.rader_n > 1) {
-    fft_unported("Rader plans");
-  }
   const size_t size = real_output ? out.size() : in.size();
   if (size % n != 0 || size > size_t(std::numeric_limits<int32_t>::max()) ||
       in.size() > size_t(std::numeric_limits<int32_t>::max()) ||
@@ -294,9 +365,11 @@ void fft_op(
   }
   const char* in_type_str = real_input ? "float" : "float2";
   const char* out_type_str = real_output ? "float" : "float2";
+  const bool rader = plan.rader_n > 1;
   std::ostringstream kname;
-  kname << "fft_mem_" << threadgroup_mem_size << "_" << in_type_str << "_"
-        << out_type_str << "_n" << fft_size << "_inv_" << inverse;
+  kname << (rader ? "rader_fft_mem_" : "fft_mem_") << threadgroup_mem_size << "_"
+        << in_type_str << "_" << out_type_str << "_n" << fft_size << "_inv_"
+        << inverse;
   const std::string entry = kname.str();
   require_entry(entry);
   int32_t n_value = fft_size;
@@ -313,6 +386,19 @@ void fft_op(
       {"n", "int32", &n_value, 1, 0},
       {"batch_size", "int32", &batch_value, 1, 0},
   };
+  FFTRaderTables tables;
+  int32_t rader_value = plan.rader_n;
+  if (rader) {
+    // fft.cpp binds b_q, g_q and g_minus_q at 2 to 4 and rader_n last.
+    tables = fft_rader_tables(plan.rader_n);
+    const uint64_t table_count = uint64_t(plan.rader_n - 1);
+    buffers.insert(
+        buffers.begin() + 2,
+        {{"raders_b_q", "complex64", tables.b_q.data(), table_count, 0},
+         {"raders_g_q", "int16", tables.g_q.data(), table_count, 0},
+         {"raders_g_minus_q", "int16", tables.g_minus_q.data(), table_count, 0}});
+    buffers.push_back({"rader_n", "int32", &rader_value, 1, 0});
+  }
   const CrosstlMlxLaunch launch{
       {uint32_t(batch_size), 1, 1},
       {1, uint32_t(threadgroup_batch_size), uint32_t(threads_per_fft)}};

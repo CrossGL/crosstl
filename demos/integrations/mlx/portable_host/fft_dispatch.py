@@ -1,18 +1,24 @@
-"""Execute translated MLX Stockham FFT packages and commit guarded outputs.
+"""Execute translated MLX Stockham and Rader FFT packages and commit guarded outputs.
 
 ``FFT`` binds the input and output transform batches, the transform size and
 the batch count, as ``mlx/backend/metal/fft.cpp`` binds them to the ``fft``
-kernel, in fft.cpp's threadgroups. Each launch is checked against
-``fft_layout``'s plan for its hash name. ``complex64`` operands travel as the
-``float2`` vectors fft.metal declares, each holding the real and imaginary
-float32 bits; ``float32`` operands as their bits. Inputs are followed by
-poisoned elements no transform reads, the output starts as guard elements
-and keeps a guard tail, and the dispatch is recorded in the trace before the
-MLX output changes. ``lazy_package_evidence`` audits each dispatch.
+kernel, in fft.cpp's threadgroups; Rader plans bind the ``rader_fft``
+kernel's tables and Rader factor too. Each launch is checked against
+``fft_layout``'s plan for its hash name, and each Rader table against the
+plan's generator powers and kernel spectrum. ``complex64`` operands travel as
+the ``float2`` vectors fft.metal declares, each holding the real and
+imaginary float32 bits; ``float32`` and ``int16`` operands as their bits.
+Inputs are followed by poisoned elements no transform reads, the output
+starts as guard elements and keeps a guard tail past the elements the
+kernel's cooperative copy may touch, only the transforms' elements reach
+MLX, and the dispatch is recorded in the trace before the MLX output
+changes.
+``lazy_package_evidence`` audits each dispatch.
 """
 
 import ctypes
 import hashlib
+import struct
 
 from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.portable_host import fft_layout as layout
@@ -34,7 +40,10 @@ from demos.integrations.mlx.portable_host.trace_records import write_trace
 LABEL = "FFT"
 ENTRY_PREFIXES = layout.ENTRY_PREFIXES
 # Read by no transform: 1.5 in every float32 part.
-POISON = {"float32": 0x3FC00000, COMPLEX: 0x3FC000003FC00000}
+POISON = {"float32": 0x3FC00000, COMPLEX: 0x3FC000003FC00000, "int16": 0x3FC0}
+# The absolute error, per table element, that pocketfft's float32 FFT of the
+# Rader kernel may differ from its double-precision DFT, per transform size.
+RADER_SPECTRUM_TOLERANCE = 1e-5
 # How every target reflects fft.metal's float2 storage element.
 VECTOR_LAYOUT = {
     "physicalType": "float2",
@@ -68,9 +77,36 @@ def encode(dtype, words, target, scalar, kind):
     return value
 
 
+def _complex(word):
+    real, imag = struct.unpack("<ff", struct.pack("<Q", word))
+    return complex(real, imag)
+
+
+def check_tables(entry, supplied):
+    """Refuse Rader tables other than compute_raders_constants' for the plan."""
+    info = layout.signature(entry)
+    if info["kind"] != "rader":
+        return
+    g_q, g_minus_q = layout.rader_generator_tables(info["raderN"])
+    if (
+        buffer_words(supplied["raders_g_q"], "int16") != g_q
+        or buffer_words(supplied["raders_g_minus_q"], "int16") != g_minus_q
+    ):
+        raise ValueError(f"{LABEL} Rader generator tables differ from fft.cpp's")
+    expected = layout.rader_kernel_spectrum(info["raderN"])
+    tolerance = RADER_SPECTRUM_TOLERANCE * info["raderN"]
+    words = buffer_words(supplied["raders_b_q"], COMPLEX)
+    if any(
+        abs(_complex(word) - value) > tolerance for word, value in zip(words, expected)
+    ):
+        raise ValueError(f"{LABEL} Rader kernel spectrum differs from fft.cpp's")
+
+
 def validate(entry, supplied, threads, execution):
     """Check the buffers and launch against the entry and return metadata."""
-    if set(supplied) != set(layout.PARAMETERS):
+    parameters = layout.parameters(entry)
+    scalars = layout.scalars(entry)
+    if set(supplied) != set(parameters):
         raise ValueError(f"{LABEL} buffers do not match the fft kernel")
     for name, buffer in supplied.items():
         dtype = layout.parameter_type(entry, name)
@@ -79,19 +115,22 @@ def validate(entry, supplied, threads, execution):
             or not buffer.data
             or buffer.data % ctypes.sizeof(CTYPES[dtype])
             or buffer.output != int(name == layout.OUTPUT)
-            or (name in layout.SCALARS and buffer.count != 1)
+            or (name in scalars and buffer.count != 1)
         ):
             raise ValueError(f"{LABEL} buffer type, alignment or direction differs")
-    (n,) = buffer_words(supplied["n"], "int32")
-    (total,) = buffer_words(supplied["batch_size"], "int32")
-    counts = {name: supplied[name].count for name in ("in", "out")}
-    metadata = layout.plan_launch(entry, counts, n, total, threads, execution)
+    values = {name: buffer_words(supplied[name], "int32")[0] for name in scalars}
+    arrays = [name for name in parameters if name not in scalars]
+    counts = {name: supplied[name].count for name in arrays}
+    metadata = layout.plan_launch(entry, counts, values, threads, execution)
     spans = {}
-    for name in ("in", "out"):
+    for name in arrays:
         size = ctypes.sizeof(CTYPES[layout.parameter_type(entry, name)])
         spans[name] = (supplied[name].data, supplied[name].data + counts[name] * size)
-    if max(spans["in"][0], spans["out"][0]) < min(spans["in"][1], spans["out"][1]):
-        raise ValueError(f"{LABEL} output overlaps its input")
+    output = spans[layout.OUTPUT]
+    for name, span in spans.items():
+        if name != layout.OUTPUT and max(span[0], output[0]) < min(span[1], output[1]):
+            raise ValueError(f"{LABEL} output overlaps its input")
+    check_tables(entry, supplied)
     return metadata
 
 
@@ -132,21 +171,29 @@ def _inputs(host, entry, descriptor, storage):
 def dispatch(host, entry, buffers, count, threads, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    if host.ffts is None or launch is None or not buffers or count != 4:
+    parameters = layout.parameters(entry)
+    if host.ffts is None or launch is None or not buffers or count != len(parameters):
         raise ValueError(f"{LABEL} dispatch requires pinned packages and geometry")
     supplied = supplied_buffers(buffers, count, LABEL)
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
     source_type = layout.parameter_type(entry, "in")
     output_type = layout.parameter_type(entry, layout.OUTPUT)
-    source = buffer_words(supplied["in"], source_type)
     size = supplied[layout.OUTPUT].count
-    storage = {
-        "in": source + [POISON[source_type]] * GUARD_COUNT,
-        layout.OUTPUT: [GUARDS[output_type]] * (size + GUARD_COUNT),
-        "n": [metadata["n"]],
-        "batch_size": [metadata["batchSize"]],
-    }
+    # The elements the kernel may touch: a partial last threadgroup's
+    # cooperative copy runs past the transforms (fft_layout.footprint).
+    reach = metadata["footprint"]
+    storage = {}
+    for name in parameters:
+        dtype = layout.parameter_type(entry, name)
+        if name == layout.OUTPUT:
+            storage[name] = [GUARDS[output_type]] * (reach[name] + GUARD_COUNT)
+        elif name in layout.scalars(entry):
+            storage[name] = buffer_words(supplied[name], "int32")
+        else:
+            words = buffer_words(supplied[name], dtype)
+            tail = reach.get(name, len(words)) - len(words) + GUARD_COUNT
+            storage[name] = words + [POISON[dtype]] * tail
     descriptor, directory = host.ffts.get(entry)
     inputs, observed, output = _inputs(host, entry, descriptor, storage)
     outputs = {output: {k: v for k, v in inputs[output].items() if k != "values"}}
@@ -173,7 +220,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
     except ValueError as error:
         raise RuntimeError(f"Native {LABEL} output is outside its storage") from error
     guard = [GUARDS[output_type]] * GUARD_COUNT
-    if len(words) != size + GUARD_COUNT or words[size:] != guard:
+    end = reach[layout.OUTPUT]
+    if len(words) != end + GUARD_COUNT or words[end:] != guard:
         raise RuntimeError(f"Native {LABEL} kernel changed its output guard")
     payload = bytes((CTYPES[output_type] * size)(*words[:size]))
     item = ctypes.sizeof(CTYPES[source_type])

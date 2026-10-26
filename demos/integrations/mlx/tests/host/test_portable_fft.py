@@ -1,4 +1,4 @@
-"""The portable host's port of fft.cpp's Stockham FFT launches."""
+"""The portable host's port of fft.cpp's Stockham and Rader FFT launches."""
 
 import ctypes
 import json
@@ -101,7 +101,10 @@ def test_hash_names_freeze_fft_cpp_constants_and_threadgroups():
         "fft_mem_4096_float2_float2_n8192_inv_0",  # a four-step plan
         "fft_mem_256_float2_float2_n1_inv_0",
         "fft_mem_256_float2_float2_n08_inv_0",
-        "rader_fft_mem_256_float2_float2_n17_inv_0",
+        "rader_fft_mem_256_float2_float2_n8_inv_0",  # a Stockham plan
+        "rader_fft_mem_256_float2_float2_n47_inv_0",  # a Bluestein plan
+        "rader_fft_mem_512_float2_float2_n17_inv_0",
+        "bluestein_fft_mem_256_float2_float2_n47_inv_0",
     ],
 )
 def test_other_names_are_refused(entry):
@@ -129,7 +132,7 @@ def test_launches_follow_fft_cpp_grids_and_extents():
     entry = "fft_mem_256_float2_float2_n100_inv_1"
     execution = fft_layout.launch(c2c, 5)
     metadata = fft_layout.plan_launch(
-        entry, {"in": 500, "out": 500}, 100, 5, 500, execution
+        entry, {"in": 500, "out": 500}, {"n": 100, "batch_size": 5}, 500, execution
     )
     assert metadata["batchSize"] == 5 and metadata["transform"] == "c2c"
     for counts, n, total, threads, launch in (
@@ -145,7 +148,98 @@ def test_launches_follow_fft_cpp_grids_and_extents():
         ),
     ):
         with pytest.raises(ValueError):
-            fft_layout.plan_launch(entry, counts, n, total, threads, launch)
+            fft_layout.plan_launch(
+                entry, counts, {"n": n, "batch_size": total}, threads, launch
+            )
+    with pytest.raises(ValueError):
+        fft_layout.plan_launch(
+            entry,
+            {"in": 500, "out": 500},
+            {"n": 100, "batch_size": 5, "rader_n": 1},
+            500,
+            execution,
+        )
+
+
+def test_rader_names_freeze_fft_cpp_constants_tables_and_threadgroups():
+    entry = "rader_fft_mem_256_float2_float2_n17_inv_0"
+    assert fft_layout.entry_name(17, False, "float2", "float2") == entry
+    info = fft_layout.signature(entry)
+    assert (info["kind"], info["raderN"], info["source"]) == (
+        "rader",
+        17,
+        "rader_fft_mem_256_float2_float2",
+    )
+    # 15 transforms of 17 fill 255 of the threadgroup's 256 elements.
+    assert info["workgroupSize"] == (1, 15, 5)
+    assert info["constants"]["rader_4_steps_"] == 2
+    assert info["constants"]["rader_m_"] == 1
+    assert set(info["constants"]) == set(fft_layout.CONSTANT_IDS)
+    # 1982 = 2 * 991: one radix-2 step around a Rader factor of 991.
+    large = fft_layout.signature("rader_fft_mem_2048_float2_float_n1982_inv_1")
+    assert (large["raderN"], large["constants"]["rader_m_"]) == (991, 2)
+    assert large["constants"]["radix_2_steps_"] == 1
+    assert fft_layout.parameters(entry) == (
+        "in",
+        "out",
+        "raders_b_q",
+        "raders_g_q",
+        "raders_g_minus_q",
+        "n",
+        "batch_size",
+        "rader_n",
+    )
+    assert fft_layout.parameter_type(entry, "raders_g_q") == "int16"
+    assert fft_layout.parameter_type(entry, "raders_b_q") == "complex64"
+    assert fft_layout.parameter_type(entry, "rader_n") == "int32"
+    assert fft_layout.extents(info, 2) == {
+        "in": 34,
+        "out": 34,
+        "raders_b_q": 16,
+        "raders_g_q": 16,
+        "raders_g_minus_q": 16,
+    }
+    # A partial threadgroup's cooperative copy touches 20 elements per row
+    # of 17, clamped to the threadgroup's 255; real transforms stay exact.
+    assert fft_layout.footprint(info, 1) == {"in": 20, "out": 20}
+    assert fft_layout.footprint(info, 15) == {"in": 255, "out": 255}
+    assert fft_layout.footprint(info, 16) == {"in": 275, "out": 275}
+    stockham = fft_layout.signature("fft_mem_256_float2_float2_n100_inv_0")
+    assert fft_layout.footprint(stockham, 3) == {"in": 300, "out": 300}
+    real = fft_layout.signature("rader_fft_mem_256_float_float2_n17_inv_0")
+    assert fft_layout.footprint(real, 1) == {"in": 17, "out": 9}
+    metadata = fft_layout.plan_launch(
+        entry,
+        fft_layout.extents(info, 2),
+        {"n": 17, "batch_size": 2, "rader_n": 17},
+        34,
+        fft_layout.launch(info, 2),
+    )
+    assert metadata["kind"] == "rader"
+    for values in (
+        {"n": 17, "batch_size": 2},
+        {"n": 17, "batch_size": 2, "rader_n": 16},
+    ):
+        with pytest.raises(ValueError):
+            fft_layout.plan_launch(
+                entry,
+                fft_layout.extents(info, 2),
+                values,
+                34,
+                fft_layout.launch(info, 2),
+            )
+
+
+def test_rader_tables_follow_compute_raders_constants():
+    # 3 generates the units modulo 17, and 6 is its inverse.
+    assert fft_layout.primitive_root(17) == 3
+    g_q, g_minus_q = fft_layout.rader_generator_tables(17)
+    assert g_q[:5] == [1, 3, 9, 10, 13] and g_minus_q[:5] == [1, 6, 2, 12, 4]
+    assert sorted(g_q) == sorted(g_minus_q) == list(range(1, 17))
+    assert fft_layout.primitive_root(991) == 6
+    spectrum = fft_layout.rader_kernel_spectrum(17)
+    # The DFT of a unit-modulus sequence of 16 conserves its energy.
+    assert sum(abs(value) ** 2 for value in spectrum) == pytest.approx(16 * 16)
 
 
 def test_project_config_freezes_constants_and_proves_opengl_subscripts(tmp_path):
@@ -159,6 +253,14 @@ def test_project_config_freezes_constants_and_proves_opengl_subscripts(tmp_path)
         assert config.entry_points == {fft_layout.SOURCE: ("fft_mem_256_float_float2",)}
         assert bool(config.index_range_assertions) == (target == "opengl")
     records = fft_layout.opengl_index_assertions(entry)
+    assert not any(record.get("indexed") == "crosstl_resource_3" for record in records)
+    rader = {
+        record.get("indexed")
+        for record in fft_layout.opengl_index_assertions(
+            "rader_fft_mem_256_float2_float2_n17_inv_0"
+        )
+    }
+    assert {"crosstl_resource_3", "crosstl_resource_5"} <= rader
     scoped = {
         (record["expression"], record.get("indexed")): record["maximum"]
         for record in records
@@ -193,27 +295,48 @@ class FakeCache:
 
     def get(self, entry):
         bindings = []
-        for name in fft_layout.PARAMETERS:
+        for name in fft_layout.parameters(entry):
             dtype = fft_layout.parameter_type(entry, name)
             scalar = (
                 dict(fft_dispatch.VECTOR_LAYOUT)
                 if dtype == element_storage.COMPLEX
                 else {
-                    "elementType": dtype,
+                    # OpenGL widens int16 storage to int32 elements.
+                    "elementType": "int32" if dtype == "int16" else dtype,
                     "elementStrideBytes": 4,
                     "storageLayout": "hlsl-constant-buffer",
                 }
             )
+            scalars = fft_layout.scalars(entry)
             bindings.append(
                 {
                     "name": name + "Binding",
-                    "kind": "constant-buffer" if name in fft_layout.SCALARS else "",
+                    "kind": "constant-buffer" if name in scalars else "",
                     "access": "read_write" if name == "out" else "read",
                     "scalarLayout": scalar,
                     "provenance": {"sourceResource": {"parameter": name}},
                 }
             )
         return {"bindings": bindings, "artifact": {"id": entry}}, Path("/packages")
+
+
+def rader_tables(rader_n, fault=None):
+    """compute_raders_constants' tables as the host binds them."""
+    g_q, g_minus_q = fft_layout.rader_generator_tables(rader_n)
+    if fault == "generator":
+        g_q[1], g_q[2] = g_q[2], g_q[1]
+    spectrum = [
+        _complex_word(value.real, value.imag)
+        for value in fft_layout.rader_kernel_spectrum(rader_n)
+    ]
+    if fault == "spectrum":
+        spectrum[3] = _complex_word(0.0, 0.0)
+    size = rader_n - 1
+    return {
+        "raders_b_q": (ctypes.c_uint64 * size)(*spectrum),
+        "raders_g_q": (ctypes.c_int16 * size)(*g_q),
+        "raders_g_minus_q": (ctypes.c_int16 * size)(*g_minus_q),
+    }
 
 
 def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
@@ -224,11 +347,17 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     memory = {
         "in": (source_type * spans["in"])(*source),
         "out": (output_type * spans["out"])(),
-        "n": (ctypes.c_int32 * 1)(overrides.get("n", info["n"])),
-        "batch_size": (ctypes.c_int32 * 1)(total),
     }
+    if info["kind"] == "rader":
+        memory.update(rader_tables(info["raderN"], fault))
+    memory["n"] = (ctypes.c_int32 * 1)(overrides.get("n", info["n"]))
+    memory["batch_size"] = (ctypes.c_int32 * 1)(total)
+    if info["kind"] == "rader":
+        memory["rader_n"] = (ctypes.c_int32 * 1)(
+            overrides.get("rader_n", info["raderN"])
+        )
     types = {name: fft_layout.parameter_type(entry, name) for name in memory}
-    array = (runtime.Buffer * 4)(
+    array = (runtime.Buffer * len(memory))(
         *(
             runtime.Buffer(
                 name.encode(),
@@ -264,6 +393,9 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
         result = words[:size] + out[size:]
         if fault == "guard":
             result[-1] ^= 1
+        if fault == "tail":
+            # Past the transforms but inside the cooperative copy's reach.
+            result[size] ^= 1
         return SimpleNamespace(
             status="ok",
             outputs={
@@ -287,7 +419,7 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
         (ctypes.c_uint32 * 3)(*execution["workgroupCount"]),
         (ctypes.c_uint32 * 3)(*execution["workgroupSize"]),
     )
-    fft_dispatch.dispatch(host, entry, array, 4, spans["out"], launch)
+    fft_dispatch.dispatch(host, entry, array, len(memory), spans["out"], launch)
     event = json.loads(host.trace.read_text().splitlines()[-1])
     return list(memory["out"]), event, host, seen
 
@@ -347,20 +479,58 @@ def test_dispatch_refuses_changed_guards_sizes_and_grids(
         )
 
 
-def test_the_host_routes_and_audits_stockham_ffts():
+def test_rader_tables_travel_with_poisoned_tails_and_are_checked(monkeypatch, tmp_path):
+    entry = "rader_fft_mem_256_float2_float2_n17_inv_1"
+    source = [_complex_word(index, 0.25) for index in range(34)]
+    values, event, host, request = run(monkeypatch, tmp_path, entry, 2, source)
+    assert values == source and event["fftMetadata"]["kind"] == "rader"
+    inputs = request["inputs"]
+    g_q, _ = fft_layout.rader_generator_tables(17)
+    # OpenGL carries each short in an int and follows the table with poison.
+    assert inputs["raders_g_qBinding"]["values"][:16] == g_q
+    assert inputs["raders_g_qBinding"]["values"][16:] == [0x3FC0] * 32
+    assert inputs["raders_b_qBinding"]["shape"] == [2 * (16 + 32)]
+    assert inputs["rader_nBinding"]["values"] == [17]
+    assert event["fftMetadata"]["elements"]["raders_g_minus_q"] == 16
+    for fault, message in (
+        ("generator", "generator tables"),
+        ("spectrum", "kernel spectrum"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            run(monkeypatch, tmp_path, entry, 2, source, fault)
+    with pytest.raises(ValueError, match="launch size"):
+        run(monkeypatch, tmp_path, entry, 2, source, rader_n=16)
+    # The staged output spans the 40-element reach of two 17-element rows;
+    # a write into its tail never reaches MLX.
+    values, event, _, request = run(monkeypatch, tmp_path, entry, 2, source, "tail")
+    assert values == source and event["fftMetadata"]["footprint"]["out"] == 40
+    assert request["inputs"]["outBinding"]["shape"] == [2 * (40 + 32)]
+    assert request["inputs"]["inBinding"]["values"][2 * 34 :] == [0x3FC00000] * (
+        2 * (6 + 32)
+    )
+    with pytest.raises(RuntimeError, match="output guard"):
+        run(monkeypatch, tmp_path, entry, 2, source, "guard")
+
+
+def test_the_host_routes_and_audits_stockham_and_rader_ffts():
     source = (HOST / "runtime.py").read_text()
     assert "fft_packages.FftPackageCache(" in source
     assert "if fft_dispatch.is_entry(entry):" in source
     assert lazy_package_evidence.family("fft_mem_256_float2_float2_n8_inv_0") == "fft"
-    assert lazy_package_evidence.family("rader_fft_mem_256_float2_float2") is None
+    assert (
+        lazy_package_evidence.family("rader_fft_mem_256_float2_float2_n17_inv_0")
+        == "fft"
+    )
+    assert lazy_package_evidence.family("bluestein_fft_mem_256_float2_float2") is None
     port = (HOST / "fft.inc").read_text()
-    for route in ("Rader plans", "fused Bluestein plans", "four-step plans"):
+    assert 'fft_unported("Rader plans")' not in port
+    assert '"rader_fft_mem_"' in port and "pocketfft::c2c(" in port
+    for route in ("fused Bluestein plans", "four-step plans"):
         assert f'fft_unported("{route}")' in port or route in port
     assert "void FFT::eval_gpu" in port
     prepare = (HOST / "prepare.py").read_text()
     assert '"crosstl_fft.inc": (HERE / "fft.inc").read_bytes()' in prepare
     assert (
-        '#include "mlx/backend/no_gpu/crosstl_fft.inc"' in (
-            HOST / "backend.cpp"
-        ).read_text()
+        '#include "mlx/backend/no_gpu/crosstl_fft.inc"'
+        in (HOST / "backend.cpp").read_text()
     )

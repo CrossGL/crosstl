@@ -1,4 +1,4 @@
-"""Plan, name and bound MLX's single-threadgroup Stockham FFT launches.
+"""Plan, name and bound MLX's single-threadgroup Stockham and Rader FFT launches.
 
 ``mlx/backend/metal/fft.cpp`` plans every 1-D transform, sets the function
 constants of ``fft.metal``'s kernels from the plan and names each pipeline
@@ -12,9 +12,16 @@ threadgroups and buffer extents, and checks every launch against them.
 The ``fft`` kernel computes ``threadgroup_batch_size`` transforms of one size
 in one threadgroup of ``(1, threadgroup_batch_size, threads_per_fft)``
 threads: complex-to-complex, real-to-complex (two real rows per transform)
-and complex-to-real. Rader, Bluestein and four-step plans use other kernels.
+and complex-to-real. The ``rader_fft`` kernel runs plans with one Rader
+factor in the same threadgroups, with the tables fft.cpp's
+compute_raders_constants builds on the CPU: the FFT of the Rader kernel
+``raders_b_q`` and the generator powers ``raders_g_q`` and
+``raders_g_minus_q``. Bluestein and four-step plans use other kernels.
 """
 
+import cmath
+import functools
+import math
 import re
 
 SOURCE = "mlx/backend/metal/kernels/fft.metal"
@@ -39,24 +46,50 @@ CONSTANT_IDS = {
     **{name: 4 + index for index, name in enumerate(STOCKHAM_CONSTANTS)},
     **{name: 13 + index for index, name in enumerate(RADER_CONSTANTS)},
 }
+# The function constant fft.cpp sets for complex Bluestein plans only.
+TWIDDLE_TABLE_CONSTANT = "use_bluestein_twiddle_table_"
 # The storage each fft.metal type name binds: float2 holds one complex64.
 STORAGE = {"float": "float32", "float2": "complex64"}
-ITEM_SIZES = {"float32": 4, "complex64": 8}
+ITEM_SIZES = {"float32": 4, "complex64": 8, "int16": 2}
 # The (input, output) instantiations fft.cpp selects, by transform.
 TRANSFORMS = {
     ("float2", "float2"): "c2c",
     ("float", "float2"): "r2c",
     ("float2", "float"): "c2r",
 }
-ENTRY_PREFIXES = ("fft_mem_",)
+# The plan kind each fft.metal kernel runs, by kernel name.
+KERNELS = {"fft": "stockham", "rader_fft": "rader"}
+ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_")
 ENTRY = re.compile(
-    r"(?P<source>fft_mem_(?P<memory>[0-9]+)_(?P<input>float2|float)_"
-    r"(?P<output>float2|float))_n(?P<n>[1-9][0-9]*)_inv_(?P<inverse>[01])"
+    r"(?P<source>(?P<kernel>rader_fft|fft)_mem_(?P<memory>[0-9]+)_"
+    r"(?P<input>float2|float)_(?P<output>float2|float))_n(?P<n>[1-9][0-9]*)"
+    r"_inv_(?P<inverse>[01])"
 )
-# The parameters fft.cpp binds to the fft kernel, in buffer order.
-PARAMETERS = ("in", "out", "n", "batch_size")
+# The parameters fft.cpp binds to each kernel, in buffer order.
+PARAMETERS = {
+    "stockham": ("in", "out", "n", "batch_size"),
+    "rader": (
+        "in",
+        "out",
+        "raders_b_q",
+        "raders_g_q",
+        "raders_g_minus_q",
+        "n",
+        "batch_size",
+        "rader_n",
+    ),
+}
 OUTPUT = "out"
-SCALARS = ("n", "batch_size")
+SCALARS = {"stockham": ("n", "batch_size"), "rader": ("n", "batch_size", "rader_n")}
+# The tables fft.cpp computes on the CPU for each kernel, and their storage.
+TABLES = {
+    "stockham": {},
+    "rader": {
+        "raders_b_q": "complex64",
+        "raders_g_q": "int16",
+        "raders_g_minus_q": "int16",
+    },
+}
 # Every device index the host binds stays a signed 32-bit element offset.
 SIGNED_MAX = (1 << 31) - 1
 MAX_WORKGROUPS = 65535
@@ -71,7 +104,9 @@ DEVICE_INDEX_EXPRESSIONS = (
 # it indexes: the threadgroup buffer or the bound input and output buffers.
 REFERENCE_INDEX = "reference.offset + index"
 SHARED_STORAGE = "crosstl_workgroup_shared_in"
+# The translated names of the bound device buffers, in buffer order.
 DEVICE_STORAGES = ("crosstl_resource", "crosstl_resource_2")
+TABLE_STORAGES = ("crosstl_resource_3", "crosstl_resource_4", "crosstl_resource_5")
 
 
 def is_power_of_2(n):
@@ -168,6 +203,55 @@ def plan_fft(n):
     return plan
 
 
+def mod_exp(x, y, n):
+    """fft.cpp mod_exp: ``x ** y % n`` by repeated squaring in int."""
+    out = 1
+    while y:
+        if y & 1:
+            out = out * x % n
+        y >>= 1
+        x = x * x % n
+    return out
+
+
+def primitive_root(n):
+    """fft.cpp primitive_root: the least primitive root of the prime ``n``."""
+    factors = prime_factors(n - 1)
+    for root in range(2, n - 1):
+        if all(mod_exp(root, (n - 1) // factor, n) != 1 for factor in factors):
+            return root
+    return -1
+
+
+def rader_generator_tables(rader_n):
+    """compute_raders_constants' ``g_q`` and ``g_minus_q``: the powers of the
+    primitive root and of its inverse modulo ``rader_n``, as fft.cpp's shorts."""
+    root = primitive_root(rader_n)
+    # Fermat's little theorem.
+    inverse = mod_exp(root, rader_n - 2, rader_n)
+    return (
+        [mod_exp(root, index, rader_n) for index in range(rader_n - 1)],
+        [mod_exp(inverse, index, rader_n) for index in range(rader_n - 1)],
+    )
+
+
+@functools.lru_cache(maxsize=16)
+def rader_kernel_spectrum(rader_n):
+    """compute_raders_constants' ``b_q`` in double precision: the forward DFT
+    of ``exp(-2 pi i g_minus_q[i] / rader_n)``, which fft.cpp computes with
+    pocketfft in float32."""
+    _, g_minus_q = rader_generator_tables(rader_n)
+    size = rader_n - 1
+    kernel = [cmath.exp(complex(0, g * -2.0 * math.pi / rader_n)) for g in g_minus_q]
+    roots = [
+        cmath.exp(complex(0, -2.0 * math.pi * index / size)) for index in range(size)
+    ]
+    return tuple(
+        sum(value * roots[index * k % size] for index, value in enumerate(kernel))
+        for k in range(size)
+    )
+
+
 def compute_elems_per_thread(plan):
     """fft.cpp compute_elems_per_thread's heuristics."""
     n = plan["n"]
@@ -189,11 +273,23 @@ def compute_elems_per_thread(plan):
     return used[1]
 
 
-def stockham_constants(n, inverse):
-    """The function constants fft.cpp sets for a Stockham-only plan of ``n``."""
+def plan_kind(plan):
+    """The kernel kind of a plan: ``stockham``, ``rader``, ``bluestein`` or
+    ``four_step``, in fft.cpp's order of precedence."""
+    if plan["four_step"]:
+        return "four_step"
+    if plan["bluestein_n"] > 0:
+        return "bluestein"
+    if plan["rader_n"] > 1:
+        return "rader"
+    return "stockham"
+
+
+def plan_constants(n, inverse, kind):
+    """The function constants fft.cpp sets for a ``kind`` plan of ``n``."""
     plan = plan_fft(n)
-    if plan["four_step"] or plan["rader_n"] > 1 or plan["bluestein_n"] > 0:
-        raise ValueError("FFT size does not have a single-threadgroup Stockham plan")
+    if plan_kind(plan) != kind or kind not in PARAMETERS:
+        raise ValueError(f"FFT size does not have a single-threadgroup {kind} plan")
     constants = {
         "inv_": bool(inverse),
         "is_power_of_2_": is_power_of_2(n),
@@ -205,32 +301,44 @@ def stockham_constants(n, inverse):
     return constants
 
 
+def stockham_constants(n, inverse):
+    """The function constants fft.cpp sets for a Stockham-only plan of ``n``."""
+    return plan_constants(n, inverse, "stockham")
+
+
 def threadgroup_batch_size(n):
     """fft.cpp's transforms per threadgroup outside four-step plans."""
     return max(MIN_THREADGROUP_MEM_SIZE // n, 1)
 
 
 def entry_name(n, inverse, input_type, output_type):
-    """fft.cpp's pipeline hash name for one Stockham transform."""
+    """fft.cpp's pipeline hash name for one single-threadgroup transform."""
+    kernel = {"stockham": "fft", "rader": "rader_fft"}.get(plan_kind(plan_fft(n)))
+    if kernel is None:
+        raise ValueError(
+            f"FFT size {n} has no single-threadgroup Stockham or Rader plan"
+        )
     memory = next_power_of_2(threadgroup_batch_size(n) * n)
-    return f"fft_mem_{memory}_{input_type}_{output_type}_n{n}_inv_{int(bool(inverse))}"
+    return f"{kernel}_mem_{memory}_{input_type}_{output_type}_n{n}_inv_{int(bool(inverse))}"
 
 
 def signature(entry):
-    """The launch an ``fft`` hash name implies, refusing every other name."""
+    """The launch a ``fft`` or ``rader_fft`` hash name implies, refusing every
+    other name."""
     match = ENTRY.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
-        raise ValueError(f"Not an MLX Stockham FFT entry: {entry!r}")
+        raise ValueError(f"Not an MLX Stockham or Rader FFT entry: {entry!r}")
     n, inverse = int(match["n"]), match["inverse"] == "1"
     transform = TRANSFORMS.get((match["input"], match["output"]))
+    kind = KERNELS[match["kernel"]]
     if (
         transform is None
         or (transform == "r2c" and inverse)
         or (transform == "c2r" and not inverse)
         or not 2 <= n <= MAX_STOCKHAM_FFT_SIZE
     ):
-        raise ValueError(f"Not an MLX Stockham FFT entry: {entry!r}")
-    constants = stockham_constants(n, inverse)
+        raise ValueError(f"Not an MLX Stockham or Rader FFT entry: {entry!r}")
+    constants = plan_constants(n, inverse, kind)
     batch = threadgroup_batch_size(n)
     memory = next_power_of_2(batch * n)
     if (
@@ -241,12 +349,14 @@ def signature(entry):
         raise ValueError(f"FFT entry does not name fft.cpp's pipeline: {entry!r}")
     elems = constants["elems_per_thread_"]
     threads = (n + elems - 1) // elems
+    plan = plan_fft(n)
     return {
-        "kind": "fft",
+        "kind": kind,
         "source": match["source"],
         "transform": transform,
         "n": n,
         "inverse": inverse,
+        "raderN": plan["rader_n"],
         "input": STORAGE[match["input"]],
         "output": STORAGE[match["output"]],
         "memory": memory,
@@ -265,24 +375,86 @@ def workgroup_size(entry):
     return signature(entry)["workgroupSize"]
 
 
+def parameters(entry):
+    """The parameters fft.cpp binds to the entry's kernel, in buffer order."""
+    return PARAMETERS[signature(entry)["kind"]]
+
+
+def scalars(entry):
+    return SCALARS[signature(entry)["kind"]]
+
+
 def parameter_type(entry, name):
     info = signature(entry)
-    return {
-        "in": info["input"],
-        "out": info["output"],
-        "n": "int32",
-        "batch_size": "int32",
-    }[name]
+    if name not in PARAMETERS[info["kind"]]:
+        raise KeyError(name)
+    if name in TABLES[info["kind"]]:
+        return TABLES[info["kind"]][name]
+    return {"in": info["input"], "out": info["output"]}.get(name, "int32")
 
 
 def extents(info, total):
-    """The elements of ``in`` and ``out`` that ``total`` transforms span."""
+    """The elements of ``in`` and ``out`` that ``total`` transforms span, and
+    of every table the kernel reads."""
     n, half = info["n"], info["n"] // 2 + 1
-    return {
+    spans = {
         "c2c": {"in": total * n, "out": total * n},
         "r2c": {"in": total * n, "out": total * half},
         "c2r": {"in": total * half, "out": total * n},
     }[info["transform"]]
+    for name in TABLES[info["kind"]]:
+        spans[name] = info["raderN"] - 1
+    return spans
+
+
+def _cooperative_io_end(n, rows, threads, elems, batch_rows, width):
+    """One past the last element readwrite.h's generic ReadWriter::load and
+    write touch from a threadgroup's first transform.
+
+    The ``rows * threads`` in-bounds threads copy the threadgroup's
+    transforms cooperatively, ``width`` elements per access, clamped to the
+    ``batch_rows`` transforms the threadgroup holds. When ``threads *
+    elems`` exceeds ``n``, a partial last threadgroup's copy runs past its
+    last transform into elements no transform owns.
+    """
+    per_group = rows * threads
+    full = elems // width
+    last_full = batch_rows * n - width
+    last = batch_rows * n - 1
+    end = 0
+    for thread in range(per_group):
+        for e in range(full):
+            index = min(width * thread + width * per_group * e, last_full)
+            end = max(end, index + width)
+        for r in range(elems % width):
+            index = min(thread + r * per_group + width * per_group * full, last)
+            end = max(end, index + 1)
+    return end
+
+
+def footprint(info, total):
+    """The elements of ``in`` and ``out`` the kernel touches for ``total``
+    transforms: their extents, and for complex-to-complex transforms the
+    tail the generic ReadWriter's cooperative copy reads and writes past a
+    partial last threadgroup's transforms."""
+    spans = extents(info, total)
+    footprint = {"in": spans["in"], "out": spans["out"]}
+    if info["transform"] != "c2c":
+        return footprint
+    n, batch = info["n"], info["threadgroupBatchSize"]
+    groups = (total + batch - 1) // batch
+    rows = total - (groups - 1) * batch
+    end = _cooperative_io_end(
+        n,
+        rows,
+        info["threadsPerFFT"],
+        info["constants"]["elems_per_thread_"],
+        batch,
+        # 16 bytes per sequential access: two float2 elements.
+        16 // ITEM_SIZES["complex64"],
+    )
+    reach = (groups - 1) * batch * n + max(end, rows * n)
+    return {"in": reach, "out": reach}
 
 
 def launch(info, total):
@@ -297,10 +469,22 @@ def launch(info, total):
     }
 
 
-def plan_launch(entry, counts, n, total, threads, execution):
-    """Check one launch against its hash name and return its metadata."""
+def plan_launch(entry, counts, values, threads, execution):
+    """Check one launch against its hash name and return its metadata.
+
+    ``values`` holds the scalar each of the entry's scalar parameters binds.
+    """
     info = signature(entry)
-    if n != info["n"] or type(total) is not int or total < 1:
+    total = values.get("batch_size")
+    expected_values = {"n": info["n"], "batch_size": total}
+    if info["kind"] == "rader":
+        expected_values["rader_n"] = info["raderN"]
+    if (
+        set(values) != set(SCALARS[info["kind"]])
+        or values != expected_values
+        or type(total) is not int
+        or total < 1
+    ):
         raise ValueError("FFT launch size or batch differs from its pipeline")
     expected = launch(info, total)
     spans = extents(info, total)
@@ -313,8 +497,10 @@ def plan_launch(entry, counts, n, total, threads, execution):
     ):
         raise ValueError("FFT launch differs from fft.cpp's dispatch")
     return {
+        "kind": info["kind"],
         "transform": info["transform"],
-        "n": n,
+        "footprint": footprint(info, total),
+        "n": info["n"],
         "batchSize": total,
         "inverse": info["inverse"],
         "elements": spans,
@@ -327,7 +513,9 @@ def opengl_index_assertions(entry):
     Device subscripts stay below the signed 32-bit extents ``plan_launch``
     admits; threadgroup subscripts stay inside the entry's ``shared_in``.
     """
-    memory = signature(entry)["memory"]
+    info = signature(entry)
+    memory = info["memory"]
+    storages = DEVICE_STORAGES + TABLE_STORAGES[: len(TABLES[info["kind"]])]
 
     def assertion(expression, maximum, indexed=None):
         record = {"source": SOURCE, "expression": expression, "minimum": 0}
@@ -339,7 +527,7 @@ def opengl_index_assertions(entry):
         assertion(REFERENCE_INDEX, memory - 1, SHARED_STORAGE),
         *(
             assertion(expression, SIGNED_MAX, indexed)
-            for storage in DEVICE_STORAGES
+            for storage in storages
             # The relative subscript and, through a rebased buffer, the
             # complete offset.
             for expression, indexed in (
