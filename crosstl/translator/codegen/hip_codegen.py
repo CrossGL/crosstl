@@ -113,6 +113,13 @@ from .stage_utils import (
     normalize_stage_name,
     stage_matches,
 )
+from .value_array_parameters import (
+    collect_function_parameters_by_name,
+    collect_struct_names,
+    fixed_array_dimensions,
+    plan_value_array_copies,
+    value_array_copy_lines,
+)
 from .vector_arithmetic import VectorArithmeticMixin
 
 HIP_WAVE_OP_ARITIES = {
@@ -321,6 +328,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.function_return_types = {}
+        self.function_parameters_by_name = {}
+        self.value_array_struct_names = frozenset()
         self.helper_functions = {}
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
@@ -809,6 +818,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(node)
+        self.function_parameters_by_name = collect_function_parameters_by_name(
+            node, self.type_name_string
+        )
+        self.value_array_struct_names = collect_struct_names(node)
         self.helper_functions = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
@@ -2044,6 +2057,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.validate_hip_tessellation_stage(node, stage_name)
         if stage_name in self.hip_mesh_task_stage_names():
             self.validate_hip_mesh_task_stage(node, stage_name)
+        value_array_copies = (
+            {}
+            if stage_name is not None
+            else plan_value_array_copies(
+                node,
+                param_list,
+                self.type_name_string,
+                self.function_parameters_by_name,
+                self.value_array_struct_names,
+            )
+        )
+        value_array_copy_statements = []
         param_declarations = []
         for param in param_list:
             param_type = self.get_parameter_type(param)
@@ -2055,7 +2080,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 self.stage_builtin_alias_types[param_name] = param_type
                 continue
 
-            param_declarations.append(self.visit_parameter(param))
+            if param_name in value_array_copies:
+                incoming = value_array_copies[param_name]
+                declaration_type = self.resource_type_with_access(param_type, param)
+                self.register_variable_type(param_name, declaration_type, param)
+                param_declarations.append(
+                    self.apply_resource_memory_qualifiers_to_declaration(
+                        self.format_typed_declarator(declaration_type, incoming),
+                        incoming,
+                        param,
+                    )
+                )
+                value_array_copy_statements.extend(
+                    value_array_copy_lines(
+                        self.apply_resource_memory_qualifiers_to_declaration(
+                            self.format_typed_declarator(declaration_type, param_name),
+                            param_name,
+                            param,
+                        ),
+                        param_name,
+                        incoming,
+                        fixed_array_dimensions(self.type_name_string(declaration_type)),
+                    )
+                )
+            else:
+                param_declarations.append(self.visit_parameter(param))
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
@@ -2130,6 +2179,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.add_line(signature)
             self.add_line("{")
             self.indent_level += 1
+            for statement in value_array_copy_statements:
+                self.add_line(statement)
             fragment_output_name = None
             if fragment_output_param is not None:
                 fragment_output_name = getattr(
