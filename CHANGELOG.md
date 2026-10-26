@@ -52,6 +52,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- HLSL Shader Model 6.9 `dx::MaybeReorderThread(hint, bits)` is refused with `ShaderExecutionReorderingUnsupportedError` for every target other than Direct3D, which writes the call back unchanged. The Metal, GLSL, Slang, CUDA, HIP, Rust and Mojo generators copied the HLSL spelling into their output, where each target compiler rejects it.
 - CUDA and HIP output combine a vector with a scalar constructor operand such as `float(i)` or `int(x)` under `+`, `-`, `*`, `/` and `%` through the existing vector-scalar helpers, as in `cgl_float3_mul_scalar(v, float(i))`. They used to keep the native operator, as in `(v * float(i))`, which does not compile because `float3` and the other vector types define no arithmetic operators. Scalar constructor calls now have the type they construct.
 - CUDA and HIP output combine a half vector with a `half` scalar under `+`, `-`, `*` and `/` through the existing vector-scalar helpers, such as `cgl_cgl_half3_mul_scalar(v, h)`. They used to keep the native operator, as in `(v * h)`, which does not compile because the generated `cgl_half3` and `cgl_half4` structures define no arithmetic operators.
 - CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
