@@ -96,6 +96,10 @@ from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_memb
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_swizzles import expand_scalar_swizzles
+from .shader_execution_reordering import (
+    ShaderExecutionReorderingUnsupportedError,
+    refuse_shader_execution_reordering,
+)
 from .shader_records import (
     ShaderRecordBufferUnsupportedError,
     refuse_shader_record_buffers,
@@ -171,6 +175,7 @@ __all__ = [
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
+    "ShaderExecutionReorderingUnsupportedError",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
@@ -265,6 +270,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    Shader Model 6.9 shader execution reordering (``dx::MaybeReorderThread``) is refused for every target but
+    Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
@@ -293,6 +300,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
