@@ -3399,6 +3399,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 )
                 if narrowed is not None:
                     return narrowed
+                diagonal = self.generate_scalar_matrix_constructor(
+                    function_name, node.arguments[0]
+                )
+                if diagonal is not None:
+                    return diagonal
             args = self.generate_type_constructor_call_arguments(
                 function_name, node.arguments
             )
@@ -4621,6 +4626,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             )
             if narrowed is not None:
                 return narrowed
+            diagonal = self.generate_scalar_matrix_constructor(
+                node.constructor_type, node.arguments[0]
+            )
+            if diagonal is not None:
+                return diagonal
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
@@ -4634,6 +4644,50 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         else:
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{self.type_name_string(node.constructor_type)}({args})"
+
+    def generate_scalar_matrix_constructor(self, matrix_type, arg):
+        """Expand a one-scalar matrix constructor such as ``mat2(s)``.
+
+        CrossGL, like GLSL (4.60 section 5.4.2), builds a matrix with ``s`` on
+        the diagonal and zeros elsewhere. WGSL has no such constructor, so the
+        matrix is written column by column.
+        """
+        shape = self.matrix_shape(matrix_type)
+        if shape is None:
+            return None
+        arg_type = self.expression_type(arg)
+        try:
+            arg_type_name = (
+                self.type_name_string(arg_type) if arg_type is not None else None
+            )
+        except ValueError:
+            arg_type_name = None
+        is_numeric_literal = isinstance(arg, LiteralNode) and isinstance(
+            arg.value, (int, float)
+        )
+        if arg_type_name not in {"f32", "f16", "i32", "u32"} and not (
+            is_numeric_literal and not isinstance(arg.value, bool)
+        ):
+            return None
+        element, columns, rows = shape
+        if not self.is_repeatable_matrix_operand(arg):
+            raise ValueError(
+                "WGSL target writes a one-scalar matrix constructor "
+                f"mat{columns}x{rows}<{element}>(s) one diagonal element at a "
+                "time and requires an argument without side effects; assign the "
+                "argument to a local variable first"
+            )
+        if self.is_float_vector_abstract_int_argument(arg, element) or (
+            is_numeric_literal and arg_type_name is None
+        ):
+            diagonal = self.generate_expression(arg)
+        else:
+            diagonal = self.generate_expression_for_target(arg, element)
+        column_values = []
+        for column in range(columns):
+            components = [diagonal if row == column else "0.0" for row in range(rows)]
+            column_values.append(f"vec{rows}<{element}>({', '.join(components)})")
+        return f"mat{columns}x{rows}<{element}>({', '.join(column_values)})"
 
     def generic_constructor_type_name(self, name):
         parsed = self.generic_constructor_parts(name)
