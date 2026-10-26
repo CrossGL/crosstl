@@ -1568,6 +1568,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs = self._find_concrete_struct_definitions(code)
         template_structs = self._find_template_structs(code)
         context = self._reachability_type_context(code, template_spans, structs)
+        # Bodies are only ever appended, and every context view is resolved at a
+        # call position. A context of a shorter prefix therefore answers queries
+        # before its end; it is rebuilt only when a call in a newer body needs it.
+        context_end = len(code)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
         explicit_specializations = (
@@ -1646,6 +1650,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ):
                 continue
 
+            if call.argument_open >= context_end:
+                context = self._reachability_type_context(code, template_spans, structs)
+                context_end = len(code)
             buffer_view = self._flatten_types_at(
                 context.buffer_element_types, call.argument_open
             )
@@ -1925,7 +1932,6 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 materialized_names[key] = specialized_name
                 materialization_start = len(code) + 2
                 code += "\n\n" + materialized
-                context = self._reachability_type_context(code, template_spans, structs)
                 body_start = self._find_next_top_level_char(materialized, 0, "{")
                 owner_position = (
                     specialization["span"][0]
