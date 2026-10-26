@@ -8889,6 +8889,22 @@ class MojoCodeGen:
             )
             if numeric_vector_binary is not None:
                 return numeric_vector_binary
+            # Mojo `and`/`or` are not lane-wise on boolean vectors (SIMD[DType.bool, N]).
+            # Use `&`/`|` for component-wise && / || on boolean masks; keep `and`/`or`
+            # for scalar bool so short-circuit evaluation is preserved.
+            op_raw = expr.op
+            if op_raw in ("&&", "||", "AND", "OR", "LOGICAL_AND", "LOGICAL_OR"):
+                left_type = self.expression_result_type(expr.left)
+                right_type = self.expression_result_type(expr.right)
+                left_info = self.vector_type_info(left_type)
+                right_info = self.vector_type_info(right_type)
+                left_is_bvec = left_info is not None and left_info[0] == "DType.bool"
+                right_is_bvec = right_info is not None and right_info[0] == "DType.bool"
+                if left_is_bvec or right_is_bvec:
+                    left = self.generate_expression(expr.left)
+                    right = self.generate_expression(expr.right)
+                    bit_op = "&" if op_raw in ("&&", "AND", "LOGICAL_AND") else "|"
+                    return f"({left} {bit_op} {right})"
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
