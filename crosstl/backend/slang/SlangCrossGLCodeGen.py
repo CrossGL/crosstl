@@ -3067,8 +3067,7 @@ class SlangToCrossGLConverter:
         offset_index = (
             2
             if len(extra_args) > 2
-            and resource_base
-            not in {
+            and resource_base not in {
                 "TextureCube",
                 "TextureCubeArray",
                 "SamplerCube",
