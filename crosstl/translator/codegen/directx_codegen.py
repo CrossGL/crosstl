@@ -677,6 +677,45 @@ class DirectXNative16BitUnsupportedError(ValueError):
         self.source_location = source_location
 
 
+class DirectXRayTracingStageProfileError(ValueError):
+    """Raised when a DirectX profile below Direct3D 12 receives a DXR stage."""
+
+    project_diagnostic_code = "project.translate.directx-ray-tracing-stage-unsupported"
+    missing_capabilities = ("directx.ray-tracing",)
+
+    def __init__(self, message, *, target_profile, shader_type, shader_attribute):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.shader_type = shader_type
+        self.shader_attribute = shader_attribute
+
+
+class DirectXWaveSizeProfileError(ValueError):
+    """Raised when a DirectX profile below Direct3D 12 receives WaveSize."""
+
+    project_diagnostic_code = "project.translate.directx-wave-size-unsupported"
+    missing_capabilities = ("directx.wave-size",)
+
+    def __init__(self, message, *, target_profile, wave_size, shader_model):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.wave_size = wave_size
+        self.shader_model = shader_model
+
+
+class DirectXMeshStageProfileError(ValueError):
+    """Raised when a DirectX profile below Direct3D 12 receives a mesh stage."""
+
+    project_diagnostic_code = "project.translate.directx-mesh-stage-unsupported"
+    missing_capabilities = ("directx.mesh-shading",)
+
+    def __init__(self, message, *, target_profile, shader_type, shader_attribute):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.shader_type = shader_type
+        self.shader_attribute = shader_attribute
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -1994,6 +2033,8 @@ class HLSLCodeGen(
         "fwidth": "fwidth",
         "fwidthCoarse": "ddx_coarse/ddy_coarse",
         "fwidthFine": "ddx_fine/ddy_fine",
+        "fwidth_coarse": "ddx_coarse/ddy_coarse",
+        "fwidth_fine": "ddx_fine/ddy_fine",
     }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
@@ -18236,6 +18277,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = self.hlsl_matrix_orientation.arithmetic_type(
+                mapped_operator, left_type, right_type
+            )
+            if matrix_type is not None:
+                return matrix_type
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -18531,6 +18577,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_transpose_result_type(
                     self.expression_result_type(args[0])
                 )
+            if func_name in {"matrixCompMult", "outerProduct"} and func_name not in (
+                getattr(self, "function_return_types", {})
+            ):
+                matrix_call_type = self.hlsl_matrix_orientation.call_type(
+                    func_name, [self.expression_result_type(arg) for arg in args]
+                )
+                if matrix_call_type is not None:
+                    return matrix_call_type
             if (
                 func_name in {
                     "frac",
@@ -18549,6 +18603,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "fwidth",
                     "fwidthFine",
                     "fwidthCoarse",
+                    "fwidth_fine",
+                    "fwidth_coarse",
                     "ddx",
                     "ddy",
                     "ddx_fine",
@@ -26816,6 +26872,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_assignment(expr)
         return self.generate_expression(expr)
 
+    def hlsl_helper_invocation_expression(self, expr):
+        """Lower CrossGL's ``gl_HelperInvocation`` to Shader Model 6.6 ``IsHelperLane()``.
+
+        HLSL has no helper-invocation variable; the query is the intrinsic. A local or
+        global that happens to use the name is left alone. The dx10 and dx11 profiles
+        (Shader Model 4 and 5) have no such intrinsic, so the read is refused there.
+        """
+        if not isinstance(expr, (IdentifierNode, VariableNode)):
+            return None
+        if getattr(expr, "name", None) != "gl_HelperInvocation":
+            return None
+        for table in ("local_variable_types", "global_variable_types"):
+            if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
+                return None
+        if self.target_profile in {"dx10", "dx11"}:
+            return self.refuse_lowering(
+                "gl_HelperInvocation: IsHelperLane() requires Shader Model 6.6, "
+                f"which DirectX profile {self.target_profile} does not provide",
+                "false",
+            )
+        return "IsHelperLane()"
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""
         storage_read = self.hlsl_half_storage.read(expr)
@@ -26827,6 +26905,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         unavailable = hlsl_unavailable_builtin(self, expr)
         if unavailable is not None:
             return unavailable
+        helper_lane = self.hlsl_helper_invocation_expression(expr)
+        if helper_lane is not None:
+            return helper_lane
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -28127,10 +28208,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "asfloat(0x7fc00000)"
         if not args and func_name == "infinity":
             return "asfloat(0x7f800000)"
-        if func_name in {"fwidthFine", "fwidthCoarse"} and len(args) == 1:
+        if (
+            func_name in {"fwidthFine", "fwidthCoarse", "fwidth_fine", "fwidth_coarse"}
+            and len(args) == 1
+        ):
             # HLSL has no fine or coarse fwidth; GLSL 4.60 section 8.14
             # defines fwidthFine(p) as abs(dFdxFine(p)) + abs(dFdyFine(p)).
-            granularity = "fine" if func_name == "fwidthFine" else "coarse"
+            # The GLSL importer writes fwidthFine as fwidth_fine.
+            granularity = (
+                "fine" if func_name in {"fwidthFine", "fwidth_fine"} else "coarse"
+            )
             targets = ("abs", f"ddx_{granularity}", f"ddy_{granularity}")
             lowering = f"abs(ddx_{granularity}(p)) + abs(ddy_{granularity}(p))"
             shadowed = [
@@ -33596,6 +33683,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "entry points"
             )
         arguments_text = ", ".join(str(value) for value in wave_size_values)
+        if self.target_profile in {"dx10", "dx11"}:
+            shader_model = "6.6" if len(wave_size_values) == 1 else "6.8"
+            raise DirectXWaveSizeProfileError(
+                f"DirectX profile {self.target_profile} does not support the "
+                f"WaveSize attribute; [WaveSize({arguments_text})] requires "
+                f"DirectX 12 / Shader Model {shader_model}",
+                target_profile=self.target_profile,
+                wave_size=tuple(wave_size_values),
+                shader_model=shader_model,
+            )
         return f"[WaveSize({arguments_text})]\n"
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
@@ -39177,7 +39274,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
+    HLSL_RAY_TRACING_SHADER_ATTRIBUTES = {
+        "ray_generation": "raygeneration",
+        "ray_intersection": "intersection",
+        "ray_closest_hit": "closesthit",
+        "ray_any_hit": "anyhit",
+        "ray_miss": "miss",
+        "ray_callable": "callable",
+    }
+
+    def validate_directx_ray_tracing_stage_profile(self, shader_type):
+        shader_attribute = self.HLSL_RAY_TRACING_SHADER_ATTRIBUTES.get(shader_type)
+        if shader_attribute is None or self.target_profile not in {"dx10", "dx11"}:
+            return
+
+        raise DirectXRayTracingStageProfileError(
+            f"DirectX profile {self.target_profile} does not support the "
+            f"'{shader_attribute}' ray tracing stage; DirectX Raytracing requires "
+            "DirectX 12 / Shader Model 6.3",
+            target_profile=self.target_profile,
+            shader_type=shader_type,
+            shader_attribute=shader_attribute,
+        )
+
+    HLSL_MESH_SHADING_SHADER_ATTRIBUTES = {
+        "mesh": "mesh",
+        "task": "amplification",
+        "amplification": "amplification",
+        "object": "amplification",
+    }
+
+    def validate_directx_mesh_stage_profile(self, shader_type):
+        shader_attribute = self.HLSL_MESH_SHADING_SHADER_ATTRIBUTES.get(shader_type)
+        if shader_attribute is None or self.target_profile not in {"dx10", "dx11"}:
+            return
+
+        raise DirectXMeshStageProfileError(
+            f"DirectX profile {self.target_profile} does not support the "
+            f"'{shader_attribute}' stage; mesh and amplification shaders require "
+            "DirectX 12 / Shader Model 6.5",
+            target_profile=self.target_profile,
+            shader_type=shader_type,
+            shader_attribute=shader_attribute,
+        )
+
     def validate_hlsl_stage_requirements(self, func, shader_type, stage_node=None):
+        self.validate_directx_ray_tracing_stage_profile(shader_type)
+        self.validate_directx_mesh_stage_profile(shader_type)
         self.validate_hlsl_max_tess_factor_value(func, shader_type)
         self.validate_hlsl_mesh_output_topology(func, shader_type)
 
@@ -43201,6 +43344,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 constants,
                 local_types,
             )
+            if binding is None:
+                return None
             delta_expression = operand.index
         elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             binding = self.hlsl_private_pointer_static_binding(
@@ -54306,11 +54451,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_name, args[3], "location", expected_dimension
         )
         if method_name == "WriteSamplerFeedbackGrad":
+            # The location carries the array slice, but the gradients do
+            # not: DXC declares ddx and ddy as float2 for both
+            # FeedbackTexture2D and FeedbackTexture2DArray.
             self.validate_hlsl_feedback_coordinate_dimension(
-                func_name, args[4], "ddx", expected_dimension
+                func_name, args[4], "ddx", 2
             )
             self.validate_hlsl_feedback_coordinate_dimension(
-                func_name, args[5], "ddy", expected_dimension
+                func_name, args[5], "ddy", 2
             )
 
     def validate_hlsl_feedback_coordinate_dimension(

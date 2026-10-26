@@ -38,7 +38,7 @@ def metal_runs():
         return False
 
 
-def test_only_supported_probes_that_read_one_input_buffer_run():
+def test_only_supported_probes_with_matching_ordered_input_buffers_run():
     assert execution.executable(supported())
     assert not execution.executable(Result(SIN, "output", "supported"))
     assert not execution.executable(
@@ -52,8 +52,19 @@ def test_only_supported_probes_that_read_one_input_buffer_run():
     )
     two_buffers = probes.build(ldexp, "metal").source
     assert not execution.executable(supported(two_buffers))
-    assert not execution.executable(
+    assert execution.executable(
         Result(SIN, "output", "supported", sources=(two_buffers, two_buffers))
+    )
+    reordered = (
+        two_buffers.replace("fin", "temporary")
+        .replace("iin", "fin")
+        .replace("temporary", "iin")
+    )
+    assert not execution.executable(
+        Result(SIN, "output", "supported", sources=(two_buffers, reordered))
+    )
+    assert not execution.executable(
+        Result(SIN, "output", "supported", sources=("void main() {}", "void main() {}"))
     )
 
 
@@ -765,3 +776,199 @@ def test_an_execution_bug_is_reproduced_with_execute():
     assert "--feature sin --execute" in body
     assert "but the runtime that runs the native Metal probe rejects it." in body
     assert not execution.found("probe.metal:3:1: error: no matching function")
+
+
+@pytest.mark.parametrize(
+    ("language", "via_spirv"),
+    [
+        ("metal", False),
+        ("glsl", False),
+        ("glsl", True),
+        ("hlsl", True),
+        ("slang", True),
+        ("wgsl", True),
+        ("spirv", False),
+    ],
+)
+@pytest.mark.parametrize("names", [("fin", "iin"), ("uin", "fin", "iin")])
+def test_execution_passes_one_typed_array_per_declared_input(
+    monkeypatch, tmp_path, language, via_spirv, names
+):
+    # A non-alphabetic order catches sorting the buffers instead of preserving declarations.
+    source = " ".join(names) + "\n" + " ".join(reversed(names))
+    feature = Feature(language, "function", "mixed", SIN.signature)
+    result = Result(feature, "output", "supported", sources=(source, source))
+    assert execution.executable(result)
+    assert execution.input_buffers(source) == names
+    if via_spirv:
+        monkeypatch.setattr(
+            execution,
+            "as_spirv",
+            lambda language, text: "; lowered without input names",
+        )
+    captured = []
+
+    def run_suite(cases, *args, **kwargs):
+        captured.extend(cases)
+        return []
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    execution._execute(language, [(0, result)], {}, tmp_path, via_spirv)
+    assert len(captured) == 2
+    for case in captured:
+        assert len(case.input_buffers) == len(names)
+        for name, data in zip(names, case.input_buffers):
+            np.testing.assert_array_equal(data, execution.inputs(name))
+            assert data.dtype == execution.inputs(name).dtype
+
+
+@pytest.mark.parametrize("language", ["metal", "glsl", "hlsl", "slang", "wgsl"])
+def test_generated_mixed_scalar_probe_is_executable(language):
+    feature = Feature(
+        language,
+        "function",
+        "ldexp",
+        Signature(Type("float"), (Param(Type("float")), Param(Type("int")))),
+    )
+    source = probes.build(feature, language).source
+    assert execution.input_buffers(source) == ("fin", "iin")
+    assert execution.executable(
+        Result(feature, "output", "supported", sources=(source, source))
+    )
+
+
+def _mixed_interface(language, input_count, constants):
+    """Discovery fixtures; SPIR-V needs only entry-point, binding and block declarations."""
+    storage = [("float", "fin"), ("int", "iin"), ("uint", "uin")][:input_count]
+    storage.append(("float", "outp"))
+    if language == "metal":
+        parameters = [
+            f"device {kind}* {name} [[buffer({slot})]]"
+            for slot, (kind, name) in enumerate(storage)
+        ]
+        if constants:
+            parameters.append(f"constant float& scale [[buffer({input_count + 1})]]")
+        return "kernel void probe(" + ", ".join(parameters) + ") {}\n"
+    if language == "glsl":
+        source = "#version 450\nlayout(local_size_x = 1) in;\n"
+        source += "".join(
+            f"layout(std430, binding = {slot}) buffer B{slot} {{ {kind} {name}[]; }};\n"
+            for slot, (kind, name) in enumerate(storage)
+        )
+        if constants:
+            source += f"layout(std140, binding = {input_count + 1}) uniform Params {{ float scale; }};\n"
+        return source + "void main() {}\n"
+    source = (
+        'OpEntryPoint GLCompute %main "main"\nOpExecutionMode %main LocalSize 1 1 1\n'
+    )
+    source += "".join(
+        f"OpDecorate %{name} DescriptorSet 0\nOpDecorate %{name} Binding {slot}\n"
+        for slot, (_, name) in enumerate(storage)
+    )
+    if constants:
+        source += (
+            f"OpDecorate %params DescriptorSet 0\nOpDecorate %params Binding {input_count + 1}\n"
+            "OpDecorate %Params Block\n%ptr = OpTypePointer Uniform %Params\n"
+            "%params = OpVariable %ptr Uniform\n"
+        )
+    return source
+
+
+@pytest.mark.parametrize("language", ["metal", "glsl", "spirv"])
+@pytest.mark.parametrize("input_count", [2, 3])
+@pytest.mark.parametrize("constants", [False, True])
+def test_multiple_inputs_keep_binding_and_constants_checks(
+    tmp_path, language, input_count, constants
+):
+    source = _mixed_interface(language, input_count, constants)
+    native, translated = (tmp_path / name for name in ("native", "translated"))
+    native.write_text(source)
+    assert (
+        execution.declares_constants(language, native, input_count=input_count)
+        == constants
+    )
+    assert (
+        execution.rebinding(
+            language, native, native, constants, input_count=input_count
+        )
+        == ""
+    )
+    binding = {"metal": "buffer({})", "glsl": "binding = {}", "spirv": "Binding {}"}[
+        language
+    ]
+    # Duplicate or moved input/output slots must fail, not silently keep the validation result.
+    for old, new in ((1, 0), (1, input_count + 2), (input_count, input_count + 2)):
+        translated.write_text(source.replace(binding.format(old), binding.format(new)))
+        detail = execution.rebinding(
+            language, native, translated, constants, input_count=input_count
+        )
+        assert "slots" in detail
+        assert str(list(range(input_count + 1))) in detail
+    native.write_text(translated.read_text())
+    assert (
+        execution.rebinding(
+            language, native, translated, constants, input_count=input_count
+        )
+        == ""
+    )
+
+
+@pytest.mark.parametrize("language", ["metal", "glsl", "spirv"])
+@pytest.mark.parametrize("input_count", [2, 3])
+@pytest.mark.parametrize(
+    "change", ["same", "binding", "drop-constants", "add-constants"]
+)
+def test_execution_checks_multiple_inputs_against_the_native_interface(
+    monkeypatch, language, input_count, change
+):
+    runtime = {
+        "metal": "metal-apple",
+        "glsl": "opengl-llvmpipe",
+        "spirv": "vulkan-lavapipe",
+    }[language]
+    _fake_harness(
+        monkeypatch, "preserved" if change == "same" else "harness-error", 0, runtime
+    )
+    given = _constants_given(monkeypatch)
+    has_constants = change != "add-constants"
+    source = _mixed_interface(language, input_count, has_constants)
+    translated = source
+    if change == "binding":
+        binding = {
+            "metal": "buffer({})",
+            "glsl": "binding = {}",
+            "spirv": "Binding {}",
+        }[language]
+        translated = source.replace(
+            binding.format(input_count), binding.format(input_count + 2)
+        )
+    elif change != "same":
+        translated = _mixed_interface(language, input_count, not has_constants)
+    probe = Result(
+        Feature(language, "function", "mixed", SIN.signature),
+        "output",
+        "supported",
+        sources=(source, translated),
+    )
+    [result], used = execution.run([probe])
+    assert used == [runtime]
+    assert given == dict.fromkeys(
+        ("00000-native", "00000-translated"),
+        execution.CONSTANTS if has_constants else None,
+    )
+    assert result.outcome == ("supported" if change == "same" else "wrong")
+    assert result.runtime == runtime
+    if change != "same":
+        assert execution.REBOUND in result.detail
+
+
+@pytest.mark.parametrize("language", sorted(CALLS))
+def test_no_argument_calls_keep_their_declared_unused_input(language):
+    name, result = CALLS[language]
+    feature = Feature(language, "function", name, Signature(result, ()))
+    source = probes.build(feature, language).source
+    assert execution.input_buffers(source) == ("fin",)
+    assert source.count("fin") == 1
+    assert execution.executable(
+        Result(feature, "output", "supported", sources=(source, source))
+    )

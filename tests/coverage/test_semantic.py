@@ -108,6 +108,24 @@ def test_glsl_features_lower_to_their_instruction(feature, expected):
     assert semantic.lower(feature) == (expected, "")
 
 
+@pytest.mark.skipif(
+    not validators.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
+)
+def test_a_spirv_core_instruction_takes_the_id_of_its_glsl_call():
+    uvec2 = Type("uint", (2,))
+    call = glsl("lessThan", Type("bool", (2,)), uvec2, uvec2)
+    core = Feature(
+        "spirv",
+        "function",
+        "OpULessThan",
+        call.signature,
+        group="core-relational-and-logical",
+        crossgl="lessThan",
+        spelling="lessThan",
+    )
+    assert semantic.lower(core) == semantic.lower(call) == ("OpULessThan", "")
+
+
 BARRIERS = """
          %20 = OpConstant %uint 2
          %21 = OpConstant %uint 264

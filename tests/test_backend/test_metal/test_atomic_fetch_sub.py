@@ -108,7 +108,10 @@ def test_atomic_fetch_sub_translations_compile(tmp_path):
     if glslang is not None:
         glsl = tmp_path / "out.comp"
         glsl.write_text(_translate(tmp_path, source, "opengl"), encoding="utf-8")
-        result = _run([glslang, "--target-env", "opengl", str(glsl)])
+        result = _run(
+            [glslang, "--target-env", "opengl", str(glsl)]
+            + ["-o", str(tmp_path / "glsl.spv")]
+        )
         assert result.returncode == 0, result.stdout + result.stderr
 
     spirv_as, spirv_val = shutil.which("spirv-as"), shutil.which("spirv-val")

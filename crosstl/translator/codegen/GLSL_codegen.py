@@ -84,7 +84,10 @@ from ..math_namespaces import (
     METAL_FREE_ARITHMETIC_OPERATOR_PREFIXES,
     METAL_MATH_NAMESPACE_ANNOTATION,
 )
-from ..matrix_shape import crossgl_linear_algebra_product_type
+from ..matrix_shape import (
+    crossgl_linear_algebra_product_type,
+    crossgl_matrix_componentwise_type,
+)
 from ..metadata_preconditions import (
     MAX_METADATA_PRECONDITIONS,
     checked_metadata_preconditions,
@@ -238,7 +241,9 @@ from .glsl_interface_block_io import (
     stage_block_member_layout,
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
-from .glsl_narrow_vectors import GLSLNarrowVectorMixin
+from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
+from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -2903,6 +2908,7 @@ class GLSLCodeGen(
         self.glsl_raised_version_line = None
         self.glsl_required_version_line = None
         self.current_mesh_output_count_limits = {}
+        self.glsl_program_has_mesh_stage = False
         self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.emit_stage_guards = False
@@ -2928,7 +2934,7 @@ class GLSLCodeGen(
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
         self.current_glsl_ieee_operator_arithmetic = False
-        self.current_glsl_exactness_test_local_ids = frozenset()
+        self.current_glsl_exactness_test_local_ids = {}
         self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
@@ -8463,6 +8469,7 @@ class GLSLCodeGen(
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
             ast = converge_subgroup_divergent_barriers(
@@ -8732,7 +8739,7 @@ class GLSLCodeGen(
         self.current_glsl_precise_function = False
         self.current_glsl_precise_captures = None
         self.current_glsl_ieee_operator_arithmetic = False
-        self.current_glsl_exactness_test_local_ids = frozenset()
+        self.current_glsl_exactness_test_local_ids = {}
         self.current_glsl_precise_value_writes = {}
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
@@ -9243,10 +9250,13 @@ class GLSLCodeGen(
             for stage_type in getattr(ast, "stages", {})
         } | {function_stage_name(func) for func in functions} - {None}
         legacy_vertex_names = not program_stage_names or "vertex" in program_stage_names
+        self.glsl_program_has_mesh_stage = "mesh" in program_stage_names
         legacy_fragment_names = (
             not program_stage_names or "fragment" in program_stage_names
         )
         data_struct_nodes = []
+        # Stage inputs and outputs of structure type name the data structures, so they follow them.
+        stage_io_code = ""
         for node in structs:
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
@@ -9272,7 +9282,7 @@ class GLSLCodeGen(
                     or node.name in self.vertex_input_struct_names
                 ):
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_stage_input_declarations(node),
                             "vertex",
                         )
@@ -9287,7 +9297,7 @@ class GLSLCodeGen(
                 ):
                     emitted_io = False
                     if node.name in self.vertex_output_struct_names and emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9296,7 +9306,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9305,14 +9315,14 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
                         emitted_io = True
                     if not emitted_io:
                         if emit_vertex_io and legacy_vertex_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_legacy_output_declarations(node),
                                 "vertex",
                             )
@@ -9329,7 +9339,7 @@ class GLSLCodeGen(
                 elif node.name in self.vertex_output_struct_names:
                     emitted_io = False
                     if emit_vertex_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_vertex_output_declarations(node),
                             "vertex",
                         )
@@ -9338,7 +9348,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9347,7 +9357,7 @@ class GLSLCodeGen(
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9358,7 +9368,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSInput" and legacy_fragment_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
@@ -9366,12 +9376,12 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_input_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_input_declarations(node),
                             "fragment",
                         )
                         if node.name in self.fragment_output_struct_names:
-                            code += self.wrap_stage_guard(
+                            stage_io_code += self.wrap_stage_guard(
                                 self.generate_fragment_output_declarations(node),
                                 "fragment",
                             )
@@ -9386,7 +9396,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name in self.fragment_output_struct_names:
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9394,7 +9404,7 @@ class GLSLCodeGen(
                         data_struct_nodes.append(node)
                 elif node.name == "PSOutput":
                     if emit_fragment_io:
-                        code += self.wrap_stage_guard(
+                        stage_io_code += self.wrap_stage_guard(
                             self.generate_fragment_output_declarations(node),
                             "fragment",
                         )
@@ -9406,6 +9416,7 @@ class GLSLCodeGen(
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
+        code += stage_io_code
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -19861,6 +19872,7 @@ class GLSLCodeGen(
     def generate_mesh_output_parameter_declarations(self, mesh_outputs):
         code = ""
         emitted = set()
+        layouts = mesh_output_layouts(self, mesh_outputs)
         for info in mesh_outputs.values():
             role = info["role"]
             if role == "indices":
@@ -19887,12 +19899,14 @@ class GLSLCodeGen(
                     else f"{member_type}[]"
                 )
                 declaration = format_c_style_array_declaration(array_type, output_name)
-                prefix = self.mesh_output_declaration_prefix(member, role)
+                prefix = self.mesh_output_declaration_prefix(
+                    member, role, layouts.get((role, output_name))
+                )
                 code += f"{prefix} {declaration};\n"
         return code
 
-    def mesh_output_declaration_prefix(self, member, role):
-        prefix = self.stage_io_declaration_prefix(member, "out")
+    def mesh_output_declaration_prefix(self, member, role, layout=None):
+        prefix = self.stage_io_declaration_prefix(member, "out", layout=layout)
         if role != "primitives":
             return prefix
 
@@ -23300,6 +23314,7 @@ class GLSLCodeGen(
             if private_distance is not None:
                 code += private_distance
                 continue
+            refuse_nested_stage_builtins(self, member, "vertex", "output")
 
             layout = self.stage_io_layout_for_node(member)
             block = block_declared_stage_io(self, "out", member, output_name)
@@ -23333,12 +23348,27 @@ class GLSLCodeGen(
 
     def generate_fragment_input_declarations(self, node):
         code = ""
+        mesh_layouts = (
+            mesh_fragment_input_layouts(
+                self,
+                [
+                    member
+                    for member in getattr(node, "members", []) or []
+                    if self.fragment_input_member_name(member, node.name) is not None
+                ],
+            )
+            if self.glsl_program_has_mesh_stage
+            else {}
+        )
         for member in getattr(node, "members", []) or []:
             input_name = self.fragment_input_member_name(member, node.name)
             if input_name is None:
                 continue
+            refuse_nested_stage_builtins(self, member, "fragment", "input")
 
-            layout = self.stage_io_layout_for_node(member)
+            layout = mesh_layouts.get(member.name) or self.stage_io_layout_for_node(
+                member
+            )
             member_type = self.member_type_name(member)
             block = block_declared_stage_io(self, "in", member, input_name)
             self.reserve_stage_io_layout(
@@ -23361,7 +23391,7 @@ class GLSLCodeGen(
                 # Declared by the input interface block itself.
                 continue
             prefix = self.stage_io_declaration_prefix(
-                member, "in", stage_name="fragment"
+                member, "in", layout=layout, stage_name="fragment"
             )
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
             member_decl = format_c_style_array_declaration(member_type, input_name)
@@ -31057,7 +31087,12 @@ class GLSLCodeGen(
             parts.append("const")
         if (
             "precise" in qualifiers
-            or id(node) in getattr(self, "current_glsl_exactness_test_local_ids", ())
+            or (
+                id(node) in getattr(self, "current_glsl_exactness_test_local_ids", ())
+                and self.glsl_exactness_test_value_has_float_sum(
+                    self.current_glsl_exactness_test_local_ids[id(node)]
+                )
+            )
             or ("const" not in qualifiers and self.glsl_precise_function_local(node))
         ):
             parts.append("precise")
@@ -36892,6 +36927,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = crossgl_matrix_componentwise_type(
+                operator, left_type, right_type
+            )
+            if matrix_type is not None:
+                return matrix_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )
@@ -40227,9 +40267,19 @@ complex64_t crossgl_complex64_mod_assign(
             if mul_call is not None:
                 return mul_call
 
+            packed_bytes = self.generate_packed_byte_call(original_func_name, expr.args)
+            if packed_bytes is not None:
+                return packed_bytes
+
             mad_call = self.generate_mad_call(original_func_name, expr.args)
             if mad_call is not None:
                 return mad_call
+
+            packed_dot = self.generate_packed_dot4add_call(
+                original_func_name, expr.args
+            )
+            if packed_dot is not None:
+                return packed_dot
 
             if original_func_name not in self.function_return_types:
                 func_name = self.function_map.get(func_name, func_name)
@@ -41634,10 +41684,14 @@ complex64_t crossgl_complex64_mod_assign(
         initializer, compares that sum itself; accumulators that are later
         reassigned, such as an attention kernel's running sum, stay as they
         are.
+
+        Returns a mapping from each local's id to its single value, so the
+        declaration can confirm, with the scope then in effect, that the sum
+        is a floating one (``glsl_exactness_test_value_has_float_sum``).
         """
         body = getattr(function, "body", None)
         if body is None:
-            return frozenset()
+            return {}
         declarations = {}
         compared = set()
         assignments = {}
@@ -41677,8 +41731,8 @@ complex64_t crossgl_complex64_mod_assign(
                     for value in (node.left, node.right)
                     if isinstance(value, IdentifierNode)
                 )
-        result = set()
-        for name in compared:
+        result = {}
+        for name in sorted(compared):
             found = declarations.get(name, ())
             values = assignments.get(name, ())
             if len(found) != 1 or len(values) != 1 or not has_sum(values[0]):
@@ -41691,8 +41745,26 @@ complex64_t crossgl_complex64_mod_assign(
                 and info["bits"] == 32
                 and self.glsl_narrow_float_width(declared) is None
             ):
-                result.add(id(found[0]))
-        return frozenset(result)
+                result[id(found[0])] = values[0]
+        return result
+
+    def glsl_exactness_test_value_has_float_sum(self, value):
+        """Whether ``value`` contains a ``+`` or ``-`` that is not integral.
+
+        An integer difference, such as ``float(n - 8)``, cannot be contracted
+        or reassociated by a floating optimization, so it needs no
+        ``precise``.  An operation whose type is unknown in the current scope
+        keeps the qualifier.
+        """
+        for node in self.walk_ast(value):
+            if not isinstance(node, BinaryOpNode) or self.map_operator(
+                getattr(node, "op", None)
+            ) not in {"+", "-"}:
+                continue
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(node))
+            if info is None or info["family"] == "float":
+                return True
+        return False
 
     def glsl_floating_remainder_helper(self, value_type):
         existing = self.glsl_floating_remainder_helper_names.get(value_type)
@@ -42515,6 +42587,39 @@ complex64_t crossgl_complex64_mod_assign(
         right = self.generate_expression(args[1])
         return f"({left} * {right})"
 
+    # HLSL pack_u8/pack_s8 keep the low byte of each lane, pack_clamp_u8 and
+    # pack_clamp_s8 saturate each lane to [0, 255] or [-128, 127], and all four
+    # put lane x in the least significant byte. packUnorm4x8 rounds each
+    # clamped lane of v * 255.0 into the same byte order, and k / 255.0 * 255.0
+    # rounds back to k for every byte k, so it packs the bytes exactly while
+    # evaluating the argument once. The signed clamp packs a + 128 and flips
+    # the top bit of every byte back to two's complement.
+    # unpack_u8u32 and unpack_s8s32 split the bytes into a four-lane vector,
+    # sign-extending a signed lane by shifting it into the top byte and
+    # arithmetically shifting it back down.
+    PACKED_BYTE_INTRINSICS = {
+        "pack_u8": "packUnorm4x8(vec4(uvec4({value}) & uvec4(255u)) / 255.0)",
+        "pack_s8": "packUnorm4x8(vec4(uvec4({value}) & uvec4(255u)) / 255.0)",
+        "pack_clamp_u8": "packUnorm4x8(vec4({value}) / 255.0)",
+        "pack_clamp_s8": (
+            "(packUnorm4x8((vec4({value}) + 128.0) / 255.0) ^ 0x80808080u)"
+        ),
+        "unpack_u8u32": (
+            "((uvec4(uint({value})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))"
+        ),
+        "unpack_s8s32": "((ivec4(int({value})) << ivec4(24, 16, 8, 0)) >> ivec4(24))",
+    }
+
+    def generate_packed_byte_call(self, func_name, args):
+        template = self.PACKED_BYTE_INTRINSICS.get(func_name)
+        if template is None or func_name in self.function_return_types:
+            return None
+        if len(args) != 1:
+            raise ValueError(
+                f"OpenGL {func_name} alias requires 1 argument; got {len(args)}"
+            )
+        return template.format(value=self.generate_expression(args[0]))
+
     def generate_mad_call(self, func_name, args):
         if func_name != "mad" or func_name in self.function_return_types:
             return None
@@ -42525,6 +42630,43 @@ complex64_t crossgl_complex64_mod_assign(
         right = self.generate_expression(args[1])
         addend = self.generate_expression(args[2])
         return f"(({left} * {right}) + {addend})"
+
+    # HLSL dot4add_i8packed(a, b, acc) and dot4add_u8packed(a, b, acc) add the
+    # dot product of the four 8-bit lanes packed in a and b to acc, with byte 0
+    # the least significant lane. GLSL has no packed integer dot product, so
+    # each operand is split into a four-lane vector once and the lanes go
+    # through dot(). Every lane product and their sum stay below 2^24 in
+    # magnitude, so the float dot product is exact. A signed lane is
+    # sign-extended by shifting it into the top byte and arithmetically
+    # shifting it back down.
+    PACKED_DOT4ADD_LANES = {
+        "dot4add_i8packed": (
+            "int",
+            "((ivec4(int({value})) << ivec4(24, 16, 8, 0)) >> ivec4(24))",
+        ),
+        "dot4add_u8packed": (
+            "uint",
+            "((uvec4(uint({value})) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u))",
+        ),
+    }
+
+    def generate_packed_dot4add_call(self, func_name, args):
+        lowering = self.PACKED_DOT4ADD_LANES.get(func_name)
+        if lowering is None or func_name in self.function_return_types:
+            return None
+        if len(args) != 3:
+            raise ValueError(
+                f"OpenGL {func_name} alias requires 3 arguments; got {len(args)}"
+            )
+
+        scalar_type, lanes = lowering
+        left = lanes.format(value=self.generate_expression(args[0]))
+        right = lanes.format(value=self.generate_expression(args[1]))
+        accumulator = self.generate_expression(args[2])
+        return (
+            f"({scalar_type}({accumulator}) + "
+            f"{scalar_type}(dot(vec4({left}), vec4({right}))))"
+        )
 
     def generate_clip_statement(self, expression, indent):
         if not isinstance(expression, FunctionCallNode):
@@ -45380,6 +45522,11 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 if product_type is not None:
                     return product_type
+            matrix_type = crossgl_matrix_componentwise_type(
+                operator, self.map_type(left_type), self.map_type(right_type)
+            )
+            if matrix_type is not None:
+                return matrix_type
             arithmetic_type = self.glsl_common_arithmetic_type(
                 left_type, right_type, operator
             )

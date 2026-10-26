@@ -91,10 +91,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools spirv-tools
       - name: Install smoke prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools spirv-tools
           python -m pip install -e . pytest pytest-xdist numpy moderngl PyOpenGL "PyYAML>=6,<7"
       - name: Checkout pinned MLX kernels
         # The full tree is retained in the native jobs; smoke reads only kernel sources.
@@ -277,10 +279,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install OpenGL runtime and validation tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
           python -m pip install -e . pytest pytest-xdist numpy moderngl PyOpenGL "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
@@ -1285,10 +1289,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0
+
       - name: Install OpenGL runtime dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0
           python -m pip install --upgrade pip
           python -m pip install -e . moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
@@ -1365,9 +1372,9 @@ jobs:
           python --version > .mlx-portable-host/python-version.txt
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -2496,9 +2503,9 @@ jobs:
         run: mkdir -p .mlx-portable-small-rows
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -2746,9 +2753,9 @@ jobs:
         run: mkdir -p .mlx-portable-half
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3016,9 +3023,9 @@ jobs:
         run: mkdir -p .mlx-portable-integer64
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3204,9 +3211,9 @@ jobs:
         run: mkdir -p .mlx-portable-slice-update
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3410,9 +3417,9 @@ jobs:
         run: echo "DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer" >> "$GITHUB_ENV"
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3661,9 +3668,9 @@ jobs:
         run: mkdir -p .mlx-portable-reductions
       - name: Install Linux build and graphics dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
       - name: Install CrossTL and MLX build dependencies
         run: |
           set -euo pipefail
@@ -3873,10 +3880,9 @@ jobs:
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
-          glslangValidator --version
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
 
       - name: Install Linux DXC
         if: runner.os == 'Linux'
@@ -6792,10 +6798,9 @@ jobs:
 
       - name: Install Linux SPIR-V tools
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
-          glslangValidator --version
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
 
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
@@ -8553,12 +8558,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
@@ -9273,12 +9281,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
@@ -9347,12 +9358,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
@@ -9424,12 +9438,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version
@@ -9653,12 +9670,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install system packages
+        uses: ./.github/actions/apt-install
+        with:
+          packages: glslang-tools spirv-tools
+
       - name: Install CrossTL and OpenGL SPIR-V validators
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y glslang-tools spirv-tools
           python -m pip install --upgrade pip
           python -m pip install -e . pytest-xdist "PyYAML>=6,<7"
           glslangValidator --version

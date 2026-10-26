@@ -1,8 +1,10 @@
+import dataclasses
+
 import pytest
 
 from tools.coverage import runner, spirv_input, validators
 from tools.coverage.dialect import ProbeError
-from tools.coverage.model import Feature, Param, Signature, Type
+from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 VEC3 = Type("float", (3,))
 FABS = Feature(
@@ -21,6 +23,26 @@ NCLAMP = Feature(
     "NClamp",
     Signature(VEC3, (Param(VEC3), Param(VEC3), Param(VEC3))),
     crossgl="fmin(fmax({}, {}), {})",
+)
+UVEC3 = Type("uint", (3,))
+ULESS = Feature(
+    "spirv",
+    "function",
+    "OpULessThan",
+    Signature(Type("bool", (3,)), (Param(UVEC3), Param(UVEC3))),
+    group="core-relational-and-logical",
+    crossgl="lessThan",
+    spelling="lessThan",
+)
+STREAM = Feature(
+    "spirv",
+    "function",
+    "OpEmitStreamVertex",
+    Signature(VOID, (Param(Type("int", ()), "const"),)),
+    group="core-primitive",
+    crossgl="EmitStreamVertex",
+    stage="geometry",
+    spelling="EmitStreamVertex",
 )
 needs_glslang = pytest.mark.skipif(
     not (validators.can_lower("glsl") and validators.available("spirv")),
@@ -220,3 +242,57 @@ def test_strict_run_names_glslang_for_spirv_input(monkeypatch, capsys):
     assert capsys.readouterr().err.strip() == (
         "error: missing tools for spirv input (glslangValidator)"
     )
+
+
+@needs_glslang
+def test_a_core_instruction_is_probed_with_the_glsl_call_that_compiles_to_it():
+    probe = spirv_input.build(ULESS)
+    assert " OpULessThan " in probe.source
+    assert validators.validate("spirv", probe.source).accepted
+    signed = dataclasses.replace(ULESS, name="OpSLessThan")
+    with pytest.raises(
+        ProbeError, match="glslang does not lower lessThan to OpSLessThan"
+    ):
+        spirv_input.build(signed)
+
+
+@needs_glslang
+def test_a_vertex_stream_probe_declares_the_geometry_streams_capability():
+    probe = spirv_input.build(STREAM)
+    assert "OpCapability GeometryStreams" in probe.source
+    assert validators.validate("spirv", probe.source).accepted
+
+
+def test_a_core_round_trip_must_keep_the_instruction():
+    body = (
+        "%main = OpFunction %void None %3\n"
+        "%5 = OpULessThan %v3bool %1 %2\n"
+        "OpControlBarrier %uint_2 %uint_2 %uint_264\n"
+        "OpFunctionEnd\n"
+    )
+    assert spirv_input.dropped(ULESS, body) == ""
+    assert (
+        spirv_input.dropped(ULESS, body.replace("OpULessThan", "OpSLessThan"))
+        == "the round trip no longer calls OpULessThan"
+    )
+    # Outside a function body the instruction is not called.
+    assert spirv_input.dropped(ULESS, "%5 = OpULessThan %v3bool %1 %2\n")
+    barrier = dataclasses.replace(ULESS, name="OpControlBarrier", group="core-barrier")
+    assert spirv_input.dropped(barrier, body) == ""
+
+
+def test_a_dropped_core_instruction_the_generator_never_writes_is_left_to_execution(
+    monkeypatch,
+):
+    written = {"text": ""}
+    monkeypatch.setattr(runner, "translate", lambda *args: written["text"])
+    written["text"] = (
+        "%main = OpFunction %void None %3\n%5 = OpULessThan %v3bool %1 %2\n"
+    )
+    assert not runner._encodes_otherwise(ULESS)
+    written["text"] = (
+        "%main = OpFunction %void None %3\n%5 = OpSLessThan %v3bool %1 %2\n"
+    )
+    assert runner._encodes_otherwise(ULESS)
+    # Extended instructions are always judged by the call.
+    assert not runner._encodes_otherwise(FABS)

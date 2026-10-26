@@ -71,7 +71,10 @@ def _assert_glsl_compute_compiles(tmp_path, glsl, stem):
         return
     source = tmp_path / f"{stem}.comp"
     source.write_text(glsl, encoding="utf-8")
-    result = _run([glslang, "--target-env", "opengl", str(source)])
+    result = _run(
+        [glslang, "--target-env", "opengl", str(source)]
+        + ["-o", str(tmp_path / f"{stem}.spv")]
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 

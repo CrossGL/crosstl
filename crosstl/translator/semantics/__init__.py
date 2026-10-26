@@ -25,7 +25,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
-from .constant_extents import fold_constant_extents
+from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
@@ -46,6 +46,7 @@ from .dxr_ray_interfaces import (
     lower_dxr_ray_interfaces,
 )
 from .enum_values import lower_enum_values
+from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
@@ -53,7 +54,9 @@ from .fragment_colour_outputs import (
 )
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
+from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
+from .hit_objects import HitObjectUnsupportedError, refuse_hit_objects
 from .hlsl_geometry_streams import (
     HlslGeometryStreamUnsupportedError,
     raise_glsl_geometry_streams,
@@ -69,6 +72,10 @@ from .hlsl_stage_interfaces import (
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .interface_block_instances import (
+    InterfaceBlockInstanceUnsupportedError,
+    declare_interface_block_instances,
+)
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
@@ -91,6 +98,10 @@ from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_memb
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_swizzles import expand_scalar_swizzles
+from .shader_execution_reordering import (
+    ShaderExecutionReorderingUnsupportedError,
+    refuse_shader_execution_reordering,
+)
 from .shader_records import (
     ShaderRecordBufferUnsupportedError,
     refuse_shader_record_buffers,
@@ -113,6 +124,7 @@ from .structured_layouts import (
     legalize_structured_layouts,
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
+from .task_payload_storage import declare_task_payload_storage
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -146,14 +158,18 @@ __all__ = [
     "DeviceReferenceUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
+    "FeedbackTextureUnsupportedError",
     "FixedSamplerStateUnsupportedError",
     "FragmentColourOutputUnsupportedError",
     "GeometryStreamUnsupportedError",
     "HalfFloatUnsupportedError",
+    "GlslMeshStageUnsupportedError",
+    "HitObjectUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
@@ -163,6 +179,7 @@ __all__ = [
     "RuleInexpressibleError",
     "RuleReport",
     "SOURCE_RULES",
+    "ShaderExecutionReorderingUnsupportedError",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
@@ -231,8 +248,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
     inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
-    becomes the stream form (:mod:`.hlsl_geometry_streams`). HLSL-style hull and domain stages
-    become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
+    becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
+    output arrays and task payload become entry parameters (:mod:`.glsl_mesh_stages`), while for GLSL and SPIR-V a
+    module-scope ``groupshared`` task payload is declared in task-payload storage (:mod:`.task_payload_storage`).
+    HLSL-style hull and domain stages become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
     hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
     SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
     ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
@@ -249,12 +268,16 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
     (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D, Vulkan and OpenGL
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
+    Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
     prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
     and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
+    Sampler feedback textures are refused for every target but Direct3D (:mod:`.feedback_textures`).
     GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
     the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
+    Shader Model 6.9 shader execution reordering (``dx::MaybeReorderThread``) is refused for every target but
+    Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
@@ -283,9 +306,12 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     refuse_undeclared_types(program, report.target)
+    refuse_hit_objects(program, report.target)
+    refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
+    fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
@@ -315,8 +341,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
+    raise_glsl_mesh_stages(program, report.target)
+    declare_task_payload_storage(program, report.target)
     lower_dxr_ray_interfaces(program, report.target)
     lower_metal_ray_dispatch(program, report.target)
+    declare_interface_block_instances(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
     legalize_structured_layouts(program, report.target)
@@ -334,6 +363,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_debug_printf(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
+    refuse_feedback_textures(program, report.target)
     declare_hlsl_residency_status(program, report.target)
     fold_array_lengths(program, report.target)
     refuse_large_constant_buffers(program, report.target)

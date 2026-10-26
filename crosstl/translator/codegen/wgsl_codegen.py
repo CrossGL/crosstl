@@ -60,6 +60,7 @@ from .enum_utils import (
     sanitize_type_name,
 )
 from .fragment_output_targets import frag_data_attribute_index
+from .generic_struct_utils import named_struct_constructor_arguments
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
@@ -81,6 +82,7 @@ from .wgsl_integer_operands import (
     wgsl_bitwise_operands,
     wgsl_shift_amount,
 )
+from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -255,6 +257,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "dfdycoarse": "dpdyCoarse",
         "ddycoarse": "dpdyCoarse",
         "ddy_coarse": "dpdyCoarse",
+        # The GLSL importer writes fwidthFine and fwidthCoarse with underscores.
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
@@ -323,10 +328,31 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "uimagebuffer",
         "uimagecube",
         "uimagecubearray",
+        "isampler1d",
+        "isampler1darray",
         "isampler2d",
         "isampler2darray",
+        "isampler2dms",
+        "isampler2dmsarray",
+        "isampler2drect",
+        "isampler3d",
+        "isamplerbuffer",
+        "isamplercube",
+        "isamplercubearray",
+        "sampler2drect",
+        "sampler2drectshadow",
+        "samplerbuffer",
+        "usampler1d",
+        "usampler1darray",
         "usampler2d",
         "usampler2darray",
+        "usampler2dms",
+        "usampler2dmsarray",
+        "usampler2drect",
+        "usampler3d",
+        "usamplerbuffer",
+        "usamplercube",
+        "usamplercubearray",
     }
     STRUCTURED_BUFFER_TYPE_NAMES = {
         "rwstructuredbuffer",
@@ -388,10 +414,18 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "texture3d": "texture_3d<f32>",
         "texturecube": "texture_cube<f32>",
         "texturecubearray": "texture_cube_array<f32>",
+        "isampler1d": "texture_1d<i32>",
         "isampler2d": "texture_2d<i32>",
         "isampler2darray": "texture_2d_array<i32>",
+        "isampler3d": "texture_3d<i32>",
+        "isamplercube": "texture_cube<i32>",
+        "isamplercubearray": "texture_cube_array<i32>",
+        "usampler1d": "texture_1d<u32>",
         "usampler2d": "texture_2d<u32>",
         "usampler2darray": "texture_2d_array<u32>",
+        "usampler3d": "texture_3d<u32>",
+        "usamplercube": "texture_cube<u32>",
+        "usamplercubearray": "texture_cube_array<u32>",
     }
     STORAGE_TEXTURE_DIMENSION_MAP = {
         "image1d": "1d",
@@ -682,7 +716,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._current_stage_name = None
         self._current_workgroup_size = None
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._cbuffer_member_accesses = {}
         self._function_texture_parameters = {}
         self._function_pointer_parameters = {}
@@ -753,7 +787,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
-        self._global_binding_index = 0
+        self._next_implicit_binding_by_group = {}
         self._identifier_scopes = []
         self._identifier_alias_scopes = []
         self._pointer_identifier_scopes = []
@@ -2512,21 +2546,28 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         root_name = self.module_identifier_name(node.name)
         bindings = []
         declarations = []
+        next_texture_binding = None
         for index in range(array_size):
             texture_name = self.safe_wgsl_identifier(f"{root_name}_{index}")
             texture_attributes = (
                 self.explicit_binding_attributes(node)
                 if index == 0
                 else self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             )
             if not texture_attributes:
                 texture_attributes = self.next_binding_attributes(
-                    group=self.binding_group_for_resource_array(node)
+                    group=self.binding_group_for_resource_array(node),
+                    start=next_texture_binding,
                 )
             sampler_attributes = self.sampler_binding_attributes_for_texture(
                 texture_attributes
+            )
+            # Expanded elements follow their preceding sampler, even when the first binding is explicit.
+            next_texture_binding = (
+                int(re.search(r"@binding\((\d+)\)", sampler_attributes).group(1)) + 1
             )
             sampler_name = self.texture_sampler_name(texture_name)
             bindings.append(
@@ -2693,7 +2734,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             expression = self.generate_statement_expression(stmt.expression)
             if self.is_multi_barrier_memory_lowering(stmt.expression):
                 return "\n".join(f"{pad}{call};" for call in expression.split("; "))
-            return f"{pad}{expression};"
+            user_functions = set(self._function_identifier_names.values())
+            user_functions.update(self._function_signature_identifier_names.values())
+            user_functions.update(self._function_overloads_by_name)
+            struct_types = set(self._type_identifier_names.values())
+            statement = wgsl_call_statement(expression, user_functions, struct_types)
+            return f"{pad}{statement};"
         if isinstance(stmt, AssignmentNode):
             return self.generate_assignment_statement(stmt, indent)
         if isinstance(stmt, ReturnNode):
@@ -3345,10 +3391,23 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
-        if derivative_name is not None:
+        if derivative_name is not None and not self.is_user_function_name(
+            function_name
+        ):
             return self.generate_derivative_call(node, derivative_name, function_name)
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
+        packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
+        if packed_8bit is not None and not self.is_user_function_name(function_name):
+            return self.generate_packed_8bit_call(node, function_name, packed_8bit)
+        if (
+            function_name == "mix"
+            and len(node.arguments) == 3
+            and not self.is_user_function_name(function_name)
+        ):
+            boolean_mix = self.generate_boolean_mix_call(node)
+            if boolean_mix is not None:
+                return boolean_mix
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)
@@ -3369,6 +3428,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 )
                 if narrowed is not None:
                     return narrowed
+                diagonal = self.generate_scalar_matrix_constructor(
+                    function_name, node.arguments[0]
+                )
+                if diagonal is not None:
+                    return diagonal
             args = self.generate_type_constructor_call_arguments(
                 function_name, node.arguments
             )
@@ -3391,6 +3455,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             function_name, node.arguments, function=resolved_function
         )
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
+        if (
+            function_name == "atan"
+            and len(node.arguments) == 2
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
+            # argument and spells the two-argument form atan2(y, x).
+            return f"atan2({args})"
         if mapped_name == function_name and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
@@ -3401,6 +3474,46 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
         return f"{mapped_name}({args})"
+
+    # HLSL 8-bit pack intrinsics and their WGSL builtins (WGSL sections
+    # 17.9.3 and 17.9.8): the WGSL argument type each takes, the builtin, and
+    # its result type. pack_clamp_u8 takes signed components, while
+    # pack4xU8Clamp takes unsigned ones, so negative components are clamped
+    # to zero first.
+    PACKED_8BIT_FUNCTIONS = {
+        "pack_s8": ("vec4<i32>", "pack4xI8", "u32"),
+        "pack_u8": ("vec4<u32>", "pack4xU8", "u32"),
+        "pack_clamp_s8": ("vec4<i32>", "pack4xI8Clamp", "u32"),
+        "pack_clamp_u8": ("vec4<u32>", "pack4xU8Clamp", "u32"),
+        "unpack_s8s32": ("u32", "unpack4xI8", "vec4<i32>"),
+        "unpack_u8u32": ("u32", "unpack4xU8", "vec4<u32>"),
+    }
+
+    def generate_packed_8bit_call(self, node, function_name, mapping):
+        """HLSL ``pack_*8``/``unpack_*8*32`` as the WGSL 4x8-bit pack builtins."""
+        argument_type, mapped_name, _result_type = mapping
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        argument_expr = self.generate_expression(argument)
+        if argument_type == "u32":
+            # HLSL converts an int to the packed type bit for bit, as u32() does.
+            if self.integer_scalar_type(self.expression_type(argument)) == "i32":
+                argument_expr = f"u32({argument_expr})"
+            return f"{mapped_name}({argument_expr})"
+        component = self.vector_component_type(self.expression_type(argument))
+        if component is not None:
+            component = self.map_type_name(component)
+        if mapped_name == "pack4xU8Clamp" and component != "u32":
+            if component != "i32":
+                argument_expr = f"vec4<i32>({argument_expr})"
+            argument_expr = f"vec4<u32>(max({argument_expr}, vec4<i32>(0)))"
+        elif component != argument_type[len("vec4<") : -1]:
+            argument_expr = f"{argument_type}({argument_expr})"
+        return f"{mapped_name}({argument_expr})"
 
     def generate_workgroup_uniform_load_call(self, node):
         """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
@@ -3755,6 +3868,77 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
         upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
         return f"clamp({value_expr}, {lower}, {upper})"
+
+    def generate_boolean_mix_call(self, node):
+        """``mix(x, y, a)`` with a ``bool`` or ``bvecN`` selector as ``select(x, y, a)``.
+
+        With a boolean selector, CrossGL's ``mix`` selects (GLSL 4.60 section 8.3): each
+        component is ``y`` where ``a`` is true and ``x`` where it is false. WGSL's ``mix``
+        takes only a floating-point selector; ``select(f, t, cond)`` (WGSL section 17.3)
+        is the selecting builtin, with the same argument order and a scalar ``cond``
+        allowed for vector values. Returns ``None`` for a non-boolean selector.
+        """
+        selector_width = self.boolean_expression_width(node.arguments[2])
+        if selector_width is None:
+            return None
+        # Only values whose type is known can disagree with the selector; a value with no
+        # recorded type, such as a built-in call, is not taken to be a scalar.
+        value_width = max(
+            (
+                self.vector_component_count(value_type) or 1
+                for value_type in map(self.expression_type, node.arguments[:2])
+                if value_type is not None
+            ),
+            default=selector_width,
+        )
+        if selector_width not in (1, value_width):
+            raise ValueError(
+                "WGSL target does not support mix with a "
+                f"{selector_width}-component selector and "
+                f"{value_width}-component values"
+            )
+        x, y, a = (self.generate_expression(arg) for arg in node.arguments)
+        return f"select({x}, {y}, {a})"
+
+    BOOLEAN_COMPARISON_OPERATORS = {"<", ">", "<=", ">=", "==", "!="}
+    BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS = {
+        "lessThan",
+        "lessThanEqual",
+        "greaterThan",
+        "greaterThanEqual",
+        "equal",
+        "notEqual",
+        "not",
+    }
+
+    def boolean_expression_width(self, expr):
+        """Component count of a ``bool`` or ``vecN<bool>`` expression, else ``None``."""
+        expr_type = self.expression_type(expr)
+        if self.is_bool_type(expr_type):
+            return 1
+        shape = self.vector_shape(expr_type)
+        if shape is not None:
+            return shape[1] if shape[0] == "bool" else None
+        if isinstance(expr, BinaryOpNode):
+            if expr.operator in {"&&", "||"}:
+                return 1
+            if expr.operator in self.BOOLEAN_COMPARISON_OPERATORS:
+                operand_type = self.expression_type(expr.left) or (
+                    self.expression_type(expr.right)
+                )
+                return self.vector_component_count(operand_type) or 1
+            return None
+        if isinstance(expr, UnaryOpNode) and expr.operator == "!":
+            return 1
+        if (
+            isinstance(expr, FunctionCallNode)
+            and isinstance(expr.function, IdentifierNode)
+            and expr.function.name in self.BOOLEAN_VECTOR_RELATIONAL_FUNCTIONS
+            and expr.arguments
+            and not self.is_user_function_name(expr.function.name)
+        ):
+            return self.vector_component_count(self.expression_type(expr.arguments[0]))
+        return None
 
     def generate_clamp_bound(self, bound, vector_type_name):
         rendered = self.generate_expression(bound)
@@ -4244,17 +4428,56 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 "WGSL target supports textureSize() calls with texture or "
                 f"texture/lod arguments; got {len(args)} argument(s)"
             )
+        texture_expr = self.generate_expression(args[0])
         dimensions = (
             "textureDimensions("
-            + ", ".join(self.generate_expression(arg) for arg in args)
+            + ", ".join(
+                [texture_expr] + [self.generate_expression(arg) for arg in args[1:]]
+            )
             + ")"
         )
-        expected_shape = self.vector_shape(self._current_expression_expected_type)
+        expected_type = self._current_expression_expected_type
+        expected_shape = self.vector_shape(expected_type)
+        texture_type = self.sampled_texture_type(self.expression_type(args[0]))
+        if texture_type is None:
+            if expected_shape is not None:
+                element_type, size = expected_shape
+                if element_type == "f32":
+                    return f"vec{size}<f32>({dimensions})"
+            return dimensions
+
+        # CrossGL's textureSize follows GLSL: it returns int/ivecN, and an
+        # array texture's last component is its layer count. WGSL's
+        # textureDimensions returns u32/vecN<u32> without the layers.
+        base_type = re.sub(r"<[^>]*>$", "", texture_type)
+        if base_type.endswith("_array"):
+            dimensions = f"vec3<u32>({dimensions}, textureNumLayers({texture_expr}))"
+            size = 3
+        elif base_type.endswith("_1d"):
+            size = 1
+        elif base_type.endswith("_3d"):
+            size = 3
+        else:
+            size = 2
+
         if expected_shape is not None:
-            element_type, size = expected_shape
-            if element_type == "f32":
-                return f"vec{size}<f32>({dimensions})"
-        return dimensions
+            element_type = expected_shape[0]
+        else:
+            try:
+                element_type = (
+                    self.type_name_string(expected_type)
+                    if expected_type is not None
+                    else None
+                )
+            except ValueError:
+                element_type = None
+        if element_type not in {"i32", "u32", "f32"}:
+            element_type = "i32"
+        if element_type == "u32":
+            return dimensions
+        if size == 1:
+            return f"{element_type}({dimensions})"
+        return f"vec{size}<{element_type}>({dimensions})"
 
     def generate_image_dimensions_call(self, args):
         if len(args) != 1:
@@ -4267,7 +4490,34 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             raise ValueError(
                 "WGSL target requires imageSize() to use a storage image resource"
             )
-        return f"vec2<i32>(textureDimensions({self.generate_expression(image)}))"
+        image_expr = self.generate_expression(image)
+        dimensions = f"textureDimensions({image_expr})"
+
+        # GLSL's imageSize returns int for 1D images, ivec2 for 2D and cube
+        # images, and ivec3 for 3D and array images with the array size last.
+        # Cube images are lowered to 2D array storage textures with six layers
+        # per cube, so a cube array's last component is the number of cubes.
+        image_type = self.resource_type_name(self.expression_type(image)) or ""
+        base_type = (
+            image_type[1:]
+            if image_type.startswith(("iimage", "uimage"))
+            else image_type
+        )
+        if base_type == "image1d":
+            return f"i32({dimensions})"
+        if base_type == "image3d":
+            return f"vec3<i32>({dimensions})"
+        if base_type == "image2darray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr})))"
+            )
+        if base_type == "imagecubearray":
+            return (
+                f"vec3<i32>(vec3<u32>({dimensions}, "
+                f"textureNumLayers({image_expr}) / 6u))"
+            )
+        return f"vec2<i32>({dimensions})"
 
     def generate_texel_fetch_call(self, function_name, args):
         if len(args) != 3:
@@ -4410,12 +4660,33 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         return "workgroupBarrier()"
 
     def generate_constructor(self, node):
+        if node.named_arguments:
+            # Fields come from the source declaration: the emitted name of a
+            # structure such as ``filter`` is ``filter_``.
+            struct_name = self.struct_type_name(node.constructor_type)
+            struct = self._structs_by_name.get(struct_name)
+            fields = [
+                (member.name, member.member_type)
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
+            ]
+            arguments = named_struct_constructor_arguments(struct_name, node, fields)
+            args = ", ".join(
+                self.generate_expression_for_target(arg, field_type)
+                for arg, field_type in arguments
+            )
+            return f"{self.type_name_string(node.constructor_type)}({args})"
         if len(node.arguments) == 1:
             narrowed = self.generate_vector_narrowing_conversion(
                 node.constructor_type, node.arguments[0]
             )
             if narrowed is not None:
                 return narrowed
+            diagonal = self.generate_scalar_matrix_constructor(
+                node.constructor_type, node.arguments[0]
+            )
+            if diagonal is not None:
+                return diagonal
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape
@@ -4429,6 +4700,65 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         else:
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{self.type_name_string(node.constructor_type)}({args})"
+
+    def generate_scalar_matrix_constructor(self, matrix_type, arg):
+        """Expand a one-scalar matrix constructor such as ``mat2(s)``.
+
+        CrossGL, like GLSL (4.60 section 5.4.2), builds a matrix with ``s`` on
+        the diagonal and zeros elsewhere. WGSL has no such constructor, so the
+        matrix is written column by column.
+        """
+        shape = self.matrix_shape(matrix_type)
+        if shape is None:
+            return None
+        # ``-s`` and ``+s`` have the type of ``s``.
+        operand = arg
+        while (
+            isinstance(operand, UnaryOpNode)
+            and operand.operator in {"-", "+"}
+            and not operand.is_postfix
+        ):
+            operand = operand.operand
+        arg_type = self.expression_type(operand)
+        try:
+            arg_type_name = (
+                self.type_name_string(arg_type) if arg_type is not None else None
+            )
+        except ValueError:
+            arg_type_name = None
+        is_numeric_literal = isinstance(operand, LiteralNode) and isinstance(
+            operand.value, (int, float)
+        )
+        if arg_type_name not in {"f32", "f16", "i32", "u32"} and not (
+            is_numeric_literal and not isinstance(operand.value, bool)
+        ):
+            return None
+        element, columns, rows = shape
+        if not self.is_repeatable_matrix_operand(arg):
+            raise ValueError(
+                "WGSL target writes a one-scalar matrix constructor "
+                f"mat{columns}x{rows}<{element}>(s) one diagonal element at a "
+                "time and requires an argument without side effects; assign the "
+                "argument to a local variable first"
+            )
+        # An integer literal without the ``u`` suffix is an abstract integer in
+        # WGSL and converts to the element type; ``1u`` is converted below.
+        if (
+            self.is_float_vector_abstract_int_argument(operand, element)
+            and arg_type_name != "u32"
+        ) or (is_numeric_literal and arg_type_name is None):
+            diagonal = self.generate_expression(arg)
+        elif operand is arg:
+            diagonal = self.generate_expression_for_target(arg, element)
+        else:
+            diagonal = self.generate_expression(arg)
+            if arg_type_name != element:
+                diagonal = f"{element}({diagonal})"
+        column_values = []
+        for column in range(columns):
+            components = [diagonal if row == column else "0.0" for row in range(rows)]
+            column_values.append(f"vec{rows}<{element}>({', '.join(components)})")
+        return f"mat{columns}x{rows}<{element}>({', '.join(column_values)})"
 
     def generic_constructor_type_name(self, name):
         parsed = self.generic_constructor_parts(name)
@@ -6028,6 +6358,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return self.type_name_string(function_name)
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
+            packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
+                self.semantic_key(function_name)
+            )
+            if packed_8bit is not None and not self.is_user_function_name(
+                function_name
+            ):
+                return packed_8bit[2]
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
@@ -6692,7 +7029,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         ``direction`` is ``"target"`` for a fragment output, whose ``COLORn`` names colour attachment ``n``.
         """
         key = self.semantic_key(semantic)
-        target = re.fullmatch(r"(?:sv_target|gl_fragcolor)(\d*)", key)
+        # The Slang importer spells SV_Target<n> as Out_Color<n>.
+        target = re.fullmatch(r"(?:sv_target|gl_fragcolor|out_color)(\d*)", key)
         if target is None and direction == "target":
             target = re.fullmatch(r"color(\d*)", key)
         if target is not None:
@@ -6702,9 +7040,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return None
         return shared_semantic_location(semantic)
 
-    def next_binding_attributes(self, group="0"):
-        binding = self.next_available_binding(group, self._global_binding_index)
-        self._global_binding_index = binding + 1
+    def next_binding_attributes(self, group="0", *, start=None):
+        group = str(group)
+        implicit = start is None
+        if implicit:
+            start = self._next_implicit_binding_by_group.get(group, 0)
+        binding = self.next_available_binding(group, start)
+        if implicit:
+            # Explicit resources and companion samplers must not consume lower free slots.
+            self._next_implicit_binding_by_group[group] = binding + 1
         self.mark_allocated_binding(group, binding)
         return f"@group({group}) @binding({binding})"
 
@@ -6719,9 +7063,6 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             if reserved_sampler is not None:
                 group, binding = reserved_sampler
                 self.mark_allocated_binding(group, binding)
-                self._global_binding_index = max(
-                    self._global_binding_index, binding + 1
-                )
                 return f"@group({group}) @binding({binding})"
         match = re.search(r"@binding\(([^)]+)\)", texture_attributes)
         if not match:
@@ -6732,7 +7073,6 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self.next_binding_attributes(group=group)
         binding = self.next_available_binding(group, start)
         self.mark_allocated_binding(group, binding)
-        self._global_binding_index = max(self._global_binding_index, binding + 1)
         return f"@group({group}) @binding({binding})"
 
     def next_available_binding(self, group, start):
@@ -6908,11 +7248,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return ""
         try:
             numeric_binding = int(str(binding), 0)
-            next_binding = numeric_binding + 1
             self.mark_allocated_binding(group, numeric_binding)
         except ValueError:
-            next_binding = self._global_binding_index
-        self._global_binding_index = max(self._global_binding_index, next_binding)
+            pass
         return f"@group({group}) @binding({binding})"
 
     def register_attribute_binding(self, arguments, default_group):

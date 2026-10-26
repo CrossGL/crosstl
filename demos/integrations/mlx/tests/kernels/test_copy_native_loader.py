@@ -37,8 +37,8 @@ MLX_COPY_GENERATED_ARTIFACTS = {
         "sizeBytes": 1546,
     },
     "opengl": {
-        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
-        "sizeBytes": 1619,
+        "sha256": "8f7725f7bfc591e6aab8ea65cc1088401d624b0eb4f4a131b10dc06d0569755d",
+        "sizeBytes": 1668,
     },
 }
 REQUIRE_PROOF_ENVS = {
@@ -231,8 +231,8 @@ def _build_runtime_package(
     else:
         assert "float cast_to_float_float(float val)" in generated
         assert (
-            "dst[(index + uint(i))] = "
-            "cast_to_float_float(src[(index + uint(i))]);" in generated
+            "dst[(index_copy + uint(i))] = "
+            "cast_to_float_float(src[(index_copy + uint(i))]);" in generated
         )
 
     report_path = work_dir / "portability-report.json"

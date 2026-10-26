@@ -35,6 +35,29 @@ def c_casts(unsigned: str) -> dict[str, Template]:
             "int a = iin[i];\noutp[i] = (float)(((a & 6) | (a ^ 5)) + ~a);"
         ),
         "negation": Template("int a = -iin[i];\noutp[i] = -fin[i] + (float)a;"),
+        "signed-comparison": Template(
+            "int a = iin[i] - 8;\noutp[i] = (a < 3 ? 1.0f : 0.0f) + (a >= -2 ? 2.0f : 0.0f)"
+            " + (a == 4 ? 4.0f : 0.0f) + (a != 0 ? 8.0f : 0.0f);"
+        ),
+        "unsigned-comparison": Template(
+            f"{unsigned} a = ({unsigned})(iin[i] - 8);\noutp[i] = (a < 4u ? 1.0f : 0.0f)"
+            " + (a >= 2147483648u ? 2.0f : 0.0f) + (a > 5u ? 4.0f : 0.0f) + (a <= 2u ? 8.0f : 0.0f);"
+        ),
+        "float-comparison": Template(
+            "float f = (float)(iin[i] - 8) * 0.5f;\noutp[i] = (f < 0.25f ? 1.0f : 0.0f)"
+            " + (f >= 1.0f ? 2.0f : 0.0f) + (f == 1.5f ? 4.0f : 0.0f) + (f != -2.0f ? 8.0f : 0.0f);"
+        ),
+        "boolean-logic": Template(
+            "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\n"
+            "outp[i] = (!p ? 1.0f : 0.0f) + (p == q ? 2.0f : 0.0f) + (p != q ? 4.0f : 0.0f);"
+        ),
+        "bool-conversion": Template(
+            "bool p = iin[i] > 7;\nbool q = (bool)(iin[i] & 2);\n"
+            "outp[i] = (float)p + 2.0f * (float)(int)q;"
+        ),
+        "increment-decrement": Template(
+            OPERATORS["increment-decrement"].body.replace("float(", "(float)(")
+        ),
         "float-to-integer": Template(
             f"outp[i] = (float)(int)fin[i] + (float)({unsigned})(fin[i] + 4.0f);"
         ),
@@ -80,6 +103,30 @@ WGSL = {
         "let a = iin[i];\noutp[i] = f32(((a & 6) | (a ^ 5)) + ~a);"
     ),
     "negation": Template("let a = -iin[i];\noutp[i] = -fin[i] + f32(a);"),
+    "signed-comparison": Template(
+        "let a = iin[i] - 8;\noutp[i] = select(0.0, 1.0, a < 3) + select(0.0, 2.0, a >= -2)"
+        " + select(0.0, 4.0, a == 4) + select(0.0, 8.0, a != 0);"
+    ),
+    "unsigned-comparison": Template(
+        "let a = u32(iin[i] - 8);\noutp[i] = select(0.0, 1.0, a < 4u) + select(0.0, 2.0, a >= 2147483648u)"
+        " + select(0.0, 4.0, a > 5u) + select(0.0, 8.0, a <= 2u);"
+    ),
+    "float-comparison": Template(
+        "let f = f32(iin[i] - 8) * 0.5;\noutp[i] = select(0.0, 1.0, f < 0.25) + select(0.0, 2.0, f >= 1.0)"
+        " + select(0.0, 4.0, f == 1.5) + select(0.0, 8.0, f != -2.0);"
+    ),
+    "boolean-logic": Template(
+        "let p = iin[i] > 7;\nlet q = (iin[i] & 1) == 1;\n"
+        "outp[i] = select(0.0, 1.0, !p) + select(0.0, 2.0, p == q) + select(0.0, 4.0, p != q);"
+    ),
+    "bool-conversion": Template(
+        "let p = iin[i] > 7;\nlet q = bool(iin[i] & 2);\noutp[i] = f32(p) + 2.0 * f32(i32(q));"
+    ),
+    # WGSL increments and decrements only as statements.
+    "increment-decrement": Template(
+        "var a = iin[i];\nlet b = a;\na++;\na++;\nlet c = a;\nlet d = a;\na--;\na--;\n"
+        "outp[i] = f32(a * 1000 + b * 100 + c * 10 + d);"
+    ),
     "float-to-integer": Template(
         "outp[i] = f32(i32(fin[i])) + f32(u32(fin[i] + 4.0));"
     ),
@@ -126,6 +173,29 @@ MOJO = {
         "var a = iin[i]\noutp[i] = Float32(((a & 6) | (a ^ 5)) + ~a)"
     ),
     "negation": Template("var a = -iin[i]\noutp[i] = -fin[i] + Float32(a)"),
+    "signed-comparison": Template(
+        "var a = iin[i] - 8\noutp[i] = (Float32(1.0) if a < 3 else 0.0) + (Float32(2.0) if a >= -2 else 0.0)"
+        " + (Float32(4.0) if a == 4 else 0.0) + (Float32(8.0) if a != 0 else 0.0)"
+    ),
+    "unsigned-comparison": Template(
+        "var a = UInt32(iin[i] - 8)\noutp[i] = (Float32(1.0) if a < 4 else 0.0)"
+        " + (Float32(2.0) if a >= 2147483648 else 0.0) + (Float32(4.0) if a > 5 else 0.0)"
+        " + (Float32(8.0) if a <= 2 else 0.0)"
+    ),
+    "float-comparison": Template(
+        "var f = Float32(iin[i] - 8) * 0.5\noutp[i] = (Float32(1.0) if f < 0.25 else 0.0)"
+        " + (Float32(2.0) if f >= 1.0 else 0.0) + (Float32(4.0) if f == 1.5 else 0.0)"
+        " + (Float32(8.0) if f != -2.0 else 0.0)"
+    ),
+    "boolean-logic": Template(
+        "var p: Bool = iin[i] > 7\nvar q: Bool = (iin[i] & 1) == 1\noutp[i] = (Float32(1.0) if not p else 0.0)"
+        " + (Float32(2.0) if p == q else 0.0) + (Float32(4.0) if p != q else 0.0)"
+    ),
+    "bool-conversion": Template(
+        "var p: Bool = iin[i] > 7\nvar q = Bool(iin[i] & 2)\noutp[i] = Float32(Int(p)) + 2.0 * Float32(Int(q))"
+    ),
+    # Mojo has no increment or decrement operators.
+    "increment-decrement": ABSENT,
     "float-to-integer": Template(
         "outp[i] = Float32(Int32(fin[i])) + Float32(UInt32(fin[i] + 4.0))"
     ),
@@ -167,6 +237,30 @@ RUST = {
         "let a = iin[i];\noutp[i] = (((a & 6) | (a ^ 5)) + !a) as f32;"
     ),
     "negation": Template("let a = -iin[i];\noutp[i] = -fin[i] + a as f32;"),
+    "signed-comparison": Template(
+        "let a = iin[i] - 8;\noutp[i] = (if a < 3 { 1.0 } else { 0.0 }) + (if a >= -2 { 2.0 } else { 0.0 })"
+        " + (if a == 4 { 4.0 } else { 0.0 }) + (if a != 0 { 8.0 } else { 0.0 });"
+    ),
+    "unsigned-comparison": Template(
+        "let a = (iin[i] - 8) as u32;\noutp[i] = (if a < 4 { 1.0 } else { 0.0 })"
+        " + (if a >= 2147483648 { 2.0 } else { 0.0 }) + (if a > 5 { 4.0 } else { 0.0 })"
+        " + (if a <= 2 { 8.0 } else { 0.0 });"
+    ),
+    "float-comparison": Template(
+        "let f = (iin[i] - 8) as f32 * 0.5;\noutp[i] = (if f < 0.25 { 1.0 } else { 0.0 })"
+        " + (if f >= 1.0 { 2.0 } else { 0.0 }) + (if f == 1.5 { 4.0 } else { 0.0 })"
+        " + (if f != -2.0 { 8.0 } else { 0.0 });"
+    ),
+    "boolean-logic": Template(
+        "let p = iin[i] > 7;\nlet q = (iin[i] & 1) == 1;\noutp[i] = (if !p { 1.0 } else { 0.0 })"
+        " + (if p == q { 2.0 } else { 0.0 }) + (if p != q { 4.0 } else { 0.0 });"
+    ),
+    # Rust converts a boolean with ``as`` but has no conversion from a number to a boolean, so it compares instead.
+    "bool-conversion": Template(
+        "let p = iin[i] > 7;\nlet q = (iin[i] & 2) != 0;\noutp[i] = p as i32 as f32 + 2.0 * q as i32 as f32;"
+    ),
+    # Rust has no increment or decrement operators.
+    "increment-decrement": ABSENT,
     "float-to-integer": Template(
         "outp[i] = fin[i] as i32 as f32 + (fin[i] + 4.0) as u32 as f32;"
     ),
