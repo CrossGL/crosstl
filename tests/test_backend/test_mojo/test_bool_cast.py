@@ -1,6 +1,5 @@
 """Issue #3148: bool -> float/half casts compile on Mojo 1.2.0."""
 
-from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
