@@ -179,6 +179,8 @@ CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
     "u32",
     "i64",
     "u64",
+    "int64",
+    "uint64",
     "f32",
     "f64",
 }
@@ -6717,6 +6719,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "u32": "unsigned int",
             "i64": "long long",
             "u64": "unsigned long long",
+            "int64": "long long",
+            "uint64": "unsigned long long",
             "f16": "half",
             "f32": "float",
             "f64": "double",
