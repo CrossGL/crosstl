@@ -23,7 +23,7 @@ _CHAINED_SUM = "a + b * 32.0 + c * 1024.0"
 _LOOP_SUM = "acc + {0}(k) * 16384.0 + {0}(j) * 262144.0"
 
 
-def _c(name: str, unsigned: str) -> str:
+def c_body(name: str, unsigned: str) -> str:
     """The C family's probe with casts in place of conversions, ``unsigned`` for uint and single-precision literals."""
     body = (
         C_FAMILY[name]
@@ -33,9 +33,9 @@ def _c(name: str, unsigned: str) -> str:
     return _LITERAL.sub(r"\1f", re.sub(r"\buint\b", unsigned, body))
 
 
-def _c_vectors(name: str, unsigned: str, construct: str) -> str:
-    """:func:`_c` with ``float2`` and ``float4`` for the vector types, built with ``construct``."""
-    body = _c(name, unsigned)
+def c_vector_body(name: str, unsigned: str, construct: str) -> str:
+    """:func:`c_body` with ``float2`` and ``float4`` for the vector types, built with ``construct``."""
+    body = c_body(name, unsigned)
     for width in ("2", "4"):
         body = body.replace(f"$vec{width}(", construct.format(width)).replace(
             f"$vec{width}", f"float{width}"
@@ -51,15 +51,17 @@ METAL = {
 
 CUDA = {
     "unsigned-float-conversion": Template(
-        _c("unsigned-float-conversion", "unsigned int")
+        c_body("unsigned-float-conversion", "unsigned int")
     ),
     "chained-assignment": Template(
-        _c_vectors("chained-assignment", "unsigned int", "make_float{}(")
+        c_vector_body("chained-assignment", "unsigned int", "make_float{}(")
     ),
-    "switch-default-position": Template(_c("switch-default-position", "unsigned int")),
-    "for-loop-variants": Template(_c("for-loop-variants", "unsigned int")),
+    "switch-default-position": Template(
+        c_body("switch-default-position", "unsigned int")
+    ),
+    "for-loop-variants": Template(c_body("for-loop-variants", "unsigned int")),
     "void-return": Template(
-        _c("void-return", "unsigned int"),
+        c_body("void-return", "unsigned int"),
         "__device__ "
         + _LITERAL.sub(r"\1f", LIMIT.replace("inout float x", "float& x")),
     ),
@@ -67,21 +69,21 @@ CUDA = {
 }
 
 OPENCL = {
-    "unsigned-float-conversion": Template(_c("unsigned-float-conversion", "uint")),
+    "unsigned-float-conversion": Template(c_body("unsigned-float-conversion", "uint")),
     "chained-assignment": Template(
-        _c_vectors("chained-assignment", "uint", "(float{})(")
+        c_vector_body("chained-assignment", "uint", "(float{})(")
     ),
-    "switch-default-position": Template(_c("switch-default-position", "uint")),
-    "for-loop-variants": Template(_c("for-loop-variants", "uint")),
+    "switch-default-position": Template(c_body("switch-default-position", "uint")),
+    "for-loop-variants": Template(c_body("for-loop-variants", "uint")),
     "void-return": Template(
-        _c("void-return", "uint")
+        c_body("void-return", "uint")
         .replace("limit(x", "limit(&x")
         .replace("limit(y", "limit(&y"),
         "void limit(float* x, float hi) {\n    if (*x > hi) {\n        *x = hi;\n        return;\n    }\n"
         "    *x = *x * 2.0f;\n}",
     ),
     "expression-swizzle": Template(
-        _c_vectors("expression-swizzle", "uint", "(float{})(")
+        c_vector_body("expression-swizzle", "uint", "(float{})(")
     ),
 }
 
