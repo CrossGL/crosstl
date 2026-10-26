@@ -851,8 +851,20 @@ class SlangParser:
         name_pos = self.skip_pointer_declarator_tokens(name_pos)
         return name_pos < len(self.tokens) and self.tokens[name_pos][0] == "IDENTIFIER"
 
+    REFERENCE_PARAMETER_MODIFIERS = {"ref", "constref"}
+
     def parse_parameter_qualifiers(self):
         qualifiers = self.parse_qualifiers()
+        # ``ref T name`` and ``constref T name``: the modifier is followed by the type, not by a declarator end.
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.REFERENCE_PARAMETER_MODIFIERS
+            and self.tokens[self.pos + 1][0]
+            not in {"COMMA", "RPAREN", "COLON", "EQUALS", "LBRACKET", "SEMICOLON"}
+        ):
+            qualifiers.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+            qualifiers.extend(self.parse_qualifiers())
         while self.is_geometry_input_primitive_qualifier_at(self.pos):
             qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")

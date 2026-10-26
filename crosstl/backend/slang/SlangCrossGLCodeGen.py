@@ -1310,9 +1310,24 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        }
+        if names & {"ref", "__ref"}:
+            # A Slang ref parameter names the caller's storage (Slang language reference, "ref" parameters);
+            # CrossGL inout copies in and copies out, which differs whenever the argument aliases other storage.
+            raise SlangImportRefused(
+                [
+                    f"ref parameter {param.name} binds the caller's storage; CrossGL "
+                    "has only copy-in/copy-out inout parameters"
+                ]
+            )
         if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+            # out and inout carry the parameter's direction for every function, not only for entry points.
+            allowed_qualifiers = {"out", "inout"}
+        else:
+            allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
