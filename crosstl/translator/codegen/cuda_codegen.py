@@ -39,6 +39,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
+from .c_family_operands import postfix_operand
 from .cuda_refusals import CudaLoweringRefused
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -3179,7 +3180,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if operator == "not":
             operator = "!"
         if getattr(node, "is_postfix", getattr(node, "postfix", False)):
-            return f"{operand}{operator}"
+            return f"{postfix_operand(operand)}{operator}"
         lowered = self.lower_vector_unary_operation(node.operand, operand, operator)
         if lowered is not None:
             return lowered
