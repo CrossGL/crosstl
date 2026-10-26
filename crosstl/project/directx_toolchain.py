@@ -15,6 +15,17 @@ _HLSL_EXACT_WAVE_SIZE_RE = re.compile(
     r"\[\s*WaveSize\s*\(\s*[^,\]]+\s*\)\s*\]",
     re.IGNORECASE,
 )
+# Stages that need Direct3D 12: DXR libraries (Shader Model 6.3) and mesh
+# shading (Shader Model 6.5). The dx10/dx11 HLSL profiles refuse them.
+_HLSL_DIRECTX_12_STAGE_RE = re.compile(
+    r"\[\s*shader\s*\(\s*\"(?:raygeneration|intersection|anyhit|closesthit|miss"
+    r"|callable|mesh|amplification)\"\s*\)\s*\]",
+    re.IGNORECASE,
+)
+# Wave and quad intrinsics need Shader Model 6.0, which Direct3D 11 lacks.
+_HLSL_WAVE_INTRINSIC_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])(?:Wave[A-Z][A-Za-z0-9_]*|QuadRead[A-Za-z0-9_]+)\s*\("
+)
 _DXC_PROFILE_RE = re.compile(r"^(?P<stage>[a-z]+)_(?P<major>\d+)_(?P<minor>\d+)$")
 _DXC_NATIVE_16_BIT_MINIMUM_PROFILE = (6, 2)
 _DXC_EXACT_WAVE_SIZE_MINIMUM_PROFILE = (6, 6)
@@ -194,6 +205,15 @@ def dxc_compiler_arguments_for_source(source: str) -> tuple[str, ...]:
     return ()
 
 
+def _has_directx_12_stage_attribute(source: str, code: str) -> bool:
+    # The stage name is a string literal, which masking blanks out, so match
+    # the raw source and keep only attributes that masking left in place.
+    return any(
+        code[match.start()] == "["
+        for match in _HLSL_DIRECTX_12_STAGE_RE.finditer(str(source or ""))
+    )
+
+
 def directx_target_profiles_for_source(source: str) -> tuple[str, ...]:
     """Return DirectX API profiles compatible with the generated source."""
 
@@ -201,6 +221,8 @@ def directx_target_profiles_for_source(source: str) -> tuple[str, ...]:
     if (
         _HLSL_NATIVE_16_BIT_TYPE_RE.search(code) is not None
         or _HLSL_EXACT_WAVE_SIZE_RE.search(code) is not None
+        or _has_directx_12_stage_attribute(source, code)
+        or _HLSL_WAVE_INTRINSIC_RE.search(code) is not None
     ):
         return _DIRECTX_12_TARGET_PROFILES
     return _DIRECTX_TARGET_PROFILES
