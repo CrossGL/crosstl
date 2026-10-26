@@ -125,3 +125,52 @@ def main():
         "False",
         "True",
     ]
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+def test_boolean_vector_and_scalar_bool_run_with_native_mojo(tmp_path, width):
+    mojo = validators.command("mojo")
+    if not mojo:
+        pytest.skip("Mojo compiler not installed")
+    output = translate(
+        tmp_path,
+        f"""
+shader Probe {{
+    bvec{width} mask_and(bvec{width} a, bool s) {{ return a && s; }}
+    bvec{width} scalar_or(bvec{width} a, bool s) {{ return s || a; }}
+}}
+""",
+    )
+    storage = 4 if width == 3 else width
+    mask = f"SIMD[DType.bool, {storage}]"
+    lanes = (["True", "False"] * 2)[:width] + (["False"] if width == 3 else [])
+    expressions = {
+        name: re.search(rf"fn {name}\([^\n]*\n\s+return (.+)", output).group(1)
+        for name in ("mask_and", "scalar_or")
+    }
+    program = f"""
+def mask_and(a: {mask}, s: Bool) -> {mask}:
+    return {expressions["mask_and"]}
+
+def scalar_or(a: {mask}, s: Bool) -> {mask}:
+    return {expressions["scalar_or"]}
+
+def main():
+    var a = {mask}({", ".join(lanes)})
+    print(mask_and(a, True))
+    print(mask_and(a, False))
+    print(scalar_or(a, True))
+    print(scalar_or(a, False))
+"""
+    path = tmp_path / "run-logical-scalar.mojo"
+    path.write_text(program)
+    result = subprocess.run(
+        [*mojo, "run", str(path)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        f"[{', '.join(lanes)}]",
+        f"[{', '.join(['False'] * storage)}]",
+        f"[{', '.join(['True'] * storage)}]",
+        f"[{', '.join(lanes)}]",
+    ]
