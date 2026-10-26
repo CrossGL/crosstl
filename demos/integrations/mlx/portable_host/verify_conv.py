@@ -8,9 +8,10 @@ convolutions run ``depthwise_conv_1d``, small-kernel depthwise 2-D
 convolutions (and the 1-D ones conv.cpp sends there) run one
 ``depthwise_conv_2d`` launch of conv.cpp's specialization, implicit GEMM
 convolutions run one ``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d``
-launch, and an empty
-output launches nothing. Three cases reach routes the host does not port yet,
-which it refuses by name before any launch.
+launch, padded-channel convolutions zero-pad the input and weight channels
+through ``Pad`` and run one ``implicit_gemm_conv_2d`` launch on the padded
+parameters, and an empty output launches nothing. Three cases reach routes the
+host does not port yet, which it refuses by name before any launch.
 
 Inputs are nonzero quarters and weights nonzero halves, so every product and
 sum is exact in float32 and rounds once to the output type. Every output bit
@@ -319,6 +320,27 @@ CASES = (
         "dense",
         None,
     ),
+    # Unaligned channels over a large stride-one output: conv.cpp zero-pads
+    # the input and weight channels to 16 and runs the implicit GEMM, here
+    # also from a copied view and with a 3x3 kernel over 21 channels.
+    (
+        "pad-in-channels-2d",
+        "float16",
+        (1, 20, 20, 8),
+        (8, 3, 3, 8),
+        dict(padding=((1, 1), (1, 1))),
+        "dense",
+        None,
+    ),
+    (
+        "pad-in-channels-2d-copied",
+        "float32",
+        (2, 16, 16, 21),
+        (32, 3, 3, 21),
+        {},
+        "moved",
+        None,
+    ),
     # Routes the host does not port yet.
     (
         "refused-general-2d",
@@ -326,15 +348,6 @@ CASES = (
         (1, 40, 40, 8),
         (8, 3, 3, 8),
         dict(stride=2),
-        "dense",
-        None,
-    ),
-    (
-        "refused-pad-in-channels",
-        "float16",
-        (1, 20, 20, 8),
-        (8, 3, 3, 8),
-        dict(padding=((1, 1), (1, 1))),
         "dense",
         None,
     ),
@@ -347,13 +360,21 @@ CASES = (
         "dense",
         None,
     ),
+    (
+        "refused-small-kd-3d",
+        "bfloat16",
+        (1, 4, 4, 4, 16),
+        (16, 2, 2, 2, 16),
+        {},
+        "dense",
+        None,
+    ),
     # No output element.
     ("empty-batch", "float32", (0, 9, 5), (7, 3, 5), {}, "dense", None),
 )
 UNPORTED = {
     "implicit_gemm_conv_2D_general_gpu",
     "winograd_conv_2D_gpu",
-    "pad_in_channels_conv_2D_gpu",
     "pad_and_slice_conv_3D_gpu",
     "stride_two_conv_transpose_3D_gpu",
     "small_kd_conv_3D_gpu",
@@ -466,6 +487,16 @@ def case_record(case):
         planar = layout.as_2d(params) if len(in_shape) == 3 else params
         entry = layout.dw2_entry(layout.dw2_constants(planar), dtype)
         return {**record, "convEntries": [entry], "launches": [entry]}
+    if route == "pad_in_channels_conv_2D_gpu":
+        # Two Pad launches per operand: the zero fill and the copy into it.
+        extra = -(-params["C"] // 16) * 16 - params["C"]
+        entry = layout.implicit_entry(layout.with_padded_channels(params, extra), dtype)
+        return {
+            **record,
+            "convEntries": [entry],
+            "launches": [entry],
+            "copies": record["copies"] + 4,
+        }
     if route in IMPLICIT_ROUTES:
         # conv_1D_gpu dispatches its implicit GEMM with 2-D parameters.
         entry = layout.implicit_entry(
@@ -709,7 +740,8 @@ def validate_trace(trace, records, target):
             raise RuntimeError(f"Convolution copies differ: {record['name']}")
         for event in launches:
             metadata = event.get("convMetadata")
-            if metadata is not None and metadata["route"] != record["route"]:
+            route = layout.LAUNCH_ROUTES.get(record["route"], record["route"])
+            if metadata is not None and metadata["route"] != route:
                 raise RuntimeError(f"Convolution launch differs: {record['name']}")
             grouped = event.get("gemmMetadata", {}).get("groups")
             if grouped is not None and grouped != record["options"]["groups"]:

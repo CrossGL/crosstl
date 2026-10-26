@@ -57,8 +57,10 @@ ROUTES = {
     "depthwise-2d-pointwise": "depthwise_conv_2D_gpu",
     "depthwise-2d-from-1d": "depthwise_conv_2D_gpu",
     "refused-general-2d": "implicit_gemm_conv_2D_general_gpu",
-    "refused-pad-in-channels": "pad_in_channels_conv_2D_gpu",
+    "pad-in-channels-2d": "pad_in_channels_conv_2D_gpu",
+    "pad-in-channels-2d-copied": "pad_in_channels_conv_2D_gpu",
     "refused-pad-and-slice-3d": "pad_and_slice_conv_3D_gpu",
+    "refused-small-kd-3d": "small_kd_conv_3D_gpu",
     "empty-batch": "none",
 }
 
@@ -91,6 +93,8 @@ def launches(record):
     (entry,) = record["convEntries"]
     if record["route"] in verify.IMPLICIT_ROUTES:
         return [implicit_launch(record)]
+    if record["route"] == "pad_in_channels_conv_2D_gpu":
+        return [padded_launch(record)]
     if record["route"] == "depthwise_conv_2D_gpu":
         return [depthwise_2d_launch(record)]
     points = math.prod(p["wS"])
@@ -131,6 +135,52 @@ def implicit_launch(record):
     }
     parameters = {"params": p, "gemm_params": gemm}
     return entry, counts, parameters, counts["C"], execution
+
+
+def padded_launch(record):
+    """The implicit GEMM pad_in_channels_conv_2D_gpu launches on padded channels."""
+    (entry,) = record["convEntries"]
+    p = record["params"]
+    extra = -(-p["C"] // 16) * 16 - p["C"]
+    padded = layout.with_padded_channels(p, extra)
+    model = steel.BY_NAME[entry]
+    gemm = layout.implicit_gemm_params(padded, model)
+    wide = lambda shape: [*shape[:-1], shape[-1] + extra]  # noqa: E731
+    counts = {
+        "A": math.prod(wide(record["inShape"])),
+        "B": math.prod(wide(record["wtShape"])),
+        "C": math.prod(record["outShape"]),
+    }
+    execution = {
+        "workgroupCount": [gemm["tiles_n"], gemm["tiles_m"], 1],
+        "workgroupSize": list(model.workgroup_size),
+    }
+    parameters = {"params": padded, "gemm_params": gemm}
+    return entry, counts, parameters, counts["C"], execution
+
+
+def test_padded_channels_reach_the_implicit_gemm_as_conv_cpp_pads_them():
+    record = BY_NAME["pad-in-channels-2d-copied"]
+    p = record["params"]
+    padded = layout.with_padded_channels(p, 11)
+    # params.h scales the channel strides and keeps the output's.
+    assert padded["C"] == 32 and padded["in_strides"] == layout.contiguous(
+        [2, 16, 16, 32]
+    )
+    assert padded["wt_strides"] == layout.contiguous([32, 3, 3, 32])
+    assert padded["out_strides"] == p["out_strides"]
+    assert layout.pad_in_channels_source(padded)
+    entry, counts, parameters, threads, execution = padded_launch(record)
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    assert metadata["route"] == "implicit_gemm_conv_2D_gpu"
+    # Padded parameters that conv.cpp would not have padded keep the routing
+    # check: strided, grouped or channel counts that are not a padding.
+    for change in (
+        {"str": [2, 1]},
+        {"groups": 2, "O": 32},
+        {"C": 40},
+    ):
+        assert not layout.pad_in_channels_source({**copy.deepcopy(padded), **change})
 
 
 def depthwise_2d_launch(record):
@@ -322,7 +372,9 @@ def test_plan_accepts_each_launch(record):
     ]
     for entry, counts, parameters, threads, execution in planned:
         metadata = layout.plan(entry, counts, parameters, threads, execution)
-        assert metadata["route"] == record["route"]
+        assert metadata["route"] == layout.LAUNCH_ROUTES.get(
+            record["route"], record["route"]
+        )
 
 
 def _unfold(name="explicit-2d-unaligned"):

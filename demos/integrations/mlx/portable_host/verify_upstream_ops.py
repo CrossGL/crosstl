@@ -235,8 +235,9 @@ MODULE_TESTS = tuple(
 
 # Convolution tests whose every route the host ports: conv1d as conv2d over
 # expand_dims views, large filters over few channels, flipped and grouped 1-D
-# convolutions, repeated convolutions and the flipped and grouped gradients,
-# which reach the unfold, depthwise and implicit GEMM routes of conv.cpp.
+# convolutions, NumPy's 1-D and 2-D convolutions of every float dtype,
+# repeated convolutions and the flipped and grouped gradients, which reach
+# the unfold, depthwise, padded-channel and implicit GEMM routes of conv.cpp.
 CONV_TESTS = tuple(
     "test_conv.TestConv.test_" + name
     for name in (
@@ -245,6 +246,7 @@ CONV_TESTS = tuple(
         "conv_1d_with_2d",
         "conv_general_flip_grad",
         "conv_groups_grad",
+        "numpy_conv",
         "repeated_conv",
     )
 )
@@ -1071,11 +1073,9 @@ def run_worker(args, output, mode):
     if args.group is not None:
         command.extend(("--group", args.group))
     command.extend(("--output-dir", str(output / mode)))
-    with (
-        (output / f"{mode}.stdout").open("w") as stdout,
-        (output / f"{mode}.stderr").open("w") as stderr,
-    ):
-        process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+    with (output / f"{mode}.stdout").open("w") as stdout:
+        with (output / f"{mode}.stderr").open("w") as stderr:
+            process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
     record = {"command": command, "returncode": process.returncode}
     write_json(output / f"{mode}.command.json", record)
     return record

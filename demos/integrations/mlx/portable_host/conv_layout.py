@@ -163,7 +163,11 @@ PORTED_ROUTES = (
     "depthwise_conv_2D_gpu",
     "implicit_gemm_conv_2D_gpu",
     "implicit_gemm_conv_3D_gpu",
+    "pad_in_channels_conv_2D_gpu",
 )
+# Routes that launch another route's kernel: the padded-channel route runs
+# the implicit GEMM on its padded parameters.
+LAUNCH_ROUTES = {"pad_in_channels_conv_2D_gpu": "implicit_gemm_conv_2D_gpu"}
 
 
 def signature(entry):
@@ -461,6 +465,43 @@ def _route_3d(p):
     )
 
 
+def with_padded_channels(p, pad_in):
+    """MLXConvParams<N>::with_padded_channels(p, 0, pad_in) of steel conv's params.h."""
+    q = dict(p)
+    for name, channels, extra in (
+        ("in_strides", p["C"], pad_in),
+        ("wt_strides", p["C"], pad_in),
+        ("out_strides", p["O"], 0),
+    ):
+        # C++ divides the non-negative int64 strides toward zero.
+        q[name] = [value // channels * (channels + extra) for value in p[name][:-1]]
+        q[name].append(1)
+    q["C"] = p["C"] + pad_in
+    return q
+
+
+def pad_in_channels_source(p):
+    """Whether ``p`` is pad_in_channels_conv_2D_gpu's padded implicit GEMM.
+
+    conv.cpp pads the input and weight channels of row-contiguous operands up
+    to a multiple of 16 and launches the implicit GEMM on the padded
+    parameters without routing them again. ``p`` qualifies when the dense
+    parameters of some narrower channel count route there and pad into it.
+    """
+    if len(p["iS"]) != 2 or p["groups"] != 1 or p["C"] % 16:
+        return False
+    for channels in range(max(1, p["C"] - 15), p["C"]):
+        q = dict(p, C=channels)
+        q["in_strides"] = contiguous([p["N"], *p["iS"], channels])
+        q["wt_strides"] = contiguous([p["O"], *p["wS"], channels])
+        if (
+            _route_2d(q) == "pad_in_channels_conv_2D_gpu"
+            and with_padded_channels(q, p["C"] - channels) == p
+        ):
+            return True
+    return False
+
+
 def route(p):
     """The conv.cpp route ``MLXConvParams`` field map ``p`` takes."""
     return {1: _route_1d, 2: _route_2d, 3: _route_3d}[len(p["iS"])](p)
@@ -756,7 +797,8 @@ def _plan_implicit(entry, info, counts, parameters, threads, execution):
     in_shape, wt_shape, out_shape = _check_implicit_params(info, p)
     expected = f"implicit_gemm_conv_{model.rank}D_gpu"
     routed = _route_2d(p) if model.rank == 2 else _route_3d(p)
-    if routed != expected:
+    # pad_in_channels_conv_2D_gpu launches this kernel on padded channels.
+    if routed != expected and not (model.rank == 2 and pad_in_channels_source(p)):
         raise ValueError("Convolution implicit GEMM differs from conv.cpp's routing")
     if implicit_entry(p, info["dtype"]) != entry:
         raise ValueError("Convolution implicit GEMM entry differs from conv.cpp's")

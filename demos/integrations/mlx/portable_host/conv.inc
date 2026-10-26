@@ -432,6 +432,31 @@ void dispatch_depthwise_conv_2d(
 // conv.cpp dispatch_conv_2D_gpu. The host has no recommendedMaxWorkingSetSize
 // for winograd_batch_step, so it refuses every product conv.cpp would send to
 // winograd once the working set allowed.
+// conv.cpp pad_in_channels_conv_2D_gpu: zero-pad the input and weight
+// channels to a multiple of 16 through Pad and run the implicit GEMM on the
+// padded parameters. Only the input channels grow, so the kernel writes
+// straight into out. conv.cpp routes only ungrouped convolutions here.
+void conv_pad_in_channels(
+    const array& in_pre,
+    const array& wt_pre,
+    array& out,
+    const MLXConvParams<2>& conv_params) {
+  const int extra_c = ((conv_params.C + 15) / 16) * 16 - conv_params.C;
+  const Stream s = out.primitive().stream();
+  auto pad_array = [&](const array& x) {
+    auto shape = x.shape();
+    shape.back() += extra_c;
+    array padded(shape, x.dtype(), nullptr, {});
+    array zero(0, x.dtype());
+    Pad(s, {-1}, {0}, {extra_c}).eval_gpu({x, zero}, padded);
+    return padded;
+  };
+  const array in = pad_array(in_pre);
+  const array wt = pad_array(wt_pre);
+  conv_implicit_gemm(
+      in, wt, out, MLXConvParams<2>::with_padded_channels(conv_params, 0, extra_c));
+}
+
 void conv_dispatch_2d(
     const array& in,
     const array& wt,
@@ -473,7 +498,7 @@ void conv_dispatch_2d(
   const bool out_channels_aligned = conv_params.O <= 16 || conv_params.O % 16 == 0;
   if (is_idil_one && is_stride_one && out_large && !specialized_channels &&
       out_channels_aligned && (conv_params.wS[0] * conv_params.wS[1]) >= 9) {
-    conv_unported("pad_in_channels_conv_2D_gpu");
+    return conv_pad_in_channels(in, wt, out, conv_params);
   }
   if (is_idil_one && specialized_channels) {
     return conv_implicit_gemm(in, wt, out, conv_params);
