@@ -43,6 +43,17 @@ struct VSIn { float4 a : POSITION; float4 b : SV_Position; };
 float4 VSMain(VSIn i) : SV_Position { return i.a + i.b; }
 """
 
+INOUT_PARAMETER = """
+void VSMain(inout float4 p : SV_Position, float2 uv : TEXCOORD0) {
+    p = p * 2.0 + float4(uv, 0.0, 0.0);
+}
+"""
+
+INOUT_STRUCT = """
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+void VSMain(inout V v) { v.pos *= 2.0; }
+"""
+
 
 def _translate(tmp_path, source, backend):
     path = tmp_path / "shader.hlsl"
@@ -139,6 +150,26 @@ def test_hlsl_keeps_the_sv_position_input_element(tmp_path, source):
 def test_structure_that_is_also_an_output_is_refused(tmp_path, backend):
     with pytest.raises(VertexInputPositionUnsupportedError, match="Structure 'V'"):
         _translate(tmp_path, SHARED_STRUCT, backend)
+
+
+@pytest.mark.parametrize("backend", ["opengl", "metal", "wgsl", "vulkan"])
+@pytest.mark.parametrize(
+    "source, name",
+    [(INOUT_PARAMETER, "p"), (INOUT_STRUCT, "v_pos")],
+    ids=["parameter", "struct"],
+)
+def test_inout_position_parameter_is_refused(tmp_path, source, name, backend):
+    # The input reads the vertex attribute and the output writes the position built-in.
+    with pytest.raises(
+        VertexInputPositionUnsupportedError, match=f"inout parameter '{name}'"
+    ):
+        _translate(tmp_path, source, backend)
+
+
+def test_hlsl_keeps_an_inout_sv_position_parameter(tmp_path):
+    code = _translate(tmp_path, INOUT_PARAMETER, "directx")
+    flat = re.sub(r"\s*:\s*", " : ", _flat(code))
+    assert "void VSMain(inout float4 p : SV_POSITION," in flat, flat
 
 
 @pytest.mark.parametrize("backend", ["opengl", "metal", "wgsl", "vulkan"])

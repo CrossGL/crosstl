@@ -17,6 +17,8 @@ class Template:
 
 ABSENT = Template(entry="<absent>")
 
+NESTED_STRUCTS = "struct Pair {\n    float a;\n    float b;\n};\nstruct Frame {\n    Pair p;\n    float w;\n};"
+
 # Operator probes. The integer inputs are 0 to 15 (:func:`..execution.inputs`), so a probe subtracts 8 where it needs
 # a negative operand, and divides and takes remainders of non-negative operands only: GLSL leaves the remainder of a
 # negative operand undefined (GLSL 4.60, section 5.9). Compilers may fuse a multiply and an add, or factor a sum of
@@ -59,6 +61,10 @@ OPERATORS = {
     "boolean-logic": Template(
         "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\n"
         "outp[i] = (!p ? 1.0 : 0.0) + (p == q ? 2.0 : 0.0) + (p != q ? 4.0 : 0.0);"
+    ),
+    # A boolean converts to 1 or 0, and a number to true when it is not zero.
+    "bool-conversion": Template(
+        "bool p = iin[i] > 7;\nbool q = bool(iin[i] & 2);\noutp[i] = float(p) + 2.0 * float(int(q));"
     ),
     # A postfix operator yields the value before the change and a prefix one the value after it.
     "increment-decrement": Template(
@@ -150,6 +156,23 @@ C_FAMILY = {
     ),
     "swizzle": Template(
         "$vec4 v = $vec4(fin[i], 1.0, 2.0, 3.0);\noutp[i] = v.wzyx.x + v.xy.y;"
+    ),
+    "array-initializer": Template(
+        "float values[4] = {1.0, 2.0, 4.0, 8.0};\noutp[i] = values[iin[i] & 3] + float(iin[i]);"
+    ),
+    "nested-struct": Template(
+        "Frame s;\ns.p.a = float(iin[i]);\ns.p.b = 2.0;\ns.w = 3.0;\noutp[i] = s.p.a * s.w + s.p.b;",
+        NESTED_STRUCTS,
+    ),
+    # Each component the probe writes scales its own power of ten in the output.
+    "swizzle-assignment": Template(
+        "$vec4 v = $vec4(0.0, 0.0, 0.0, 0.0);\nv.y = float(iin[i]);\nv.zx = $vec2(2.0, 3.0);\n"
+        "v.wy += $vec2(1.0, 0.5);\noutp[i] = v.x * 1000.0 + v.y * 100.0 + v.z * 10.0 + v.w;"
+    ),
+    # m[k] is column k; the column index of c depends on the input.
+    "matrix-indexing": Template(
+        "float f = float(iin[i]);\n$mat2 m = $mat2(f, 1.0, 2.0, 3.0);\n$vec2 c = m[iin[i] & 1];\n"
+        "outp[i] = m[1][0] * 100.0 + m[0].y * 10.0 + c.x + 0.5 * c.y;"
     ),
     "matrix-vector-product": Template(
         "$mat2 m = $mat2(fin[i], 1.0, 2.0, 3.0);\n$vec2 v = m * $vec2(1.0, fin[i]);\noutp[i] = v.y;"

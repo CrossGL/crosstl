@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import operators
+from . import composites, operators
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 _CSTDINT = "#include <cstdint>"
@@ -39,6 +39,7 @@ CUDA = {
         "__device__ void bump(float& a) {\n    a = a + 1.0f;\n}",
     ),
     **operators.c_casts("unsigned int"),
+    **composites.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -134,6 +135,7 @@ OPENCL = {
         "float4 v = (float4)(fin[i], 1.0f, 2.0f, 3.0f);\noutp[i] = v.wzyx.x + v.xy.y;"
     ),
     **operators.c_casts("uint"),
+    **composites.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -249,6 +251,7 @@ MOJO = {
     ),
     "compute": Template("outp[i] = fin[i]"),
     **operators.MOJO,
+    **composites.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -431,6 +434,7 @@ RUST = {
         "let v = m * $vec2::new(1.0, fin[i]);\noutp[i] = v.y;"
     ),
     **operators.RUST,
+    **composites.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

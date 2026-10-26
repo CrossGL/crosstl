@@ -50,6 +50,9 @@ from .trigonometric_reduction import HLSLTrigonometricReductionMixin
 from .unorm_store_rounding import HLSLUnormStoreRoundingMixin
 from .value_shapes import HLSLValueShapeMixin
 
+# Namespaced HLSL types that CrossGL keeps under the same scoped spelling.
+_SCOPED_BUILTIN_TYPE_NAMES = frozenset({"dx::HitObject"})
+
 
 class HLSLSelectOverloadError(ValueError):
     """Reject select calls whose source overload ownership is unresolved."""
@@ -366,6 +369,9 @@ class HLSLToCrossGLConverter(
             "fmod": "fmod",
             "lerp": "mix",
             "reversebits": "bitfieldReverse",
+            # HLSL round rounds halfway cases to the nearest even integer (DXC lowers it to Round_ne); CrossGL round
+            # leaves them implementation-defined, as GLSL does.
+            "round": "roundEven",
             "rsqrt": "inverseSqrt",
             "atan2": "atan",
             "EvaluateAttributeAtSample": "interpolateAtSample",
@@ -3791,6 +3797,17 @@ class HLSLToCrossGLConverter(
         code += "}\n"
         return code
 
+    def source_function_accepts_argument_count(self, name, count):
+        """Whether a function the shader defines can be called with ``count`` arguments."""
+        for function in self.source_functions.get(name, []):
+            params = getattr(function, "params", []) or []
+            required = sum(
+                1 for param in params if getattr(param, "value", None) is None
+            )
+            if required <= count <= len(params):
+                return True
+        return False
+
     def should_emit_stage_entry_attribute(self, func, stage_name, entry_name=None):
         if entry_name is not None or getattr(func, "name", None) == "main":
             return False
@@ -5353,7 +5370,10 @@ class HLSLToCrossGLConverter(
             )
             if precise_call is not None:
                 return precise_call
-            func_name = self.function_map.get(func_name, func_name)
+            if func_name != "round" or not self.source_function_accepts_argument_count(
+                func_name, len(expr.args)
+            ):
+                func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
             integer_shape = source_integer_shape(self.resolve_integer_alias(func_name))
             if (
@@ -5657,6 +5677,10 @@ class HLSLToCrossGLConverter(
         raw = str(type_name)
         if raw in self.type_identifier_renames:
             return self.type_identifier_renames[raw]
+        if raw in _SCOPED_BUILTIN_TYPE_NAMES:
+            # CrossGL spells these Shader Model types with their namespace, and the
+            # DirectX generator writes them back unchanged.
+            return raw
         sanitized = raw.replace("::", "_")
         if sanitized in self.type_identifier_renames:
             return self.type_identifier_renames[sanitized]

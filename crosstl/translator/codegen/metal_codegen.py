@@ -663,11 +663,27 @@ class MetalCodeGen(
         "sample_no_perspective": "sample_no_perspective",
         "sample_perspective": "sample_perspective",
     }
+    # MSL has only dfdx, dfdy and fwidth and does not let a shader pick fine or
+    # coarse derivatives, so the GLSL fine and coarse forms lower to the plain
+    # functions, whose granularity GLSL also leaves to the implementation. The
+    # ddx_fine and fwidth_fine spellings are the ones the GLSL importer writes.
     METAL_DERIVATIVE_FUNCTION_ALIASES = {
         "ddx": "dfdx",
         "dFdx": "dfdx",
+        "dFdxCoarse": "dfdx",
+        "dFdxFine": "dfdx",
+        "ddx_coarse": "dfdx",
+        "ddx_fine": "dfdx",
         "ddy": "dfdy",
         "dFdy": "dfdy",
+        "dFdyCoarse": "dfdy",
+        "dFdyFine": "dfdy",
+        "ddy_coarse": "dfdy",
+        "ddy_fine": "dfdy",
+        "fwidthCoarse": "fwidth",
+        "fwidthFine": "fwidth",
+        "fwidth_coarse": "fwidth",
+        "fwidth_fine": "fwidth",
     }
     # Metal's native `abs` overload set does not accept bfloat directly: the
     # simultaneous half/float/integer conversions are ambiguous.  Promote only
@@ -5269,6 +5285,8 @@ class MetalCodeGen(
             self.validate_metal_fragment_invocation_density(func, shader_type)
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
+        if shader_type in self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS:
+            self.validate_metal_kernel_derivatives(func, shader_type)
         self.current_unsupported_glsl_buffer_block_parameters = (
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
@@ -6943,6 +6961,61 @@ class MetalCodeGen(
                     ),
                     missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
                 )
+
+    def metal_kernel_derivative_call_name(self, func):
+        """Return the first derivative built-in that ``func`` calls, or ``None``."""
+        derivative_names = {
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES,
+            *self.METAL_DERIVATIVE_FUNCTION_ALIASES.values(),
+            "fwidth",
+        }
+        for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name in derivative_names and name not in self.user_function_names:
+                return name
+        return None
+
+    # The Metal function kind each non-fragment stage is written as. None of
+    # them has derivatives.
+    METAL_DERIVATIVE_FREE_FUNCTION_KINDS = {
+        "compute": "kernel",
+        "ray_generation": "kernel",
+        "mesh": "mesh",
+        "object": "object",
+        "task": "object",
+        "amplification": "object",
+    }
+
+    def validate_metal_kernel_derivatives(self, func, shader_type):
+        """Refuse derivatives reached from a Metal ``kernel``, ``mesh`` or ``object`` function.
+
+        MSL has ``dfdx``, ``dfdy`` and ``fwidth`` only in fragment functions, so a kernel, mesh or object function
+        that calls them, directly or through a helper, does not compile. SPIR-V derivative groups and Shader Model
+        6.6 compute derivatives have no Metal equivalent.
+        """
+        function_kind = self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS[shader_type]
+        article = "an" if function_kind == "object" else "a"
+        for reachable_func in self.metal_reachable_functions(func):
+            derivative_name = self.metal_kernel_derivative_call_name(reachable_func)
+            if derivative_name is None:
+                continue
+            entry_name = getattr(func, "name", None) or "<entry>"
+            caller_name = getattr(reachable_func, "name", None) or entry_name
+            via = "" if reachable_func is func else f" through '{caller_name}'"
+            raise UnsupportedMetalFeatureError(
+                derivative_name,
+                (
+                    f"Metal {shader_type} entry point '{entry_name}' calls "
+                    f"{derivative_name}{via}; Metal has derivatives only in fragment "
+                    f"functions, so {article} {function_kind} function cannot call dfdx, dfdy "
+                    "or fwidth."
+                ),
+                missing_capabilities=(f"metal.{function_kind}-derivatives",),
+                operation=derivative_name,
+                reason="derivatives are fragment-only in Metal",
+            )
 
     def metal_reachable_functions(self, root_func):
         reachable = []
@@ -10485,6 +10558,9 @@ class MetalCodeGen(
                 and args
                 and func_name not in self.user_function_names
             ):
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                if unified_type is not None:
+                    return unified_type
                 return self.expression_result_type(args[0])
             if (
                 func_name in self.METAL_DERIVATIVE_FUNCTION_ALIASES
@@ -10503,6 +10579,11 @@ class MetalCodeGen(
             )
             if integer_bit_result_type is not None:
                 return integer_bit_result_type
+            if (
+                func_name in self.PACKED_BYTE_INTRINSICS
+                and func_name not in self.user_function_names
+            ):
+                return self.PACKED_BYTE_INTRINSICS[func_name][0]
             if (
                 func_name in self.METAL_ANGLE_CONVERSION_FACTORS
                 and len(args or []) == 1
@@ -11603,6 +11684,44 @@ class MetalCodeGen(
             return self.strip_unused_metal_declaration_attribute(initializer)
         return self.generate_discarded_expression(init).strip().rstrip(";")
 
+    # HLSL pack_u8/pack_s8 keep the low byte of each lane, pack_clamp_u8 and
+    # pack_clamp_s8 saturate each lane to [0, 255] or [-128, 127], and all four
+    # put lane x in the least significant byte. Metal narrows each lane to
+    # uchar4 (unsigned narrowing keeps the low byte) or to char4 after the
+    # clamp, then reinterprets the four bytes as a uint, which puts lane x in
+    # the least significant byte on the little-endian Apple GPUs.
+    # unpack_u8u32/unpack_s8s32 (and the 16-bit forms) reinterpret the uint as
+    # uchar4 or char4 and widen each lane, sign-extending the signed lanes.
+    # Each entry is (result type, template); expression_result_type reports the
+    # result type so HLSL's implicit conversions of the result get a constructor.
+    PACKED_BYTE_INTRINSICS = {
+        "pack_u8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
+        "pack_s8": ("uint", "as_type<uint>(uchar4(uint4({value})))"),
+        "pack_clamp_u8": (
+            "uint",
+            "as_type<uint>(uchar4(clamp(int4({value}), int4(0), int4(255))))",
+        ),
+        "pack_clamp_s8": (
+            "uint",
+            "as_type<uint>(char4(clamp(int4({value}), int4(-128), int4(127))))",
+        ),
+        "unpack_u8u32": ("uint4", "uint4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s32": ("int4", "int4(as_type<char4>(uint({value})))"),
+        "unpack_u8u16": ("ushort4", "ushort4(as_type<uchar4>(uint({value})))"),
+        "unpack_s8s16": ("short4", "short4(as_type<char4>(uint({value})))"),
+    }
+
+    def generate_packed_byte_call(self, func_name, args):
+        entry = self.PACKED_BYTE_INTRINSICS.get(func_name)
+        if entry is None or func_name in self.user_function_names:
+            return None
+        template = entry[1]
+        if len(args) != 1:
+            raise ValueError(
+                f"Metal {func_name} alias requires 1 argument; got {len(args)}"
+            )
+        return template.format(value=self.generate_expression(args[0]))
+
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into Metal expression syntax."""
         if expr is None:
@@ -11712,9 +11831,11 @@ class MetalCodeGen(
                     left,
                     right,
                 )
+            unconverted_operands = (left, right)
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
+            mixed_operands_converted = (left, right) != unconverted_operands
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
             matrix_arithmetic = self.metal_matrix_builtins.componentwise(
@@ -11727,9 +11848,18 @@ class MetalCodeGen(
                 expression_width = self.vector_value_width(
                     self.expression_result_type(expr)
                 )
+                # Once mixed operands share a common component type, casting
+                # each one to an integer declared type would mix them again,
+                # as in int4(uint4(a) + int4(b)) (#3089). The declaration
+                # converts the result instead.
                 if (
                     expression_width is not None
                     and expression_width == self.vector_value_width(expected_type)
+                    and not (
+                        mixed_operands_converted
+                        and self.vector_component_type(self.map_type(expected_type))
+                        in {"int", "uint", "short", "ushort", "long", "ulong"}
+                    )
                 ):
                     left = self.cast_binary_operand_to_expected_vector(
                         left, self.expression_result_type(expr.left), expected_type
@@ -11961,6 +12091,9 @@ class MetalCodeGen(
                 return metal_pack_call(
                     self, func_name, [self.generate_expression(a) for a in expr.args]
                 )
+            packed_dot = self.generate_packed_dot4add_call(func_name, expr.args)
+            if packed_dot is not None:
+                return packed_dot
             if (
                 func_name in BITFIELD_ARITIES
                 and func_name not in self.user_function_names
@@ -11984,6 +12117,9 @@ class MetalCodeGen(
             )
             if extended_arithmetic is not None:
                 return extended_arithmetic
+            packed_bytes = self.generate_packed_byte_call(func_name, expr.args)
+            if packed_bytes is not None:
+                return packed_bytes
 
             vector_set = re.fullmatch(
                 r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
@@ -12231,7 +12367,15 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 # MSL rint() rounds halfway cases to the nearest even integer (MSL 4.1 section 6.5).
-                arg = self.generate_expression(expr.args[0])
+                # It has only float and half overloads, so integer operands are converted to float.
+                unified_args = self.generate_metal_unified_builtin_arguments(
+                    func_name, expr.args
+                )
+                arg = (
+                    unified_args[0]
+                    if unified_args is not None
+                    else self.generate_expression(expr.args[0])
+                )
                 rint_name = (
                     "metal::rint"
                     if self.metal_function_name_is_shadowed("rint")
@@ -21906,6 +22050,43 @@ class MetalCodeGen(
             ) in self.glsl_buffer_block_variables
             if getattr(buffer_variable, "name", None) in dependencies
         ]
+
+    # HLSL dot4add_i8packed(a, b, acc) and dot4add_u8packed(a, b, acc) add the
+    # dot product of the four 8-bit lanes packed in a and b to acc, with byte 0
+    # the least significant lane. Metal has no packed integer dot product, and
+    # its dot() takes only floating-point vectors, so each operand is
+    # reinterpreted as a char4 or uchar4 (byte 0 lands in .x on the
+    # little-endian Apple GPUs) and the lanes go through a float dot(). Every
+    # lane product and their sum stay below 2^24 in magnitude, so the float
+    # dot product is exact. HLSL wraps the accumulator addition, but signed
+    # overflow is undefined in MSL, so the signed sum is taken in uint.
+    PACKED_DOT4ADD_LANES = {
+        "dot4add_i8packed": (
+            "char4",
+            "as_type<int>(as_type<uint>(int({accumulator})) + "
+            "as_type<uint>(int({dot})))",
+        ),
+        "dot4add_u8packed": ("uchar4", "(uint({accumulator}) + uint({dot}))"),
+    }
+
+    def generate_packed_dot4add_call(self, func_name, args):
+        lowering = self.PACKED_DOT4ADD_LANES.get(func_name)
+        if lowering is None or func_name in self.user_function_names:
+            return None
+        if len(args) != 3:
+            raise ValueError(
+                f"Metal {func_name} alias requires 3 arguments; got {len(args)}"
+            )
+
+        lane_type, total = lowering
+        left, right = (
+            f"float4(as_type<{lane_type}>(uint({self.generate_expression(arg)})))"
+            for arg in args[:2]
+        )
+        return total.format(
+            accumulator=self.generate_expression(args[2]),
+            dot=f"dot({left}, {right})",
+        )
 
     def generate_function_call_arguments(self, func_name, call_args):
         call_args = list(call_args or [])

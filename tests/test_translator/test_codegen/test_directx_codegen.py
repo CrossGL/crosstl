@@ -69,10 +69,12 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXEntryPointSelectionError,
     DirectXForInIterableError,
     DirectXInverseHyperbolicError,
+    DirectXMeshStageProfileError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXNative16BitArithmeticError,
     DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
+    DirectXRayTracingStageProfileError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
@@ -84,6 +86,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXTrailingZeroBuiltinError,
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
+    DirectXWaveSizeProfileError,
     DirectXWorkgroupPointerError,
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
@@ -6776,6 +6779,8 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
         "fwidth",
         "fwidthFine",
         "fwidthCoarse",
+        "fwidth_fine",
+        "fwidth_coarse",
     ],
 )
 def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
@@ -45803,6 +45808,7 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
                 write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
                 write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
                 write_sampler_feedback_level(feedbackUsed, pairedLayers, pairedSampler, uvLayer, 1.0);
+                write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);
             }
         }
     }
@@ -45837,6 +45843,11 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
     assert (
         "feedbackUsed.WriteSamplerFeedbackLevel("
         "pairedLayers, pairedSampler, uvLayer, 1.0);" in generated_code
+    )
+    # Array gradients stay float2; only the location gains the slice.
+    assert (
+        "feedbackUsed.WriteSamplerFeedbackGrad("
+        "pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);" in generated_code
     )
     assert "write_sampler_feedback" not in generated_code
 
@@ -45963,6 +45974,10 @@ def test_directx_feedback_texture_pixel_only_helpers_reject_transitive_compute_c
             "ddx argument must be float2",
         ),
         (
+            "write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxLayer, ddyLayer);",
+            "ddx argument must be float2, got",
+        ),
+        (
             "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv);",
             "requires 5 or 6 argument",
         ),
@@ -45975,6 +45990,7 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
         sampler2DArray pairedLayers;
         sampler pairedSampler;
         feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+        feedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP> feedbackUsed;
 
         fragment {{
             void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {{
@@ -51927,3 +51943,222 @@ def test_hlsl_hip_unsafe_record_layouts_fail_closed(
             format_output=False,
             source_backend="hip",
         )
+
+
+def test_directx_lowers_glsl_imported_fine_and_coarse_fwidth(tmp_path):
+    # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
+    shader = """
+    #version 450
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        vec2 w = fwidthFine(uv) + fwidthCoarse(uv);
+        color = vec4(w, w);
+    }
+    """
+    shader_path = tmp_path / "fwidth.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "(abs(ddx_fine(input.uv)) + abs(ddy_fine(input.uv)))" in generated_code
+    assert "(abs(ddx_coarse(input.uv)) + abs(ddy_coarse(input.uv)))" in generated_code
+    assert "fwidth_fine(" not in generated_code
+    assert "fwidth_coarse(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "shader_attribute",
+    ["raygeneration", "intersection", "anyhit", "closesthit", "miss", "callable"],
+)
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_ray_tracing_stages(
+    tmp_path, backend, shader_attribute
+):
+    source = tmp_path / "stage.hlsl"
+    source.write_text(f"""
+RWStructuredBuffer<uint> outp : register(u0);
+[shader("{shader_attribute}")]
+void main() {{
+    uint index = 3u;
+    outp[0] = index;
+}}
+""")
+
+    with pytest.raises(DirectXRayTracingStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_attribute == shader_attribute
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-ray-tracing-stage-unsupported"
+    )
+    assert "Shader Model 6.3" in str(error)
+
+    if shader_attribute == "raygeneration":
+        generated = crosstl.translate(str(source), backend="directx")
+        assert '[shader("raygeneration")]' in generated
+
+
+def test_directx_dx10_profile_rejects_ray_tracing_stages():
+    code = """
+    shader Dx10RayGeneration {
+        ray_generation {
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXRayTracingStageProfileError,
+        match="DirectX profile dx10 does not support the 'raygeneration'",
+    ):
+        HLSLCodeGen(target_profile="dx10").generate(crosstl.translator.parse(code))
+
+
+MESH_STAGE_HLSL = """
+struct VertexOut { float4 pos : SV_Position; };
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(out indices uint3 tris[1], out vertices VertexOut verts[3]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(0.0, 0.0, 0.0, 1.0);
+    verts[1].pos = float4(1.0, 0.0, 0.0, 1.0);
+    verts[2].pos = float4(0.0, 1.0, 0.0, 1.0);
+    tris[0] = uint3(0, 1, 2);
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+def test_directx_dx11_profile_rejects_mesh_stage(tmp_path, backend):
+    source = tmp_path / "mesh.hlsl"
+    source.write_text(MESH_STAGE_HLSL)
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.shader_type == "mesh"
+    assert error.shader_attribute == "mesh"
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-mesh-stage-unsupported"
+    )
+    assert "Shader Model 6.5" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert '[shader("mesh")]' in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+@pytest.mark.parametrize(
+    ("stage", "shader_attribute"),
+    [
+        ("task", "amplification"),
+        ("amplification", "amplification"),
+        ("object", "amplification"),
+        ("mesh", "mesh"),
+    ],
+)
+def test_directx_legacy_profiles_reject_crossgl_mesh_shading_stages(
+    target_profile, stage, shader_attribute
+):
+    code = f"""
+    shader LegacyMeshShading {{
+        {stage} {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXMeshStageProfileError) as exc_info:
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    error = exc_info.value
+    assert error.target_profile == target_profile
+    assert error.shader_type == stage
+    assert error.shader_attribute == shader_attribute
+    assert (
+        f"DirectX profile {target_profile} does not support the "
+        f"'{shader_attribute}' stage"
+    ) in str(error)
+
+
+WAVE_SIZE_HLSL = """
+RWStructuredBuffer<uint> outp : register(u0);
+[WaveSize({arguments})]
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {{ outp[id.x] = id.x; }}
+"""
+
+
+@pytest.mark.parametrize("backend", ["dx11", "d3d11", "directx-11"])
+@pytest.mark.parametrize(
+    ("arguments", "wave_size", "shader_model"),
+    [
+        ("32", (32,), "6.6"),
+        ("16, 64", (16, 64), "6.8"),
+        ("16, 64, 32", (16, 64, 32), "6.8"),
+    ],
+)
+def test_directx_dx11_profile_rejects_wave_size_attribute(
+    tmp_path, backend, arguments, wave_size, shader_model
+):
+    source = tmp_path / "wave_size.hlsl"
+    source.write_text(WAVE_SIZE_HLSL.format(arguments=arguments))
+
+    with pytest.raises(DirectXWaveSizeProfileError) as exc_info:
+        crosstl.translate(str(source), backend=backend)
+
+    error = exc_info.value
+    assert error.target_profile == "dx11"
+    assert error.wave_size == wave_size
+    assert error.shader_model == shader_model
+    assert error.project_diagnostic_code == (
+        "project.translate.directx-wave-size-unsupported"
+    )
+    assert f"Shader Model {shader_model}" in str(error)
+
+    generated = crosstl.translate(str(source), backend="directx")
+    assert f"[WaveSize({arguments})]" in generated
+
+
+@pytest.mark.parametrize("target_profile", ["dx10", "dx11"])
+def test_directx_legacy_profiles_reject_crossgl_wave_size_attribute(target_profile):
+    code = """
+    shader LegacyWaveSize {
+        compute {
+            void main() @ WaveSize(32) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWaveSizeProfileError,
+        match=(
+            f"DirectX profile {target_profile} does not support the "
+            "WaveSize attribute"
+        ),
+    ):
+        HLSLCodeGen(target_profile=target_profile).generate(
+            crosstl.translator.parse(code)
+        )
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+    assert "[WaveSize(32)]" in generated

@@ -1,4 +1,4 @@
-"""GLSL bit-field built-ins and ``mix`` with a boolean selector on Metal, HLSL, SPIR-V and GLSL.
+"""GLSL bit-field built-ins and ``mix`` with a boolean selector on Metal, HLSL, SPIR-V, GLSL and WGSL.
 
 Execution is covered by the ``g_bitfield`` and ``g_mix_select`` conformance cases; these tests check the spelling
 each target receives, the typed refusals and the native checkers when they are installed.
@@ -18,6 +18,7 @@ from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 
 BITFIELDS = """shader Bitfields {
     RWStructuredBuffer<uint> words @register(u0);
@@ -187,3 +188,63 @@ def test_boolean_mix_selects_on_every_target(tmp_path):
     if shutil.which("glslangValidator"):
         (tmp_path / "out.comp").write_text(glsl, encoding="utf-8")
         _check(["glslangValidator", "out.comp"], tmp_path)
+
+
+def test_wgsl_boolean_mix_is_select(tmp_path):
+    # WGSL's mix takes only a floating-point weight; select(f, t, cond) keeps the argument order.
+    source = SELECTS.replace(
+        "void main(uint i @gl_GlobalInvocationID) {",
+        "void main(uvec3 id @gl_GlobalInvocationID) {\n            uint i = id.x;",
+    )
+    wgsl = WGSLCodeGen().generate(parse(source))
+
+    assert "select(values[i], 2.0, c)" in wgsl
+    assert (
+        "select(vec3<f32>(values[i]), vec3<f32>(1.0), vec3<bool>(c, false, true))"
+        in wgsl
+    )
+    # WGSL's select accepts a scalar condition with vector values, so it is not splatted.
+    assert "select(vec2<f32>(values[i]), vec2<f32>(0.0), c)" in wgsl
+    assert "mix(values[i], 2.0, 0.25)" in wgsl
+    _naga_validates(wgsl, tmp_path)
+
+
+def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
+    source = """shader Inline {
+    RWStructuredBuffer<vec3> values @register(u0);
+    compute {
+        @numthreads(64, 1, 1)
+        void main(uvec3 id @gl_GlobalInvocationID) {
+            uint i = id.x;
+            vec3 a = values[i];
+            vec3 b = vec3(1.0);
+            vec3 r = mix(a, b, a.x > 0.5);
+            vec3 s = mix(a, b, lessThan(a, b));
+            vec3 t = mix(normalize(a), normalize(b), lessThan(a, b));
+            values[i] = r + s + t;
+        }
+    }
+}"""
+    wgsl = WGSLCodeGen().generate(parse(source))
+
+    assert "mix(" not in wgsl
+    assert wgsl.count("select(a, b, ") == 2
+    # Values with no recorded type are not taken to be scalars and refused.
+    assert "select(normalize(a), normalize(b), (a < b))" in wgsl
+    _naga_validates(wgsl, tmp_path)
+
+
+def test_wgsl_boolean_mix_with_a_selector_of_another_width_is_refused():
+    source = SELECTS.replace(
+        "void main(uint i @gl_GlobalInvocationID) {",
+        "void main(uvec3 id @gl_GlobalInvocationID) {\n            uint i = id.x;",
+    ).replace("bvec3(c, false, true)", "bvec2(c, false)")
+
+    with pytest.raises(ValueError, match="2-component selector and 3-component values"):
+        WGSLCodeGen().generate(parse(source))
+
+
+def _naga_validates(code, tmp_path):
+    if shutil.which("naga"):
+        (tmp_path / "out.wgsl").write_text(code, encoding="utf-8")
+        _check(["naga", "out.wgsl"], tmp_path)

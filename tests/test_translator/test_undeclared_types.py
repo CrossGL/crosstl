@@ -212,6 +212,45 @@ def test_trait_bounds_are_not_type_uses():
     assert undeclared_type_uses(_program(BOUNDED)) == []
 
 
+FEEDBACK_TEXTURE = """
+shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* outp;
+        void main() {
+            %s obj;
+            outp[gl_GlobalInvocationID.x] = 0u;
+        }
+    }
+}
+"""
+FEEDBACK_KINDS = [
+    "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>",
+    "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED>",
+    "feedbackTexture2D<SAMPLER_FEEDBACK_MIP_REGION_USED>",
+]
+
+
+@pytest.mark.parametrize("feedback_type", FEEDBACK_KINDS)
+def test_sampler_feedback_kinds_are_values_not_type_uses(feedback_type):
+    assert undeclared_type_uses(_program(FEEDBACK_TEXTURE % feedback_type)) == []
+
+
+@pytest.mark.parametrize(
+    "feedback_type", ["FeedbackTexture2D<Missing>", "FeedbackTexture2DArray<Missing>"]
+)
+def test_other_feedback_texture_arguments_are_type_uses(feedback_type):
+    uses = undeclared_type_uses(_program(FEEDBACK_TEXTURE % feedback_type))
+    assert [name for name, _node in uses] == ["Missing"]
+
+
+def test_a_feedback_texture_translates_with_its_kind(tmp_path):
+    source = FEEDBACK_TEXTURE % "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>"
+    path = _write(tmp_path, "feedback.cgl", source)
+    generated = crosstl.translate(path, backend="directx")
+    assert "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> obj;" in generated
+
+
 RAY_QUERIES = """
 shader RayQueries {
     compute {
