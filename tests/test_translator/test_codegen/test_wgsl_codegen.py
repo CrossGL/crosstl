@@ -971,6 +971,88 @@ def test_wgsl_codegen_lowers_imagecube_to_storage_texture_array():
     assert "imageStore" not in generated
 
 
+@pytest.mark.parametrize(
+    ("image_type", "result_type", "coord", "value", "expected"),
+    [
+        (
+            "image1D",
+            "int",
+            "0",
+            "vec4(1.0)",
+            "var r: i32 = i32(textureDimensions(u0));",
+        ),
+        (
+            "image2D",
+            "ivec2",
+            "ivec2(0, 0)",
+            "vec4(1.0)",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
+        ),
+        (
+            "image3D",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0));",
+        ),
+        (
+            "image2DArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "uimage2DArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "uvec4(1u)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0)));",
+        ),
+        (
+            "imageCube",
+            "ivec2",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
+        ),
+        (
+            "imageCubeArray",
+            "ivec3",
+            "ivec3(0, 0, 0)",
+            "vec4(1.0)",
+            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
+            "textureNumLayers(u0) / 6u));",
+        ),
+    ],
+)
+def test_wgsl_codegen_image_size_follows_glsl_result_shape(
+    image_type, result_type, coord, value, expected
+):
+    image_format = "r32ui" if image_type.startswith("u") else "rgba8"
+    shader = f"""
+    shader WGSLImageSizeShape {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer {result_type}* outp;
+            uniform layout({image_format}) {image_type} u0;
+            void main() {{
+                {result_type} r = imageSize(u0);
+                imageStore(u0, {coord}, {value});
+                outp[0] = r;
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert expected in generated
+    assert "imageSize" not in generated
+
+
 def test_wgsl_codegen_rejects_storage_image_without_representable_format():
     shader = """
     shader WGSLStorageImageMissingFormat {
@@ -3473,85 +3555,3 @@ def test_wgsl_call_statement_phony_assigns_only_must_use_calls(expression, expec
     from crosstl.translator.codegen.wgsl_must_use import wgsl_call_statement
 
     assert wgsl_call_statement(expression) == expected
-
-
-@pytest.mark.parametrize(
-    ("image_type", "result_type", "coord", "value", "expected"),
-    [
-        (
-            "image1D",
-            "int",
-            "0",
-            "vec4(1.0)",
-            "var r: i32 = i32(textureDimensions(u0));",
-        ),
-        (
-            "image2D",
-            "ivec2",
-            "ivec2(0, 0)",
-            "vec4(1.0)",
-            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
-        ),
-        (
-            "image3D",
-            "ivec3",
-            "ivec3(0, 0, 0)",
-            "vec4(1.0)",
-            "var r: vec3<i32> = vec3<i32>(textureDimensions(u0));",
-        ),
-        (
-            "image2DArray",
-            "ivec3",
-            "ivec3(0, 0, 0)",
-            "vec4(1.0)",
-            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
-            "textureNumLayers(u0)));",
-        ),
-        (
-            "uimage2DArray",
-            "ivec3",
-            "ivec3(0, 0, 0)",
-            "uvec4(1u)",
-            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
-            "textureNumLayers(u0)));",
-        ),
-        (
-            "imageCube",
-            "ivec2",
-            "ivec3(0, 0, 0)",
-            "vec4(1.0)",
-            "var r: vec2<i32> = vec2<i32>(textureDimensions(u0));",
-        ),
-        (
-            "imageCubeArray",
-            "ivec3",
-            "ivec3(0, 0, 0)",
-            "vec4(1.0)",
-            "var r: vec3<i32> = vec3<i32>(vec3<u32>(textureDimensions(u0), "
-            "textureNumLayers(u0) / 6u));",
-        ),
-    ],
-)
-def test_wgsl_codegen_image_size_follows_glsl_result_shape(
-    image_type, result_type, coord, value, expected
-):
-    image_format = "r32ui" if image_type.startswith("u") else "rgba8"
-    shader = f"""
-    shader WGSLImageSizeShape {{
-        compute {{
-            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-            buffer {result_type}* outp;
-            uniform layout({image_format}) {image_type} u0;
-            void main() {{
-                {result_type} r = imageSize(u0);
-                imageStore(u0, {coord}, {value});
-                outp[0] = r;
-            }}
-        }}
-    }}
-    """
-
-    generated = WGSLCodeGen().generate(parse_shader(shader))
-
-    assert expected in generated
-    assert "imageSize" not in generated
