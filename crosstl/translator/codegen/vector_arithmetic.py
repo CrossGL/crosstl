@@ -2022,9 +2022,7 @@ class VectorArithmeticMixin:
             operands = ", ".join(
                 f"__half2float({operand.strip()})" for operand in value.split(",")
             )
-            float_call = self.format_scalar_math_component(
-                func_name, "float", operands
-            )
+            float_call = self.format_scalar_math_component(func_name, "float", operands)
             return f"__float2half({float_call})"
         signatures = self.scalar_float_math_functions()[func_name]
         if func_name == "inversesqrt" and component_type == "double":
