@@ -209,15 +209,14 @@ class VectorArithmeticMixin:
                 return self.expression_result_type(raw_args[0])
             if func_name == "cross" and raw_args:
                 return self.expression_result_type(raw_args[0])
-            if func_name in {"dot", "length"} and raw_args:
+            if func_name in {"dot", "distance", "length"} and raw_args:
                 vector_info = self.vector_type_info(
                     self.expression_result_type(raw_args[0])
                 )
                 if vector_info is not None:
                     return vector_info["component_type"]
             if (
-                func_name
-                in {
+                func_name in {
                     "abs",
                     "sign",
                     "fract",

@@ -2661,7 +2661,8 @@ class TestCudaCodeGen:
                 half d = distance(s, r);
                 f16vec3 c = cross(s, r);
                 half e = length(q);
-                return b + n.x + d + c.x + e;
+                f16vec3 m = r * distance(s, r);
+                return b + n.x + d + c.x + e + m.x;
             }
             float g(vec3 a, vec3 b) {
                 return distance(a, b);
@@ -2676,6 +2677,10 @@ class TestCudaCodeGen:
         assert "half d = cgl_cgl_half3_distance(s, r);" in cuda_code
         assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in cuda_code
         assert "half e = cgl_cgl_half4_length(q);" in cuda_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
+            in cuda_code
+        )
         assert "return cgl_float3_distance(a, b);" in cuda_code
         assert (
             "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in cuda_code
@@ -4368,8 +4373,9 @@ class TestCudaCodeGen:
 
         assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in cuda_code
         assert (
-            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));"
-            in (cuda_code)
+            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
+                cuda_code
+            )
         )
         assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in cuda_code
         assert "__popc(static_cast<unsigned int>(value.x))" in cuda_code
