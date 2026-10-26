@@ -12698,6 +12698,12 @@ class MojoCodeGen:
         )
         if self.vector_type_info(self.expression_result_type(expr.left)) is None:
             left = self.scalar_splat_expression(info[0], info[2], left)
+        if (
+            info[0] == "DType.bool"
+            and self.vector_type_info(self.expression_result_type(expr.right)) is None
+        ):
+            # Mojo does not convert a Bool argument to a mask either.
+            right = self.scalar_splat_expression(info[0], info[2], right)
         method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
         return f"({left}).{method}({right})"
 
