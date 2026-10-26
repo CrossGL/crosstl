@@ -2158,11 +2158,12 @@ void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() != 2 || inputs[0].ndim() != out.ndim() ||
       inputs[1].size() != 1 || inputs[0].dtype() != out.dtype() ||
-      inputs[1].dtype() != out.dtype() || !storage_type(out.dtype()) ||
-      out.size() > 65535 || out.ndim() > 64 ||
+      inputs[1].dtype() != out.dtype() ||
+      (!storage_type(out.dtype()) && out.dtype() != float16 && out.dtype() != bfloat16) ||
+      out.size() > max_slice_update_elements || out.ndim() > 64 ||
       axes_.size() != low_pad_size_.size() || axes_.size() != high_pad_size_.size()) {
     throw std::invalid_argument(
-        "CrossTL padding requires matching supported arrays, one fill value and at most 65535 output elements.");
+        "CrossTL padding requires matching supported arrays, one fill value and an output within the storage capacity.");
   }
   const auto& in = inputs[0];
   Shape expected = in.shape();
@@ -2170,7 +2171,8 @@ void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
   for (size_t i = 0; i < axes_.size(); ++i) {
     const int axis = axes_[i] < 0 ? out.ndim() + axes_[i] : axes_[i];
     if (axis < 0 || axis >= out.ndim() || low_pad_size_[i] < 0 || high_pad_size_[i] < 0 ||
-        int64_t(expected[axis]) + low_pad_size_[i] + high_pad_size_[i] > 65535) {
+        int64_t(expected[axis]) + low_pad_size_[i] + high_pad_size_[i] >
+            int64_t(max_slice_update_elements)) {
       throw std::invalid_argument("CrossTL padding axes or extents are invalid.");
     }
     expected[axis] += low_pad_size_[i] + high_pad_size_[i];
@@ -2179,7 +2181,9 @@ void Pad::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (expected != out.shape()) {
     throw std::invalid_argument("CrossTL padding output shape does not match.");
   }
-  // A broadcast view lets the unchanged copy kernel fill every output element.
+  // A broadcast view lets the unchanged copy kernel fill every output element;
+  // the half types copy through their own kernels, and the copies split
+  // outputs wider than the portable launch limits into exact regions.
   array fill(out.shape(), out.dtype(), nullptr, {});
   fill.copy_shared_buffer(
       inputs[1], Strides(out.ndim(), 0), {true, out.size() <= 1, out.size() <= 1}, 1);

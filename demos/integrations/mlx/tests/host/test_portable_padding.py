@@ -68,15 +68,20 @@ def evidence(target="metal", *, native=True):
 @pytest.mark.parametrize("native", [True, False])
 def test_complete_padding_cases(target, native):
     records, trace = evidence(target, native=native)
-    assert len(records) == 102
+    assert len(records) == 108
     assert {item["dtype"] for item in records} == set(workloads.DTYPES)
     assert any(item["resultShape"] == [255, 257] for item in records)
+    assert any(item["resultShape"] == [257, 257] for item in records)
     workloads.validate(records, trace, native=native)
 
 
 @pytest.fixture
 def small_evidence(monkeypatch):
-    selected = [case for case in workloads.cases() if case["layout"] != "limit"]
+    selected = [
+        case
+        for case in workloads.cases()
+        if case["layout"] not in {"limit", "over-limit"}
+    ]
     monkeypatch.setattr(workloads, "cases", lambda: iter(selected))
     return evidence()
 

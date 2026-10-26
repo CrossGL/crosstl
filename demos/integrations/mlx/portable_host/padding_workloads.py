@@ -20,6 +20,7 @@ PAD_LAYOUTS = (
     "singleton",
     "zero-width",
     "limit",
+    "over-limit",
 )
 UPDATE_LAYOUTS = (
     "matrix",
@@ -81,6 +82,10 @@ def inputs(np, case):
         elif layout == "limit":
             base = data[:65025].reshape(255, 255)
             widths = ((0, 0), (1, 1))
+        elif layout == "over-limit":
+            # 66,049 outputs: more than one launch-axis limit of elements.
+            base = data[:65025].reshape(255, 255)
+            widths = ((1, 1), (1, 1))
         return base, data[4:5].reshape(()), widths
     base = data[:24].reshape(4, 6)
     if layout == "transpose":

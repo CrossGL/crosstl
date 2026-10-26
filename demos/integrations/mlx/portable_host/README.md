@@ -2969,18 +2969,20 @@ destination bounds, preserved regions and nonoverlapping writes are checked
 before native submission. Aliased base/update views remain alive while a distinct
 output allocation is populated.
 
-These hooks support float32, int32, uint32, bool, int64 and uint64. Padding retains
-its 65,535-output-element limit; slice updates use the separate allocation and
-dispatch bounds described below. The wider types require the optional `integer64` packages.
+These hooks support float32, int32, uint32, bool, int64 and uint64, and padding
+float16 and bfloat16 through the optional half-type copy packages. Padding and slice
+updates accept outputs within the storage capacity described below, and padding's
+copies split outputs wider than the portable launch limits into exact regions. The
+wider types require the optional `integer64` packages.
 MLX's unchanged edge, reflect and symmetric padding implementations compose these
 hooks with shared-buffer slices. Slice-update reductions require the optional
 packages described below; replacement support does not imply scatter or general
 indexing support.
 
-`verify_padding` runs 102 workloads on CPU and generated GPU paths, checking exact
+`verify_padding` runs 108 workloads on CPU and generated GPU paths, checking exact
 storage bytes, intermediate copy readbacks, output guards, signed strides,
-broadcast inputs, aliased updates, empty regions and the maximum supported output
-size. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
+broadcast inputs, aliased updates, empty regions and outputs on both sides of
+65,535 elements. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
 negative workers reject missing packages, unsupported types, oversized outputs
 and reductions without the optional slice-update packages. The unchanged upstream `test_pad`,
 `test_pad_reflect_symmetric` and `test_slice_update_reversed` methods must also pass
