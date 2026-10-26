@@ -4,7 +4,8 @@ A :class:`Program` is one compute kernel with an ``int`` input buffer ``a``, an 
 global invocation index ``i``, plus helper functions. Every expression is explicitly typed: operands of a binary
 operator have the same type, conversions are explicit and comparisons take scalars, so one program prints as valid
 MSL, HLSL, GLSL, CrossGL and SPIR-V without any implicit-conversion rule of its own. Integer divisors are forced
-odd and shift counts are masked, so no constant folding can divide by zero or shift past the width.
+odd and shift counts are masked, so no constant folding can divide by zero or shift past the width. A float literal
+converted to ``int`` or ``uint`` is clamped into the target range, so no conversion folds to an undefined value.
 
 ``programs(config)`` is the hypothesis strategy. Hypothesis shrinks a failing program structurally (fewer
 statements, smaller expressions), which is what makes crash reproducers short.
@@ -214,6 +215,12 @@ COMPOUND = ("+", "-", "*", "&", "|", "^")
 INT_EDGES = (0, 1, -1, 2, 7, 31, 32, 255, 65535, 2147483647, -2147483648)
 UINT_EDGES = (0, 1, 2, 31, 32, 255, 65535, 2147483647, 2147483648, 4294967295)
 FLOAT_EDGES = (0.0, -0.0, 1.0, -1.0, 0.5, 2.5, 1e-07, 1e10, 3.4028234663852886e38)
+# The float32 values nearest each integer type's bounds that still truncate to a value of that type. Converting a
+# float outside them is undefined, and compilers such as DXC fold such a constant conversion to an undefined value.
+FLOAT_TO_INTEGER_RANGE = {
+    "int": (-2147483648.0, 2147483520.0),
+    "uint": (0.0, 4294967040.0),
+}
 
 
 @dataclass(frozen=True)
@@ -226,6 +233,18 @@ class Config:
     max_statements: int = 24
     max_functions: int = 2
     switch: bool = True
+
+
+def _clamp_float_literals(node, low, high):
+    """Clamp a float literal, or the literals of a vector built from them, into ``[low, high]``."""
+    if isinstance(node, Literal) and node.type.kind == "float":
+        return Literal(node.type, min(max(node.value, low), high))
+    if isinstance(node, Construct):
+        return Construct(
+            node.type,
+            tuple(_clamp_float_literals(arg, low, high) for arg in node.args),
+        )
+    return node
 
 
 class _Builder:
@@ -402,7 +421,12 @@ class _Builder:
 
     def op_convert(self, type_, depth):
         kind = self.choice(tuple(k for k in KINDS if k != type_.kind))
-        return Convert(type_, self.expr(Type(kind, type_.size), depth))
+        operand = self.expr(Type(kind, type_.size), depth)
+        if kind == "float" and type_.kind in FLOAT_TO_INTEGER_RANGE:
+            operand = _clamp_float_literals(
+                operand, *FLOAT_TO_INTEGER_RANGE[type_.kind]
+            )
+        return Convert(type_, operand)
 
     def builtins_for(self, type_):
         names = []

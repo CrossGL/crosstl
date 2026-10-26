@@ -16,7 +16,14 @@ from crosstl.translator.diagnostics import TranslationDiagnostic
 from tests.conformance.fuzz import campaign, mutate, outcomes, worker
 from tests.conformance.fuzz.preprocessor import units
 from tests.conformance.fuzz.printers import PRINTERS, GLSLPrinter
-from tests.conformance.fuzz.program import Config, programs
+from tests.conformance.fuzz.program import (
+    FLOAT_TO_INTEGER_RANGE,
+    Config,
+    Construct,
+    Convert,
+    Literal,
+    programs,
+)
 from tests.conformance.fuzz.spirv import SpirvPrinter
 from tests.conformance.fuzz.targets import IMPORTERS
 from tests.conformance.process import run
@@ -107,6 +114,33 @@ def test_printing_is_deterministic(program):
             continue
         assert printer().print(program) == printer().print(program)
     assert SpirvPrinter().print(program) == SpirvPrinter().print(program)
+
+
+def _nodes(node):
+    yield node
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _nodes(item)
+    elif hasattr(node, "__dataclass_fields__"):
+        for name in node.__dataclass_fields__:
+            yield from _nodes(getattr(node, name))
+
+
+@given(programs())
+def test_float_literal_conversions_to_integers_are_defined(program):
+    # DXC folds an out-of-range float-to-int constant conversion to undef (#3109).
+    for node in _nodes(program):
+        if (
+            not isinstance(node, Convert)
+            or node.type.kind not in FLOAT_TO_INTEGER_RANGE
+        ):
+            continue
+        low, high = FLOAT_TO_INTEGER_RANGE[node.type.kind]
+        operand = node.operand
+        literals = operand.args if isinstance(operand, Construct) else (operand,)
+        for literal in literals:
+            if isinstance(literal, Literal) and literal.type.kind == "float":
+                assert low <= literal.value <= high
 
 
 def test_scalar_printers_refuse_vectors():
