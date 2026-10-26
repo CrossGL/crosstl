@@ -101,6 +101,10 @@ from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
+class UnsupportedWGSLFeatureError(ValueError):
+    """A CrossGL construct that WGSL output refuses because WGSL cannot express it."""
+
+
 class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
@@ -4157,6 +4161,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_texture_function_call(self, node, function_name):
         normalized_name = self.semantic_key(function_name)
         args = list(node.arguments)
+        if normalized_name in self.FILTERED_TEXTURE_SAMPLE_FUNCTIONS and args:
+            self.refuse_integer_texture_sample(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -4190,6 +4196,30 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         raise ValueError(
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
+        )
+
+    # GLSL lookups that go through the sampler's filtering and wrap state. WGSL
+    # writes them as textureSample*, which is only defined for f32 textures.
+    FILTERED_TEXTURE_SAMPLE_FUNCTIONS = frozenset(
+        {
+            "texture",
+            "texturegrad",
+            "texturegradoffset",
+            "texturelod",
+            "texturelodoffset",
+            "textureoffset",
+        }
+    )
+
+    def refuse_integer_texture_sample(self, texture_expr, function_name):
+        type_name = self.resource_type_name(self.expression_type(texture_expr))
+        if not type_name or not type_name.startswith(("isampler", "usampler")):
+            return
+        raise UnsupportedWGSLFeatureError(
+            f"WGSL target cannot lower {function_name}() on an integer sampler "
+            f"({self.generate_expression(texture_expr)}): WGSL only samples f32 "
+            "textures, and textureLoad and textureGather cannot apply the "
+            "sampler's filter and wrap state; use texelFetch() instead"
         )
 
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
