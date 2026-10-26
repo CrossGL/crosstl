@@ -167,6 +167,17 @@ C_FAMILY = {
         "        acc += 2.0;\n        break;\n    case 2:\n    case 3:\n        acc += 4.0;\n        break;\n}\n"
         "outp[i] = acc;"
     ),
+    # Each inner x hides the outer one only inside its own block, so the last line reads the input again.
+    "block-scope": Template(
+        "float x = fin[i];\nfloat r = 0.0;\n{\n    float x = 2.0;\n    r += x;\n}\n"
+        "for (int k = 0; k < 2; k++) {\n    float x = float(k + 1) * 10.0;\n    r += x;\n}\n"
+        "outp[i] = r * 100.0 + x;"
+    ),
+    # A private global keeps one value per invocation; bump() reads and writes the kernel's copy.
+    "global-variable": Template(
+        "float before = counter;\ncounter = fin[i];\nbump();\noutp[i] = counter * 10.0 + before;",
+        "float counter = 1.0;\n\nvoid bump() {\n    counter = counter * 2.0 + 1.0;\n}",
+    ),
     "array": Template(
         "float values[4];\nfor (int k = 0; k < 4; k++) {\n    values[k] = fin[i] * float(k);\n}\n"
         "outp[i] = values[iin[i] & 3];"
@@ -233,6 +244,22 @@ C_FAMILY = {
     "struct-copy": Template(
         "Pair a;\na.a = fin[i];\na.b = 2.0;\nPair b = a;\nb.a = 9.0;\noutp[i] = a.a * 10.0 + b.a + b.b;",
         PAIR,
+    ),
+    # a[r][c] starts as 3r + c; the input picks the row whose last element it overwrites.
+    "array-of-arrays": Template(
+        "float a[2][3];\nfor (int r = 0; r < 2; r++) {\n    for (int c = 0; c < 3; c++) {\n"
+        "        a[r][c] = float(r * 3 + c);\n    }\n}\na[iin[i] & 1][2] = fin[i];\n"
+        "outp[i] = a[1][2] * 100.0 + a[0][2] * 10.0 + a[1][0];"
+    ),
+    # The input picks the component the probe writes and reads.
+    "vector-dynamic-index": Template(
+        "$vec4 v = $vec4(1.0, 2.0, 4.0, 8.0);\nint k = iin[i] & 3;\nv[k] = fin[i];\n"
+        "outp[i] = v[k] * 100.0 + v[(k + 1) & 3] * 10.0 + v.x;"
+    ),
+    "integer-vector-arithmetic": Template(
+        "$ivec2 a = $ivec2(iin[i], 3);\n$ivec2 b = a * 2 + $ivec2(1, 5);\n"
+        "$ivec2 c = (b >> 1) ^ (b & $ivec2(6, 6));\n$ivec2 d = b / 3 + b % 4;\n"
+        "outp[i] = float(c.x * 100 + c.y * 10 + d.x + d.y * 1000);"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,

@@ -11,6 +11,7 @@ from __future__ import annotations
 from .base import ABSENT, C_FAMILY, Template
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
+from .scopes import WEBGL as _SCOPES
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -49,6 +50,7 @@ WEBGL = {
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
+    **_SCOPES,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),
