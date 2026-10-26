@@ -28,7 +28,20 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
-from .templates.base import BAG, BINS, MAKE_PAIR, NESTED_STRUCTS, PAIR, POSE, SPREAD
+from .templates.aggregates import ABSORB
+from .templates.aggregates import FAMILY as AGGREGATES
+from .templates.base import (
+    BAG,
+    BINS,
+    GROW,
+    MAKE_PAIR,
+    NESTED_STRUCTS,
+    PAIR,
+    POSE,
+    SPREAD,
+)
+from .templates.values import BASIS
+from .templates.values import FAMILY as VALUES
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -497,6 +510,12 @@ _MESH_STAGES = {
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
+    **AGGREGATES,
+    **VALUES,
+    "struct-matrix-member": Template(
+        VALUES["struct-matrix-member"].body, prelude=BASIS
+    ),
+    "struct-conditional": Template(VALUES["struct-conditional"].body, prelude=PAIR),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
@@ -512,6 +531,12 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "struct-parameter": Template(
         C_FAMILY["struct-parameter"].body, SPREAD, prelude=PAIR
+    ),
+    "inout-argument-lvalues": Template(
+        C_FAMILY["inout-argument-lvalues"].body, GROW, prelude=PAIR
+    ),
+    "aggregate-inout-parameter": Template(
+        AGGREGATES["aggregate-inout-parameter"].body, ABSORB, prelude=PAIR
     ),
     "constant-array": Template(
         C_FAMILY["constant-array"].body, prelude=C_FAMILY["constant-array"].declarations
