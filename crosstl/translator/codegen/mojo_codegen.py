@@ -14403,6 +14403,13 @@ class MojoCodeGen:
         return self.generate_expression(piece["expr"], target_type, context)
 
     def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        if target_dtype in {"DType.float16", "DType.float32"} and (
+            self.is_scalar_bool_expression(expr)
+        ):
+            # Mojo's Float16/Float32 constructors do not accept Bool directly.
+            # Converting through Int preserves GLSL's 0/1 numeric cast.
+            return f"Int({self.generate_expression(expr)})"
+
         target_type = self.constructor_scalar_expression_target_type(
             expr, target_dtype, force_scalar_target=True
         )
@@ -15610,6 +15617,29 @@ class MojoCodeGen:
         if info is not None:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
+
+    def is_scalar_bool_expression(self, expr):
+        """Return whether ``expr`` evaluates to a scalar boolean.
+
+        Scalar comparisons and logical expressions are recognized directly as
+        their result type is inferred from their operands on some codegen paths.
+        Vector comparisons and logical operations remain SIMD masks.
+        """
+        expr_type = self.expression_result_type(expr)
+        if self.is_bool_scalar_type(expr_type):
+            return True
+
+        if isinstance(expr, BinaryOpNode):
+            op = self.map_operator(expr.op)
+            if op in MOJO_VECTOR_COMPARISON_METHODS or op in {"and", "or"}:
+                return (
+                    self.vector_type_info(self.expression_result_type(expr.left))
+                    is None
+                    and self.vector_type_info(self.expression_result_type(expr.right))
+                    is None
+                )
+
+        return False
 
     def compatible_numeric_vector_target(self, source_info, target_info):
         if source_info is None or target_info is None:
