@@ -2320,6 +2320,17 @@ GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
 port (see "Convolution") and its gradients, and translate their kernels on
 demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
 the general implicit GEMM and small-depth 3-D routes.
+The `array`, `autograd` and `compile` groups run the `test_array` (40),
+`test_autograd` (44) and `test_compile` (51) methods that reach the GPU. Five
+more groups run the GPU methods of whole modules (`upstream_module_groups`):
+`nn` (39 `test_nn` methods: module state, weight files and the layers),
+`transforms` (23 `test_vmap` and 11 `test_eval` methods), `serialization` (16
+`test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
+and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
+samplers, four `test_bf16` sweeps and the device, stream, memory and constant
+tests) and `rope` (the seven rotary embedding and fused transform methods of
+`test_fast` and the two antialiased `test_upsample` sweeps). A module's other
+methods dispatch nothing or need a kernel family the host does not port yet.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
 native run must dispatch, except `test_layer_norm_dim_check`, which rejects its

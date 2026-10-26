@@ -155,6 +155,9 @@ from demos.integrations.mlx.portable_host.sort_packages import (
     CACHE_DIRECTORY as SORT_CACHE,
 )
 from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    GROUPS as MODULE_GROUPS,
+)
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -661,7 +664,9 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS
+    ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
+        name for tests in MODULE_GROUPS.values() for name in tests
+    )
 )
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -778,6 +783,9 @@ GROUP_TESTS = {
     "array": ARRAY_TESTS,
     "autograd": AUTOGRAD_TESTS,
     "compile": COMPILE_TESTS,
+    # The GPU methods of the nn, vmap, eval, export, load, optimizer and
+    # rotary embedding modules, about a quarter of an hour each natively.
+    **MODULE_GROUPS,
 }
 
 

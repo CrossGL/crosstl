@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from demos.integrations.mlx.portable_host import (
+    upstream_module_groups,
     verify,
     verify_random,
     verify_scatter,
@@ -67,7 +68,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 351
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 498
     assert all(
         name.startswith(
             (
@@ -88,6 +89,20 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_array.TestInequality.test_",
                 "test_autograd.TestAutograd.test_",
                 "test_compile.TestCompile.test_",
+                "test_nn.TestBase.test_",
+                "test_nn.TestLayers.test_",
+                "test_vmap.TestVmap.test_",
+                "test_eval.TestEval.test_",
+                "test_export_import.TestExportImport.test_",
+                "test_load.TestLoad.test_",
+                "test_optimizers.TestOptimizers.test_",
+                "test_optimizers.TestSchedulers.test_",
+                "test_random.TestRandom.test_",
+                "test_device.TestDevice.test_",
+                "test_device.TestStream.test_",
+                "test_memory.TestMemory.test_",
+                "test_constants.TestConstants.test_",
+                "test_upsample.TestUpsample.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
@@ -98,6 +113,11 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + ops.ARRAY_TESTS
         + ops.AUTOGRAD_TESTS
         + ops.COMPILE_TESTS
+        + upstream_module_groups.NN_TESTS
+        + upstream_module_groups.TRANSFORM_TESTS
+        + upstream_module_groups.SERIALIZATION_TESTS
+        + upstream_module_groups.TRAINING_TESTS
+        + upstream_module_groups.ROPE_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -125,7 +145,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 346 and not set(opengl) & set(excluded)
+    assert len(opengl) == 493 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -151,6 +171,11 @@ def test_upstream_op_groups_partition_the_inventory():
         "array",
         "autograd",
         "compile",
+        "nn",
+        "transforms",
+        "serialization",
+        "training",
+        "rope",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -215,6 +240,32 @@ def test_upstream_op_groups_partition_the_inventory():
         assert ops.GROUPS[group] == tests and len(tests) == count
         assert all(name.startswith(module) for name in tests)
         assert ops.upstream_tests("opengl", group) == tests
+    # The GPU methods of whole modules run by module family, each family in
+    # a group of its own.
+    for group, modules, count in (
+        ("nn", ("test_nn.",), 39),
+        ("transforms", ("test_vmap.", "test_eval."), 34),
+        ("serialization", ("test_export_import.", "test_load."), 30),
+        (
+            "training",
+            (
+                "test_optimizers.",
+                "test_random.",
+                "test_bf16.",
+                "test_device.",
+                "test_memory.",
+                "test_constants.",
+            ),
+            35,
+        ),
+        ("rope", ("test_fast.", "test_upsample."), 9),
+    ):
+        tests = upstream_module_groups.GROUPS[group]
+        assert ops.GROUPS[group] == tests and len(tests) == count
+        assert {name.split(".")[0] + "." for name in tests} == set(modules)
+        assert ops.upstream_tests("opengl", group) == tests
+    # The rotary embedding tests are test_fast methods, but not normalization.
+    assert not set(ops.GROUPS["rope"]) & set(ops.GROUPS["normalization"])
     # Every slice update reduction's gradient and both shapeless tests that
     # count reduced elements with NumberOfElements run here.
     assert {
