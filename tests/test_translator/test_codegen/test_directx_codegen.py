@@ -45807,6 +45807,7 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
                 write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
                 write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
                 write_sampler_feedback_level(feedbackUsed, pairedLayers, pairedSampler, uvLayer, 1.0);
+                write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);
             }
         }
     }
@@ -45841,6 +45842,11 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
     assert (
         "feedbackUsed.WriteSamplerFeedbackLevel("
         "pairedLayers, pairedSampler, uvLayer, 1.0);" in generated_code
+    )
+    # Array gradients stay float2; only the location gains the slice.
+    assert (
+        "feedbackUsed.WriteSamplerFeedbackGrad("
+        "pairedLayers, pairedSampler, uvLayer, ddxValue, ddyValue);" in generated_code
     )
     assert "write_sampler_feedback" not in generated_code
 
@@ -45967,6 +45973,10 @@ def test_directx_feedback_texture_pixel_only_helpers_reject_transitive_compute_c
             "ddx argument must be float2",
         ),
         (
+            "write_sampler_feedback_grad(feedbackUsed, pairedLayers, pairedSampler, uvLayer, ddxLayer, ddyLayer);",
+            "ddx argument must be float2, got",
+        ),
+        (
             "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv);",
             "requires 5 or 6 argument",
         ),
@@ -45979,6 +45989,7 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
         sampler2DArray pairedLayers;
         sampler pairedSampler;
         feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+        feedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP> feedbackUsed;
 
         fragment {{
             void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {{

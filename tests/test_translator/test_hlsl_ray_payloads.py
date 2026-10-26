@@ -160,6 +160,52 @@ def test_a_field_without_qualifiers_gets_every_stage(tmp_path):
     _dxc(tmp_path, code)
 
 
+HIT_OBJECT_HLSL = """
+struct [raypayload] Payload {
+    float4 color : read(caller) : write(anyhit, closesthit);
+};
+RaytracingAccelerationStructure scene : register(t0);
+RWStructuredBuffer<uint> outp : register(u0);
+[shader("raygeneration")]
+void main() {
+    RayDesc ray;
+    ray.Origin = float3(0, 0, 0);
+    ray.Direction = float3(0, 0, 1);
+    ray.TMin = 0.0;
+    ray.TMax = 100.0;
+    Payload payload;
+    dx::HitObject hit = dx::HitObject::TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+    dx::HitObject::Invoke(hit, payload);
+    outp[0] = 0u;
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "dx::HitObject hit = dx::HitObject::TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);",
+        "dx::HitObject::Invoke(hit, payload);",
+    ],
+)
+def test_a_hit_object_payload_stays_a_payload(tmp_path, call):
+    # dx::HitObject::TraceRay and dx::HitObject::Invoke take the payload as their
+    # last argument, like TraceRay, so DXC needs it declared [raypayload].
+    source = HIT_OBJECT_HLSL
+    if call.startswith("dx::HitObject::Invoke"):
+        source = source.replace(
+            "dx::HitObject hit = dx::HitObject::TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);",
+            "dx::HitObject hit;",
+        )
+    else:
+        source = source.replace("    dx::HitObject::Invoke(hit, payload);\n", "")
+    code = _translate(tmp_path, source, "shader.hlsl")
+
+    assert _payload_fields(code, "Payload") == {
+        "color": ": read(caller) : write(anyhit, closesthit);",
+    }
+
+
 def test_a_trace_ray_payload_from_glsl_is_declared_a_payload(tmp_path):
     code = _translate(tmp_path, RAYGEN_GLSL, "shader.rgen")
 
