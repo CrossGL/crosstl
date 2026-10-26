@@ -325,6 +325,40 @@ C_FAMILY = {
         "$mat2 m = $mat2(1.0, 2.0, 3.0, 4.0);\nm[1] = $vec2(fin[i], 5.0);\nm[0].y = float(iin[i]);\n"
         "outp[i] = m[0][0] + m[0][1] * 10.0 + m[1][0] * 100.0 + m[1][1] * 1000.0;"
     ),
+    # A break in a case ends the switch, and a continue in a case skips the rest of the loop body.
+    "switch-in-loop": Template(
+        "float acc = 0.0;\nfor (int k = 0; k < 6; k++) {\n    switch ((iin[i] + k) & 3) {\n"
+        "        case 0:\n            acc += 1.0;\n            break;\n        case 1:\n            continue;\n"
+        "        case 2:\n            acc += fin[i];\n            break;\n        default:\n"
+        "            acc *= 2.0;\n            break;\n    }\n    acc += 0.5;\n}\noutp[i] = acc;"
+    ),
+    # A continue in a do-while loop still tests the condition; the break only bounds a translation that skips it.
+    "do-while-continue": Template(
+        "int m = 5 + (iin[i] & 3);\nint k = 0;\nfloat acc = fin[i];\ndo {\n    k++;\n    if (k > 20) {\n"
+        "        break;\n    }\n    if (k > 4) {\n        acc += 0.5;\n        continue;\n    }\n"
+        "    acc += float(k);\n} while (k < m);\noutp[i] = acc;"
+    ),
+    # ?: groups to the right, and its last operand takes the whole sum. Scaling by a power of two is exact, so
+    # contracting a product into a fused multiply-add does not change the result.
+    "chained-conditional": Template(
+        "int a = iin[i];\nfloat b = a > 1 ? a > 9 ? 1.0 : 2.0 : 3.0;\nfloat c = a > 6 ? 4.0 : 5.0 + fin[i];\n"
+        "outp[i] = (a < 4 ? fin[i] : a < 8 ? fin[i] * 2.0 : a < 12 ? 3.0 : -fin[i]) + b * 10.0 + c * 256.0;"
+    ),
+    # No parentheses: each operator binds as C does, and - and / group to the left.
+    "operator-precedence": Template(
+        "int a = iin[i];\nint r = a + 3 << 2 & 60 ^ a * 2 | 1;\nint s = 20 - a - 3 + a / 2 * 3;\n"
+        "outp[i] = float(r) + float(s) * 64.0 + fin[i] / 2.0 * 4.0 - 1.0 - 2.0;"
+    ),
+    "matrix-arithmetic": Template(
+        "$mat2 m = $mat2(fin[i], 1.0, 2.0, 3.0);\n$mat2 n = $mat2(4.0, float(iin[i]), 5.0, 6.0);\n"
+        "$mat2 r = (m + n) * 2.0 - 0.5 * n;\nr += m;\n"
+        "outp[i] = r[0][0] + r[0][1] * 10.0 + r[1][0] * 100.0 + r[1][1] * 1000.0;"
+    ),
+    "vector-array": Template(
+        "$vec2 pts[3];\nfor (int k = 0; k < 3; k++) {\n    pts[k] = $vec2(fin[i] + float(k), float(iin[i] * k));\n}\n"
+        "int j = iin[i] % 3;\npts[j].y = pts[j].y + 100.0;\n"
+        "outp[i] = pts[0].x + pts[1].y * 10.0 + pts[2].x * 1024.0 + pts[j].y;"
+    ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
 }

@@ -6,6 +6,7 @@ import re
 from dataclasses import replace
 
 from . import (
+    branches,
     calls,
     composites,
     constructors,
@@ -497,6 +498,7 @@ WGSL = {
     **scopes.WGSL,
     **declarations.WGSL,
     **calls.WGSL,
+    **branches.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
