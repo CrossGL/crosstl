@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Breaking Changes
 
+- Mojo output refuses a vector where a scalar is expected, such as `return v;` from a function returning `float` or `if (a == b)` on two vectors, with `MojoScalarConversionError`. It used to write the vector unchanged, which Mojo does not convert to `Float32` or `Bool`. Use `all`, `any` or a component access to reduce the vector first.
 - A type name that is neither built in nor declared by the program, as a structure, enumeration, alias, constant block or generic parameter, is refused with a typed error. Every generator used to copy it into the output.
 - WGSL output refuses 64-bit integers, doubles and bfloat16, the vectors and matrices built on them and conversions such as `double(x)`, with `WGSLNumericTypeUnsupportedError`. It used to narrow `double` to `f32` and `long` to `i32`, which changed host buffer layouts, or copy the type unchanged.
 - `buffer T name[]` and `buffer T name[N]` declare one storage buffer of `T` elements for every `T`, structures included, as Metal's `device T*` does. GLSL buffer block arrays (`buffer B { ... } name[N];`) keep their meaning as arrays of descriptors.
