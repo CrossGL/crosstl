@@ -3540,7 +3540,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         declaration = self.apply_resource_memory_qualifiers_to_declaration(
             declaration, node.name, node
         )
-        qualifiers = self.variable_memory_qualifiers(node, declaration)
+        # The match arms assign the variable after this declaration, so it
+        # cannot be const.
+        qualifiers = [
+            qualifier
+            for qualifier in self.variable_memory_qualifiers(node, declaration)
+            if qualifier != "const"
+        ]
         if qualifiers:
             declaration = f"{' '.join(qualifiers)} {declaration}"
 

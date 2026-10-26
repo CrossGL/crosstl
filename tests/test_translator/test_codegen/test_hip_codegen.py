@@ -14358,3 +14358,27 @@ def test_hip_const_resource_pointer_is_not_qualified_twice():
     hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     assert "const const" not in hip_code
+
+
+def test_hip_const_match_expression_local_stays_assignable():
+    source_code = """
+    shader ConstMatch {
+        compute {
+            buffer int* outv;
+            void main() {
+                int mode = outv[1];
+                const int value = match mode {
+                    0 => 10,
+                    _ => -1,
+                };
+                outv[0] = value;
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "const int value;" not in hip_code
+    assert "int value;" in hip_code
+    assert "value = 10;" in hip_code
+    assert "value = -1;" in hip_code
