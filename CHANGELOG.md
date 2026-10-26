@@ -121,6 +121,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - SPIR-V output declares immutable scalar, vector and matrix globals with constant initializers as constants, so `constant uint T = W * 3;` is valid, and flattens structure members of vertex outputs and fragment inputs that carry no location, such as the nested structures of a Metal mesh pipeline's `[[stage_in]]`. They used to overlap the next member's location.
 - GLSL output of a multi-stage file emits each helper only under the macros of the stages that call it, so a fragment-only helper that calls `fwidth` no longer breaks the vertex stage. Written half-precision stage inputs are copied into locals, and varyings no longer take the names of entry resource parameters.
 - Depth comparisons with 16-bit float reference values translate.
+- WGSL output converts a signed shift amount to `u32` whatever its expression form, so a bitwise amount such as `1 << (n & 3)` joins the arithmetic, name and element spellings that were already converted, and a `~` amount or the `select` a ternary lowers to are converted the same way. A bitwise amount was left signed, which naga rejects with `automatic conversions cannot convert elements of i32 to u32`. A signed bitwise scalar beside a vector bitwise operand is now replicated into a vector, as the other scalar spellings are.
 
 ---
 
