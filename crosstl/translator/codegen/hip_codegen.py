@@ -47,6 +47,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
+from .c_family_operands import postfix_operand
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -3970,7 +3971,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return f"!{operand}"
         elif node.op in ["++", "--"]:
             if getattr(node, "is_postfix", getattr(node, "postfix", False)):
-                return f"{operand}{node.op}"
+                return f"{postfix_operand(operand)}{node.op}"
             else:
                 return f"{node.op}{operand}"
         lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)

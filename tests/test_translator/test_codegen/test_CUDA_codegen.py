@@ -20185,3 +20185,31 @@ def test_fixed_width_integers_include_cstdint(tmp_path):
     assert "uint16_t" in cuda_code
     assert "uint8_t" in cuda_code
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_cuda_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code

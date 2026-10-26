@@ -34438,3 +34438,31 @@ def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
 
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_metal_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code
