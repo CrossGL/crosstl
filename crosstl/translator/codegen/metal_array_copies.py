@@ -26,11 +26,14 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     AssignmentNode,
+    FunctionCallNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     PrimitiveType,
 )
-from ..semantics.rewrite import is_pure
+from ..semantics.hub_types import call_name
+from ..semantics.rewrite import child_slots, get_child, is_pure
 
 __all__ = [
     "generate_metal_array_copy",
@@ -78,6 +81,8 @@ def generate_metal_array_copy(codegen, target, value):
     extent = metal_array_extent(target_type)
     if extent is None:
         return None
+    if isinstance(value, ArrayLiteralNode):
+        return _generate_metal_array_literal_copy(codegen, target, value, target_type)
     if not (is_pure(target) and is_pure(value)):
         return codegen.refuse_lowering(
             f"array assignment: '{target_type}' values are copied element by element in Metal, which evaluates "
@@ -92,6 +97,68 @@ def generate_metal_array_copy(codegen, target, value):
     body = codegen.generate_assignment(element)
     return "\n".join(
         [f"for (int {index} = 0; {index} < {extent}; ++{index}) {{", str(body), "}"]
+    )
+
+
+def _generate_metal_array_literal_copy(codegen, target, value, target_type):
+    """``target[0] = e0; target[1] = e1; ...`` for an array value written as the list ``{e0, e1, ...}``.
+
+    The source language evaluates every element before it stores any. Storing each element as it is evaluated is
+    the same only when no element reads the assigned array or has effects, and when ``target``, evaluated once per
+    element, has no effects either; any other list assignment is refused.
+    """
+    extent = metal_array_extent(target_type)
+    if len(value.elements) != extent:
+        return codegen.refuse_lowering(
+            f"array assignment: '{target_type}' is assigned a list of {len(value.elements)} elements"
+        )
+    root = _root_name(target)
+    if not (
+        root is not None
+        and is_pure(target)
+        and all(_is_pure_value(codegen, element) for element in value.elements)
+        and not any(_mentions(element, root) for element in value.elements)
+    ):
+        return codegen.refuse_lowering(
+            f"array assignment: '{target_type}' is assigned a list element by element in Metal, which stores "
+            "each element before the next is evaluated, and this list has effects or reads the assigned array"
+        )
+    lines = []
+    for index, element in enumerate(value.elements):
+        assignment = AssignmentNode(_element(target, index), element, "=")
+        lines.append(str(codegen.generate_assignment(assignment)))
+    return "\n".join(lines)
+
+
+def _root_name(expr):
+    """Name of the variable an access path such as ``a.b[i].c`` starts from, or ``None``."""
+    while True:
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            expr = expr.array_expr
+        elif isinstance(expr, MemberAccessNode):
+            expr = expr.object_expr
+        else:
+            return None
+
+
+def _is_pure_value(codegen, expr):
+    """:func:`is_pure`, which also admits nested lists and constructors of the program's structures."""
+    if isinstance(expr, ArrayLiteralNode):
+        return all(_is_pure_value(codegen, element) for element in expr.elements)
+    if isinstance(expr, FunctionCallNode) and call_name(expr) in (
+        getattr(codegen, "structs_by_name", None) or {}
+    ):
+        return all(_is_pure_value(codegen, a) for a in expr.arguments or [])
+    return is_pure(expr)
+
+
+def _mentions(node, name):
+    if isinstance(node, IdentifierNode):
+        return node.name == name
+    return any(
+        _mentions(get_child(node, field, key), name) for field, key in child_slots(node)
     )
 
 
