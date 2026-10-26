@@ -2667,6 +2667,80 @@ def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():
     assert "sampleShadow(shadowMap, shadowMap_sampler, uv, 0.625)" in generated
 
 
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "coord", "layer"),
+    [
+        ("sampler2DArray", "vec3", "uv.xy", "uv.z"),
+        ("samplerCubeArray", "vec4", "uv.xyz", "uv.w"),
+    ],
+)
+def test_wgsl_codegen_passes_array_texture_layer_as_its_own_argument(
+    tmp_path, sampler_type, coord_type, coord, layer
+):
+    shader = f"""
+    shader WGSLArrayTextureLayer {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture(tex, uv) + textureLod(tex, uv, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    rounded = f"i32(floor({layer} + 0.5))"
+    assert f"textureSample(tex, tex_sampler, {coord}, {rounded})" in code
+    assert f"textureSampleLevel(tex, tex_sampler, {coord}, {rounded}, 1.0)" in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    "sampler_type", ["sampler2DArray", "isampler2DArray", "usampler2DArray"]
+)
+def test_wgsl_codegen_splits_array_texture_layer_out_of_texel_fetch(
+    tmp_path, sampler_type
+):
+    shader = f"""
+    shader WGSLArrayTexelFetch {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {{
+                ivec3 c = ivec3(pos.xy, 1);
+                return vec4(texelFetch(tex, c, 0))
+                    + vec4(texelFetchOffset(tex, c, 0, ivec2(1, 0)));
+            }}
+        }}
+    }}
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureLoad(tex, c.xy, c.z, 0)" in code
+    assert "textureLoad(tex, (c.xy + vec2<i32>(1, 0)), c.z, 0)" in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+def test_wgsl_codegen_refuses_array_texture_coordinate_from_a_user_function():
+    shader = """
+    shader WGSLArrayTextureCallCoordinate {
+        uniform sampler2DArray tex;
+        ivec3 nextCoord() {
+            return ivec3(0, 0, 1);
+        }
+        fragment {
+            vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {
+                return texelFetch(tex, nextCoord(), 0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="assign the coordinate to a local variable"):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_rejects_plain_sampler_for_explicit_shadow_compare():
     shader = """
     shader WGSLBadShadowSampler {
