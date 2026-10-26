@@ -25,6 +25,9 @@ FIND = (
     "float find(int n, float x) {\n    for (int k = 0; k < 8; k++) {\n        if (k == n) {\n"
     "            return x + float(k);\n        }\n    }\n    return -1.0;\n}"
 )
+TWICE = "float twice(float x) {\n    return x * 2.0;\n}"
+BLEND = "float blend(float x, float y) {\n    return x + y * 0.5;\n}"
+SPREAD = "float spread(Pair q) {\n    q.a = q.a * 2.0;\n    return q.a + q.b;\n}"
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -292,6 +295,35 @@ C_FAMILY = {
     "multiple-declarators": Template(
         "float a = fin[i], b = 2.0, c;\nc = a * 4.0 + b;\nint j = 1, k = iin[i];\n"
         "outp[i] = c + float(j + k) * 64.0;"
+    ),
+    # Calls as arguments of calls; blend() weights its two arguments differently, so swapping them shows.
+    "nested-call": Template(
+        "outp[i] = twice(blend(fin[i], 3.0)) + blend(twice(float(iin[i])), twice(fin[i]));",
+        TWICE + "\n" + BLEND,
+    ),
+    # A struct argument is copied, so the callee's write to q.a must not reach p.a.
+    "struct-parameter": Template(
+        "Pair p;\np.a = fin[i];\np.b = float(iin[i]);\noutp[i] = spread(p) * 10.0 + p.a;",
+        PAIR + "\n" + SPREAD,
+    ),
+    "const-local": Template(
+        "const float k = 3.0;\nconst int m = 2;\noutp[i] = fin[i] * k + float(iin[i] * m);"
+    ),
+    # The input picks the element of a constant table.
+    "constant-array": Template(
+        "int k = iin[i] & 3;\noutp[i] = WEIGHTS[k] * fin[i] + WEIGHTS[3 - k] * 16.0;",
+        "const float WEIGHTS[4] = {0.125, 0.25, 0.5, 1.0};",
+    ),
+    # The inner break ends only the inner loop, and the inner continue skips one k of every j.
+    "nested-loop": Template(
+        "float acc = 0.0;\nfor (int j = 0; j < 4; j++) {\n    for (int k = 0; k < 4; k++) {\n"
+        "        if (k > j) {\n            break;\n        }\n        if (k == (iin[i] & 3)) {\n"
+        "            continue;\n        }\n        acc += float(j * 4 + k);\n    }\n}\noutp[i] = acc + fin[i];"
+    ),
+    # m[1] replaces column 1 and m[0].y one element of column 0.
+    "matrix-column-assignment": Template(
+        "$mat2 m = $mat2(1.0, 2.0, 3.0, 4.0);\nm[1] = $vec2(fin[i], 5.0);\nm[0].y = float(iin[i]);\n"
+        "outp[i] = m[0][0] + m[0][1] * 10.0 + m[1][0] * 100.0 + m[1][1] * 1000.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,

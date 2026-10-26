@@ -9,6 +9,7 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 from __future__ import annotations
 
 from .base import ABSENT, C_FAMILY, Template
+from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .scopes import WEBGL as _SCOPES
@@ -51,6 +52,7 @@ WEBGL = {
     **_COMPOSITES,
     **_CONSTRUCTORS,
     **_SCOPES,
+    **_CALLS,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),

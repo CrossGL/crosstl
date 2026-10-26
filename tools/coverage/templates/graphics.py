@@ -5,7 +5,15 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import composites, constructors, declarations, functions, operators, scopes
+from . import (
+    calls,
+    composites,
+    constructors,
+    declarations,
+    functions,
+    operators,
+    scopes,
+)
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -155,6 +163,7 @@ HLSL = {
     **composites.HLSL,
     **constructors.HLSL,
     **scopes.HLSL,
+    **calls.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -298,6 +307,7 @@ METAL = {
     **functions.METAL,
     **constructors.METAL,
     **scopes.METAL,
+    **calls.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -486,6 +496,7 @@ WGSL = {
     **constructors.WGSL,
     **scopes.WGSL,
     **declarations.WGSL,
+    **calls.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
