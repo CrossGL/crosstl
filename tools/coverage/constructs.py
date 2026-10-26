@@ -80,6 +80,29 @@ def _curated() -> list[Construct]:
         ),
         c("control-flow", "function-overloading", "OpFunction", "OpFunctionCall"),
         c("control-flow", "switch-fallthrough", "OpSwitch"),
+        c("control-flow", "block-scope", "OpVariable", "StorageClass.Function"),
+        c("control-flow", "vector-conditional", "OpSelect", "OpTypeVector"),
+        c("control-flow", "loop-return", "OpLoopMerge", "OpReturnValue"),
+        c("control-flow", "nested-call", "OpFunctionCall"),
+        c("control-flow", "struct-parameter", "OpFunctionParameter", "OpTypeStruct"),
+        c("control-flow", "nested-loop", "OpLoopMerge", "OpBranch"),
+        c("control-flow", "switch-in-loop", "OpSwitch", "OpLoopMerge"),
+        c("control-flow", "do-while-continue", "OpLoopMerge", "OpBranchConditional"),
+        c("control-flow", "chained-conditional", "OpSelect"),
+        c("control-flow", "nested-switch", "OpSwitch", "OpSelectionMerge"),
+        c("control-flow", "unsigned-switch", "OpSwitch", "OpTypeInt"),
+        c("control-flow", "multi-variable-loop", "OpLoopMerge", "OpISub"),
+        c("control-flow", "forward-declaration", "OpFunction", "OpFunctionCall"),
+        c(
+            "control-flow",
+            "conditional-side-effect",
+            "OpSelectionMerge",
+            "OpFunctionCall",
+        ),
+        c("control-flow", "switch-return", "OpSwitch", "OpReturnValue"),
+        c("control-flow", "loop-in-switch", "OpSwitch", "OpLoopMerge"),
+        c("control-flow", "infinite-loop", "OpLoopMerge", "OpBranch"),
+        c("control-flow", "loop-condition-call", "OpLoopMerge", "OpFunctionCall"),
         c(
             "control-flow",
             "discard",
@@ -160,6 +183,31 @@ def _curated() -> list[Construct]:
             "OpAny",
             "OpAll",
         ),
+        c(
+            "operator",
+            "integer-vector-arithmetic",
+            "OpTypeVector",
+            "OpIMul",
+            "OpShiftRightArithmetic",
+            "OpSDiv",
+        ),
+        c("operator", "unsigned-wraparound", "OpIAdd", "OpIMul", "OpISub"),
+        c("operator", "operator-precedence", "OpShiftLeftLogical", "OpBitwiseXor"),
+        c("operator", "matrix-arithmetic", "OpMatrixTimesScalar", "OpFAdd"),
+        c("operator", "implicit-conversion", "OpConvertSToF", "OpConvertUToF"),
+        c(
+            "operator",
+            "matrix-compound-assignment",
+            "OpMatrixTimesMatrix",
+            "OpVectorTimesMatrix",
+        ),
+        c(
+            "operator",
+            "indexed-compound-assignment",
+            "OpAccessChain",
+            "OpFunctionCall",
+        ),
+        c("operator", "vector-compound-assignment", "OpVectorTimesScalar", "OpFDiv"),
         c("type", "array", "OpTypeArray"),
         c("type", "struct", "OpTypeStruct"),
         c("type", "array-of-structs", "OpTypeArray", "OpTypeStruct"),
@@ -173,6 +221,33 @@ def _curated() -> list[Construct]:
         c("type", "matrix-from-vectors", "OpTypeMatrix", "OpCompositeConstruct"),
         c("type", "struct-constructor", "OpTypeStruct", "OpCompositeConstruct"),
         c("type", "struct-copy", "OpTypeStruct", "OpStore"),
+        c("type", "array-of-arrays", "OpTypeArray", "OpAccessChain"),
+        c("type", "vector-dynamic-index", "OpTypeVector", "OpAccessChain"),
+        c("type", "global-variable", "StorageClass.Private"),
+        c("type", "numeric-literals", "OpConstant"),
+        c(
+            "type",
+            "struct-array-member",
+            "OpTypeStruct",
+            "OpTypeArray",
+            "OpAccessChain",
+        ),
+        c("type", "multiple-declarators", "OpVariable"),
+        c("type", "const-local", "OpConstant"),
+        c("type", "constant-array", "OpConstantComposite", "OpTypeArray"),
+        c("type", "matrix-column-assignment", "OpTypeMatrix", "OpAccessChain"),
+        c("type", "vector-array", "OpTypeArray", "OpTypeVector"),
+        c(
+            "type",
+            "non-square-matrix",
+            "OpTypeMatrix",
+            "OpMatrixTimesVector",
+            "OpVectorTimesMatrix",
+        ),
+        c("type", "struct-vector-member", "OpTypeStruct", "OpVectorShuffle"),
+        c("type", "diagonal-matrix", "OpCompositeConstruct", "OpTypeMatrix"),
+        c("type", "nested-member-assignment", "OpTypeStruct", "OpAccessChain"),
+        c("type", "bool-array", "OpTypeBool", "OpTypeArray"),
         c("type", "global-constant", "OpConstant"),
         c("type", "runtime-array-length", "OpTypeRuntimeArray", "OpArrayLength"),
         c("compute", "shared-memory", "StorageClass.Workgroup", "OpControlBarrier"),
@@ -278,8 +353,9 @@ def _spellings(dialect) -> dict[str, str]:
         spelled[f"uvec{size}"] = dialect.type(Type("uint", (size,)))
     try:
         spelled["mat2"] = dialect.type(Type("float", (2, 2)))
+        spelled["mat2x3"] = dialect.type(Type("float", (2, 3)))
     except ProbeError:
-        pass  # the language has no matrices, and its templates do not use $mat2
+        pass  # the language lacks these matrices, and its templates do not use them
     try:
         spelled["bvec2"] = dialect.type(Type("bool", (2,)))
     except ProbeError:
