@@ -758,7 +758,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
 
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
-            self.emit("workgroupBarrier();")
+            for statement in self.format_opencl_barrier_statements(node.args or []):
+                self.emit(f"{statement};")
         elif node.sync_type == "mem_fence" and node.args:
             # mem_fence(flags) orders loads and stores over the flagged memory,
             # as read_mem_fence and write_mem_fence do for one of them.
@@ -916,6 +917,49 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if barrier is not None:
                 return f"{barrier}()"
         return "memoryBarrier()"
+
+    # barrier(flags) and work_group_barrier(flags[, scope]) synchronize the
+    # work-group and order the memory their flags name. workgroupBarrier()
+    # orders work-group (local) memory; global and image memory need the
+    # CrossGL fence over that memory on each side of the execution barrier,
+    # the same spelling the HLSL importer gives DeviceMemoryBarrierWithGroupSync.
+    OPENCL_BARRIER_DEVICE_FENCES = {
+        frozenset({"CLK_GLOBAL_MEM_FENCE"}): "memoryBarrierBuffer",
+        frozenset({"CLK_IMAGE_MEM_FENCE"}): "memoryBarrierImage",
+        frozenset(
+            {"CLK_GLOBAL_MEM_FENCE", "CLK_IMAGE_MEM_FENCE"}
+        ): "deviceMemoryBarrier",
+    }
+
+    def format_opencl_barrier_statements(self, args):
+        if not args:
+            return ["workgroupBarrier()"]
+        func_name = "work_group_barrier" if len(args) > 1 else "barrier"
+        self.require_opencl_fence_scope(
+            func_name, args[1:], self.OPENCL_ATOMIC_DEVICE_SCOPES
+        )
+        flags_text = self.visit(args[0])
+        flags = set(re.findall(r"\bCLK_\w+\b", flags_text))
+        known_flags = set(self.OPENCL_MEM_FENCE_FLAG_BARRIERS)
+        # Only CLK_ names joined with | are literal flags, so a value such as
+        # CLK_LOCAL_MEM_FENCE | mask may name more memory than its CLK_ names.
+        literal = not re.sub(r"\bCLK_\w+\b|[\s()|]", "", flags_text)
+        if re.sub(r"[\s()]", "", flags_text) == "0":
+            # No memory is ordered: an execution barrier only.
+            return ["workgroupExecutionBarrier()"]
+        if not literal or not flags or not flags <= known_flags:
+            # Flags that are not literals may name any memory.
+            return ["allMemoryBarrier()", "workgroupBarrier()", "allMemoryBarrier()"]
+        device_flags = frozenset(flags - {"CLK_LOCAL_MEM_FENCE"})
+        if not device_flags:
+            return ["workgroupBarrier()"]
+        fence = f"{self.OPENCL_BARRIER_DEVICE_FENCES[device_flags]}()"
+        barrier = (
+            "workgroupBarrier()"
+            if "CLK_LOCAL_MEM_FENCE" in flags
+            else "workgroupExecutionBarrier()"
+        )
+        return [fence, barrier, fence]
 
     def require_opencl_fence_scope(self, func_name, scope_args, scopes):
         """Refuse a fence whose memory_scope argument is wider than ``scopes``."""

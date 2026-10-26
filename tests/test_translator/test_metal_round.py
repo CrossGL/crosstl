@@ -107,7 +107,7 @@ def test_hlsl_round_is_not_metal_round(tmp_path):
     path = tmp_path / "source.hlsl"
     path.write_text("float evaluate(float x) { return round(x); }")
     generated = translate(str(path), backend="crossgl", format_output=False)
-    assert "round(x)" in generated
+    assert "roundEven(x)" in generated
     assert "metal_round" not in generated
 
 

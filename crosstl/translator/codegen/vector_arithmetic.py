@@ -228,6 +228,7 @@ class VectorArithmeticMixin:
                     "floor",
                     "ceil",
                     "round",
+                    "roundEven",
                     "trunc",
                     "saturate",
                 }
@@ -1959,7 +1960,7 @@ class VectorArithmeticMixin:
             return None
 
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         helper_name = self.require_vector_scalar_math_helper(
@@ -2006,7 +2007,11 @@ class VectorArithmeticMixin:
             return None
 
         base_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
-        if base_info is None or base_info["component_type"] not in {"float", "double"}:
+        if base_info is None or base_info["component_type"] not in {
+            "float",
+            "double",
+            "half",
+        }:
             return None
 
         exponent_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
@@ -2104,6 +2109,14 @@ class VectorArithmeticMixin:
 
     def format_scalar_math_component(self, func_name, component_type, value):
         """Format one scalar component for a precision-aware math builtin."""
+        if component_type == "half":
+            # ``__half`` has no math overloads in every toolkit, so widen each
+            # operand to float, call the float function and narrow the result.
+            operands = ", ".join(
+                f"__half2float({operand.strip()})" for operand in value.split(",")
+            )
+            float_call = self.format_scalar_math_component(func_name, "float", operands)
+            return f"__float2half({float_call})"
         signatures = self.scalar_float_math_functions()[func_name]
         if func_name == "inversesqrt" and component_type == "double":
             return f"(1.0 / sqrt({value}))"
@@ -2132,6 +2145,7 @@ class VectorArithmeticMixin:
             "floor": {"float": "floorf", "double": "floor"},
             "ceil": {"float": "ceilf", "double": "ceil"},
             "round": {"float": "roundf", "double": "round"},
+            "roundEven": {"float": "rintf", "double": "rint"},
             "trunc": {"float": "truncf", "double": "trunc"},
             "inversesqrt": {"float": "rsqrtf", "double": "sqrt"},
         }
