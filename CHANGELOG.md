@@ -105,6 +105,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - SPIR-V output declares immutable scalar, vector and matrix globals with constant initializers as constants, so `constant uint T = W * 3;` is valid, and flattens structure members of vertex outputs and fragment inputs that carry no location, such as the nested structures of a Metal mesh pipeline's `[[stage_in]]`. They used to overlap the next member's location.
 - GLSL output of a multi-stage file emits each helper only under the macros of the stages that call it, so a fragment-only helper that calls `fwidth` no longer breaks the vertex stage. Written half-precision stage inputs are copied into locals, and varyings no longer take the names of entry resource parameters.
 - Depth comparisons with 16-bit float reference values translate.
+- CUDA and HIP output lower `length`, `distance` and `normalize` on `float`, `double` and `half` scalars, the one-component forms of the GLSL geometric functions, to `fabsf(a)`, `fabsf((a) - (b))` and a `cgl_float_normalize` helper that returns `value / fabsf(value)` (`fabs` for `double`, and `cgl_half_length` style helpers that compute in `float` for `half`). They used to write bare calls such as `length(a)` and `distance(a, b)`, which CUDA and HIP do not declare for scalars.
 
 ---
 

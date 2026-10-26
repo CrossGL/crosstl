@@ -3281,6 +3281,44 @@ class TestHipCodeGen:
         assert "makeMask().x ? makeA().x" not in hip_code
         assert "makeMask().x ? nextWeight()" not in hip_code
 
+    def test_scalar_geometric_builtins_use_abs(self):
+        source_code = """
+        shader G {
+            float f(float a, float b, half h, half k, double d, double e) {
+                float x = length(a);
+                float y = distance(a, b);
+                float z = normalize(a);
+                half w = distance(h, k);
+                half v = length(h);
+                half u = normalize(h);
+                double q = distance(d, e) + length(d) + normalize(d);
+                return x + y + z + float(w) + float(v) + float(u) + float(q);
+            }
+        }
+        """
+
+        code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float x = fabsf(a);" in code
+        assert "float y = fabsf((a) - (b));" in code
+        assert "float z = cgl_float_normalize(a);" in code
+        assert "half w = cgl_half_distance(h, k);" in code
+        assert "half v = cgl_half_length(h);" in code
+        assert "half u = cgl_half_normalize(h);" in code
+        assert (
+            "double q = ((fabs((d) - (e)) + fabs(d)) + cgl_double_normalize(d));"
+            in code
+        )
+        assert "return value / fabsf(value);" in code
+        assert "return value / fabs(value);" in code
+        assert (
+            "return __float2half(fabsf(__half2float(lhs) - __half2float(rhs)));" in code
+        )
+        assert "return __float2half(fabsf(__half2float(value)));" in code
+        assert "return __float2half(component / fabsf(component));" in code
+        for bare in ("length(a)", "distance(a, b)", "normalize(a)", "distance(h, k)"):
+            assert f" = {bare};" not in code
+
     def test_vector_geometric_builtins_emit_hip_helpers(self):
         source_code = """
         shader TestShader {

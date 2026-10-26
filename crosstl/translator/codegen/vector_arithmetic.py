@@ -209,12 +209,16 @@ class VectorArithmeticMixin:
                 return self.expression_result_type(raw_args[0])
             if func_name == "cross" and raw_args:
                 return self.expression_result_type(raw_args[0])
-            if func_name in {"dot", "length"} and raw_args:
+            if func_name in {"dot", "distance", "length"} and raw_args:
                 vector_info = self.vector_type_info(
                     self.expression_result_type(raw_args[0])
                 )
                 if vector_info is not None:
                     return vector_info["component_type"]
+                if func_name in {"distance", "length"}:
+                    scalar_type = self.scalar_geometric_type(raw_args[0])
+                    if scalar_type is not None:
+                        return scalar_type
             if (
                 func_name in {
                     "abs",
@@ -1688,6 +1692,10 @@ class VectorArithmeticMixin:
 
     def generate_vector_geometric_call(self, func_name, raw_args, args):
         """Lower vector geometric builtins to generated component-wise helpers."""
+        scalar_call = self.generate_scalar_geometric_call(func_name, raw_args, args)
+        if scalar_call is not None:
+            return scalar_call
+
         if func_name in {"length", "normalize"}:
             if len(raw_args) != 1:
                 return None
@@ -1725,6 +1733,79 @@ class VectorArithmeticMixin:
             return f"{helper_name}({args[0]}, {args[1]})"
 
         return None
+
+    def scalar_geometric_type(self, raw_arg):
+        """Return ``float``, ``double`` or ``half`` for a scalar geometric operand."""
+        arg_type = self.expression_result_type(raw_arg)
+        if arg_type is None or self.vector_type_info(arg_type) is not None:
+            return None
+        if not isinstance(arg_type, str):
+            arg_type = self.convert_type_node_to_string(arg_type)
+        mapped_type = self.map_vector_arithmetic_type(arg_type)
+        if mapped_type in {"float", "double", "half"}:
+            return mapped_type
+        return None
+
+    def generate_scalar_geometric_call(self, func_name, raw_args, args):
+        """Lower the one-component forms of length, distance and normalize.
+
+        For a scalar ``x``, ``length(x)`` is ``abs(x)``, ``distance(a, b)`` is
+        ``abs(a - b)`` and ``normalize(x)`` is ``x / abs(x)``. CUDA and HIP
+        declare none of these functions for scalars.
+        """
+        arity = {"length": 1, "normalize": 1, "distance": 2}.get(func_name)
+        if arity is None or len(raw_args) != arity or len(args) != arity:
+            return None
+        scalar_types = {self.scalar_geometric_type(raw_arg) for raw_arg in raw_args}
+        if len(scalar_types) != 1:
+            return None
+        scalar_type = scalar_types.pop()
+        if scalar_type is None:
+            return None
+
+        if scalar_type == "half":
+            helper_name = self.require_scalar_half_geometric_helper(func_name)
+            return f"{helper_name}({', '.join(args)})"
+
+        abs_name = "fabs" if scalar_type == "double" else "fabsf"
+        if func_name == "length":
+            return f"{abs_name}({args[0]})"
+        if func_name == "distance":
+            return f"{abs_name}(({args[0]}) - ({args[1]}))"
+
+        helper_name = f"cgl_{scalar_type}_normalize"
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline {scalar_type} {helper_name}({scalar_type} value)\n"
+                "{\n"
+                f"    return value / {abs_name}(value);\n"
+                "}"
+            )
+        return f"{helper_name}({args[0]})"
+
+    def require_scalar_half_geometric_helper(self, func_name):
+        helper_name = f"cgl_half_{func_name}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        if func_name == "distance":
+            parameters = "half lhs, half rhs"
+            body = (
+                "    return __float2half("
+                "fabsf(__half2float(lhs) - __half2float(rhs)));\n"
+            )
+        elif func_name == "length":
+            parameters = "half value"
+            body = "    return __float2half(fabsf(__half2float(value)));\n"
+        else:
+            parameters = "half value"
+            body = (
+                "    float component = __half2float(value);\n"
+                "    return __float2half(component / fabsf(component));\n"
+            )
+        signature = f"__device__ inline half {helper_name}({parameters})"
+        self.helper_functions[helper_name] = f"{signature}\n{{\n{body}}}"
+        return helper_name
 
     def generate_abs_call(self, raw_args, args):
         """Lower abs with scalar type awareness and vector helper support."""

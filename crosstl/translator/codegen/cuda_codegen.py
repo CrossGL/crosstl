@@ -3483,7 +3483,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if smoothstep_call is not None:
                 return smoothstep_call
 
-        if func_name in {"dot", "cross", "length", "normalize"}:
+        if func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
