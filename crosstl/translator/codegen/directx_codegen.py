@@ -469,6 +469,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .operator_spellings import map_c_family_operator
 from .pack_builtins import PACK_FUNCTIONS, emit_hlsl_pack_helpers, hlsl_pack_call
 from .pointer_reinterpret import (
@@ -16086,6 +16087,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return component_type, suffix[0], suffix[2]
         return None
 
+    def hlsl_numeric_matrix_type(self, vtype):
+        # Boolean matrices have no product; their compound assignments are refused elsewhere.
+        shape = self.hlsl_matrix_shape(vtype)
+        return shape is not None and shape[0] != "bool"
+
     def hlsl_matrix_dimensions(self, vtype):
         matrix_shape = self.hlsl_matrix_shape(vtype)
         if matrix_shape is None:
@@ -24734,6 +24740,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target = node.left
             value = node.right
             op = getattr(node, "operator", "=")
+
+        # HLSL *= on matrices is component-wise; CrossGL's is the product.
+        matrix_product = matrix_product_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            target_type_of=self.hlsl_assignment_target_type,
+            is_matrix=self.hlsl_numeric_matrix_type,
+            is_vector=self.is_vector_value_type,
+            backend="directx",
+        )
+        if matrix_product is not None:
+            return self.generate_assignment(
+                matrix_product, statement_context=statement_context
+            )
 
         private_rebase = self.generate_hlsl_private_pointer_rebase_assignment(
             node, target, value, op, statement_context=statement_context
