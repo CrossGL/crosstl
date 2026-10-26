@@ -8881,6 +8881,9 @@ class MojoCodeGen:
             comparison = self.generate_vector_comparison(expr)
             if comparison is not None:
                 return comparison
+            boolean_vector_logical = self.generate_boolean_vector_logical_op(expr)
+            if boolean_vector_logical is not None:
+                return boolean_vector_logical
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
@@ -12679,6 +12682,32 @@ class MojoCodeGen:
             left = f"SIMD[{info[0]}, {info[2]}]({left})"
         method = MOJO_VECTOR_COMPARISON_METHODS[self.map_operator(expr.op)]
         return f"({left}).{method}({right})"
+
+    def generate_boolean_vector_logical_op(self, expr):
+        """Combine two boolean vector masks per component.
+
+        Mojo's ``and`` and ``or`` return one whole operand, chosen by whether
+        any lane of the left mask is true, so ``&&`` and ``||`` on boolean
+        vectors are written with the lane-wise ``&`` and ``|``. Scalar ``bool``
+        operands keep ``and`` and ``or``, which short-circuit.
+        """
+        op = self.map_operator(expr.op)
+        if op not in {"and", "or"}:
+            return None
+        left_info = self.vector_type_info(self.expression_result_type(expr.left))
+        right_info = self.vector_type_info(self.expression_result_type(expr.right))
+        if left_info is None or right_info is None:
+            return None
+        if left_info[0] != "DType.bool" or right_info[0] != "DType.bool":
+            return None
+        if left_info != right_info:
+            raise ValueError(
+                "Mojo boolean vector && and || require masks of the same width"
+            )
+        left = self.generate_expression(expr.left)
+        right = self.generate_expression(expr.right)
+        lane_op = "&" if op == "and" else "|"
+        return f"({left} {lane_op} {right})"
 
     def generate_boolean_vector_reduction(self, name, args):
         if name not in {"any", "all"} or len(args) != 1:
