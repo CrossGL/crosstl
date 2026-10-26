@@ -4,8 +4,10 @@ A :class:`Program` is one compute kernel with an ``int`` input buffer ``a``, an 
 global invocation index ``i``, plus helper functions. Every expression is explicitly typed: operands of a binary
 operator have the same type, conversions are explicit and comparisons take scalars, so one program prints as valid
 MSL, HLSL, GLSL, CrossGL and SPIR-V without any implicit-conversion rule of its own. Integer divisors are forced
-odd and shift counts are masked, so no constant folding can divide by zero or shift past the width. A float literal
-converted to ``int`` or ``uint`` is clamped into the target range, so no conversion folds to an undefined value.
+odd and shift counts are masked, so no constant folding can divide by zero or shift past the width. A float
+converted to ``int`` or ``uint`` is kept in the target range, a literal by clamping its value and any other
+expression through ``min(max(x, low), high)``, which also takes a NaN to ``low``, so no conversion folds to an
+undefined value.
 
 ``programs(config)`` is the hypothesis strategy. Hypothesis shrinks a failing program structurally (fewer
 statements, smaller expressions), which is what makes crash reproducers short.
@@ -235,6 +237,13 @@ class Config:
     switch: bool = True
 
 
+def _only_literals(node):
+    """Whether ``node`` is a literal or a vector built only from literals."""
+    if isinstance(node, Construct):
+        return all(_only_literals(arg) for arg in node.args)
+    return isinstance(node, Literal)
+
+
 def _clamp_float_literals(node, low, high):
     """Clamp a float literal, or the literals of a vector built from them, into ``[low, high]``."""
     if isinstance(node, Literal) and node.type.kind == "float":
@@ -423,10 +432,19 @@ class _Builder:
         kind = self.choice(tuple(k for k in KINDS if k != type_.kind))
         operand = self.expr(Type(kind, type_.size), depth)
         if kind == "float" and type_.kind in FLOAT_TO_INTEGER_RANGE:
-            operand = _clamp_float_literals(
-                operand, *FLOAT_TO_INTEGER_RANGE[type_.kind]
-            )
+            operand = self.in_range(operand, *FLOAT_TO_INTEGER_RANGE[type_.kind])
         return Convert(type_, operand)
+
+    def in_range(self, operand, low, high):
+        """``operand`` kept in ``[low, high]``. Anything but literals can still fold to a constant out of range or
+        to NaN (``1e10 * 2.5``, ``sqrt(-1.0)``, a variable holding one), so it goes through ``min(max(x, low),
+        high)``; DXC folds ``max(NaN, low)`` to ``low``, where its ``clamp`` keeps the NaN.
+        """
+        if _only_literals(operand):
+            return _clamp_float_literals(operand, low, high)
+        type_ = operand.type
+        raised = Builtin("max", (operand, self.splat(type_, low)), type_)
+        return Builtin("min", (raised, self.splat(type_, high)), type_)
 
     def builtins_for(self, type_):
         names = []
