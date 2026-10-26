@@ -93,6 +93,9 @@ _PRIMITIVE_BUILTINS = {
     "gl_ViewportIndex": ("viewportIndex", "uint", True),
 }
 _BUILTIN_BLOCKS = frozenset({"gl_MeshPerVertexEXT", "gl_MeshPerPrimitiveEXT"})
+_BUILTIN_ARRAYS = _INDEX_ARRAYS | {_VERTICES, _PRIMITIVES}
+# GLSL qualifies an output ``out``; the SPIR-V importer marks it ``@output``.
+_OUTPUT = frozenset({"out", "output"})
 _DROPPED_ATTRIBUTES = frozenset(
     {"input", "output", "in", "out", "glsl_interface_block"}
 )
@@ -386,6 +389,13 @@ def _carried_attributes(node, location):
     return attributes
 
 
+def _named_type(type_node):
+    """The name of a named (struct) type, or ``None``."""
+    return (
+        getattr(type_node, "name", None) if isinstance(type_node, A.NamedType) else None
+    )
+
+
 def _builtin_type(type_name):
     if type_name == "vec4":
         return A.VectorType(A.PrimitiveType("float"), 4)
@@ -438,7 +448,7 @@ class _MeshRaising:
         payload = _single_payload(
             self.program, self.stage, self.target, self.payload_users
         )
-        vertex_outputs, primitive_outputs, blocks = self.interface()
+        vertex_outputs, primitive_outputs, blocks, builtin_outputs = self.interface()
         used = _builtin_members(self.entry.body)
         vertex_struct, primitive_struct = self.fresh("MeshVertex"), self.fresh(
             "MeshPrimitive"
@@ -529,7 +539,12 @@ class _MeshRaising:
             self.program.structs.append(A.StructNode(primitive_struct, primitive_nodes))
         self.stage.layout_qualifiers = []
         self.drop_declarations(
-            [*vertex_outputs, *primitive_outputs, *([payload] if payload else [])],
+            [
+                *vertex_outputs,
+                *primitive_outputs,
+                *builtin_outputs,
+                *([payload] if payload else []),
+            ],
             blocks,
         )
 
@@ -573,14 +588,18 @@ class _MeshRaising:
 
     def interface(self):
         """The stage's per-vertex and per-primitive output variables and its ``out`` blocks."""
-        vertex_outputs, primitive_outputs = [], []
+        vertex_outputs, primitive_outputs, builtin_outputs = [], [], []
         for variable in [
             *(getattr(self.program, "global_variables", None) or []),
             *(getattr(self.stage, "local_variables", None) or []),
         ]:
-            if not isinstance(variable, A.VariableNode) or "out" not in _names(
-                variable
+            if not isinstance(variable, A.VariableNode) or not (
+                _names(variable) & _OUTPUT
             ):
+                continue
+            if variable.name in _BUILTIN_ARRAYS:
+                # The SPIR-V importer declares the index array it writes; it is the @indices parameter.
+                builtin_outputs.append(variable)
                 continue
             if not isinstance(variable.var_type, A.ArrayType):
                 self.refuse(
@@ -611,7 +630,7 @@ class _MeshRaising:
                     "output-block",
                 )
             blocks.append(struct)
-        return vertex_outputs, primitive_outputs, blocks
+        return vertex_outputs, primitive_outputs, blocks, builtin_outputs
 
     def structure(self, outputs, blocks, builtins, used, builtin_array):
         """``{interface name: member map}`` and the struct members for one of the two output structures.
@@ -632,7 +651,17 @@ class _MeshRaising:
                         [A.AttributeNode(builtin)],
                     )
                 )
+        structs = {
+            struct.name: struct
+            for struct in getattr(self.program, "structs", None) or []
+        }
+        flattened = []
         for variable in outputs:
+            struct = structs.get(_named_type(variable.var_type.element_type))
+            if struct is not None:
+                # A SPIR-V Block output array, which GLSL spells as an arrayed ``out`` block.
+                flattened.append((variable.name, struct, variable))
+                continue
             member = self.taken(variable.name, taken)
             members[variable.name] = member
             nodes.append(
@@ -652,23 +681,42 @@ class _MeshRaising:
                     "",
                 )
             )
-            block_location = explicit_location(block)
-            mapped = members.setdefault(instance, {})
-            for block_member in block.members or []:
-                own = explicit_location(block_member)
-                location = own if own is not None else block_location
-                member = self.taken(block_member.name, taken)
-                mapped[block_member.name] = member
-                nodes.append(
-                    _member(
-                        member,
-                        copy.deepcopy(block_member.member_type),
-                        _carried_attributes(block_member, location),
-                    )
-                )
-                if location is not None:
-                    block_location = location + location_span(block_member.member_type)
+            flattened.append((instance, block, block))
+        for instance, struct, located in flattened:
+            members[instance] = self.flatten(struct, located, nodes, taken)
         return members, nodes
+
+    def flatten(self, struct, located, nodes, taken):
+        """Members of an output block or struct-typed output array, as ``{member: interface member}``.
+
+        Each member takes its own location, else the next one after the previous member's, starting from the
+        location of ``located`` (the block or the output variable).
+        """
+        block_location = explicit_location(located)
+        mapped = {}
+        for block_member in struct.members or []:
+            if (
+                _names(block_member) & _PER_PRIMITIVE
+                and not _names(located) & _PER_PRIMITIVE
+            ):
+                self.refuse(
+                    f"mesh output '{struct.name}' mixes per-vertex and per-primitive members",
+                    "output-block",
+                )
+            own = explicit_location(block_member)
+            location = own if own is not None else block_location
+            member = self.taken(block_member.name, taken)
+            mapped[block_member.name] = member
+            nodes.append(
+                _member(
+                    member,
+                    copy.deepcopy(block_member.member_type),
+                    _carried_attributes(block_member, location),
+                )
+            )
+            if location is not None:
+                block_location = location + location_span(block_member.member_type)
+        return mapped
 
     def taken(self, preferred, taken):
         name, index = preferred, 1
