@@ -926,9 +926,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     OPENCL_BARRIER_DEVICE_FENCES = {
         frozenset({"CLK_GLOBAL_MEM_FENCE"}): "memoryBarrierBuffer",
         frozenset({"CLK_IMAGE_MEM_FENCE"}): "memoryBarrierImage",
-        frozenset({"CLK_GLOBAL_MEM_FENCE", "CLK_IMAGE_MEM_FENCE"}): (
-            "deviceMemoryBarrier"
-        ),
+        frozenset(
+            {"CLK_GLOBAL_MEM_FENCE", "CLK_IMAGE_MEM_FENCE"}
+        ): "deviceMemoryBarrier",
     }
 
     def format_opencl_barrier_statements(self, args):
