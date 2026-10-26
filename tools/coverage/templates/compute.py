@@ -14,6 +14,7 @@ from . import (
     operators,
     scopes,
     shapes,
+    statements,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
 
@@ -61,6 +62,7 @@ CUDA = {
     **shapes.CUDA,
     **evaluation.CUDA,
     **assignments.CUDA,
+    **statements.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -166,6 +168,7 @@ OPENCL = {
     **shapes.OPENCL,
     **evaluation.OPENCL,
     **assignments.OPENCL,
+    **statements.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -291,6 +294,7 @@ MOJO = {
     **shapes.MOJO,
     **evaluation.MOJO,
     **assignments.MOJO,
+    **statements.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -483,6 +487,7 @@ RUST = {
     **shapes.RUST,
     **evaluation.RUST,
     **assignments.RUST,
+    **statements.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

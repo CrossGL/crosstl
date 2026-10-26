@@ -55,6 +55,11 @@ BAG_SUM = (
     "b.items[0].pos.y + b.items[1].pos.y * 32.0 + b.items[0].w[1] * 1024.0 + b.items[1].w[0] * 16384.0"
     " + b.items[0].w[0] * 262144.0 + b.items[1].w[1] * 4194304.0"
 )
+# limit returns early from a void function, after changing its argument.
+LIMIT = (
+    "void limit(inout float x, float hi) {\n    if (x > hi) {\n        x = hi;\n        return;\n    }\n"
+    "    x = x * 2.0;\n}"
+)
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -500,6 +505,43 @@ C_FAMILY = {
         "bool flags[4];\nfor (int j = 0; j < 4; j++) {\n    flags[j] = ((iin[i] >> j) & 1) == 1;\n}\n"
         "bool either = flags[0] || flags[3];\nflags[1] = !flags[1];\n"
         "outp[i] = (flags[1] ? 1.0 : 0.0) + (flags[2] ? 2.0 : 0.0) + (either ? 4.0 : 0.0) + float(iin[i]) * 8.0;"
+    ),
+    # Values from 2^31 up do not fit an int, so they convert correctly only as unsigned, and float to uint truncates.
+    "unsigned-float-conversion": Template(
+        "uint k = uint(iin[i] & 15);\nfloat big = float(k) * 268435456.0;\nuint u = uint(big);\n"
+        "uint v = u + 2147483648u;\nfloat back = float(v);\n"
+        "outp[i] = float(u >> 24u) + float(v >> 28u) * 512.0 + float(uint(float(k) * 2.75)) * 8192.0"
+        " + (back >= 2147483648.0 ? 524288.0 : 0.0);"
+    ),
+    # An assignment is an expression whose value is the value stored, and chained assignments store right to left.
+    "chained-assignment": Template(
+        "float a;\nfloat b;\nfloat c;\na = b = c = float(iin[i]) * 2.0;\nint j;\nint k;\nj = k = iin[i] + 1;\n"
+        "$vec2 v;\n$vec2 w;\nv = w = $vec2(1.0, float(j));\nc = (b = c + 1.0) * 2.0;\n"
+        "outp[i] = a + b * 32.0 + c * 1024.0 + float(k) * 65536.0 + (v.y == w.y ? 2097152.0 : 0.0);"
+    ),
+    # The default label comes first, and a case may be negative or share its statements with another.
+    "switch-default-position": Template(
+        "int k = iin[i] - 3;\nfloat acc = 0.0;\nswitch (k) {\n    default:\n        acc = 1.0;\n        break;\n"
+        "    case -1:\n        acc = 2.0;\n        break;\n    case 2:\n    case 5:\n        acc = 4.0;\n"
+        "        break;\n    case 0:\n        acc = 8.0;\n        break;\n}\noutp[i] = acc + float(k) * 16.0;"
+    ),
+    # for loops without an initializer or an increment, and loops that count down, one of them unsigned.
+    "for-loop-variants": Template(
+        "int k = iin[i] & 7;\nfloat acc = 0.0;\nfor (; k < 10;) {\n    acc += 1.0;\n    k += 3;\n}\nint j = 0;\n"
+        "for (; j < 4; j++) {\n    acc += 16.0;\n}\nfor (uint u = 4u; u > 0u; u--) {\n    acc += float(u) * 64.0;\n}\n"
+        "for (int m = 9; m >= 0; m -= 4) {\n    acc += 1024.0;\n}\n"
+        "outp[i] = acc + float(k) * 16384.0 + float(j) * 262144.0;"
+    ),
+    "void-return": Template(
+        "float x = float(iin[i]);\nlimit(x, 9.0);\nfloat y = float(iin[i] & 3);\nlimit(y, 2.0);\n"
+        "outp[i] = x + y * 32.0;",
+        LIMIT,
+    ),
+    # Swizzles of a parenthesized expression and of an array element the input picks.
+    "expression-swizzle": Template(
+        "$vec4 v = $vec4(float(iin[i]), 1.0, 2.0, 3.0);\n$vec2 a = (v * 2.0).wy;\n$vec2 b = (v + v.wzyx).zx;\n"
+        "$vec4 arr[2];\narr[0] = v;\narr[1] = v.wzyx;\n$vec2 d = arr[iin[i] & 1].zx;\n"
+        "outp[i] = a.x + a.y * 16.0 + b.x * 256.0 + b.y * 4096.0 + d.x * 65536.0 + d.y * 1048576.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
