@@ -5112,14 +5112,13 @@ class HLSLToCrossGLConverter(
         return code
 
     def generate_do_while_loop(self, node, indent, is_main):
+        # Keep the CrossGL do/while form: a ``continue`` in the body must still
+        # reach the loop condition, which a ``while (true)`` rewrite skips.
         condition = self.generate_expression(node.condition, is_main)
 
-        code = "while (true) {\n"
+        code = "do {\n"
         code += self.generate_function_body(node.body, indent + 1, is_main)
-        code += "    " * (indent + 1) + f"if (!({condition})) {{\n"
-        code += "    " * (indent + 2) + "break;\n"
-        code += "    " * (indent + 1) + "}\n"
-        code += "    " * indent + "}\n"
+        code += "    " * indent + f"}} while ({condition});\n"
         return code
 
     def generate_if_statement(self, node, indent, is_main):

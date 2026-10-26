@@ -125,6 +125,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
@@ -8375,7 +8376,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
         return f"{declaration};"
 
+    def slang_matrix_product_assignment(self, node):
+        # Slang *= on matrices is component-wise; CrossGL's is the product.
+        return matrix_product_assignment(
+            node.left,
+            node.right,
+            node.operator,
+            type_of=self.expression_result_type,
+            is_matrix=self.is_matrix_value_type,
+            is_vector=self.is_vector_value_type,
+            backend="slang",
+        )
+
     def generate_assignment(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
@@ -8399,6 +8415,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment_statement(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
