@@ -50,6 +50,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- CUDA and HIP output combine a vector with a scalar constructor operand such as `float(i)` or `int(x)` under `+`, `-`, `*`, `/` and `%` through the existing vector-scalar helpers, as in `cgl_float3_mul_scalar(v, float(i))`. They used to keep the native operator, as in `(v * float(i))`, which does not compile because `float3` and the other vector types define no arithmetic operators. Scalar constructor calls now have the type they construct.
 - CUDA and HIP output splat a half vector constructor whose only argument is a component of a native `half2`, such as `f16vec3(b.x)` for an `f16vec2 b`, into `cgl_make_half3(b.x, b.x, b.x)`. It used to be written as `cgl_make_half3(b.x)`, which does not compile because `cgl_make_half3` takes three components.
 - WGSL output discards the value of a call statement to a `@must_use` built-in such as `min(a, 4u);` or a structure constructor such as `Pair(a, b);` with a phony assignment, `_ = min(a, 4u);`. The call used to be written as a statement, which WGSL rejects. Atomics, barriers, `textureStore` and functions the shader declares are written unchanged.
 - CUDA and HIP output splat a vector constructor whose only argument is a scalar cast, such as `ivec3(int(x))`, through the `cgl_int3_splat` helper. It used to be written as `make_int3(int(x))`, which does not compile because `make_int3` takes one argument per component.

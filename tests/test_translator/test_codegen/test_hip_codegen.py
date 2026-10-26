@@ -1859,6 +1859,34 @@ class TestHipCodeGen:
         assert "cgl_make_half3(b.x);" not in hip_code
         assert "cgl_make_half4(b.y);" not in hip_code
 
+    def test_vector_with_scalar_constructor_operand_uses_scalar_helpers(self):
+        source_code = """
+        shader Scale {
+            vec3 f(vec3 v, int i) {
+                return v * float(i);
+            }
+            vec3 g(vec3 v, int i) {
+                return float(i) - v;
+            }
+            ivec2 h(ivec2 v, float x) {
+                return v + int(x);
+            }
+            vec4 k(vec4 v, int i) {
+                return v / float(i) % float(i);
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "return cgl_float3_mul_scalar(v, float(i));" in hip_code
+        assert "return cgl_scalar_sub_float3(float(i), v);" in hip_code
+        assert "return cgl_int2_add_scalar(v, int(x));" in hip_code
+        assert "cgl_float4_mod_scalar(cgl_float4_div_scalar(v, float(i))" in hip_code
+        assert "(v * float(i))" not in hip_code
+        assert "(float(i) - v)" not in hip_code
+        assert "(v + int(x))" not in hip_code
+
     def test_fp16_aliases_emit_hip_half_types_and_intrinsics(self):
         source_code = """
         shader TestShader {
