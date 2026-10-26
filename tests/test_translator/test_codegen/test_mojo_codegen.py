@@ -51,7 +51,10 @@ from crosstl.translator.ast import (
     WaveOpNode,
     WildcardPatternNode,
 )
-from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
+from crosstl.translator.codegen.mojo_codegen import (
+    MojoCodeGen,
+    MojoScalarConversionError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -27336,6 +27339,125 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
     assert "comptime comptime = 2" not in generated_code
     assert "fn comptime(" not in generated_code
     assert "var ref:" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "source_type", "target_type", "context"),
+    [
+        (
+            "shader P { float f(vec3 v) { return v; } }",
+            "vec3",
+            "float",
+            "return value",
+        ),
+        (
+            "shader P { bool f(vec3 a, vec3 b) { return a == b; } }",
+            "bvec3",
+            "bool",
+            "return value",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ if (a == b) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "if condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ while (a != b) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "while condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ for (int i = 0; a == b; i++) { return 1.0; } return 0.0; } }"
+            ),
+            "bvec2",
+            "bool",
+            "for condition",
+        ),
+        (
+            (
+                "shader P { float f(vec2 a, vec2 b) "
+                "{ float s = 0.0; do { s = s + 1.0; } while (a == b); return s; } }"
+            ),
+            "bvec2",
+            "bool",
+            "do-while condition",
+        ),
+        (
+            "shader P { float f(vec2 a, vec2 b) { return (a == b) ? 1.0 : 0.0; } }",
+            "bvec2",
+            "bool",
+            "ternary condition",
+        ),
+        (
+            "shader P { float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
+            "vec3",
+            "float",
+            "global declaration g",
+        ),
+        (
+            "shader P { float f(vec4 v) { float s = v; return s; } }",
+            "vec4",
+            "float",
+            "declaration s",
+        ),
+        (
+            "shader P { float f(vec2 v) { float s = 0.0; s = v; return s; } }",
+            "vec2",
+            "float",
+            "assignment target",
+        ),
+        (
+            "shader P { float f(bool c, vec3 v) { return c ? v : 1.0; } }",
+            "vec3",
+            "float",
+            "return value true branch",
+        ),
+    ],
+)
+def test_mojo_refuses_implicit_vector_to_scalar_conversion(
+    code, source_type, target_type, context
+):
+    with pytest.raises(MojoScalarConversionError) as raised:
+        generate_code(parse_code(tokenize_code(code)))
+
+    error = raised.value
+    assert isinstance(error, ValueError)
+    assert error.source_type == source_type
+    assert error.target_type == target_type
+    assert error.reason == "vector-to-scalar"
+    assert context in str(error)
+    assert error.project_diagnostic_code == (
+        "project.translate.mojo-scalar-conversion-unsupported"
+    )
+
+
+def test_mojo_keeps_explicit_vector_reductions_in_scalar_contexts():
+    code = """
+    shader P {
+        bool f(vec3 a, vec3 b) { return all(a == b); }
+        float g(vec3 v) {
+            float s = v.x;
+            if (any(v != v)) { return dot(v, v); }
+            return v.y > 0.0 ? s : length(v);
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert ".reduce_and()" in generated
+    assert ".reduce_or()" in generated
+    assert "var s: Float32 = v[0]" in generated
+    assert "return dot_product(v, v)" in generated
 
 
 if __name__ == "__main__":

@@ -247,7 +247,9 @@ class VectorArithmeticMixin:
             if func_name in self.scalar_float_math_functions() and raw_args:
                 return self.expression_result_type(raw_args[0])
             if isinstance(func_name, str):
-                return self.function_return_types.get(func_name)
+                return self.function_return_types.get(
+                    func_name
+                ) or self.scalar_cast_result_type(node)
             return None
         if isinstance(node, BinaryOpNode):
             left_type = self.expression_result_type(node.left)
@@ -1617,6 +1619,15 @@ class VectorArithmeticMixin:
         if operator == "%" and component_type in {"float", "double"}:
             func_name = "fmod" if component_type == "double" else "fmodf"
             return f"{func_name}({left}, {right})"
+        if operator == "%" and component_type == "half":
+            # ``__half`` has no ``%`` operator: take the remainder of the
+            # components converted to ``float`` the way float vectors do, so
+            # the GLSL floor semantics of the CUDA and HIP generators carry
+            # over, and round the result back to half.
+            remainder = self.format_vector_binary_component(
+                "float", operator, f"__half2float({left})", f"__half2float({right})"
+            )
+            return f"__float2half({remainder})"
         return f"({left} {operator} {right})"
 
     def generate_mod_call(self, raw_args, args):

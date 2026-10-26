@@ -11737,8 +11737,8 @@ def test_copy_native_runtime_evidence_records_bounded_cross_target_proof():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "fac13358ba17271c622634c3e42f9b3cd0863adb75bcfe71aca7ce13aa5628cb",
-        "size_bytes": 1619,
+        "sha256": "8f7725f7bfc591e6aab8ea65cc1088401d624b0eb4f4a131b10dc06d0569755d",
+        "size_bytes": 1668,
         "workgroup_size": [1, 1, 1],
         "resource_layouts": {
             "input_storage": "std430",
@@ -13959,8 +13959,8 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "ff85e35b7e785054d643c872b24356fc4945c1b80fa28e62061c11782798889c",
-        "size_bytes": 120044,
+        "sha256": "ce27978c20089f86b6b00955503b1aede87d1ae6f7400e1adfe88961e3be77ef",
+        "size_bytes": 124401,
         "source_remap_granularity": "file",
         "source_remap_mapping_count": 1,
         "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
@@ -14031,7 +14031,7 @@ def test_fft_current_opengl_evidence_records_native_runtime_proof():
     assert status["runtime_parity_claimed"] is False
 
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
-    assert "current FFT source now also emits a 120,044-byte GLSL artifact" in readme
+    assert "current FFT source now also emits a 124,401-byte GLSL artifact" in readme
     assert "21 deferred specialization constants" in readme
     assert "8-byte size, stride, and alignment" in readme
     assert "19 control barriers and no group-nonuniform instructions" in readme
@@ -17272,7 +17272,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 43106796
+    assert artifact["generatedSizeBytesTotal"] == 42976818
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],
