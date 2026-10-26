@@ -755,6 +755,17 @@ def o_warp(inp):
     return inp.astype(np.int64).reshape(-1, 32).sum(axis=1).astype(np.int32)
 
 
+def o_array_list_assignment(inp):
+    """Brace lists that read the array they replace see its old elements: a rotation, a struct swap, a row swap."""
+    out = []
+    for x in inp.astype(np.int64):
+        a = [x + 2, x, x + 1]
+        q = [(x + 5) * 100 + 1, x * 100 + 1]
+        g = 2 * 1000 + 3 * 100 + x * 10 + 1
+        out.extend(a + q + [g, x * 4, x * 2 + x * 3])
+    return np.array(out, dtype=np.int32)
+
+
 def _width_check(inp, out, group=64, divergent=False):
     """Parametric oracle for SIMD/wave reductions: the reported width w must be uniform and every lane's sum must
     equal the sum over its SIMD-group (consecutive chunks of w threads within each threadgroup); with
@@ -1717,6 +1728,16 @@ CASES = [
         threads=128,
         group=32,
         out_count=128 * warp_cases.RESULTS,
+    ),
+    Case(
+        "x_array_list_assignment",
+        "composite",
+        "Brace lists assigned to int, struct and nested arrays whose elements read the array being assigned",
+        "GLSL 4.60 section 5.8: an assignment stores the value of its right operand, so a list's elements "
+        "are all computed before the array changes, as for the equivalent array constructor",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_array_list_assignment,
     ),
     Case(
         "m_simd_sum",

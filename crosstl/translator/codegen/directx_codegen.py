@@ -237,6 +237,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
+from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
 from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_bfloat16_vectors import (
     HLSLBfloat16Vectors,
@@ -18362,8 +18363,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if array_metadata is not None:
                 return array_metadata["base_type"]
             if array_type and "[" in array_type and "]" in array_type:
-                base_type, _ = split_array_type_suffix(array_type)
-                return base_type
+                # Indexing removes the outermost extent only: g[i] of int[3][2] is int[2].
+                base_type, array_suffix = split_array_type_suffix(array_type)
+                inner = re.fullmatch(r"\[[^\]]*\](.*)", array_suffix or "")
+                return f"{base_type}{inner.group(1)}" if inner else base_type
             buffer_element_type = self.hlsl_typed_buffer_element_type(
                 array_type,
                 {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
@@ -24807,6 +24810,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "without changing evaluation order"
                     ),
                 )
+            list_assignment = generate_hlsl_array_list_assignment(
+                self, target, value, target_type
+            )
+            if list_assignment is not None:
+                return list_assignment
             return "\n".join(
                 self.hlsl_aggregate_assignment_statements(
                     self.generate_expression(target),
@@ -49857,6 +49865,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if self.hlsl_outer_array_type(expected_type) is not None:
             if isinstance(expr, ArrayLiteralNode):
+                list_assignment = generate_hlsl_array_list_assignment(
+                    self, target, expr, expected_type
+                )
+                if list_assignment is not None:
+                    return self.generate_statement_code(list_assignment, indent)
                 statements = self.hlsl_aggregate_assignment_statements(
                     target,
                     expr,
