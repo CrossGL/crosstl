@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ConstructorNode,
@@ -8339,6 +8340,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return "break;"
         elif isinstance(node, ContinueNode):
             return "continue;"
+        elif isinstance(node, BlockNode):
+            return self.generate_block(node)
         else:
             synchronization_statement = self.generate_slang_synchronization_statement(
                 node
@@ -8350,6 +8353,16 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
+
+    def generate_block(self, node):
+        """Render a bare block statement with its own scope."""
+        result = "{\n"
+        self.indent_level += 1
+        for stmt in self.get_statements(node):
+            result += self.emit_statement(stmt) + "\n"
+        self.indent_level -= 1
+        result += self.indent() + "}"
+        return result
 
     def generate_variable_statement(self, node):
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
