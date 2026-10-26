@@ -95,6 +95,7 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_swizzles import expand_scalar_swizzles
@@ -177,6 +178,7 @@ __all__ = [
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
     "RuleInexpressibleError",
+    "RowMajorMemberError",
     "RuleReport",
     "SOURCE_RULES",
     "ShaderExecutionReorderingUnsupportedError",
@@ -280,6 +282,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
+    whose structs cannot carry a matrix layout (:mod:`.row_major_members`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
     texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
@@ -315,6 +319,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
     hoist_static_locals(program, report.target)
+    store_row_major_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     lower_metal_math_spellings(program, report.target)

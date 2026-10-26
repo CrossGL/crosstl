@@ -733,6 +733,35 @@ def o_buffer_count(inp):
     return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
 
 
+def row_major_inputs():
+    """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
+    rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
+        np.float32
+    )
+    words = np.zeros((64, 2, 4), dtype=np.float32)
+    words[:, :, :3] = rows
+    return words.reshape(-1)
+
+
+def o_row_major_members(inp):
+    """The row-major mat4x2 results, row by row, followed by the columns read back from them."""
+    rows = inp.reshape(64, 2, 4)[:, :, :3].astype(np.float64)
+    out_w, out_o = [], []
+    for m in rows:  # m[r][c]: row r, column c
+        col = m[:, 2]
+        e = m[0, 1]
+        mv = m @ np.array([1.0, 2.0, 3.0])
+        w = np.stack(
+            [m[:, 0], m[:, 1], m[:, 2], col + e + mv[0] + mv[1]], axis=1
+        )  # 2 rows, 4 columns
+        w[0, 0] += 1.0
+        w[1, 1] += 1.0
+        w[:, 2] += 0.5
+        out_w.extend(w.reshape(-1))
+        out_o.extend([w[0, 0], w[1, 0], w[0, 1], w[1, 1]])
+    return np.array(out_w + out_o, dtype=np.float32)
+
+
 def o_mirror(inp):
     """Each 64-element group reversed: workgroup memory is shared by the group."""
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
@@ -1914,6 +1943,16 @@ CASES = [
         np.int32,
         control_flow_cases.short_circuit_reference,
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_row_major_members",
+        "S20",
+        "layout(row_major) mat3x2 and mat4x2 block members: matrix, column and element reads, a matrix times a "
+        "vector, whole and compound writes",
+        "GLSL 4.60 section 7.6.2.2: a row-major matrix is laid out like an array of its row vectors",
+        row_major_inputs(),
+        np.float32,
+        o_row_major_members,
     ),
     Case(
         "u_atomic_add",
