@@ -716,6 +716,14 @@ class DirectXMeshStageProfileError(ValueError):
         self.shader_attribute = shader_attribute
 
 
+class DirectXMeshOutputCountsError(ValueError):
+    """Raised when a mesh stage does not call SetMeshOutputCounts exactly once, outside loops and outside
+    thread-varying control flow."""
+
+    project_diagnostic_code = "project.translate.directx-mesh-output-counts-unsupported"
+    missing_capabilities = ("directx.mesh-output-counts",)
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -36414,7 +36422,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.hlsl_statement_contains_set_mesh_output_counts(stmt)
                 )
                 if contains_output_count and in_loop:
-                    raise ValueError(
+                    raise DirectXMeshOutputCountsError(
                         "DirectX mesh SetMeshOutputCounts must not be called from "
                         "loop control flow"
                     )
@@ -36427,7 +36435,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                 )
                 if contains_output_count and branch_is_thread_varying:
-                    raise ValueError(
+                    raise DirectXMeshOutputCountsError(
                         "DirectX mesh SetMeshOutputCounts must not be called from "
                         "thread-varying control flow"
                     )
@@ -36445,12 +36453,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 stmt
             )
             if contains_output_count and in_loop:
-                raise ValueError(
+                raise DirectXMeshOutputCountsError(
                     "DirectX mesh SetMeshOutputCounts must not be called from "
                     "loop control flow"
                 )
             if contains_output_count and in_thread_varying_branch:
-                raise ValueError(
+                raise DirectXMeshOutputCountsError(
                     "DirectX mesh SetMeshOutputCounts must not be called from "
                     "thread-varying control flow"
                 )
@@ -37275,7 +37283,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         output_count_calls = self.hlsl_mesh_output_call_count(func)
         if output_count_calls != 1:
-            raise ValueError(
+            raise DirectXMeshOutputCountsError(
                 "DirectX mesh stage output signature must call "
                 "SetMeshOutputCounts exactly once"
             )
