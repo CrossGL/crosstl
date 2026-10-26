@@ -20,6 +20,11 @@ ABSENT = Template(entry="<absent>")
 PAIR = "struct Pair {\n    float a;\n    float b;\n};"
 NESTED_STRUCTS = PAIR + "\nstruct Frame {\n    Pair p;\n    float w;\n};"
 MAKE_PAIR = "Pair make(float x) {\n    Pair p;\n    p.a = x;\n    p.b = x * 2.0;\n    return p;\n}"
+BINS = "struct Bins {\n    float v[3];\n    int n;\n};"
+FIND = (
+    "float find(int n, float x) {\n    for (int k = 0; k < 8; k++) {\n        if (k == n) {\n"
+    "            return x + float(k);\n        }\n    }\n    return -1.0;\n}"
+)
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -83,6 +88,11 @@ OPERATORS = {
     ),
     "signed-to-unsigned": Template(
         "uint a = uint(iin[i] - 8);\noutp[i] = float(a >> 28u) + float(int(a) + 8);"
+    ),
+    # Unsigned arithmetic wraps modulo 2^32: b comes back to the input, and c and d keep their wrapped top bits.
+    "unsigned-wraparound": Template(
+        "uint a = 4294967295u;\nuint n = uint(iin[i]);\nuint b = a + n + 1u;\nuint c = n * 2654435761u;\n"
+        "uint d = n - 16u;\noutp[i] = float(b) + float(c >> 28u) * 16.0 + float(d >> 28u) * 256.0;"
     ),
     "compound-assignment": Template(
         "int a = iin[i];\na += 3;\na -= 1;\na *= 5;\na /= 2;\na %= 7;\na <<= 2;\na >>= 1;\na &= 13;\na |= 16;\n"
@@ -260,6 +270,28 @@ C_FAMILY = {
         "$ivec2 a = $ivec2(iin[i], 3);\n$ivec2 b = a * 2 + $ivec2(1, 5);\n"
         "$ivec2 c = (b >> 1) ^ (b & $ivec2(6, 6));\n$ivec2 d = b / 3 + b % 4;\n"
         "outp[i] = float(c.x * 100 + c.y * 10 + d.x + d.y * 1000);"
+    ),
+    # A scalar condition picks a whole vector.
+    "vector-conditional": Template(
+        "$vec2 a = $vec2(fin[i], 1.0);\n$vec2 b = $vec2(2.0, fin[i] * 4.0);\n$vec2 r = iin[i] > 7 ? a : b;\n"
+        "outp[i] = r.x * 16.0 + r.y;"
+    ),
+    # find() returns from inside its loop when it reaches n, and after the loop only for n of 8 or more.
+    "loop-return": Template("outp[i] = find(iin[i], fin[i]);", FIND),
+    "numeric-literals": Template(
+        "int h = 0x1F + 0X0a;\nuint m = 0xFFu & uint(iin[i] * 37);\nfloat e = 2.5e-1 + 1E2 + .5;\n"
+        "outp[i] = float(h) + float(m) * 64.0 + e * 4.0;"
+    ),
+    # The input picks the element it overwrites; the other two keep the values the loop gave them.
+    "struct-array-member": Template(
+        "Bins b;\nfor (int k = 0; k < 3; k++) {\n    b.v[k] = float(k + 1);\n}\nb.n = iin[i];\n"
+        "b.v[iin[i] % 3] = fin[i];\noutp[i] = b.v[0] * 64.0 + b.v[1] * 8.0 + b.v[2] + float(b.n) * 512.0;",
+        BINS,
+    ),
+    # One declaration names several variables, one of them without an initializer.
+    "multiple-declarators": Template(
+        "float a = fin[i], b = 2.0, c;\nc = a * 4.0 + b;\nint j = 1, k = iin[i];\n"
+        "outp[i] = c + float(j + k) * 64.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,

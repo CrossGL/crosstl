@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import composites, constructors, functions, operators, scopes
+from . import composites, constructors, declarations, functions, operators, scopes
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -485,6 +485,7 @@ WGSL = {
     **functions.WGSL,
     **constructors.WGSL,
     **scopes.WGSL,
+    **declarations.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
