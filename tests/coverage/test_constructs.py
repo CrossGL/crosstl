@@ -367,6 +367,16 @@ def test_a_kernel_probe_declares_only_the_input_buffers_it_reads():
     )
 
 
+def test_a_kernel_template_can_give_the_output_element_type():
+    # The output buffer holds float unless the template names another element type, in the language's spelling.
+    vectors = probes.build(_feature("glsl", "vector-buffer"), "glsl").source
+    assert "buffer B1 { vec4 outp[]; };" in vectors
+    pairs = probes.build(_feature("wgsl", "struct-buffer"), "wgsl").source
+    assert "array<Pair>" in pairs and "array<f32>" in pairs
+    crossgl_probe = probes.build(_feature("glsl", "vector-buffer"), "crossgl").source
+    assert "vec4* outp" in crossgl_probe
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {

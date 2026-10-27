@@ -391,6 +391,35 @@ def _curated() -> list[Construct]:
             "StorageClass.StorageBuffer",
         ),
         c("resource", "uniform-in-helper", "OpFunctionCall", "StorageClass.Uniform"),
+        c(
+            "resource",
+            "vector-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeVector",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "struct-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "struct-buffer-copy",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "OpCompositeExtract",
+        ),
+        c("resource", "uniform-members", "StorageClass.Uniform", "Decoration.Offset"),
+        c("resource", "uniform-vector", "StorageClass.Uniform", "OpTypeVector"),
+        c(
+            "resource",
+            "uniform-vector-packing",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
     ]
 
 
@@ -516,6 +545,8 @@ def build(feature: Feature, dialect):
         for scalar, name in _BUFFERS
         if name == "outp" or name in read
     ]
+    if template.output:
+        buffers[-1] = (_Text(template.output).substitute(spelled), "outp")
     source = dialect.kernel(
         buffers,
         _lines(template.body, spelled),
