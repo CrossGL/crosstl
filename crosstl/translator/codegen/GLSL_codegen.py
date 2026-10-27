@@ -196,6 +196,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -12202,6 +12203,10 @@ class GLSLCodeGen(
                 )
                 clear_interval_targets(loop_intervals, mutated)
                 visit(getattr(value, "init", None), loop_intervals)
+                if isinstance(getattr(value, "init", None), list):
+                    # for (int a = 0, b = n; ...) declares no single induction counter for the bounds below, so a
+                    # declared variable the loop writes has no proven range inside the loop.
+                    clear_interval_targets(loop_intervals, mutated)
                 bounded = bounded_loop_bounds(value, loop_intervals, mutated)
                 count = bounded[0] if bounded is not None else None
                 if count == 0:
@@ -39547,6 +39552,12 @@ complex64_t crossgl_complex64_mod_assign(
             return ""
         if isinstance(init, str):
             return init
+        if isinstance(init, list):
+            return join_for_initializer(
+                [self.generate_for_initializer(item) for item in init],
+                [isinstance(item, VariableNode) for item in init],
+                "opengl",
+            )
         if isinstance(init, VariableNode) or (
             hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
         ):
