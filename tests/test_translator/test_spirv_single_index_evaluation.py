@@ -57,7 +57,8 @@ SIDE_EFFECT_CASES = {
 def _spirv(tmp_path, body):
     path = tmp_path / "index.cgl"
     path.write_text(SHADER.replace("BODY", body))
-    return crosstl.translate(str(path), backend="vulkan")
+    # Unformatted output keeps numeric ids whether or not SPIRV-Tools is installed.
+    return crosstl.translate(str(path), backend="vulkan", format_output=False)
 
 
 def _main_body(spirv):
@@ -66,8 +67,12 @@ def _main_body(spirv):
     return spirv[start : spirv.index("OpFunctionEnd", start)]
 
 
-def _stores_to(body, name):
-    return len(re.findall(rf"OpStore %{name} ", body))
+def _id(spirv, name):
+    return re.search(rf'OpName (%\S+) "{name}"\n', spirv).group(1)
+
+
+def _stores_to(spirv, body, name):
+    return len(re.findall(rf"OpStore {re.escape(_id(spirv, name))} ", body))
 
 
 def _validate(tmp_path, spirv):
@@ -97,38 +102,38 @@ def test_side_effecting_index_runs_once(tmp_path, body):
     main = _main_body(spirv)
     # One store for `k = 0`, one for the single evaluation of the index.
     expected = 1 if "next()" in body or "j = k" in body else 2
-    assert _stores_to(main, "k") == expected
+    assert _stores_to(spirv, main, "k") == expected
     if "next()" in body:
         assert main.count("OpFunctionCall") == 1
     if "j = k" in body:
-        assert _stores_to(main, "j") == 1
+        assert _stores_to(spirv, main, "j") == 1
     _validate(tmp_path, spirv)
 
 
 def test_declaration_reads_the_element_the_side_effect_selected(tmp_path):
-    main = _main_body(_spirv(tmp_path, "float a = t[k--]; outp[i] = a;"))
-    old_k = re.search(r"(%\S+) = OpLoad %int %k\n\s*%\S+ = OpISub %int \1 ", main)
+    spirv = _spirv(tmp_path, "float a = t[k--]; outp[i] = a;")
+    main = _main_body(spirv)
+    k, t = (re.escape(_id(spirv, name)) for name in ("k", "t"))
+    old_k = re.search(rf"(%\S+) = OpLoad \S+ {k}\n\s*%\S+ = OpISub \S+ \1 ", main)
     assert old_k is not None
-    chains = re.findall(
-        rf"(%\S+) = OpAccessChain %_ptr_Private_float %t (%\S+)\n", main
-    )
+    chains = re.findall(rf"(%\S+) = OpAccessChain \S+ {t} (%\S+)\n", main)
     # Every access chain the declaration builds indexes with the value `k` had before `--`.
     declaration_chains = [chain for chain, used in chains if used == old_k.group(1)]
     assert declaration_chains
     assert len(chains) == len(declaration_chains) + 4  # t[0] .. t[3] = ...
     assert any(
-        re.search(rf"= OpLoad %float {re.escape(chain)}\n", main)
+        re.search(rf"= OpLoad \S+ {re.escape(chain)}\n", main)
         for chain in declaration_chains
     )
 
 
 def test_storage_buffer_declaration_indexes_with_one_value(tmp_path):
-    main = _main_body(_spirv(tmp_path, "float a = outp[k++]; outp[i] = a;"))
-    old_k = re.search(r"(%\S+) = OpLoad %int %k\n\s*%\S+ = OpIAdd %int \1 ", main)
+    spirv = _spirv(tmp_path, "float a = outp[k++]; outp[i] = a;")
+    main = _main_body(spirv)
+    k, outp = (re.escape(_id(spirv, name)) for name in ("k", "outp"))
+    old_k = re.search(rf"(%\S+) = OpLoad \S+ {k}\n\s*%\S+ = OpIAdd \S+ \1 ", main)
     assert old_k is not None
-    indices = re.findall(
-        r"OpAccessChain %_ptr_Uniform_float %outp %int_0 (%\S+)\n", main
-    )
+    indices = re.findall(rf"OpAccessChain \S+ {outp} \S+ (%\S+)\n", main)
     # The declaration's chains all use the old `k`; the final store indexes with `i`.
     assert set(indices[:-1]) == {old_k.group(1)}
     assert indices[-1] != old_k.group(1)
@@ -144,5 +149,5 @@ def test_storage_buffer_declaration_indexes_with_one_value(tmp_path):
 )
 def test_pure_index_declarations_still_translate(tmp_path, body):
     spirv = _spirv(tmp_path, body)
-    assert _stores_to(_main_body(spirv), "k") == 1
+    assert _stores_to(spirv, _main_body(spirv), "k") == 1
     _validate(tmp_path, spirv)
