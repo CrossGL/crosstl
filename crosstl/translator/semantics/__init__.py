@@ -130,6 +130,7 @@ from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
 )
+from .struct_constructor_conversions import convert_struct_constructor_arguments
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
     StructuredLayoutUnsupportedError,
@@ -267,6 +268,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
+    A structure constructor argument whose type converts implicitly to its member's type is converted explicitly
+    (:mod:`.struct_constructor_conversions`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
     inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
     becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
@@ -368,6 +371,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    convert_struct_constructor_arguments(program)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
