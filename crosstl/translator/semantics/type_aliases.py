@@ -288,7 +288,9 @@ class _Resolver:
             kept.append(item)
             self.node(item, scope)
             if statements and self.hides(item, scope):
-                scope = {name: value for name, value in scope.items() if name != item.name}
+                scope = {
+                    name: value for name, value in scope.items() if name != item.name
+                }
         if len(kept) != len(items) or any(a is not b for a, b in zip(kept, items)):
             items[:] = kept
 
@@ -326,7 +328,9 @@ class _Resolver:
             if isinstance(value, str) and value in env:
                 spelled = type_constructor_name(env[value])
                 setattr(
-                    node, field, spelled if spelled is not None else deepcopy(env[value])
+                    node,
+                    field,
+                    spelled if spelled is not None else deepcopy(env[value]),
                 )
 
     def call(self, node, env):

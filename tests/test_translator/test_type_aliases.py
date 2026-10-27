@@ -153,43 +153,57 @@ def _program_body(text):
 
 @pytest.mark.parametrize("target", RESOLVING_TARGETS)
 def test_program_alias_resolves_where_the_generator_declares_none(tmp_path, target):
-    output = crosstl.translate(_write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend=target)
+    output = crosstl.translate(
+        _write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend=target
+    )
     assert _alias_mentions(_program_body(output), ("real",)) == []
 
 
 def test_wgsl_program_alias_is_not_a_private_variable(tmp_path):
-    output = crosstl.translate(_write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend="wgsl")
+    output = crosstl.translate(
+        _write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend="wgsl"
+    )
     assert "var<private> real" not in output
     assert re.search(r"var x\s*:\s*f32\s*=\s*f32\(", output)
 
 
 def test_spirv_translates_a_conversion_through_a_program_alias(tmp_path):
-    output = crosstl.translate(_write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend="vulkan")
+    output = crosstl.translate(
+        _write(tmp_path, "alias.cgl", PROGRAM_ALIAS), backend="vulkan"
+    )
     assert "OpConvertSToF" in output
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_scoped_aliases_leave_no_alias_name_in_code(tmp_path, target):
-    output = crosstl.translate(_write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend=target)
+    output = crosstl.translate(
+        _write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend=target
+    )
     assert _alias_mentions(_program_body(output), ALIAS_NAMES) == []
 
 
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
 def test_stage_and_block_aliases_are_not_variables(tmp_path, target):
-    output = crosstl.translate(_write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend=target)
+    output = crosstl.translate(
+        _write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend=target
+    )
     assert not re.search(r"\buint\s+index\s*;", output)
     assert not re.search(r"\bint\s+count\s*;", output)
 
 
 def test_hlsl_resolves_an_alias_chain(tmp_path):
-    output = crosstl.translate(_write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend="directx")
+    output = crosstl.translate(
+        _write(tmp_path, "scoped.cgl", SCOPED_ALIASES), backend="directx"
+    )
     assert re.search(r"\bfloat3\s+p\s*=\s*float3\(", output)
     assert re.search(r"\bPair\s+k\b", output)
 
 
 @pytest.mark.parametrize("target", ["metal", "wgsl", "opengl"])
 def test_sibling_block_aliases_keep_their_own_types(tmp_path, target):
-    output = crosstl.translate(_write(tmp_path, "blocks.cgl", BLOCK_ALIASES), backend=target)
+    output = crosstl.translate(
+        _write(tmp_path, "blocks.cgl", BLOCK_ALIASES), backend=target
+    )
     integer = {"metal": "int", "opengl": "int", "wgsl": "i32"}[target]
     real = {"metal": "float", "opengl": "float", "wgsl": "f32"}[target]
     if target == "wgsl":
@@ -204,7 +218,9 @@ def test_sibling_block_aliases_keep_their_own_types(tmp_path, target):
 @pytest.mark.parametrize("target", RESOLVING_TARGETS)
 def test_qualified_alias_is_refused(tmp_path, target):
     with pytest.raises(TypeAliasUnsupportedError) as raised:
-        crosstl.translate(_write(tmp_path, "qualified.cgl", QUALIFIED_ALIAS), backend=target)
+        crosstl.translate(
+            _write(tmp_path, "qualified.cgl", QUALIFIED_ALIAS), backend=target
+        )
     assert raised.value.code.endswith("type-alias-unsupported")
 
 
@@ -227,7 +243,8 @@ def test_resolution_drops_every_alias_declaration():
     program = _parse(SCOPED_ALIASES)
     assert resolve_type_aliases(program, "wgsl") == 6
     assert not any(
-        getattr(variable, "is_type_alias", False) for variable in program.global_variables
+        getattr(variable, "is_type_alias", False)
+        for variable in program.global_variables
     )
     stage = next(iter(program.stages.values()))
     assert [variable.name for variable in stage.local_variables] == ["iin", "outp"]
@@ -259,7 +276,12 @@ def test_native_targets_keep_program_aliases_with_resolved_chains():
         (A.MatrixType(A.PrimitiveType("float"), 4, 3), "mat3x4"),
         (A.MatrixType(A.PrimitiveType("double"), 2, 2), "dmat2"),
         (A.NamedType("Pair"), "Pair"),
-        (A.ArrayType(A.PrimitiveType("float"), A.LiteralNode(4, A.PrimitiveType("int"))), "float[4]"),
+        (
+            A.ArrayType(
+                A.PrimitiveType("float"), A.LiteralNode(4, A.PrimitiveType("int"))
+            ),
+            "float[4]",
+        ),
         (A.VectorType(A.PrimitiveType("half"), 3), None),
         (A.NamedType("Box", generic_args=[A.PrimitiveType("float")]), None),
         (A.PointerType(A.PrimitiveType("float")), None),
@@ -268,7 +290,9 @@ def test_native_targets_keep_program_aliases_with_resolved_chains():
 def test_constructor_names_round_trip_through_the_parser(type_value, expected):
     assert type_constructor_name(type_value) == expected
     if expected is not None and "[" not in expected:
-        parsed = _parse(f"shader P {{ typedef {expected} t; }}").global_variables[0].var_type
+        parsed = (
+            _parse(f"shader P {{ typedef {expected} t; }}").global_variables[0].var_type
+        )
         assert repr(parsed) == repr(type_value)
 
 
@@ -311,7 +335,18 @@ def test_metal_output_compiles(tmp_path, source):
     )
     if probe.returncode != 0:
         pytest.skip("the Metal compiler is not installed")
-    _run(["xcrun", "-sdk", "macosx", "metal", "-c", str(path), "-o", str(tmp_path / "alias.air")])
+    _run(
+        [
+            "xcrun",
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(path),
+            "-o",
+            str(tmp_path / "alias.air"),
+        ]
+    )
 
 
 @pytest.mark.parametrize("source", [SCOPED_ALIASES, BLOCK_ALIASES])
