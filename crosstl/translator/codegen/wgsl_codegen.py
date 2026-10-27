@@ -6416,13 +6416,23 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self._struct_member_types.get((struct_name, expr.member))
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
+        if isinstance(expr, TernaryOpNode):
+            # WGSL lowers a ternary to select, whose branches share one type.
+            return self._common_value_type(
+                self.expression_type(expr.true_expr),
+                self.expression_type(expr.false_expr),
+            )
         if (
             isinstance(expr, UnaryOpNode)
-            and expr.operator in {"-", "+"}
+            and expr.operator in {"-", "+", "~"}
             and not expr.is_postfix
         ):
             operand_type = self.expression_type(expr.operand)
-            if self.matrix_shape(operand_type) is not None:
+            if (
+                self.matrix_shape(operand_type) is not None
+                or self.vector_shape(operand_type) is not None
+                or self.scalar_type_name(operand_type) is not None
+            ):
                 return operand_type
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
@@ -6508,7 +6518,29 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self.array_element_type(array_type)
         return None
 
+    def _common_value_type(self, left_type, right_type):
+        """The type two WGSL bitwise operands or select branches share, or None."""
+        left_vector = self.vector_shape(left_type)
+        right_vector = self.vector_shape(right_type)
+        left_scalar = self.scalar_type_name(left_type)
+        right_scalar = self.scalar_type_name(right_type)
+        if left_vector is not None and left_vector == right_vector:
+            return left_type
+        if left_vector is not None and right_scalar is not None:
+            return left_type
+        if right_vector is not None and left_scalar is not None:
+            return right_type
+        if left_scalar is not None and left_scalar == right_scalar:
+            return left_scalar
+        return None
+
     def binary_expression_type(self, expr):
+        if expr.operator in BITWISE_OPERATORS:
+            # WGSL's bitwise operators need both operands of one type; a scalar is
+            # replicated at rendering, so the result is the type the sides share.
+            return self._common_value_type(
+                self.expression_type(expr.left), self.expression_type(expr.right)
+            )
         if expr.operator not in {"+", "-", "*", "/", "%"}:
             return None
         left_type = self.expression_type(expr.left)
