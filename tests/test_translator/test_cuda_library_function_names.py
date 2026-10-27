@@ -65,7 +65,7 @@ def test_user_functions_named_like_library_functions_are_renamed(tmp_path, backe
         assert f"float {name}(float x)" not in code, name
     # Names the device library does not declare keep theirs, and the built-in sin still reaches sinf.
     assert "float lerp(float a, float b)" in code
-    assert "lerp(x, 1.0)" in code
+    assert "lerp(x, 1.0f)" in code
     assert "float helper(float x)" in code
     assert "sinf(x)" in code
 
@@ -76,7 +76,7 @@ def test_a_call_only_a_builtin_accepts_reaches_the_builtin(tmp_path, backend):
     assert "float clamp_fn(float x)" in code
     assert "clamp_fn(x)" in code
     assert "clamp(x, 0.0, 1.0)" not in code
-    assert "fmaxf(0.0, fminf(1.0, x))" in code
+    assert "fmaxf(0.0f, fminf(1.0f, x))" in code
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
