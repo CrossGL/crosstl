@@ -2759,6 +2759,99 @@ class TestCudaCodeGen:
         assert "o.xy" not in cuda_code
         assert "o.zw" not in cuda_code
 
+    def test_native_half2_swizzles_and_constructors_expand_components(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 f(f16vec2 a, f16vec2 b, half h, f16vec4 d) {
+                    half x = a.x;
+                    f16vec2 xy = a.xy;
+                    f16vec2 xx = a.xx;
+                    f16vec2 yy = a.yy;
+                    f16vec2 s = a.yx;
+                    f16vec4 c1 = f16vec4(a, b);
+                    f16vec3 c2 = f16vec3(a, h);
+                    f16vec4 c3 = f16vec4(d.xy, a);
+                    return c1 + c3;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "half x = a.x;" in cuda_code
+        assert "half2 xy = __floats2half2_rn(a.x, a.y);" in cuda_code
+        assert "half2 xx = __floats2half2_rn(a.x, a.x);" in cuda_code
+        assert "half2 yy = __floats2half2_rn(a.y, a.y);" in cuda_code
+        assert "half2 s = __floats2half2_rn(a.y, a.x);" in cuda_code
+        assert "cgl_make_half4(a.x, a.y, b.x, b.y)" in cuda_code
+        assert "cgl_make_half4(d.x, d.y, a.x, a.y)" in cuda_code
+        assert "cgl_make_half3(a.x, a.y, h)" in cuda_code
+
+    def test_native_half2_swizzle_assignment_writes_each_component(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 assign(f16vec2 a, f16vec2 b) {
+                    f16vec2 t = a;
+                    t.yx = b;
+                    t.xy += b;
+                    return t;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "half2 __crossgl_swizzle_value_0 = b;" in cuda_code
+        assert "t.y = __crossgl_swizzle_value_0.x;" in cuda_code
+        assert "t.x = __crossgl_swizzle_value_0.y;" in cuda_code
+        assert "half2 __crossgl_swizzle_value_1 = b;" in cuda_code
+        assert "t.x = (t.x + __crossgl_swizzle_value_1.x);" in cuda_code
+        assert "t.y = (t.y + __crossgl_swizzle_value_1.y);" in cuda_code
+        assert "__floats2half2_rn(t." not in cuda_code
+        assert "t.yx" not in cuda_code
+
+    def test_native_half2_constructor_operands_are_evaluated_once(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 pick(f16vec2 a) { return a; }
+                f16vec4 widen(f16vec4 d) { return d; }
+                f16vec4 f(f16vec2 a, f16vec2 b, f16vec4 d, half h) {
+                    f16vec4 c = f16vec4(pick(a), b);
+                    f16vec4 e = f16vec4(widen(d).xy, a);
+                    f16vec3 g = f16vec3(pick(b).yx, h);
+                    return c + e + f16vec4(g, h);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "cgl_half4 c = cgl_cgl_half4_construct_half2_xy_half2_xy(pick(a), b);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half4 e = cgl_cgl_half4_construct_cgl_half4_xy_half2_xy(widen(d), a);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half3 g = cgl_cgl_half3_construct_half2_yx_half(pick(b), h);"
+            in cuda_code
+        )
+        assert "return cgl_make_half4(arg0.x, arg0.y, arg1.x, arg1.y);" in cuda_code
+        assert "return cgl_make_half3(arg0.y, arg0.x, arg1);" in cuda_code
+        assert "pick(a).x" not in cuda_code
+        assert "pick(b).y" not in cuda_code
+
     def test_half_vector_math_builtins_use_component_helpers(self):
         source_code = """
         shader TestShader {
