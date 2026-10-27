@@ -2,6 +2,7 @@
 
 import re
 
+from ...translator.integer_literals import crossgl_legacy_octal
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -316,6 +317,9 @@ class CudaToCrossGLConverter:
         text = str(value)
         if "'" in text and bool(text) and (text[0].isdigit() or text.startswith(".")):
             return True
+        if re.fullmatch(r"0\d+", text):
+            # A leading zero makes an integer literal octal (C++17 [lex.icon]).
+            return True
         return (
             re.fullmatch(
                 r"(?i)(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)(?:u|l|ul|lu|ull|llu)",
@@ -331,13 +335,13 @@ class CudaToCrossGLConverter:
             text,
         )
         if match is None:
-            return text
+            return crossgl_legacy_octal(text)
 
         digits, suffix = match.groups()
         if "u" in suffix.lower():
             unsigned_suffix = "U" if "U" in suffix else "u"
-            return f"{digits}{unsigned_suffix}"
-        return digits
+            return crossgl_legacy_octal(f"{digits}{unsigned_suffix}")
+        return crossgl_legacy_octal(digits)
 
     def is_cuda_char_literal_text(self, value):
         return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None

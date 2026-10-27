@@ -6,6 +6,7 @@ from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
@@ -3741,15 +3742,15 @@ class GLSLToCrossGLConverter:
         if long_integer_match:
             suffix = long_integer_match.group("suffix")
             if "u" in suffix.lower():
-                return f"{long_integer_match.group('body')}u"
-            return long_integer_match.group("body")
+                return crossgl_legacy_octal(f"{long_integer_match.group('body')}u")
+            return crossgl_legacy_octal(long_integer_match.group("body"))
         match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if not match:
-            return text
+            return crossgl_legacy_octal(text)
         suffix = match.group("suffix")
         if suffix[0].lower() == "u":
-            return f"{match.group('body')}u"
-        return match.group("body")
+            return crossgl_legacy_octal(f"{match.group('body')}u")
+        return crossgl_legacy_octal(match.group("body"))
 
     def generate_function_call(self, node):
         structured_length = self.structured_buffer_length_call(node)

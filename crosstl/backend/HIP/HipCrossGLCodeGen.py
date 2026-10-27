@@ -3,6 +3,7 @@
 import hashlib
 import re
 
+from ...translator.integer_literals import crossgl_legacy_octal
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..thread_hierarchy import (
     global_invocation_axis,
@@ -845,8 +846,8 @@ class HipToCrossGLConverter:
             body = integer_literal.group("body").replace("'", "")
             suffix = integer_literal.group("suffix").lower()
             if "u" in suffix:
-                return f"{body}u"
-            return body
+                return crossgl_legacy_octal(f"{body}u")
+            return crossgl_legacy_octal(body)
 
         if "'" in value and self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
             return value.replace("'", "")
