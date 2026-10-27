@@ -2266,6 +2266,99 @@ class TestHipCodeGen:
         assert "o.xy" not in hip_code
         assert "o.zw" not in hip_code
 
+    def test_native_half2_swizzles_and_constructors_expand_components(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 f(f16vec2 a, f16vec2 b, half h, f16vec4 d) {
+                    half x = a.x;
+                    f16vec2 xy = a.xy;
+                    f16vec2 xx = a.xx;
+                    f16vec2 yy = a.yy;
+                    f16vec2 s = a.yx;
+                    f16vec4 c1 = f16vec4(a, b);
+                    f16vec3 c2 = f16vec3(a, h);
+                    f16vec4 c3 = f16vec4(d.xy, a);
+                    return c1 + c3;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "half x = a.x;" in hip_code
+        assert "half2 xy = __floats2half2_rn(a.x, a.y);" in hip_code
+        assert "half2 xx = __floats2half2_rn(a.x, a.x);" in hip_code
+        assert "half2 yy = __floats2half2_rn(a.y, a.y);" in hip_code
+        assert "half2 s = __floats2half2_rn(a.y, a.x);" in hip_code
+        assert "cgl_make_half4(a.x, a.y, b.x, b.y)" in hip_code
+        assert "cgl_make_half4(d.x, d.y, a.x, a.y)" in hip_code
+        assert "cgl_make_half3(a.x, a.y, h)" in hip_code
+
+    def test_native_half2_swizzle_assignment_writes_each_component(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 assign(f16vec2 a, f16vec2 b) {
+                    f16vec2 t = a;
+                    t.yx = b;
+                    t.xy += b;
+                    return t;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "half2 __crossgl_swizzle_value_0 = b;" in hip_code
+        assert "t.y = __crossgl_swizzle_value_0.x;" in hip_code
+        assert "t.x = __crossgl_swizzle_value_0.y;" in hip_code
+        assert "half2 __crossgl_swizzle_value_1 = b;" in hip_code
+        assert "t.x = (t.x + __crossgl_swizzle_value_1.x);" in hip_code
+        assert "t.y = (t.y + __crossgl_swizzle_value_1.y);" in hip_code
+        assert "__floats2half2_rn(t." not in hip_code
+        assert "t.yx" not in hip_code
+
+    def test_native_half2_constructor_operands_are_evaluated_once(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 pick(f16vec2 a) { return a; }
+                f16vec4 widen(f16vec4 d) { return d; }
+                f16vec4 f(f16vec2 a, f16vec2 b, f16vec4 d, half h) {
+                    f16vec4 c = f16vec4(pick(a), b);
+                    f16vec4 e = f16vec4(widen(d).xy, a);
+                    f16vec3 g = f16vec3(pick(b).yx, h);
+                    return c + e + f16vec4(g, h);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "cgl_half4 c = cgl_cgl_half4_construct_half2_xy_half2_xy(pick(a), b);"
+            in hip_code
+        )
+        assert (
+            "cgl_half4 e = cgl_cgl_half4_construct_cgl_half4_xy_half2_xy(widen(d), a);"
+            in hip_code
+        )
+        assert (
+            "cgl_half3 g = cgl_cgl_half3_construct_half2_yx_half(pick(b), h);"
+            in hip_code
+        )
+        assert "return cgl_make_half4(arg0.x, arg0.y, arg1.x, arg1.y);" in hip_code
+        assert "return cgl_make_half3(arg0.y, arg0.x, arg1);" in hip_code
+        assert "pick(a).x" not in hip_code
+        assert "pick(b).y" not in hip_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [
@@ -3500,6 +3593,112 @@ class TestHipCodeGen:
         assert "2.0 * cgl_float3_fract" not in hip_code
         assert "2.0f * cgl_float3_fract" not in hip_code
         assert "float l = length(a);" not in hip_code
+
+    def test_scalar_geometric_builtins_emit_hip_math_calls(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f1 = 1.0;
+                    float f2 = 2.0;
+                    float fl = length(f1);
+                    float fd = distance(f1, f2);
+                    float fn = normalize(f1);
+
+                    double d1 = 3.0;
+                    double d2 = 4.0;
+                    double dl = length(d1);
+                    double dd = distance(d1, d2);
+                    double dn = normalize(d1);
+
+                    half h1 = half(1.0);
+                    half h2 = half(2.0);
+                    half hl = length(h1);
+                    half hd = distance(h1, h2);
+                    half hn = normalize(h1);
+
+                    int i1 = 2;
+                    bool b1 = true;
+
+                    float hf = distance(h1, f1);
+                    float f_lit = distance(f1, 1.0);
+                    float fi = distance(f1, 1);
+                    float hi = distance(h1, i1);
+                    float fb = distance(f1, b1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float fl = fabsf(f1);" in hip_code
+        assert "float fd = fabsf(f1 - f2);" in hip_code
+        assert "float fn = (f1 / fabsf(f1));" in hip_code
+        assert "double dl = fabs(d1);" in hip_code
+        assert "double dd = fabs(d1 - d2);" in hip_code
+        assert "double dn = (d1 / fabs(d1));" in hip_code
+        assert "half hl = __float2half(fabsf(__half2float(h1)));" in hip_code
+        assert (
+            "half hd = __float2half(fabsf(__half2float(h1) - __half2float(h2)));"
+            in hip_code
+        )
+        assert (
+            "half hn = __float2half(__half2float(h1) / fabsf(__half2float(h1)));"
+            in hip_code
+        )
+        assert "float hf = fabsf(__half2float(h1) - f1);" in hip_code
+        assert "float f_lit = fabsf(f1 - 1.0f);" in hip_code
+        assert "float fi = fabsf(f1 - 1);" in hip_code
+        assert "float hi = fabsf(__half2float(h1) - i1);" in hip_code
+        assert "float fb = distance(f1, b1);" in hip_code
+        assert "h1 - f1" not in hip_code
+        assert "h1 - i1" not in hip_code
+        assert "fabsf(f1 - b1)" not in hip_code
+        assert "length(" not in hip_code
+        assert "normalize(" not in hip_code
+        assert "distance(f1, f2)" not in hip_code
+        assert "distance(d1, d2)" not in hip_code
+        assert "distance(h1, h2)" not in hip_code
+        assert "distance(h1, f1)" not in hip_code
+        assert "distance(f1, 1.0)" not in hip_code
+        assert "distance(f1, 1)" not in hip_code
+        assert "distance(h1, i1)" not in hip_code
+
+    def test_scalar_normalize_evaluates_operand_once_and_distance_is_typed(self):
+        source_code = """
+        shader TestShader {
+            float next(float x) {
+                return x * 3.0 + 1.0;
+            }
+            float f(vec3 v, float a, half h) {
+                float n = normalize(next(a));
+                half hn = normalize(half(next(a)));
+                vec3 m = v * distance(h, a);
+                return n + float(hn) + m.x;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float n = cgl_normalize_float(next(a));" in hip_code
+        assert "half hn = cgl_normalize_half(__float2half(next(a)));" in hip_code
+        assert "return value / fabsf(value);" in hip_code
+        assert "return __float2half(widened / fabsf(widened));" in hip_code
+        assert hip_code.count("next(a)") == 2
+        assert (
+            "float3 m = cgl_float3_mul_scalar(v, fabsf(__half2float(h) - a));"
+            in hip_code
+        )
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
         source_code = """

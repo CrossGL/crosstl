@@ -12388,6 +12388,11 @@ class MetalCodeGen(
                 func_name = specialized_func_name
             else:
                 reject_unresolved_generic_function_call(self, func_name, "Metal")
+            scalar_geometric_call = self.metal_scalar_geometric_call(
+                func_name, expr.args
+            )
+            if scalar_geometric_call is not None:
+                return scalar_geometric_call
             if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
@@ -25018,6 +25023,26 @@ class MetalCodeGen(
 
     def is_scalar_integer_type(self, vtype):
         return is_integer_scalar_type_name(self.type_name_string(vtype), self.map_type)
+
+    def metal_scalar_geometric_call(self, func_name, args):
+        """Lower scalar ``length``, ``dot``, ``distance`` and ``normalize``, which Metal declares only for vectors."""
+        arity = {"length": 1, "normalize": 1, "dot": 2, "distance": 2}.get(func_name)
+        if arity != len(args) or func_name in self.user_function_names:
+            return None
+        if not all(
+            self.is_scalar_numeric_type(self.expression_result_type(arg))
+            for arg in args
+        ):
+            return None
+        operands = [self.generate_expression(arg) for arg in args]
+        if func_name == "dot":
+            return f"(({operands[0]}) * ({operands[1]}))"
+        call_name = "sign" if func_name == "normalize" else "abs"
+        if self.metal_function_name_is_shadowed(call_name):
+            call_name = f"metal::{call_name}"
+        if func_name == "distance":
+            return f"{call_name}(({operands[0]}) - ({operands[1]}))"
+        return f"{call_name}({operands[0]})"
 
     def texture_argument_diagnostic_type(self, arg):
         sampler_names = {
