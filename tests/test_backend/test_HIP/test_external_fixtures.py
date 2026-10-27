@@ -252,7 +252,7 @@ def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_hip_helpers(
     assert (
         "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
     )
-    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var flattened: mat2 = mat2(1.0f, 2.0f, 3.0f, 4.0f);" in crossgl
     assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
 
 

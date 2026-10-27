@@ -303,3 +303,95 @@ def mask_comments_and_literals(source: str) -> str:
         match = search(source, position)
     pieces.append(source[position:])
     return "".join(pieces)
+
+
+_BLOCK_STOPS = re.compile(r"[\"'{}]|//|/\*")
+
+
+def brace_block_spans(source: str, read_string: ReadString) -> List[Tuple[int, int]]:
+    """Return ``(open, close + 1)`` for each matched brace pair outside strings and comments, in closing order.
+
+    An unmatched ``}`` is ignored. An unterminated comment ends the scan.
+    """
+    spans: List[Tuple[int, int]] = []
+    stack: List[int] = []
+    search = _BLOCK_STOPS.search
+    i = 0
+    while True:
+        match = search(source, i)
+        if match is None:
+            break
+        i = match.start()
+        token = match.group()
+        if token == "{":
+            stack.append(i)
+        elif token == "}":
+            if stack:
+                spans.append((stack.pop(), i + 1))
+        elif token == "//":
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end + 1
+            continue
+        elif token == "/*":
+            end = source.find("*/", i + 2)
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        else:
+            i += read_string(source, i)[1]
+            continue
+        i += 1
+    return spans
+
+
+# ``<type> [const|volatile]... [*&] <name>`` before a declarator delimiter. ``type`` is a whole identifier, so a
+# declaration of one type name can never start inside a declaration of another (the name that ends a match is
+# followed by a delimiter, not by the identifier a declaration needs): one scan finds what a scan per type name
+# finds.
+_NAMED_TYPE_DECLARATION = re.compile(
+    r"\b(?P<type>[A-Za-z_]\w*)\b"
+    r"(?:\s+(?:const|volatile)\b)*\s*"
+    r"(?P<indirection>[*&]+)?\s*"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"(?=[;,)=\[{(])"
+)
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+
+
+def _named_type_declaration_pattern(type_name: str) -> "re.Pattern[str]":
+    return re.compile(
+        rf"\b{re.escape(type_name)}\b"
+        r"(?:\s+(?:const|volatile)\b)*\s*"
+        r"(?P<indirection>[*&]+)?\s*"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
+        r"(?=[;,)=\[{(])"
+    )
+
+
+def find_named_type_declarations(
+    code: str, type_names
+) -> List[Tuple[str, "re.Match[str]"]]:
+    """Return ``(type name, match)`` for each declaration of a variable of one of ``type_names``, by position.
+
+    A match has the groups ``indirection`` (``*``/``&`` characters, or ``None``) and ``name``. Each type name
+    is matched as a whole word; the result is what a separate scan per type name, merged by position, gives.
+    """
+    names = set(type_names)
+    if not names:
+        return []
+    if all(_PLAIN_IDENTIFIER.fullmatch(name) for name in names):
+        return [
+            (match.group("type"), match)
+            for match in _NAMED_TYPE_DECLARATION.finditer(code)
+            if match.group("type") in names
+        ]
+    found = [
+        (match.start(), name, match)
+        for name in sorted(names)
+        for match in _named_type_declaration_pattern(name).finditer(code)
+    ]
+    found.sort(key=lambda item: item[0])
+    return [(name, match) for _start, name, match in found]

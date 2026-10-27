@@ -98,6 +98,7 @@ from .wgsl_stage_io import (
     with_flat_integer_interpolation,
 )
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
+from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
@@ -3207,6 +3208,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 if converted != operand:
                     # A bool conversion is a constructor call, a primary.
                     return f"!{converted}"
+            if expr.operator == "-":
+                negation = wgsl_unsigned_negation(self, expr.operand, operand)
+                if negation is not None:
+                    return negation
             if expr.operator == "-" and self.matrix_shape(
                 self.expression_type(expr.operand)
             ):

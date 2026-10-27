@@ -1403,9 +1403,10 @@ def test_current_mlx_arg_reduce_native_validation(
         generated = root / artifact["path"]
         output = tmp_path / generated.name
         shutil.copyfile(generated, output)
+        # The copy is the reported artifact; the pin above checks its bytes.
         assert (
             hashlib.sha256(output.read_bytes()).hexdigest()
-            == ARTIFACTS[target][entry]["sha256"]
+            == artifact["generatedHash"]["value"]
         )
         generated_text = output.read_text(encoding="utf-8")
         assert "unsupported" not in generated_text

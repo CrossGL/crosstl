@@ -70,7 +70,7 @@ if (index < size) out[index] = ~in[index]; }
     assert unary.read_bytes() == original_unary
     assert set(index["descriptors"]) == set(packages.BITWISE_PACKAGE_ENTRIES)
     assert index["family"] == "bitwise"
-    assert len(packages.ENTRIES) == 93
+    assert len(packages.ENTRIES) == 97
     assert not set(packages.BITWISE_PACKAGE_ENTRIES).intersection(packages.ENTRIES)
     return output, index
 

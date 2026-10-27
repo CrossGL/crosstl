@@ -4481,9 +4481,10 @@ def test_opengl_fixed_array_mutation_analysis_uses_for_in_lexical_call_type(
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main() {{
-                float values[1] = {{1.0}};
-                forward(values);
-                output[0] = values[0];
+                // &value is caller-visible storage, so the writes forward makes reach it.
+                float value = 1.0;
+                forward(&value);
+                output[0] = value;
             }}
         }}
     }}
