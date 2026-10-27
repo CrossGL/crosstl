@@ -44,7 +44,8 @@ the host, rather than in std430's 32 bits.
 
 - The GLSL, SPIR-V and WGSL output is unchanged; Metal output changes only for element types whose MSL layout
   differs from std430, which were wrong before.
-- HLSL structured buffers pack vectors to their scalar alignment, so an unmarked buffer whose std430 layout pads a
-  vector (`struct { float a; vec3 b; }`) still differs in HLSL output. Adding the HLSL targets to the marker, so
-  that `legalize_structured_layouts` stores such buffers as 32-bit words, is the follow-up.
+- HLSL structured buffers align vectors to their scalar, so for the HLSL targets the marker also adds
+  `@buffer_layout(std430)` where the HLSL layout differs (`struct { float a; vec3 b; }`, `vec3 v[]`, `mat3`), and
+  `legalize_structured_layouts` stores such buffers as 32-bit words read and written at their std430 offsets. A
+  stage's own buffers are lowered too, and their helper functions belong to that stage.
 - An importer that produces a buffer with a non-std430 layout must mark it; an unmarked buffer is a std430 claim.
