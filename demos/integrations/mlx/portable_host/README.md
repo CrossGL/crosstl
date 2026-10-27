@@ -2338,8 +2338,12 @@ from those transforms and the copy, unary, binary, padding and concatenation
 primitives. Threadgroups with more than 64 threads per transform launch at the
 linearized workgroup size the translated entry declares on Direct3D and OpenGL.
 Bluestein's twiddle-table plans (batches of 1,024 or more complex Bluestein
-transforms of 1,025 to 2,048 points) are refused by name; `test_fft_grads`
-compares against PyTorch, which the host environment does not install. The
+transforms of 1,025 to 2,048 points) first run the translated
+`generate_bluestein_twiddles` kernel into the table past `w_q`'s spectrum,
+which the host checks with the other Bluestein tables. `test_fft_grads`
+compares against PyTorch, which the host environment does not install, and
+`test_batched_bluestein_twiddle_table` and `test_fft_too_large` run only where
+`mx.metal.is_available()`, which the portable host is not. The
 Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
 2**24-point pass.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'

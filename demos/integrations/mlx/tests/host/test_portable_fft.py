@@ -437,7 +437,9 @@ class FakeCache:
                 {
                     "name": name + "Binding",
                     "kind": "constant-buffer" if name in scalars else "",
-                    "access": "read_write" if name == "out" else "read",
+                    "access": (
+                        "read_write" if name == fft_layout.output(entry) else "read"
+                    ),
                     "scalarLayout": scalar,
                     "provenance": {"sourceResource": {"parameter": name}},
                 }
@@ -469,17 +471,22 @@ def rader_tables(rader_n, fault=None):
     }
 
 
-def bluestein_tables(length, bluestein_n, fault=None):
-    """compute_bluestein_constants' tables as the host binds them."""
+def bluestein_tables(length, bluestein_n, fault=None, precomputed=False):
+    """compute_bluestein_constants' tables as the host binds them, with
+    generate_bluestein_twiddles' table past a twiddle-table plan's spectrum."""
     chirp, spectrum = fft_layout.bluestein_tables(length, bluestein_n)
+    if precomputed:
+        spectrum = spectrum + fft_layout.bluestein_twiddles()
     w_k = [_complex_word(value.real, value.imag) for value in chirp]
     w_q = [_complex_word(value.real, value.imag) for value in spectrum]
     if fault == "chirp":
         w_k[1] = _complex_word(chirp[1].real, -chirp[1].imag)
     if fault == "spectrum":
         w_q[5] = _complex_word(0.0, 0.0)
+    if fault == "twiddle":
+        w_q[bluestein_n + 9] = _complex_word(1.0, 0.0)
     return {
-        "w_q": (ctypes.c_uint64 * bluestein_n)(*w_q),
+        "w_q": (ctypes.c_uint64 * len(w_q))(*w_q),
         "w_k": (ctypes.c_uint64 * length)(*w_k),
     }
 
@@ -503,7 +510,7 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     if info["kind"] == "rader":
         memory.update(rader_tables(info["raderN"], fault))
     if info["kind"] == "bluestein":
-        memory.update(bluestein_tables(length, info["n"], fault))
+        memory.update(bluestein_tables(length, info["n"], fault, info["precomputed"]))
         memory["length"] = (ctypes.c_int32 * 1)(overrides.get("length", length))
     if four_step:
         n1, n2 = overrides.get("scalars", split)
@@ -686,15 +693,13 @@ def test_the_host_routes_and_audits_stockham_and_rader_ffts():
         == "fft"
     )
     port = (HOST / "fft.inc").read_text()
-    assert 'fft_unported("Rader plans")' not in port
-    assert 'fft_unported("fused Bluestein plans")' not in port
+    # Every fft.cpp route is ported: nothing is refused as unported.
+    assert "fft_unported" not in port and "unported" not in port
     assert '"rader_fft_mem_"' in port and "pocketfft::c2c(" in port
     assert '"bluestein_fft_mem_"' in port and "fft_bluestein_tables(" in port
-    assert 'fft_unported("four-step plans")' not in port
     assert '"four_step_mem_"' in port and "FFTFourStepParams" in port
-    assert 'fft_unported("multi-upload Bluestein plans")' not in port
     assert "void fft_multi_upload_bluestein(" in port
-    assert 'fft_unported("Bluestein twiddle-table plans")' in port
+    assert '"generate_bluestein_twiddles"' in port and '"_precomputed"' in port
     assert "void FFT::eval_gpu" in port
     prepare = (HOST / "prepare.py").read_text()
     assert '"crosstl_fft.inc": (HERE / "fft.inc").read_bytes()' in prepare
@@ -830,3 +835,169 @@ def test_the_metal_host_binds_the_largest_four_step_pass():
     spans = fft_layout.four_step_extents(info, 4096, 4096, 4096)
     bound = sum(spans.values()) + 2 * fft_dispatch.GUARD_COUNT
     assert 256 * 1024 * 1024 < bound * 8 <= runtime.METAL_BUFFER_BYTES
+
+
+def test_twiddle_table_plans_name_precomputed_pipelines():
+    entry = "bluestein_fft_mem_4096_float2_float2_n4096_inv_1_precomputed"
+    assert fft_layout.entry_name(1031, True, "float2", "float2", True) == entry
+    info = fft_layout.signature(entry)
+    assert (
+        info["precomputed"] and info["source"] == "bluestein_fft_mem_4096_float2_float2"
+    )
+    assert info["constants"][fft_layout.TWIDDLE_TABLE_CONSTANT] is True
+    plain = fft_layout.signature(entry[: -len(fft_layout.PRECOMPUTED)])
+    assert plain["constants"][fft_layout.TWIDDLE_TABLE_CONSTANT] is False
+    assert {
+        key: value
+        for key, value in info["constants"].items()
+        if key != fft_layout.TWIDDLE_TABLE_CONSTANT
+    } == {
+        key: value
+        for key, value in plain["constants"].items()
+        if key != fft_layout.TWIDDLE_TABLE_CONSTANT
+    }
+    # Only complex 4,096-point convolutions read the table.
+    for n, types in ((47, ("float2", "float2")), (1031, ("float", "float2"))):
+        with pytest.raises(ValueError):
+            fft_layout.entry_name(n, False, *types, True)
+    for name in (
+        "bluestein_fft_mem_4096_float_float2_n4096_inv_0_precomputed",
+        "bluestein_fft_mem_2048_float2_float2_n2048_inv_0_precomputed",
+        "fft_mem_4096_float2_float2_n4096_inv_0_precomputed",
+    ):
+        assert not fft_dispatch.is_entry(name)
+    # w_q holds the 584-element table past the 4,096-point spectrum.
+    spans = fft_layout.extents(info, 1024, 1031)
+    assert spans["w_q"] == 4096 + 584 and spans["w_k"] == 1031
+    execution = fft_layout.launch(info, 1024)
+    values = {"length": 1031, "n": 4096, "batch_size": 1024}
+    metadata = fft_layout.plan_launch(entry, spans, values, spans["out"], execution)
+    assert metadata["batchSize"] == 1024
+    # fft.cpp reads the table for batches of 1,024 or more, and only then.
+    fewer = fft_layout.extents(info, 1023, 1031)
+    with pytest.raises(ValueError, match="twiddle-table"):
+        fft_layout.plan_launch(
+            entry,
+            fewer,
+            dict(values, batch_size=1023),
+            fewer["out"],
+            fft_layout.launch(info, 1023),
+        )
+    plain_entry = entry[: -len(fft_layout.PRECOMPUTED)]
+    plain_spans = fft_layout.extents(plain, 1024, 1031)
+    with pytest.raises(ValueError, match="twiddle-table"):
+        fft_layout.plan_launch(
+            plain_entry, plain_spans, values, plain_spans["out"], execution
+        )
+
+
+def test_the_twiddle_table_follows_generate_bluestein_twiddles():
+    import cmath
+    import math
+
+    table = fft_layout.bluestein_twiddles()
+    assert len(table) == fft_layout.BLUESTEIN_TWIDDLE_TABLE_SIZE == 8 + 64 + 512
+    for index, (p, k) in ((0, (8, 0)), (7, (8, 7)), (8, (64, 0)), (71, (64, 63))):
+        assert table[index] == cmath.exp(complex(0, -2.0 * math.pi * k / (8 * p)))
+    assert table[72 + 511] == cmath.exp(complex(0, -2.0 * math.pi * 511 / 4096))
+    info = fft_layout.signature(fft_layout.TWIDDLE_ENTRY)
+    assert info["workgroupSize"] == (584, 1, 1) and info["constants"] == {}
+    assert fft_layout.parameters(fft_layout.TWIDDLE_ENTRY) == ("twiddles",)
+    assert fft_layout.output(fft_layout.TWIDDLE_ENTRY) == "twiddles"
+    assert (
+        fft_layout.parameter_type(fft_layout.TWIDDLE_ENTRY, "twiddles") == "complex64"
+    )
+    subscript, _offset = fft_layout.opengl_index_assertions(fft_layout.TWIDDLE_ENTRY)
+    assert (subscript["maximum"], subscript["indexed"]) == (583, "crosstl_resource")
+    execution = {"workgroupCount": [1, 1, 1], "workgroupSize": [584, 1, 1]}
+    counts = {"twiddles": 584}
+    assert (
+        fft_layout.plan_launch(fft_layout.TWIDDLE_ENTRY, counts, {}, 584, execution)[
+            "footprint"
+        ]
+        == counts
+    )
+    for changed in (
+        ({"twiddles": 583}, 584, execution),
+        (counts, 583, execution),
+        (counts, 584, dict(execution, workgroupSize=[512, 1, 1])),
+        (counts, 584, dict(execution, workgroupCount=[2, 1, 1])),
+    ):
+        with pytest.raises(ValueError):
+            fft_layout.plan_launch(
+                fft_layout.TWIDDLE_ENTRY, changed[0], {}, *changed[1:]
+            )
+
+
+def test_the_twiddle_kernel_writes_its_table(monkeypatch, tmp_path):
+    entry = fft_layout.TWIDDLE_ENTRY
+    table = [
+        _complex_word(value.real, value.imag)
+        for value in fft_layout.bluestein_twiddles()
+    ]
+    memory = (ctypes.c_uint64 * 584)()
+    array = (runtime.Buffer * 1)(
+        runtime.Buffer(b"twiddles", b"complex64", ctypes.addressof(memory), 584, 1)
+    )
+    host = SimpleNamespace(
+        ffts=FakeCache("opengl"),
+        target="opengl",
+        trace=tmp_path / "dispatch.jsonl",
+        trace_values=True,
+        dispatch_count=0,
+    )
+
+    def execute(_, request):
+        guard = element_storage.unpack(
+            "complex64", "opengl", request["inputs"]["twiddlesBinding"]["values"]
+        )[584:]
+        return SimpleNamespace(
+            status="ok",
+            outputs={
+                "twiddlesBinding": element_storage.packet(
+                    "complex64", "opengl", table + guard
+                )
+            },
+            details={"request": {}},
+        )
+
+    monkeypatch.setattr(
+        fft_dispatch,
+        "build_native_loader_dispatch_request",
+        lambda descriptor, directory, inputs, outputs, execution, **_: {
+            "inputs": inputs
+        },
+    )
+    monkeypatch.setattr(fft_dispatch, "execute", execute)
+    launch = runtime.Launch(
+        (ctypes.c_uint32 * 3)(1, 1, 1), (ctypes.c_uint32 * 3)(584, 1, 1)
+    )
+    fft_dispatch.dispatch(host, entry, array, 1, 584, launch)
+    assert list(memory) == table and host.dispatch_count == 1
+    event = json.loads(host.trace.read_text().splitlines()[-1])
+    assert event["inputHash"] is None and event["fftMetadata"]["kind"] == "twiddles"
+    bad = runtime.Launch(
+        (ctypes.c_uint32 * 3)(1, 1, 1), (ctypes.c_uint32 * 3)(512, 1, 1)
+    )
+    with pytest.raises(ValueError):
+        fft_dispatch.dispatch(host, entry, array, 1, 584, bad)
+
+
+def test_twiddle_table_tables_are_checked(monkeypatch, tmp_path):
+    entry = "bluestein_fft_mem_4096_float2_float2_n4096_inv_0_precomputed"
+    source = [_complex_word(index % 5, 1.0) for index in range(1024 * 1031)]
+    values, event, _host, request = run(
+        monkeypatch, tmp_path, entry, 1024, source, transform_length=1031
+    )
+    assert values == source
+    assert len(request["inputs"]["w_qBinding"]["values"]) == 2 * (4096 + 584 + 32)
+    with pytest.raises(ValueError, match="w_q differs"):
+        run(
+            monkeypatch,
+            tmp_path,
+            entry,
+            1024,
+            source,
+            "twiddle",
+            transform_length=1031,
+        )

@@ -12,7 +12,8 @@
 // the translated four_step_fft kernel, and multi-upload Bluestein plans
 // compose two of those transforms with the copy, unary, binary, padding and
 // concatenation primitives as fft.cpp does. Bluestein's twiddle-table plans
-// are refused by name before any allocation or launch.
+// run the translated generate_bluestein_twiddles kernel into the table past
+// w_q's spectrum before the bluestein_fft kernel reads it.
 // fft_layout checks each launch against the same plan; the host names each
 // pipeline by fft.cpp's hash name, whose translated entry has the function
 // constants that name implies frozen. crosstl_backend.cpp includes this file
@@ -33,11 +34,6 @@ constexpr int fft_max_rader_size = 2048;
 constexpr int fft_max_bluestein_size = 2048;
 constexpr int fft_min_threadgroup_mem_size = 256;
 constexpr int fft_min_coalesce_width = 4;
-
-[[noreturn]] void fft_unported(const char* route) {
-  throw std::invalid_argument(
-      std::string("CrossTL FFT does not port fft.cpp's ") + route + " yet.");
-}
 
 // fft.cpp FFTPlan.
 struct HostFFTPlan {
@@ -258,17 +254,23 @@ FFTRaderTables fft_rader_tables(int rader_n) {
 
 // fft.cpp's twiddle-table selection for Bluestein plans.
 constexpr int fft_bluestein_twiddle_table_fft_size = 4096;
+constexpr int fft_bluestein_twiddle_table_size = 584;
 constexpr int fft_min_bluestein_twiddle_table_batch = 1024;
 
-// fft.cpp compute_bluestein_constants without the radix twiddle table:
-// w_k = exp(-i pi k^2 / n) and w_q = fft(1 / w_k) over 1 - n .. n - 1,
-// zero padded to bluestein_n, in double precision and then float32.
+// fft.cpp compute_bluestein_constants: w_k = exp(-i pi k^2 / n) and
+// w_q = fft(1 / w_k) over 1 - n .. n - 1, zero padded to bluestein_n, in
+// double precision and then float32. A twiddle-table plan's w_q leaves
+// radix_twiddle_size elements past the spectrum for
+// generate_bluestein_twiddles.
 struct FFTBluesteinTables {
   std::vector<std::complex<float>> w_k;
   std::vector<std::complex<float>> w_q;
 };
 
-FFTBluesteinTables fft_bluestein_tables(int n, int bluestein_n) {
+FFTBluesteinTables fft_bluestein_tables(
+    int n,
+    int bluestein_n,
+    int radix_twiddle_size = 0) {
   FFTBluesteinTables tables;
   tables.w_k.resize(n);
   std::vector<std::complex<float>> w_q_vec(bluestein_n, 0);
@@ -279,7 +281,7 @@ FFTBluesteinTables fft_bluestein_tables(int n, int bluestein_n) {
       tables.w_k[i] = std::exp(std::complex<double>(0, -theta));
     }
   }
-  tables.w_q.resize(bluestein_n);
+  tables.w_q.resize(bluestein_n + radix_twiddle_size);
   std::ptrdiff_t item_size = sizeof(std::complex<float>);
   size_t fft_size = bluestein_n;
   pocketfft::c2c(
@@ -588,12 +590,10 @@ void fft_op(
   const int total_batch_size = int(size / n);
   static const std::vector<int> bluestein_twiddle_table_plan = {
       0, 0, 4, 0, 0, 0, 0, 0, 0};
-  if (bluestein && !real &&
+  const bool use_bluestein_twiddle_table = bluestein && !real &&
       plan.bluestein_n == fft_bluestein_twiddle_table_fft_size &&
       plan.stockham == bluestein_twiddle_table_plan &&
-      total_batch_size >= fft_min_bluestein_twiddle_table_batch) {
-    fft_unported("Bluestein twiddle-table plans");
-  }
+      total_batch_size >= fft_min_bluestein_twiddle_table_batch;
   const int threads_per_fft = (fft_size + elems_per_thread - 1) / elems_per_thread;
   int threadgroup_batch_size = std::max(fft_min_threadgroup_mem_size / fft_size, 1);
   if (four_step) {
@@ -626,6 +626,9 @@ void fft_op(
           << (real ? "true" : "false");
   }
   kname << "_n" << fft_size << "_inv_" << inverse;
+  if (use_bluestein_twiddle_table) {
+    kname << "_precomputed";
+  }
   const std::string entry = kname.str();
   require_entry(entry);
   int32_t n_value = fft_size;
@@ -677,11 +680,23 @@ void fft_op(
   if (bluestein) {
     // fft.cpp binds w_q and w_k at 2 and 3, then n, bluestein_n and
     // total_batch_size, which bluestein_fft names length, n and batch_size.
-    bluestein_tables = fft_bluestein_tables(int(n), plan.bluestein_n);
+    const int twiddles =
+        use_bluestein_twiddle_table ? fft_bluestein_twiddle_table_size : 0;
+    bluestein_tables = fft_bluestein_tables(int(n), plan.bluestein_n, twiddles);
+    if (use_bluestein_twiddle_table) {
+      // fft.cpp's get_fft_twiddle_kernel writes the radix twiddles past the
+      // spectrum, one thread per element in one threadgroup.
+      require_entry("generate_bluestein_twiddles");
+      std::vector<CrosstlMlxBuffer> table = {
+          {"twiddles", "complex64",
+           bluestein_tables.w_q.data() + plan.bluestein_n, uint64_t(twiddles), 1}};
+      const CrosstlMlxLaunch twiddle_launch{{1, 1, 1}, {uint32_t(twiddles), 1, 1}};
+      fft_launch("generate_bluestein_twiddles", table, uint64_t(twiddles), twiddle_launch);
+    }
     buffers.insert(
         buffers.begin() + 2,
         {{"w_q", "complex64", bluestein_tables.w_q.data(),
-          uint64_t(plan.bluestein_n), 0},
+          uint64_t(plan.bluestein_n + twiddles), 0},
          {"w_k", "complex64", bluestein_tables.w_k.data(), uint64_t(n), 0},
          {"length", "int32", &length_value, 1, 0}});
   }

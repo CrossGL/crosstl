@@ -25,7 +25,11 @@ plans of powers of two run the ``four_step_fft`` kernel twice, ``n1``
 columns and then ``n2`` rows through a complex64 temporary, in threadgroups
 batched to coalesce their strided accesses; each pass's hash name carries
 its own size, and ``n1`` and ``n2`` bind as scalars. Multi-upload Bluestein
-plans compose those transforms with other kernels.
+plans compose those transforms with other kernels. Batches of at least 1,024
+complex Bluestein transforms convolved at 4,096 points read the radix
+twiddles of their Stockham steps from a table past ``w_q``'s spectrum, which
+the ``generate_bluestein_twiddles`` kernel writes first; their hash names end
+in ``_precomputed``.
 """
 
 import cmath
@@ -57,6 +61,17 @@ CONSTANT_IDS = {
 }
 # The function constant fft.cpp sets for complex Bluestein plans only.
 TWIDDLE_TABLE_CONSTANT = "use_bluestein_twiddle_table_"
+# fft.cpp's Bluestein twiddle-table plans: batches of at least
+# MIN_BLUESTEIN_TWIDDLE_TABLE_BATCH complex transforms convolved at 4,096
+# points in four radix-8 steps read the radix twiddles of their last three
+# steps from BLUESTEIN_TWIDDLE_TABLE_SIZE elements past ``w_q``'s spectrum,
+# which the generate_bluestein_twiddles kernel writes.
+BLUESTEIN_TWIDDLE_TABLE_FFT_SIZE = 4096
+BLUESTEIN_TWIDDLE_TABLE_SIZE = 584
+MIN_BLUESTEIN_TWIDDLE_TABLE_BATCH = 1024
+BLUESTEIN_TWIDDLE_TABLE_PLAN = [0, 0, 4, 0, 0, 0, 0, 0, 0]
+TWIDDLE_ENTRY = "generate_bluestein_twiddles"
+PRECOMPUTED = "_precomputed"
 # The storage each fft.metal type name binds: float2 holds one complex64.
 STORAGE = {"float": "float32", "float2": "complex64"}
 ITEM_SIZES = {"float32": 4, "complex64": 8, "int16": 2}
@@ -68,11 +83,17 @@ TRANSFORMS = {
 }
 # The plan kind each fft.metal kernel runs, by kernel name.
 KERNELS = {"fft": "stockham", "rader_fft": "rader", "bluestein_fft": "bluestein"}
-ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_", "bluestein_fft_mem_", "four_step_mem_")
+ENTRY_PREFIXES = (
+    "fft_mem_",
+    "rader_fft_mem_",
+    "bluestein_fft_mem_",
+    "four_step_mem_",
+    TWIDDLE_ENTRY,
+)
 ENTRY = re.compile(
     r"(?P<source>(?P<kernel>bluestein_fft|rader_fft|fft)_mem_(?P<memory>[0-9]+)_"
     r"(?P<input>float2|float)_(?P<output>float2|float))_n(?P<n>[1-9][0-9]*)"
-    r"_inv_(?P<inverse>[01])"
+    r"_inv_(?P<inverse>[01])(?P<precomputed>_precomputed)?"
 )
 # fft.cpp's four_step_fft hash names: the step's transform size follows the
 # step and real template arguments fft.metal instantiates.
@@ -107,13 +128,17 @@ PARAMETERS = {
     ),
     "bluestein": ("in", "out", "w_q", "w_k", "length", "n", "batch_size"),
     "four_step": ("in", "out", "n1", "n2", "batch_size"),
+    "twiddles": ("twiddles",),
 }
 OUTPUT = "out"
+# The parameter each kernel writes.
+OUTPUTS = {"twiddles": "twiddles"}
 SCALARS = {
     "stockham": ("n", "batch_size"),
     "rader": ("n", "batch_size", "rader_n"),
     "bluestein": ("length", "n", "batch_size"),
     "four_step": ("n1", "n2", "batch_size"),
+    "twiddles": (),
 }
 # The tables fft.cpp computes on the CPU for each kernel, and their storage.
 TABLES = {
@@ -125,6 +150,7 @@ TABLES = {
     },
     "bluestein": {"w_q": "complex64", "w_k": "complex64"},
     "four_step": {},
+    "twiddles": {},
 }
 # Every device index the host binds stays a signed 32-bit element offset.
 SIGNED_MAX = (1 << 31) - 1
@@ -359,7 +385,7 @@ def plan_kind(plan):
     return "stockham"
 
 
-def plan_constants(n, inverse, kind, transform="c2c"):
+def plan_constants(n, inverse, kind, transform="c2c", precomputed=False):
     """The function constants fft.cpp sets for a ``kind`` plan of ``n``.
 
     For Bluestein plans ``n`` is the hash name's ``bluestein_n``: fft.cpp
@@ -388,8 +414,31 @@ def plan_constants(n, inverse, kind, transform="c2c"):
     constants.update(zip(STOCKHAM_CONSTANTS, plan["stockham"]))
     constants.update(zip(RADER_CONSTANTS, plan["rader"]))
     if kind == "bluestein" and transform == "c2c":
-        constants[TWIDDLE_TABLE_CONSTANT] = False
+        constants[TWIDDLE_TABLE_CONSTANT] = bool(precomputed)
     return constants
+
+
+def twiddle_table_plan(n, plan):
+    """Whether fft.cpp's Bluestein twiddle table can serve a plan of ``n``
+    points, for complex transforms in large enough batches."""
+    return (
+        plan_kind(plan) == "bluestein"
+        and plan["bluestein_n"] == BLUESTEIN_TWIDDLE_TABLE_FFT_SIZE
+        and plan["stockham"] == BLUESTEIN_TWIDDLE_TABLE_PLAN
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def bluestein_twiddles():
+    """generate_bluestein_twiddles' table in double precision: the radix-8
+    twiddles ``exp(-2 pi i k / (8 p))`` of the Stockham steps at p = 8, 64
+    and 512."""
+    values = []
+    for p, count in ((8, 8), (64, 64), (512, 512)):
+        values.extend(
+            cmath.exp(complex(0, -2.0 * math.pi * k / (8 * p))) for k in range(count)
+        )
+    return tuple(values)
 
 
 def stockham_constants(n, inverse):
@@ -402,11 +451,17 @@ def threadgroup_batch_size(n):
     return max(MIN_THREADGROUP_MEM_SIZE // n, 1)
 
 
-def entry_name(n, inverse, input_type, output_type):
+def entry_name(n, inverse, input_type, output_type, precomputed=False):
     """fft.cpp's pipeline hash name for one single-threadgroup transform of
-    length ``n``; a Bluestein plan's name carries its ``bluestein_n``."""
+    length ``n``; a Bluestein plan's name carries its ``bluestein_n``, and a
+    twiddle-table plan's name ends in ``_precomputed``."""
     plan = plan_fft(n)
     kind = plan_kind(plan)
+    if precomputed and (
+        not twiddle_table_plan(n, plan)
+        or (input_type, output_type) != ("float2", "float2")
+    ):
+        raise ValueError(f"FFT size {n} has no Bluestein twiddle-table plan")
     kernel = {"stockham": "fft", "rader": "rader_fft", "bluestein": "bluestein_fft"}
     if kind not in kernel:
         raise ValueError(
@@ -416,7 +471,7 @@ def entry_name(n, inverse, input_type, output_type):
     memory = next_power_of_2(threadgroup_batch_size(size) * size)
     return (
         f"{kernel[kind]}_mem_{memory}_{input_type}_{output_type}_n{size}"
-        f"_inv_{int(bool(inverse))}"
+        f"_inv_{int(bool(inverse))}{PRECOMPUTED if precomputed else ''}"
     )
 
 
@@ -513,6 +568,39 @@ def _four_step_signature(entry):
     }
 
 
+def _twiddle_signature():
+    """The launch of generate_bluestein_twiddles: one thread per table
+    element in one threadgroup, as fft.cpp dispatches it."""
+    return {
+        "kind": "twiddles",
+        "source": TWIDDLE_ENTRY,
+        "transform": None,
+        "n": BLUESTEIN_TWIDDLE_TABLE_SIZE,
+        "inverse": False,
+        "raderN": 1,
+        "lengths": (),
+        "precomputed": False,
+        "input": None,
+        "output": "complex64",
+        "memory": 0,
+        "threadgroupBatchSize": 1,
+        "threadsPerFFT": BLUESTEIN_TWIDDLE_TABLE_SIZE,
+        # The kernel reads no function constant.
+        "constants": {},
+        "workgroupSize": (BLUESTEIN_TWIDDLE_TABLE_SIZE, 1, 1),
+    }
+
+
+def output(entry):
+    """The parameter the entry's kernel writes."""
+    return OUTPUTS.get(signature(entry)["kind"], OUTPUT)
+
+
+def input_parameter(entry):
+    """The transform input the entry's kernel reads, if any."""
+    return None if signature(entry)["kind"] == "twiddles" else "in"
+
+
 def four_step_extents(info, total, n1, n2):
     """The elements of ``in`` and ``out`` one four-step pass spans over its
     ``total`` transforms of ``n1 * n2``-point transforms split as fft.cpp
@@ -541,6 +629,8 @@ def signature(entry):
     ``four_step_fft`` hash name implies, refusing every other name."""
     if isinstance(entry, str) and entry.startswith("four_step_mem_"):
         return _four_step_signature(entry)
+    if entry == TWIDDLE_ENTRY:
+        return _twiddle_signature()
     match = ENTRY.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError(f"Not an MLX single-threadgroup FFT entry: {entry!r}")
@@ -554,14 +644,21 @@ def signature(entry):
         or not 2 <= n <= MAX_STOCKHAM_FFT_SIZE
     ):
         raise ValueError(f"Not an MLX single-threadgroup FFT entry: {entry!r}")
-    constants = plan_constants(n, inverse, kind, transform)
+    precomputed = match["precomputed"] is not None
+    constants = plan_constants(n, inverse, kind, transform, precomputed)
     batch = threadgroup_batch_size(n)
     memory = next_power_of_2(batch * n)
     lengths = bluestein_lengths(n) if kind == "bluestein" else (n,)
+    try:
+        expected = entry_name(
+            lengths[0], inverse, match["input"], match["output"], precomputed
+        )
+    except ValueError:
+        expected = None
     if (
         memory not in MEMORY_SIZES
         or int(match["memory"]) != memory
-        or entry_name(lengths[0], inverse, match["input"], match["output"]) != entry
+        or expected != entry
     ):
         raise ValueError(f"FFT entry does not name fft.cpp's pipeline: {entry!r}")
     elems = constants["elems_per_thread_"]
@@ -575,6 +672,7 @@ def signature(entry):
         "inverse": inverse,
         "raderN": plan["rader_n"],
         "lengths": lengths,
+        "precomputed": precomputed,
         "input": STORAGE[match["input"]],
         "output": STORAGE[match["output"]],
         "memory": memory,
@@ -608,6 +706,8 @@ def parameter_type(entry, name):
         raise KeyError(name)
     if name in TABLES[info["kind"]]:
         return TABLES[info["kind"]][name]
+    if name == OUTPUTS.get(info["kind"]):
+        return info["output"]
     return {"in": info["input"], "out": info["output"]}.get(name, "int32")
 
 
@@ -627,7 +727,9 @@ def extents(info, total, length=None):
         "c2r": {"in": total * half, "out": total * n},
     }[info["transform"]]
     if bluestein:
-        spans.update(w_q=info["n"], w_k=n)
+        # A twiddle-table plan's w_q holds the table past its spectrum.
+        twiddles = BLUESTEIN_TWIDDLE_TABLE_SIZE if info["precomputed"] else 0
+        spans.update(w_q=info["n"] + twiddles, w_k=n)
     for name in TABLES[info["kind"]]:
         spans.setdefault(name, info["raderN"] - 1)
     return spans
@@ -697,6 +799,31 @@ def launch(info, total):
     }
 
 
+def _plan_twiddle_launch(info, counts, values, threads, execution):
+    """Check generate_bluestein_twiddles' launch; ``plan_launch`` for it."""
+    size = BLUESTEIN_TWIDDLE_TABLE_SIZE
+    expected = {
+        "workgroupCount": [1, 1, 1],
+        "workgroupSize": list(info["workgroupSize"]),
+    }
+    if (
+        values
+        or counts != {"twiddles": size}
+        or threads != size
+        or execution != expected
+    ):
+        raise ValueError("FFT twiddle launch differs from fft.cpp's dispatch")
+    return {
+        "kind": "twiddles",
+        "transform": None,
+        "footprint": {"twiddles": size},
+        "n": size,
+        "batchSize": 1,
+        "inverse": False,
+        "elements": {"twiddles": size},
+    }
+
+
 def _plan_four_step_launch(info, counts, values, threads, execution):
     """Check one four-step pass's launch; ``plan_launch`` for its entries."""
     total, n1, n2 = values.get("batch_size"), values.get("n1"), values.get("n2")
@@ -742,6 +869,8 @@ def plan_launch(entry, counts, values, threads, execution):
     info = signature(entry)
     if info["kind"] == "four_step":
         return _plan_four_step_launch(info, counts, values, threads, execution)
+    if info["kind"] == "twiddles":
+        return _plan_twiddle_launch(info, counts, values, threads, execution)
     total = values.get("batch_size")
     length = values.get("length")
     expected_values = {"n": info["n"], "batch_size": total}
@@ -758,6 +887,14 @@ def plan_launch(entry, counts, values, threads, execution):
         or total < 1
     ):
         raise ValueError("FFT launch size or batch differs from its pipeline")
+    if info["kind"] == "bluestein" and info["transform"] == "c2c":
+        # fft.cpp reads the twiddle table exactly when the plan and batch
+        # admit it.
+        table = twiddle_table_plan(length, plan_fft(length))
+        if (table and total >= MIN_BLUESTEIN_TWIDDLE_TABLE_BATCH) != info[
+            "precomputed"
+        ]:
+            raise ValueError("FFT launch differs from fft.cpp's twiddle-table choice")
     expected = launch(info, total)
     spans = extents(info, total, length)
     if (
@@ -787,6 +924,25 @@ def opengl_index_assertions(entry):
     admits; threadgroup subscripts stay inside the entry's ``shared_in``.
     """
     info = signature(entry)
+    if info["kind"] == "twiddles":
+        # One table element per invocation of fft.cpp's single threadgroup.
+        last = BLUESTEIN_TWIDDLE_TABLE_SIZE - 1
+        storage = DEVICE_STORAGES[0]
+        return [
+            {
+                "source": SOURCE,
+                "expression": REFERENCE_INDEX,
+                "minimum": 0,
+                "maximum": last,
+                "indexed": storage,
+            },
+            {
+                "source": SOURCE,
+                "expression": f"{storage} + {REFERENCE_INDEX}",
+                "minimum": 0,
+                "maximum": SIGNED_MAX,
+            },
+        ]
     memory = info["memory"]
     storages = DEVICE_STORAGES + TABLE_STORAGES[: len(TABLES[info["kind"]])]
 
@@ -814,6 +970,8 @@ def opengl_index_assertions(entry):
 def workgroup_access_assertions(entry):
     """Every threadgroup access of the entry stays inside ``shared_in``."""
     info = signature(entry)
+    if info["kind"] == "twiddles":
+        return []
     return [
         {
             "source": SOURCE,

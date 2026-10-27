@@ -55,6 +55,10 @@ RADER_SPECTRUM_TOLERANCE = 1e-5
 # pocketfft float32 spectrum.
 BLUESTEIN_CHIRP_TOLERANCE = 1e-6
 BLUESTEIN_SPECTRUM_TOLERANCE = 1e-5
+# The absolute error per element of the radix twiddles
+# generate_bluestein_twiddles evaluates with the target's float32 cos and
+# sin over phases in (-pi / 4, 0].
+BLUESTEIN_TWIDDLE_TOLERANCE = 1e-5
 # How every target reflects fft.metal's float2 storage element.
 VECTOR_LAYOUT = {
     "physicalType": "float2",
@@ -96,14 +100,20 @@ def _complex(word):
 def _check_bluestein_tables(info, supplied):
     length = buffer_words(supplied["length"], "int32")[0]
     chirp, spectrum = layout.bluestein_tables(length, info["n"])
+    tolerances = [BLUESTEIN_SPECTRUM_TOLERANCE * info["n"]] * len(spectrum)
+    if info["precomputed"]:
+        # generate_bluestein_twiddles' table follows the spectrum.
+        twiddles = layout.bluestein_twiddles()
+        spectrum = spectrum + twiddles
+        tolerances += [BLUESTEIN_TWIDDLE_TOLERANCE] * len(twiddles)
     for name, expected, tolerance in (
-        ("w_k", chirp, BLUESTEIN_CHIRP_TOLERANCE),
-        ("w_q", spectrum, BLUESTEIN_SPECTRUM_TOLERANCE * info["n"]),
+        ("w_k", chirp, [BLUESTEIN_CHIRP_TOLERANCE] * len(chirp)),
+        ("w_q", spectrum, tolerances),
     ):
         words = buffer_words(supplied[name], COMPLEX)
         if len(words) != len(expected) or any(
-            abs(_complex(word) - value) > tolerance
-            for word, value in zip(words, expected)
+            abs(_complex(word) - value) > bound
+            for word, value, bound in zip(words, expected, tolerance)
         ):
             raise ValueError(
                 f"{LABEL} Bluestein {name} differs from compute_bluestein_constants"
@@ -145,7 +155,7 @@ def validate(entry, supplied, threads, execution):
             buffer.dtype != dtype.encode("ascii")
             or not buffer.data
             or buffer.data % ctypes.sizeof(CTYPES[dtype])
-            or buffer.output != int(name == layout.OUTPUT)
+            or buffer.output != int(name == layout.output(entry))
             or (name in scalars and buffer.count != 1)
         ):
             raise ValueError(f"{LABEL} buffer type, alignment or direction differs")
@@ -157,9 +167,11 @@ def validate(entry, supplied, threads, execution):
     for name in arrays:
         size = ctypes.sizeof(CTYPES[layout.parameter_type(entry, name)])
         spans[name] = (supplied[name].data, supplied[name].data + counts[name] * size)
-    output = spans[layout.OUTPUT]
+    output = spans[layout.output(entry)]
     for name, span in spans.items():
-        if name != layout.OUTPUT and max(span[0], output[0]) < min(span[1], output[1]):
+        if name != layout.output(entry) and max(span[0], output[0]) < min(
+            span[1], output[1]
+        ):
             raise ValueError(f"{LABEL} output overlaps its input")
     check_tables(entry, supplied)
     return metadata
@@ -207,7 +219,7 @@ def _inputs(host, entry, descriptor, storage):
             binding["scalarLayout"],
             binding.get("kind", ""),
         )
-        if name == layout.OUTPUT:
+        if name == layout.output(entry):
             if binding.get("access") != "read_write":
                 raise ValueError(f"{LABEL} output is not writable")
             output = binding["name"]
@@ -227,16 +239,17 @@ def dispatch(host, entry, buffers, count, threads, launch):
     supplied = supplied_buffers(buffers, count, LABEL)
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
-    source_type = layout.parameter_type(entry, "in")
-    output_type = layout.parameter_type(entry, layout.OUTPUT)
-    size = supplied[layout.OUTPUT].count
+    output_name = layout.output(entry)
+    source = layout.input_parameter(entry)
+    output_type = layout.parameter_type(entry, output_name)
+    size = supplied[output_name].count
     # The elements the kernel may touch: a partial last threadgroup's
     # cooperative copy runs past the transforms (fft_layout.footprint).
     reach = metadata["footprint"]
     storage = {}
     for name in parameters:
         dtype = layout.parameter_type(entry, name)
-        if name == layout.OUTPUT:
+        if name == output_name:
             storage[name] = [GUARDS[output_type]] * (reach[name] + GUARD_COUNT)
         elif name in layout.scalars(entry):
             storage[name] = buffer_words(supplied[name], "int32")
@@ -272,11 +285,17 @@ def dispatch(host, entry, buffers, count, threads, launch):
     except ValueError as error:
         raise RuntimeError(f"Native {LABEL} output is outside its storage") from error
     guard = [GUARDS[output_type]] * GUARD_COUNT
-    end = reach[layout.OUTPUT]
+    end = reach[output_name]
     if len(words) != end + GUARD_COUNT or words[end:] != guard:
         raise RuntimeError(f"Native {LABEL} kernel changed its output guard")
     payload = bytes((CTYPES[output_type] * size)(*words[:size]))
-    item = ctypes.sizeof(CTYPES[source_type])
+    # The twiddle kernel reads no transform input.
+    input_hash = None
+    if source is not None:
+        item = ctypes.sizeof(CTYPES[layout.parameter_type(entry, source)])
+        input_hash = hashlib.sha256(
+            ctypes.string_at(supplied[source].data, supplied[source].count * item)
+        ).hexdigest()
     write_trace(
         host,
         {
@@ -294,14 +313,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "packageRoot": str(directory),
             "details": result.details,
             "fftMetadata": metadata,
-            "inputHash": (
-                hashlib.sha256(
-                    ctypes.string_at(supplied["in"].data, supplied["in"].count * item)
-                ).hexdigest()
-            ),
+            "inputHash": input_hash,
             "outputValues": words[:size] if size <= 4096 else None,
             "outputHash": hashlib.sha256(payload).hexdigest(),
         },
     )
-    ctypes.memmove(supplied[layout.OUTPUT].data, payload, len(payload))
+    ctypes.memmove(supplied[output_name].data, payload, len(payload))
     host.dispatch_count += 1

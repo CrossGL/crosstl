@@ -1,4 +1,4 @@
-"""Cache translated MLX Stockham, Rader, Bluestein and four-step FFT entries, one per fft.cpp pipeline.
+"""Cache translated MLX Stockham, Rader, Bluestein, four-step and twiddle-table FFT entries, one per fft.cpp pipeline.
 
 Each entry is the pinned ``fft.metal`` ``fft``, ``rader_fft``, ``bluestein_fft`` or ``four_step_fft``
 kernel at one threadgroup memory size and input/output type pair (and, for
@@ -33,6 +33,17 @@ def project_config(root, output_dir, target, entry):
     info = layout.signature(entry)
     source = info["source"]
     opengl = target == "opengl"
+    # generate_bluestein_twiddles is no template, so no host-named
+    # instantiation carries its threadgroup.
+    workgroup = (
+        {"workgroup_size": tuple(info["workgroupSize"])}
+        if info["kind"] == "twiddles"
+        else {
+            "entry_workgroup_size_rules": {
+                layout.SOURCE: {source: list(info["workgroupSize"])}
+            }
+        }
+    )
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
@@ -41,9 +52,7 @@ def project_config(root, output_dir, target, entry):
         targets=(target,),
         output_dir=output_dir,
         entry_points={layout.SOURCE: (source,)},
-        entry_workgroup_size_rules={
-            layout.SOURCE: {source: list(info["workgroupSize"])}
-        },
+        **workgroup,
         specialization_constants=dict(info["constants"]),
         freeze_specialization_constants=True,
         index_range_assertions=layout.opengl_index_assertions(entry) if opengl else (),
@@ -83,6 +92,19 @@ class FftPackageCache(TranslatedEntryCache):
 
     def workgroup_size(self, entry):
         return layout.workgroup_size(entry)
+
+    def translated_workgroup_size(self, entry, artifact):
+        # The plain twiddle kernel records the project's workgroup size, and
+        # its Metal artifact none, since Metal takes the size from the
+        # dispatch.
+        execution = artifact.get("execution")
+        if layout.signature(entry)["kind"] == "twiddles":
+            if execution is None:
+                return list(self.workgroup_size(entry))
+            if execution["sourceEntryPoints"] != [entry]:
+                raise ValueError("FFT twiddle translation selected another entry")
+            return execution["workgroupSize"]
+        return super().translated_workgroup_size(entry, artifact)
 
     def project_config(self, output_dir, entry):
         return project_config(self.root, output_dir, self.target, entry)
@@ -124,7 +146,8 @@ def verification_entries():
     Rader size and one Bluestein size, and at a Stockham size whose
     threadgroups pass the 64-thread z limit of Direct3D and OpenGL; and both
     passes of the four-step transforms of 8,192 points and of 2**23 points,
-    whose 4,096- and 2,048-point passes also pass that limit."""
+    whose 4,096- and 2,048-point passes also pass that limit; and Bluestein's
+    twiddle-table kernel with both directions of the transforms that read it."""
     single = [
         layout.entry_name(n, *direction)
         for n in (8, 100, 17, 47, 1024)
@@ -136,7 +159,15 @@ def verification_entries():
         for direction in DIRECTIONS
         for name in layout.four_step_entry_names(n, *direction)
     ]
-    return single + four_step
+    # Bluestein's twiddle table and both directions that read it.
+    twiddle_table = [
+        layout.TWIDDLE_ENTRY,
+        *(
+            layout.entry_name(1031, inverse, "float2", "float2", True)
+            for inverse in (False, True)
+        ),
+    ]
+    return single + four_step + twiddle_table
 
 
 def main(argv=None):
