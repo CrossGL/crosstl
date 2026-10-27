@@ -3659,6 +3659,13 @@ class GLSLToCrossGLConverter:
             return f"return {value}" if value else "return"
         return f"return {self.generate_expression(node.value)}"
 
+    def generate_operand(self, node):
+        """Render an operand, keeping an assignment operand as one group."""
+        expression = self.generate_expression(node)
+        if isinstance(node, AssignmentNode):
+            return f"({expression})"
+        return expression
+
     def generate_expression(self, node):
         """Render an OpenGL backend expression node as CrossGL syntax."""
         if node is None:
@@ -3685,11 +3692,14 @@ class GLSLToCrossGLConverter:
                 return ssbo_member
             return node.name
         elif isinstance(node, BinaryOpNode):
-            left = self.generate_expression(node.left)
-            right = self.generate_expression(node.right)
             operator = self.operator_map.get(node.op, node.op)
             if operator == ",":
+                # Assignment binds tighter than the comma operator.
+                left = self.generate_expression(node.left)
+                right = self.generate_expression(node.right)
                 return f"({left}, {right})"
+            left = self.generate_operand(node.left)
+            right = self.generate_operand(node.right)
             equality = lower_aggregate_equality(self, node, left, right)
             if equality is not None:
                 return equality
@@ -3697,12 +3707,12 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, UnaryOpNode):
             if node.op in {"++", "--"}:
                 self.mark_structured_element_reference(node.operand)
-            operand = self.generate_expression(node.operand)
+            operand = self.generate_operand(node.operand)
             operator = self.operator_map.get(node.op, node.op)
             return f"({operator}{operand})"
         elif isinstance(node, PostfixOpNode):
             self.mark_structured_element_reference(node.operand)
-            operand = self.generate_expression(node.operand)
+            operand = self.generate_operand(node.operand)
             return f"({operand}{node.op})"
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
@@ -3713,9 +3723,9 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, ArrayAccessNode):
             return self.generate_array_access(node)
         elif isinstance(node, TernaryOpNode):
-            condition = self.generate_expression(node.condition)
-            true_expr = self.generate_expression(node.true_expr)
-            false_expr = self.generate_expression(node.false_expr)
+            condition = self.generate_operand(node.condition)
+            true_expr = self.generate_operand(node.true_expr)
+            false_expr = self.generate_operand(node.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(node, VectorConstructorNode):
             args = ", ".join(self.generate_expression(arg) for arg in node.args)

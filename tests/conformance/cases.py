@@ -733,6 +733,28 @@ def o_buffer_count(inp):
     return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
 
 
+def o_assignment_operand(inp):
+    """Assignments and compound assignments used as operands contribute the value they store."""
+    out = []
+    for x in inp.astype(np.int64):
+        b = x + 1
+        c = b * 2
+        b += 3
+        d = b - 1
+        b -= 2
+        e = -b
+        c = c + 1
+        if c > 5:
+            d = d * 2
+            f = d + 1
+        else:
+            e = e - 7
+            f = e - 1
+        b *= 3
+        out.extend([b, c, d, e, f, 10 * b])
+    return np.array(out, dtype=np.int32)
+
+
 def row_major_inputs():
     """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
     rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
@@ -1964,6 +1986,16 @@ CASES = [
         np.int32,
         control_flow_cases.short_circuit_reference,
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_assignment_operand",
+        "control",
+        "Parenthesized =, +=, -= and *= used as operands of arithmetic, unary minus and both arms of ?:",
+        "GLSL 4.60 section 5.8: an assignment expression has the value of its left operand after the "
+        "assignment; section 5.9: ?: evaluates only the selected expression",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_assignment_operand,
     ),
     Case(
         "g_row_major_members",
