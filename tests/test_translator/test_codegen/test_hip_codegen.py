@@ -275,9 +275,9 @@ class TestHipCodeGen:
     def test_global_constants_are_emitted(self):
         source_code = """
         shader TestShader {
-            const float PI = 3.14159;
+            const float PI = 3.14159f;
             const int WARP_SIZE = 32;
-            const vec3 UP_VECTOR = vec3(0.0, 1.0, 0.0);
+            const vec3 UP_VECTOR = vec3(0.0f, 1.0f, 0.0f);
 
             compute {
                 void main(float *out) {
@@ -293,9 +293,9 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "const float PI = 3.14159;" in hip_code
+        assert "const float PI = 3.14159f;" in hip_code
         assert "const int WARP_SIZE = 32;" in hip_code
-        assert "const float3 UP_VECTOR = make_float3(0.0, 1.0, 0.0);" in hip_code
+        assert "const float3 UP_VECTOR = make_float3(0.0f, 1.0f, 0.0f);" in hip_code
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in hip_code
 
     def test_compute_shader_to_kernel(self):
@@ -705,10 +705,10 @@ class TestHipCodeGen:
                     uvec3 launch = gl_LaunchIDEXT;
                     uint launchWidth = gl_LaunchSizeEXT.x;
                     RayDesc ray = RayDesc(
-                        vec3(0.0, 0.0, 0.0),
-                        0.001,
-                        vec3(0.0, 0.0, 1.0),
-                        100.0
+                        vec3(0.0f, 0.0f, 0.0f),
+                        0.001f,
+                        vec3(0.0f, 0.0f, 1.0f),
+                        100.0f
                     );
                     RayPayload payload;
                     CallableData data;
@@ -723,7 +723,7 @@ class TestHipCodeGen:
                     HitAttributes attributes @ hit_attribute,
                     float hitT @ gl_HitTEXT
                 ) {
-                    payload.color = vec3(1.0, 0.0, hitT);
+                    payload.color = vec3(1.0f, 0.0f, hitT);
                 }
             }
 
@@ -733,7 +733,7 @@ class TestHipCodeGen:
                     HitAttributes attributes @ hit_attribute,
                     uint hitKind @ gl_HitKindEXT
                 ) {
-                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    payload.color = vec3(0.5f, 0.0f, float(hitKind));
                     IgnoreHit();
                     AcceptHitAndEndSearch();
                 }
@@ -741,7 +741,7 @@ class TestHipCodeGen:
 
             ray_miss {
                 void main(RayPayload payload @ rayPayloadInEXT) {
-                    payload.color = vec3(0.0, 0.0, 0.0);
+                    payload.color = vec3(0.0f, 0.0f, 0.0f);
                 }
             }
 
@@ -754,8 +754,8 @@ class TestHipCodeGen:
             ray_intersection {
                 void main() {
                     HitAttributes attributes;
-                    bool accepted = ReportHit(1.0, 0, attributes);
-                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                    bool accepted = ReportHit(1.0f, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0f, 1);
                 }
             }
         }
@@ -786,10 +786,10 @@ class TestHipCodeGen:
         assert "cgl_call_shader(0, data);" in hip_code
         assert "cgl_ignore_hit();" in hip_code
         assert "cgl_accept_hit_and_end_search();" in hip_code
-        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in hip_code
+        assert "bool accepted = cgl_report_hit(1.0f, 0, attributes);" in hip_code
         assert (
             "bool acceptedWithoutAttributes = cgl_report_hit"
-            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in hip_code
+            "(2.0f, 1, CglBuiltInTriangleIntersectionAttributes{});" in hip_code
         )
 
         compile_hip_if_hipcc_available(hip_code, tmp_path)
@@ -876,7 +876,7 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(smoke_ast)
 
         assert "__global__ void compileSmoke(float * out)" in hip_code
-        assert "out[0] = 1.0;" in hip_code
+        assert "out[0] = 1.0f;" in hip_code
         compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_generated_atomic_barrier_kernel_smoke_compiles_with_hipcc(self, tmp_path):
@@ -1005,8 +1005,8 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(smoke_ast)
 
-        assert "float2 uv = make_float2(1.0, 2.0);" in hip_code
-        assert "float4 color = make_float4(uv.x, uv.y, 3.0, 4.0);" in hip_code
+        assert "float2 uv = make_float2(1.0f, 2.0f);" in hip_code
+        assert "float4 color = make_float4(uv.x, uv.y, 3.0f, 4.0f);" in hip_code
         assert "out[0] = color.w;" in hip_code
         compile_hip_if_hipcc_available(hip_code, tmp_path)
 
@@ -1015,11 +1015,11 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float helper(float x) {
-                    return x + 1.0;
+                    return x + 1.0f;
                 }
 
                 void main() {
-                    float y = helper(1.0);
+                    float y = helper(1.0f);
                 }
             }
         }
@@ -1038,7 +1038,7 @@ class TestHipCodeGen:
         assert helper_signature in hip_code
         assert kernel_signature in hip_code
         assert hip_code.index(helper_signature) < hip_code.index(kernel_signature)
-        assert "float y = helper(1.0);" in hip_code
+        assert "float y = helper(1.0f);" in hip_code
 
     def test_user_defined_mix_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
@@ -1049,7 +1049,7 @@ class TestHipCodeGen:
                 }
 
                 void main() {
-                    float adjusted = mix(0.0, 1.0, 0.25);
+                    float adjusted = mix(0.0f, 1.0f, 0.25f);
                 }
             }
         }
@@ -1062,8 +1062,9 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float mix(float x, float y, float t)" in hip_code
-        assert "float adjusted = mix(0.0, 1.0, 0.25);" in hip_code
+        assert "float adjusted = mix(0.0f, 1.0f, 0.25f);" in hip_code
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in hip_code
+        assert "float adjusted = (0.0f + ((1.0f - 0.0f) * 0.25f));" not in hip_code
 
     def test_user_defined_builtin_name_result_type_is_not_reinferred_as_hip_builtin(
         self,
@@ -1076,9 +1077,9 @@ class TestHipCodeGen:
                 }
 
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
-                    float wrapped = fract(mix(a, b, 0.25));
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
+                    float wrapped = fract(mix(a, b, 0.25f));
                 }
             }
         }
@@ -1091,19 +1092,21 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float mix(float3 x, float3 y, float t)" in hip_code
-        assert "float wrapped = cgl_fract_float(mix(a, b, 0.25));" in hip_code
+        assert "float wrapped = cgl_fract_float(mix(a, b, 0.25f));" in hip_code
         assert "float wrapped = cgl_float3_fract(mix(a, b, 0.25));" not in hip_code
+        assert "float wrapped = cgl_float3_fract(mix(a, b, 0.25f));" not in hip_code
         assert "float wrapped = (mix(a, b, 0.25)" not in hip_code
+        assert "float wrapped = (mix(a, b, 0.25f)" not in hip_code
 
     def test_hlsl_rsqrt_builtin_lowers_to_hip_inverse_sqrt_math(self):
         source_code = """
         shader TestShader {
             compute {
                 void main() {
-                    float x = 4.0;
+                    float x = 4.0f;
                     float inv = rsqrt(x);
-                    vec3 v = rsqrt(vec3(4.0, 9.0, 16.0));
-                    double d = 4.0;
+                    vec3 v = rsqrt(vec3(4.0f, 9.0f, 16.0f));
+                    double d = 4.0f;
                     double invD = rsqrt(d);
                 }
             }
@@ -1125,7 +1128,7 @@ class TestHipCodeGen:
         )
         assert "float inv = rsqrtf(x);" in hip_code
         assert (
-            "float3 v = cgl_float3_inversesqrt(make_float3(4.0, 9.0, 16.0));"
+            "float3 v = cgl_float3_inversesqrt(make_float3(4.0f, 9.0f, 16.0f));"
             in hip_code
         )
         assert "double invD = (1.0 / sqrt(d));" in hip_code
@@ -1137,10 +1140,10 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = 4.0;
+                    float x = 4.0f;
                     float inv = inverseSqrt(x);
-                    vec3 v = inverseSqrt(vec3(4.0, 9.0, 16.0));
-                    double d = 4.0;
+                    vec3 v = inverseSqrt(vec3(4.0f, 9.0f, 16.0f));
+                    double d = 4.0f;
                     double invD = inverseSqrt(d);
                 }
             }
@@ -1155,7 +1158,7 @@ class TestHipCodeGen:
 
         assert "float inv = rsqrtf(x);" in hip_code
         assert (
-            "float3 v = cgl_float3_inversesqrt(make_float3(4.0, 9.0, 16.0));"
+            "float3 v = cgl_float3_inversesqrt(make_float3(4.0f, 9.0f, 16.0f));"
             in hip_code
         )
         assert "double invD = (1.0 / sqrt(d));" in hip_code
@@ -1420,13 +1423,13 @@ class TestHipCodeGen:
                 }
 
                 float asfloat(float value) {
-                    return value + 1.0;
+                    return value + 1.0f;
                 }
 
                 void main() {
-                    vec3 value = vec3(1.0, 2.0, 3.0);
+                    vec3 value = vec3(1.0f, 2.0f, 3.0f);
                     let adjusted = floatBitsToInt(value);
-                    let nativeName = asfloat(1.0);
+                    let nativeName = asfloat(1.0f);
                 }
             }
         }
@@ -1441,10 +1444,11 @@ class TestHipCodeGen:
         assert "__device__ float floatBitsToInt(float3 value)" in hip_code
         assert "__device__ float asfloat(float value)" in hip_code
         assert "float adjusted = floatBitsToInt(value);" in hip_code
-        assert "float nativeName = asfloat(1.0);" in hip_code
+        assert "float nativeName = asfloat(1.0f);" in hip_code
         assert "cgl_float3_to_int3_bitcast(value)" not in hip_code
         assert "__float_as_int(value)" not in hip_code
         assert "float nativeName = 1.0;" not in hip_code
+        assert "float nativeName = 1.0f;" not in hip_code
 
     def test_integer_bit_builtins_lower_to_hip_intrinsics(self):
         source_code = """
@@ -1681,11 +1685,11 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float rsqrt(float x) {
-                    return x + 1.0;
+                    return x + 1.0f;
                 }
 
                 void main() {
-                    float inv = rsqrt(4.0);
+                    float inv = rsqrt(4.0f);
                 }
             }
         }
@@ -1698,19 +1702,20 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float rsqrt(float x)" in hip_code
-        assert "float inv = rsqrt(4.0);" in hip_code
+        assert "float inv = rsqrt(4.0f);" in hip_code
         assert "rsqrtf(4.0)" not in hip_code
+        assert "rsqrtf(4.0f)" not in hip_code
 
     def test_user_defined_inverse_sqrt_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
         shader TestShader {
             compute {
                 float inverseSqrt(float x) {
-                    return x + 1.0;
+                    return x + 1.0f;
                 }
 
                 void main() {
-                    float inv = inverseSqrt(4.0);
+                    float inv = inverseSqrt(4.0f);
                 }
             }
         }
@@ -1723,8 +1728,9 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float inverseSqrt(float x)" in hip_code
-        assert "float inv = inverseSqrt(4.0);" in hip_code
+        assert "float inv = inverseSqrt(4.0f);" in hip_code
         assert "rsqrtf(4.0)" not in hip_code
+        assert "rsqrtf(4.0f)" not in hip_code
 
     def test_type_conversion(self):
         codegen = HipCodeGen()
@@ -1810,9 +1816,9 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 1.0);
-                    dvec2 precise = dvec2(1.0, 2.0);
-                    dvec4 weights = dvec4(1.0, 2.0, 3.0, 4.0);
+                    vec2 uv = vec2(0.5f, 1.0f);
+                    dvec2 precise = dvec2(1.0f, 2.0f);
+                    dvec4 weights = dvec4(1.0f, 2.0f, 3.0f, 4.0f);
                     ivec3 index = ivec3(1, 2, 3);
                     uvec4 mask = uvec4(1, 2, 3, 4);
                 }
@@ -1827,9 +1833,9 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float2 uv = make_float2(0.5, 1.0);" in hip_code
-        assert "double2 precise = make_double2(1.0, 2.0);" in hip_code
-        assert "double4 weights = make_double4(1.0, 2.0, 3.0, 4.0);" in hip_code
+        assert "float2 uv = make_float2(0.5f, 1.0f);" in hip_code
+        assert "double2 precise = make_double2(1.0f, 2.0f);" in hip_code
+        assert "double4 weights = make_double4(1.0f, 2.0f, 3.0f, 4.0f);" in hip_code
         assert "int3 index = make_int3(1, 2, 3);" in hip_code
         assert "uint4 mask = make_uint4(1, 2, 3, 4);" in hip_code
         assert " = vec2(" not in hip_code
@@ -1930,12 +1936,12 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 f16 tone(f16 input) {
-                    f16 bias = f16(0.5);
+                    f16 bias = f16(0.5f);
                     return bias;
                 }
 
                 vec2<f16> pair(vec2<f16> input) {
-                    vec2<f16> scale = vec2<f16>(1.0, 2.0);
+                    vec2<f16> scale = vec2<f16>(1.0f, 2.0f);
                     vec2<f16> same = vec2<f16>(input);
                     return same;
                 }
@@ -1948,9 +1954,9 @@ class TestHipCodeGen:
 
         assert "#include <hip/hip_fp16.h>" in hip_code
         assert "__device__ half tone(half input)" in hip_code
-        assert "half bias = __float2half(0.5);" in hip_code
+        assert "half bias = __float2half(0.5f);" in hip_code
         assert "__device__ half2 pair(half2 input)" in hip_code
-        assert "half2 scale = __floats2half2_rn(1.0, 2.0);" in hip_code
+        assert "half2 scale = __floats2half2_rn(1.0f, 2.0f);" in hip_code
         assert "half2 same = input;" in hip_code
         assert "vec2<f16>" not in hip_code
         assert "f162" not in hip_code
@@ -2000,8 +2006,8 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 f16vec3 tint(f16vec3 input) {
-                    f16 scalar = f16(0.5);
-                    f16vec3 from_scalars = f16vec3(1.0, scalar, input.z);
+                    f16 scalar = f16(0.5f);
+                    f16vec3 from_scalars = f16vec3(1.0f, scalar, input.z);
                     f16vec3 from_vector = f16vec3(input);
                     f16vec3 from_swizzle = f16vec3(input.zyx);
                     f16 component = from_scalars.x;
@@ -2017,9 +2023,10 @@ class TestHipCodeGen:
         assert "#include <hip/hip_fp16.h>" in hip_code
         assert "struct cgl_half3" in hip_code
         assert "__device__ cgl_half3 tint(cgl_half3 input)" in hip_code
-        assert "half scalar = __float2half(0.5);" in hip_code
+        assert "half scalar = __float2half(0.5f);" in hip_code
         assert (
-            "cgl_half3 from_scalars = cgl_make_half3(1.0, scalar, input.z);" in hip_code
+            "cgl_half3 from_scalars = cgl_make_half3(1.0f, scalar, input.z);"
+            in hip_code
         )
         assert (
             "cgl_half3 from_vector = cgl_make_half3(input.x, input.y, input.z);"
@@ -2035,6 +2042,51 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "f16vec3" not in hip_code
+
+    def test_half_vector_geometric_builtins_use_float_helpers(self):
+        source_code = """
+        shader G {
+            half f(f16vec3 s, f16vec3 r, f16vec4 q) {
+                half b = length(s);
+                f16vec3 n = normalize(s);
+                half d = distance(s, r);
+                f16vec3 c = cross(s, r);
+                half e = length(q);
+                f16vec3 m = r * distance(s, r);
+                return b + n.x + d + c.x + e + m.x;
+            }
+            float g(vec3 a, vec3 b) {
+                return distance(a, b);
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "half b = cgl_cgl_half3_length(s);" in hip_code
+        assert "cgl_half3 n = cgl_cgl_half3_normalize(s);" in hip_code
+        assert "half d = cgl_cgl_half3_distance(s, r);" in hip_code
+        assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in hip_code
+        assert "half e = cgl_cgl_half4_length(q);" in hip_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
+            in hip_code
+        )
+        assert "return cgl_float3_distance(a, b);" in hip_code
+        assert (
+            "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in hip_code
+        )
+        assert "__float2half(sqrtf((__half2float(value.x) *" in hip_code
+        assert "float inv_length = 1.0f / sqrtf(" in hip_code
+        assert "float dx = __half2float(lhs.x) - __half2float(rhs.x);" in hip_code
+        assert "float dx = lhs.x - rhs.x;" in hip_code
+        assert (
+            "(__half2float(lhs.y) * __half2float(rhs.z) - "
+            "__half2float(lhs.z) * __half2float(rhs.y))" in hip_code
+        )
+        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
+            assert f" = {bare};" not in hip_code
+        assert "return distance(a, b);" not in hip_code
 
     def test_half_vector_modulo_uses_float_mod_helper(self):
         source_code = """
@@ -2202,9 +2254,9 @@ class TestHipCodeGen:
         assert "#include <hip/hip_fp16.h>" in hip_code
         assert "struct alignas(8) cgl_half4" in hip_code
         assert "__device__ cgl_half4 tint(cgl_half4 input)" in hip_code
-        assert "half scalar = __float2half(0.5);" in hip_code
+        assert "half scalar = __float2half(0.5f);" in hip_code
         assert (
-            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            "cgl_half4 from_scalars = cgl_make_half4(1.0f, scalar, input.z, input.w);"
             in hip_code
         )
         assert (
@@ -2274,10 +2326,10 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2 uv = vec2(0.25, 0.5);
-                    vec4 color = vec4(uv, 0.75, 1.0);
-                    vec3 normal = vec3(1.0, 2.0, 3.0);
-                    vec4 packed = vec4(normal, 1.0);
+                    vec2 uv = vec2(0.25f, 0.5f);
+                    vec4 color = vec4(uv, 0.75f, 1.0f);
+                    vec3 normal = vec3(1.0f, 2.0f, 3.0f);
+                    vec4 packed = vec4(normal, 1.0f);
                     vec3 rgb = vec3(color.rgb);
                     vec2 from_swizzle = vec2(color.xy);
                 }
@@ -2292,15 +2344,17 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float4 color = make_float4(uv.x, uv.y, 0.75, 1.0);" in hip_code
+        assert "float4 color = make_float4(uv.x, uv.y, 0.75f, 1.0f);" in hip_code
         assert (
-            "float4 packed = make_float4(normal.x, normal.y, normal.z, 1.0);"
+            "float4 packed = make_float4(normal.x, normal.y, normal.z, 1.0f);"
             in hip_code
         )
         assert "float3 rgb = make_float3(color.x, color.y, color.z);" in hip_code
         assert "float2 from_swizzle = make_float2(color.x, color.y);" in hip_code
         assert "make_float4(uv, 0.75, 1.0)" not in hip_code
+        assert "make_float4(uv, 0.75f, 1.0f)" not in hip_code
         assert "make_float4(normal, 1.0)" not in hip_code
+        assert "make_float4(normal, 1.0f)" not in hip_code
         assert "make_float3(make_float3(color.x, color.y, color.z))" not in hip_code
         assert "make_float2(make_float2(color.x, color.y))" not in hip_code
 
@@ -2309,14 +2363,14 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 vec2 makeUv() {
-                    return vec2(0.25, 0.5);
+                    return vec2(0.25f, 0.5f);
                 }
 
                 void main() {
-                    vec4 color = vec4{1.0, 0.5, 0.25, 1.0};
-                    vec2 uv = vec2{0.25, 0.5};
-                    vec4 packed = vec4{uv, 0.0, 1.0};
-                    vec4 fromCall = vec4{makeUv(), 0.0, 1.0};
+                    vec4 color = vec4{1.0f, 0.5f, 0.25f, 1.0f};
+                    vec2 uv = vec2{0.25f, 0.5f};
+                    vec4 packed = vec4{uv, 0.0f, 1.0f};
+                    vec4 fromCall = vec4{makeUv(), 0.0f, 1.0f};
                 }
             }
         }
@@ -2328,25 +2382,28 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float4 color = make_float4(1.0, 0.5, 0.25, 1.0);" in hip_code
-        assert "float2 uv = make_float2(0.25, 0.5);" in hip_code
-        assert "float4 packed = make_float4(uv.x, uv.y, 0.0, 1.0);" in hip_code
+        assert "float4 color = make_float4(1.0f, 0.5f, 0.25f, 1.0f);" in hip_code
+        assert "float2 uv = make_float2(0.25f, 0.5f);" in hip_code
+        assert "float4 packed = make_float4(uv.x, uv.y, 0.0f, 1.0f);" in hip_code
         assert (
             "float4 fromCall = "
-            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0f, 1.0f);"
             in hip_code
         )
         assert "float4 color = float4{" not in hip_code
         assert "float4 packed = float4{uv, 0.0, 1.0}" not in hip_code
+        assert "float4 packed = float4{uv, 0.0f, 1.0f}" not in hip_code
         assert "float4 packed = make_float4(uv, 0.0, 1.0)" not in hip_code
+        assert "float4 packed = make_float4(uv, 0.0f, 1.0f)" not in hip_code
         assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in hip_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0f, 1.0f)" not in hip_code
 
     def test_complex_scalar_vector_constructor_splats_use_hip_helpers(self):
         source_code = """
         shader TestShader {
             compute {
                 float makeWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 int nextIndex() {
@@ -2362,7 +2419,7 @@ class TestHipCodeGen:
                     vec3 fromCast = vec3(nextIndex());
                     bvec4 fromBoolCall = bvec4(nextFlag());
                     bvec2 fromInt = bvec2(nextIndex());
-                    vec3 simple = vec3(1.0);
+                    vec3 simple = vec3(1.0f);
                 }
             }
         }
@@ -2381,7 +2438,7 @@ class TestHipCodeGen:
         assert "float3 fromCast = cgl_float3_splat(nextIndex());" in hip_code
         assert "uchar4 fromBoolCall = cgl_uchar4_splat(nextFlag());" in hip_code
         assert "uchar2 fromInt = cgl_uchar2_splat(nextIndex());" in hip_code
-        assert "float3 simple = make_float3(1.0, 1.0, 1.0);" in hip_code
+        assert "float3 simple = make_float3(1.0f, 1.0f, 1.0f);" in hip_code
         assert "make_float3(makeWeight(), makeWeight(), makeWeight())" not in hip_code
         assert "make_float3(nextIndex(), nextIndex(), nextIndex())" not in hip_code
         assert "make_uchar4(nextFlag(), nextFlag()" not in hip_code
@@ -2392,27 +2449,27 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 vec2 makeUv() {
-                    return vec2(0.25, 0.5);
+                    return vec2(0.25f, 0.5f);
                 }
 
                 vec3 makeNormal() {
-                    return vec3(0.0, 1.0, 0.0);
+                    return vec3(0.0f, 1.0f, 0.0f);
                 }
 
                 vec4 makeColor() {
-                    return vec4(1.0, 2.0, 3.0, 4.0);
+                    return vec4(1.0f, 2.0f, 3.0f, 4.0f);
                 }
 
                 float makeWeight() {
-                    return 0.75;
+                    return 0.75f;
                 }
 
                 void main() {
-                    vec4 color = vec4(makeUv(), 0.0, 1.0);
+                    vec4 color = vec4(makeUv(), 0.0f, 1.0f);
                     vec4 packed = vec4(makeNormal(), makeWeight());
                     vec3 rgb = vec3(makeColor().rgb);
-                    vec2 uv = vec2(0.25, 0.5);
-                    vec4 simple = vec4(uv, 0.0, 1.0);
+                    vec2 uv = vec2(0.25f, 0.5f);
+                    vec4 simple = vec4(uv, 0.0f, 1.0f);
                 }
             }
         }
@@ -2442,7 +2499,7 @@ class TestHipCodeGen:
         assert "return make_float3(arg0.x, arg0.y, arg0.z);" in hip_code
         assert (
             "float4 color = "
-            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0f, 1.0f);"
             in hip_code
         )
         assert (
@@ -2451,8 +2508,9 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "float3 rgb = cgl_float3_construct_float4_xyz(makeColor());" in hip_code
-        assert "float4 simple = make_float4(uv.x, uv.y, 0.0, 1.0);" in hip_code
+        assert "float4 simple = make_float4(uv.x, uv.y, 0.0f, 1.0f);" in hip_code
         assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in hip_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0f, 1.0f)" not in hip_code
         assert "make_float4(makeNormal().x, makeNormal().y" not in hip_code
         assert (
             "make_float3(makeColor().x, makeColor().y, makeColor().z)" not in hip_code
@@ -2652,12 +2710,12 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float weight = 0.5;
-                    vec4 base = vec4(1.0);
-                    vec4 offset = vec4(0.25, 0.5, 0.75, 1.0);
+                    float weight = 0.5f;
+                    vec4 base = vec4(1.0f);
+                    vec4 offset = vec4(0.25f, 0.5f, 0.75f, 1.0f);
                     vec4 scaled = base * weight;
                     vec4 biased = weight + base;
-                    vec4 shifted = base - 1.0;
+                    vec4 shifted = base - 1.0f;
                     vec4 divided = base / weight;
                     vec4 combined = base + offset;
                     base *= weight;
@@ -2673,7 +2731,7 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float4 base = make_float4(1.0, 1.0, 1.0, 1.0);" in hip_code
+        assert "float4 base = make_float4(1.0f, 1.0f, 1.0f, 1.0f);" in hip_code
         assert "__device__ inline float4 cgl_float4_mul_scalar" in hip_code
         assert "__device__ inline float4 cgl_scalar_add_float4" in hip_code
         assert "__device__ inline float4 cgl_float4_sub_scalar" in hip_code
@@ -2681,13 +2739,14 @@ class TestHipCodeGen:
         assert "__device__ inline float4 cgl_float4_add" in hip_code
         assert "float4 scaled = cgl_float4_mul_scalar(base, weight);" in hip_code
         assert "float4 biased = cgl_scalar_add_float4(weight, base);" in hip_code
-        assert "float4 shifted = cgl_float4_sub_scalar(base, 1.0);" in hip_code
+        assert "float4 shifted = cgl_float4_sub_scalar(base, 1.0f);" in hip_code
         assert "float4 divided = cgl_float4_div_scalar(base, weight);" in hip_code
         assert "float4 combined = cgl_float4_add(base, offset);" in hip_code
         assert "base = cgl_float4_mul_scalar(base, weight);" in hip_code
         assert "(base * weight)" not in hip_code
         assert "(weight + base)" not in hip_code
         assert "make_float4(1.0);" not in hip_code
+        assert "make_float4(1.0f);" not in hip_code
 
     def test_vector_unary_negation_uses_hip_helpers(self):
         source_code = """
@@ -2823,12 +2882,12 @@ class TestHipCodeGen:
                 void main() {
                     bool cond = true;
                     bvec3 mask = bvec3(true, false, true);
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
                     vec3 scalarSelected = cond ? a : b;
                     vec3 laneSelected = mask ? a : b;
-                    vec3 scalarArms = mask ? 1.0 : 0.0;
-                    vec3 mixedArm = mask ? a : 0.0;
+                    vec3 scalarArms = mask ? 1.0f : 0.0f;
+                    vec3 mixedArm = mask ? a : 0.0f;
                 }
             }
         }
@@ -2846,16 +2905,18 @@ class TestHipCodeGen:
             "(mask.y ? a.y : b.y), (mask.z ? a.z : b.z));" in hip_code
         )
         assert (
-            "float3 scalarArms = make_float3((mask.x ? 1.0 : 0.0), "
-            "(mask.y ? 1.0 : 0.0), (mask.z ? 1.0 : 0.0));" in hip_code
+            "float3 scalarArms = make_float3((mask.x ? 1.0f : 0.0f), "
+            "(mask.y ? 1.0f : 0.0f), (mask.z ? 1.0f : 0.0f));" in hip_code
         )
         assert (
-            "float3 mixedArm = make_float3((mask.x ? a.x : 0.0), "
-            "(mask.y ? a.y : 0.0), (mask.z ? a.z : 0.0));" in hip_code
+            "float3 mixedArm = make_float3((mask.x ? a.x : 0.0f), "
+            "(mask.y ? a.y : 0.0f), (mask.z ? a.z : 0.0f));" in hip_code
         )
         assert "float3 laneSelected = (mask ? a : b);" not in hip_code
         assert "float3 scalarArms = (mask ? 1.0 : 0.0);" not in hip_code
+        assert "float3 scalarArms = (mask ? 1.0f : 0.0f);" not in hip_code
         assert "float3 mixedArm = (mask ? a : 0.0);" not in hip_code
+        assert "float3 mixedArm = (mask ? a : 0.0f);" not in hip_code
 
     def test_integer_vector_bitwise_ops_expand_hip_components(self):
         source_code = """
@@ -2972,15 +3033,15 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(5.5, 6.5, 7.5);
-                    vec3 b = vec3(2.0, 2.5, 3.0);
+                    vec3 a = vec3(5.5f, 6.5f, 7.5f);
+                    vec3 b = vec3(2.0f, 2.5f, 3.0f);
                     vec3 vf = a % b;
-                    vec3 vs = a % 2.0;
-                    vec3 sv = 10.0 % b;
+                    vec3 vs = a % 2.0f;
+                    vec3 sv = 10.0f % b;
                     vec3 builtin = mod(a, b);
                     a %= b;
-                    dvec2 da = dvec2(5.5, 6.5);
-                    dvec2 db = dvec2(2.0, 2.5);
+                    dvec2 da = dvec2(5.5f, 6.5f);
+                    dvec2 db = dvec2(2.0f, 2.5f);
                     dvec2 dm = da % db;
                     da %= db;
                     ivec3 ia = ivec3(5, 6, 7);
@@ -3031,8 +3092,8 @@ class TestHipCodeGen:
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in hip_code
         assert "__device__ inline uint4 cgl_uint4_mod(uint4 lhs, uint4 rhs)" in hip_code
         assert "float3 vf = cgl_float3_mod(a, b);" in hip_code
-        assert "float3 vs = cgl_float3_mod_scalar(a, 2.0);" in hip_code
-        assert "float3 sv = cgl_scalar_mod_float3(10.0, b);" in hip_code
+        assert "float3 vs = cgl_float3_mod_scalar(a, 2.0f);" in hip_code
+        assert "float3 sv = cgl_scalar_mod_float3(10.0f, b);" in hip_code
         assert "float3 builtin = cgl_float3_mod(a, b);" in hip_code
         assert "a = cgl_float3_mod(a, b);" in hip_code
         assert "double2 dm = cgl_double2_mod(da, db);" in hip_code
@@ -3058,13 +3119,13 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float fa = 5.5;
-                    float fb = 2.0;
+                    float fa = 5.5f;
+                    float fb = 2.0f;
                     float fm = fa % fb;
-                    float flit = 5.5 % 2.0;
+                    float flit = 5.5f % 2.0f;
                     fa %= fb;
-                    double da = 5.5;
-                    double db = 2.0;
+                    double da = 5.5f;
+                    double db = 2.0f;
                     double dm = da % db;
                     da %= db;
                     int ia = 5;
@@ -3094,7 +3155,7 @@ class TestHipCodeGen:
         )
         assert "return lhs - rhs * floor(lhs / rhs);" in hip_code
         assert "float fm = cgl_mod_float(fa, fb);" in hip_code
-        assert "float flit = cgl_mod_float(5.5, 2.0);" in hip_code
+        assert "float flit = cgl_mod_float(5.5f, 2.0f);" in hip_code
         assert "fa = cgl_mod_float(fa, fb);" in hip_code
         assert "double dm = cgl_mod_double(da, db);" in hip_code
         assert "da = cgl_mod_double(da, db);" in hip_code
@@ -3118,7 +3179,7 @@ class TestHipCodeGen:
 
             compute {
                 void main() {
-                    float value = mod(1.0, 2.0);
+                    float value = mod(1.0f, 2.0f);
                 }
             }
         }
@@ -3132,7 +3193,7 @@ class TestHipCodeGen:
 
         assert "__device__ float mod(float x, float y)" in hip_code
         assert "return (x + y);" in hip_code
-        assert "float value = mod(1.0, 2.0);" in hip_code
+        assert "float value = mod(1.0f, 2.0f);" in hip_code
         assert "cgl_mod_float" not in hip_code
 
     def test_vector_comparisons_emit_hip_bool_vector_constructors(self):
@@ -3140,15 +3201,15 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(1.0, 0.0, 4.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(1.0f, 0.0f, 4.0f);
                     bvec3 lt = a < b;
                     bvec3 le = a <= b;
                     bvec3 gt = a > b;
-                    bvec3 ge = a >= 0.0;
-                    bvec3 scalarLeft = 1.0 < b;
-                    vec4 c = vec4(1.0);
-                    vec4 d = vec4(2.0);
+                    bvec3 ge = a >= 0.0f;
+                    bvec3 scalarLeft = 1.0f < b;
+                    vec4 c = vec4(1.0f);
+                    vec4 d = vec4(2.0f);
                     bvec4 eq = c == d;
                     ivec2 ia = ivec2(1, 2);
                     ivec2 ib = ivec2(2, 2);
@@ -3177,12 +3238,12 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "uchar3 ge = make_uchar3((a.x >= 0.0), (a.y >= 0.0), (a.z >= 0.0));"
+            "uchar3 ge = make_uchar3((a.x >= 0.0f), (a.y >= 0.0f), (a.z >= 0.0f));"
             in hip_code
         )
         assert (
-            "uchar3 scalarLeft = make_uchar3((1.0 < b.x), "
-            "(1.0 < b.y), (1.0 < b.z));" in hip_code
+            "uchar3 scalarLeft = make_uchar3((1.0f < b.x), "
+            "(1.0f < b.y), (1.0f < b.z));" in hip_code
         )
         assert (
             "uchar4 eq = make_uchar4((c.x == d.x), (c.y == d.y), "
@@ -3210,15 +3271,15 @@ class TestHipCodeGen:
                 }
 
                 vec3 makeA() {
-                    return vec3(1.0, 2.0, 3.0);
+                    return vec3(1.0f, 2.0f, 3.0f);
                 }
 
                 vec3 makeB() {
-                    return vec3(4.0, 5.0, 6.0);
+                    return vec3(4.0f, 5.0f, 6.0f);
                 }
 
                 float nextWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 void main() {
@@ -3229,7 +3290,7 @@ class TestHipCodeGen:
                     bvec3 ge = makeA() >= nextWeight();
                     bvec3 scalarLeft = nextWeight() < makeB();
                     vec3 selected = makeMask() ? makeA() : makeB();
-                    vec3 scalarBranch = makeMask() ? nextWeight() : 0.0;
+                    vec3 scalarBranch = makeMask() ? nextWeight() : 0.0f;
                 }
             }
         }
@@ -3312,7 +3373,7 @@ class TestHipCodeGen:
         )
         assert (
             "float3 scalarBranch = cgl_float3_select_uchar3_xyz_float_float("
-            "makeMask(), nextWeight(), 0.0);" in hip_code
+            "makeMask(), nextWeight(), 0.0f);" in hip_code
         )
         assert "makeMask().x && makeOtherMask().x" not in hip_code
         assert "makeA().x < makeB().x" not in hip_code
@@ -3324,18 +3385,18 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
                     float d = dot(a, b);
                     vec3 c = cross(a, b);
                     vec3 n = normalize(a);
-                    float weight = 0.5;
+                    float weight = 0.5f;
                     vec3 scaled = normalize(a) * weight;
                     vec3 wave = sin(a);
-                    vec3 noisy = -1.0 + 2.0 * fract(sin(a) * 43758.5453);
-                    vec3 fresnel = (1.0 - a) * pow(max(1.0 - weight, 0.0), 5.0);
+                    vec3 noisy = -1.0f + 2.0f * fract(sin(a) * 43758.5453f);
+                    vec3 fresnel = (1.0f - a) * pow(max(1.0f - weight, 0.0f), 5.0f);
                     float l = length(a);
-                    dvec2 da = dvec2(3.0, 4.0);
+                    dvec2 da = dvec2(3.0f, 4.0f);
                     double dl = length(da);
                 }
             }
@@ -3378,9 +3439,9 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "float3 wave = cgl_float3_sin(a);" in hip_code
-        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453)" in hip_code
-        assert "cgl_scalar_mul_float3(2.0, cgl_float3_fract" in hip_code
-        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0, a), powf" in hip_code
+        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453f)" in hip_code
+        assert "cgl_scalar_mul_float3(2.0f, cgl_float3_fract" in hip_code
+        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0f, a), powf" in hip_code
         assert "float l = cgl_float3_length(a);" in hip_code
         assert "double dl = cgl_double2_length(da);" in hip_code
         assert "float d = dot(a, b);" not in hip_code
@@ -3389,6 +3450,7 @@ class TestHipCodeGen:
         assert "sinf(a)" not in hip_code
         assert "cgl_float3_normalize(a) * weight" not in hip_code
         assert "2.0 * cgl_float3_fract" not in hip_code
+        assert "2.0f * cgl_float3_fract" not in hip_code
         assert "float l = length(a);" not in hip_code
 
     def test_vector_atan2_builtin_lowers_componentwise(self):
@@ -3396,13 +3458,13 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 y = vec3(1.0, 2.0, 3.0);
-                    vec3 x = vec3(4.0, 5.0, 6.0);
+                    vec3 y = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 x = vec3(4.0f, 5.0f, 6.0f);
                     vec3 a = atan2(y, x);
-                    dvec2 dy = dvec2(1.0, 2.0);
-                    dvec2 dx = dvec2(3.0, 4.0);
+                    dvec2 dy = dvec2(1.0f, 2.0f);
+                    dvec2 dx = dvec2(3.0f, 4.0f);
                     dvec2 da = atan2(dy, dx);
-                    float s = atan2(1.0, 2.0);
+                    float s = atan2(1.0f, 2.0f);
                 }
             }
         }
@@ -3428,7 +3490,7 @@ class TestHipCodeGen:
         assert "return make_double2(atan2(y.x, x.x), atan2(y.y, x.y));" in hip_code
         assert "float3 a = cgl_float3_atan2(y, x);" in hip_code
         assert "double2 da = cgl_double2_atan2(dy, dx);" in hip_code
-        assert "float s = atan2f(1.0, 2.0);" in hip_code
+        assert "float s = atan2f(1.0f, 2.0f);" in hip_code
         assert "float3 a = atan2f(" not in hip_code
         assert "double2 da = atan2f(" not in hip_code
 
@@ -3437,14 +3499,14 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 y = vec3(1.0, 2.0, 3.0);
-                    vec3 x = vec3(4.0, 5.0, 6.0);
+                    vec3 y = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 x = vec3(4.0f, 5.0f, 6.0f);
                     vec3 a = atan(y, x);
-                    float s = atan(1.0, 2.0);
-                    double dy = 1.0;
-                    double dx = 2.0;
+                    float s = atan(1.0f, 2.0f);
+                    double dy = 1.0f;
+                    double dx = 2.0f;
                     double ds = atan(dy, dx);
-                    float slope = atan(1.0 / 2.0);
+                    float slope = atan(1.0f / 2.0f);
                 }
             }
         }
@@ -3457,11 +3519,12 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "float3 a = cgl_float3_atan2(y, x);" in hip_code
-        assert "float s = atan2f(1.0, 2.0);" in hip_code
+        assert "float s = atan2f(1.0f, 2.0f);" in hip_code
         assert "double ds = atan2(dy, dx);" in hip_code
-        assert "float slope = atanf((1.0 / 2.0));" in hip_code
+        assert "float slope = atanf((1.0f / 2.0f));" in hip_code
         assert "atanf(y, x)" not in hip_code
         assert "atanf(1.0, 2.0)" not in hip_code
+        assert "atanf(1.0f, 2.0f)" not in hip_code
         assert "atan(dy, dx)" not in hip_code
 
     def test_user_defined_two_argument_atan_is_not_lowered_to_hip_atan2(self):
@@ -3473,7 +3536,7 @@ class TestHipCodeGen:
                 }
 
                 void main() {
-                    float angle = atan(1.0, 2.0);
+                    float angle = atan(1.0f, 2.0f);
                 }
             }
         }
@@ -3486,31 +3549,32 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float atan(float y, float x)" in hip_code
-        assert "float angle = atan(1.0, 2.0);" in hip_code
+        assert "float angle = atan(1.0f, 2.0f);" in hip_code
         assert "atan2f(1.0, 2.0)" not in hip_code
+        assert "atan2f(1.0f, 2.0f)" not in hip_code
 
     def test_fma_and_mad_aliases_lower_to_hip_fused_multiply_add(self):
         source_code = """
         shader TestShader {
             compute {
                 void main() {
-                    float x = 2.0;
-                    float y = 3.0;
-                    float z = 4.0;
+                    float x = 2.0f;
+                    float y = 3.0f;
+                    float z = 4.0f;
                     float fused = fma(x, y, z);
                     float multiplyAdd = mad(x, y, z);
 
-                    double dx = 2.0;
-                    double dy = 3.0;
-                    double dz = 4.0;
+                    double dx = 2.0f;
+                    double dy = 3.0f;
+                    double dz = 4.0f;
                     double preciseFused = fma(dx, dy, dz);
                     double preciseMad = mad(dx, dy, dz);
 
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 vz = vec3(7.0, 8.0, 9.0);
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 vz = vec3(7.0f, 8.0f, 9.0f);
                     vec3 vectorFused = fma(vx, vy, vz);
-                    vec3 scalarMiddle = mad(vx, 2.0, vz);
+                    vec3 scalarMiddle = mad(vx, 2.0f, vz);
                     vec3 nested = fract(fma(vx, vy, vz));
                 }
             }
@@ -3542,7 +3606,7 @@ class TestHipCodeGen:
         )
         assert (
             "float3 scalarMiddle = "
-            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0, vz);" in hip_code
+            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0f, vz);" in hip_code
         )
         assert (
             "float3 nested = cgl_float3_fract("
@@ -3550,6 +3614,7 @@ class TestHipCodeGen:
         )
         assert "float3 vectorFused = fma(vx, vy, vz);" not in hip_code
         assert "float3 scalarMiddle = mad(vx, 2.0, vz);" not in hip_code
+        assert "float3 scalarMiddle = mad(vx, 2.0f, vz);" not in hip_code
         assert " = mad(" not in hip_code
 
     def test_sign_builtin_lowers_to_hip_expressions(self):
@@ -3612,22 +3677,22 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float nextWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(3.0, 2.0, 1.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(3.0f, 2.0f, 1.0f);
                     vec3 lo = min(a, b);
                     vec3 hi = max(a, b);
-                    vec3 capped = min(a, 2.0);
-                    vec3 raised = max(0.0, b);
+                    vec3 capped = min(a, 2.0f);
+                    vec3 raised = max(0.0f, b);
                     vec3 complexCapped = min(a, nextWeight());
                     vec3 complexRaised = max(nextWeight(), b);
                     ivec3 ia = ivec3(1, 2, 3);
                     ivec3 ib = ivec3(3, 2, 1);
                     ivec3 ilo = min(ia, ib);
-                    float scalar = min(0.25, 1.0);
+                    float scalar = min(0.25f, 1.0f);
                 }
             }
         }
@@ -3667,8 +3732,8 @@ class TestHipCodeGen:
         assert "((lhs.x) < (rhs.x) ? (lhs.x) : (rhs.x))" in hip_code
         assert "float3 lo = cgl_float3_min(a, b);" in hip_code
         assert "float3 hi = cgl_float3_max(a, b);" in hip_code
-        assert "float3 capped = cgl_float3_min_scalar(a, 2.0);" in hip_code
-        assert "float3 raised = cgl_scalar_max_float3(0.0, b);" in hip_code
+        assert "float3 capped = cgl_float3_min_scalar(a, 2.0f);" in hip_code
+        assert "float3 raised = cgl_scalar_max_float3(0.0f, b);" in hip_code
         assert (
             "float3 complexCapped = cgl_float3_min_scalar(a, nextWeight());" in hip_code
         )
@@ -3676,7 +3741,7 @@ class TestHipCodeGen:
             "float3 complexRaised = cgl_scalar_max_float3(nextWeight(), b);" in hip_code
         )
         assert "int3 ilo = cgl_int3_min(ia, ib);" in hip_code
-        assert "float scalar = fminf(0.25, 1.0);" in hip_code
+        assert "float scalar = fminf(0.25f, 1.0f);" in hip_code
         assert "float3 lo = fminf(a, b);" not in hip_code
         assert "float3 hi = fmaxf(a, b);" not in hip_code
         assert "float3 complexCapped = fminf(a, nextWeight());" not in hip_code
@@ -3694,10 +3759,10 @@ class TestHipCodeGen:
                     uint mixed = min(y, 32u);
                     int64_t w = 7;
                     uint64_t uw = 7u;
-                    double d = 1.5;
-                    double wide = max(d, 2.0);
-                    float f = 0.5;
-                    float narrow = min(f, 1.0);
+                    double d = 1.5f;
+                    double wide = max(d, 2.0f);
+                    float f = 0.5f;
+                    float narrow = min(f, 1.0f);
                     int64_t wide64 = max(w, 3);
                     uint64_t big = min(uw, 3u);
                     int64_t same64 = min(w, w);
@@ -3717,8 +3782,8 @@ class TestHipCodeGen:
         assert (
             "unsigned int mixed = min(static_cast<unsigned int>(y), 32u);" in hip_code
         )
-        assert "double wide = fmax(d, 2.0);" in hip_code
-        assert "float narrow = fminf(f, 1.0);" in hip_code
+        assert "double wide = fmax(d, 2.0f);" in hip_code
+        assert "float narrow = fminf(f, 1.0f);" in hip_code
         # int64_t is long on LP64 Linux, so both operands are cast to one type.
         assert (
             "int64_t wide64 = max(static_cast<long long>(w), "
@@ -3732,6 +3797,7 @@ class TestHipCodeGen:
         assert "fminf(x, 32u)" not in hip_code
         assert "fmaxf(y, 3)" not in hip_code
         assert "fminf(d, 2.0)" not in hip_code
+        assert "fminf(d, 2.0f)" not in hip_code
         compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_vector_clamp_expands_hip_components(self):
@@ -3739,9 +3805,9 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 v = vec3(2.0, -1.0, 0.5);
-                    vec3 c = clamp(v, vec3(0.0), vec3(1.0));
-                    float x = clamp(0.25, 0.0, 1.0);
+                    vec3 v = vec3(2.0f, -1.0f, 0.5f);
+                    vec3 c = clamp(v, vec3(0.0f), vec3(1.0f));
+                    float x = clamp(0.25f, 0.0f, 1.0f);
                 }
             }
         }
@@ -3758,9 +3824,10 @@ class TestHipCodeGen:
         assert "fmaxf(min_value.x, fminf(max_value.x, value.x))" in hip_code
         assert (
             "float3 c = cgl_float3_clamp("
-            "v, make_float3(0.0, 0.0, 0.0), make_float3(1.0, 1.0, 1.0));" in hip_code
+            "v, make_float3(0.0f, 0.0f, 0.0f), make_float3(1.0f, 1.0f, 1.0f));"
+            in hip_code
         )
-        assert "float x = fmaxf(0.0, fminf(1.0, 0.25));" in hip_code
+        assert "float x = fmaxf(0.0f, fminf(1.0f, 0.25f));" in hip_code
         assert "fmaxf(make_float3" not in hip_code
         assert "fminf(make_float3" not in hip_code
         assert " = clamp(" not in hip_code
@@ -3770,10 +3837,10 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = clamp(0.25, 0.0, 1.0);
-                    double v = 0.25;
-                    double lo = 0.0;
-                    double hi = 1.0;
+                    float x = clamp(0.25f, 0.0f, 1.0f);
+                    double v = 0.25f;
+                    double lo = 0.0f;
+                    double hi = 1.0f;
                     double d = clamp(v, lo, hi);
                     int n = 2;
                     int i = clamp(n, 0, 1);
@@ -3788,7 +3855,7 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float x = fmaxf(0.0, fminf(1.0, 0.25));" in hip_code
+        assert "float x = fmaxf(0.0f, fminf(1.0f, 0.25f));" in hip_code
         assert "double d = fmax(lo, fmin(hi, v));" in hip_code
         assert "int i = ((n) < (0) ? (0) : ((n) > (1) ? (1) : (n)));" in hip_code
         assert "double d = fmaxf(" not in hip_code
@@ -3846,10 +3913,10 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = saturate(1.25);
-                    double d = 1.25;
+                    float x = saturate(1.25f);
+                    double d = 1.25f;
                     double y = saturate(d);
-                    vec3 v = saturate(vec3(2.0, -1.0, 0.5));
+                    vec3 v = saturate(vec3(2.0f, -1.0f, 0.5f));
                 }
             }
         }
@@ -3861,7 +3928,7 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float x = fmaxf(0.0, fminf(1.0, 1.25));" in hip_code
+        assert "float x = fmaxf(0.0, fminf(1.0, 1.25f));" in hip_code
         assert "double y = fmax(0.0, fmin(1.0, d));" in hip_code
         assert (
             "__device__ inline float3 cgl_float3_clamp_scalar_min_scalar_max"
@@ -3874,7 +3941,7 @@ class TestHipCodeGen:
         )
         assert (
             "float3 v = cgl_float3_clamp_scalar_min_scalar_max("
-            "make_float3(2.0, -1.0, 0.5), 0.0, 1.0);" in hip_code
+            "make_float3(2.0f, -1.0f, 0.5f), 0.0, 1.0);" in hip_code
         )
         assert " = saturate(" not in hip_code
 
@@ -3883,27 +3950,27 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float edgeValue() {
-                    return 0.4;
+                    return 0.4f;
                 }
 
                 vec3 edgeVector() {
-                    return vec3(0.1, 0.2, 0.3);
+                    return vec3(0.1f, 0.2f, 0.3f);
                 }
 
                 vec3 valueVector() {
-                    return vec3(0.2, 0.1, 0.4);
+                    return vec3(0.2f, 0.1f, 0.4f);
                 }
 
                 void main() {
-                    float scalar = 0.75;
-                    float scalarGate = step(0.5, scalar);
-                    double precise = 0.75;
-                    double preciseGate = step(0.5, precise);
-                    vec3 value = vec3(0.2, 0.1, 0.4);
-                    vec3 vectorGate = step(0.25, value);
+                    float scalar = 0.75f;
+                    float scalarGate = step(0.5f, scalar);
+                    double precise = 0.75f;
+                    double preciseGate = step(0.5f, precise);
+                    vec3 value = vec3(0.2f, 0.1f, 0.4f);
+                    vec3 vectorGate = step(0.25f, value);
                     vec3 vectorEdgeGate = step(edgeVector(), edgeValue());
                     vec3 vectorBoth = step(edgeVector(), valueVector());
-                    vec3 nested = fract(step(0.25, value));
+                    vec3 nested = fract(step(0.25f, value));
                 }
             }
         }
@@ -3915,8 +3982,8 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float scalarGate = ((scalar) < (0.5) ? 0.0f : 1.0f);" in hip_code
-        assert "double preciseGate = ((precise) < (0.5) ? 0.0 : 1.0);" in hip_code
+        assert "float scalarGate = ((scalar) < (0.5f) ? 0.0f : 1.0f);" in hip_code
+        assert "double preciseGate = ((precise) < (0.5f) ? 0.0 : 1.0);" in hip_code
         assert (
             "__device__ inline float3 "
             "cgl_float3_step_scalar_edge_vector_value"
@@ -3939,7 +4006,7 @@ class TestHipCodeGen:
         )
         assert (
             "float3 vectorGate = "
-            "cgl_float3_step_scalar_edge_vector_value(0.25, value);" in hip_code
+            "cgl_float3_step_scalar_edge_vector_value(0.25f, value);" in hip_code
         )
         assert (
             "float3 vectorEdgeGate = "
@@ -3953,7 +4020,7 @@ class TestHipCodeGen:
         )
         assert (
             "float3 nested = cgl_float3_fract("
-            "cgl_float3_step_scalar_edge_vector_value(0.25, value));" in hip_code
+            "cgl_float3_step_scalar_edge_vector_value(0.25f, value));" in hip_code
         )
         assert " = step(" not in hip_code
 
@@ -3965,31 +4032,31 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float nextX() {
-                    return 0.0;
+                    return 0.0f;
                 }
 
                 float nextY() {
-                    return 1.0;
+                    return 1.0f;
                 }
 
                 float nextT() {
-                    return 0.25;
+                    return 0.25f;
                 }
 
                 void main() {
-                    float a = mix(0.0, 1.0, 0.25);
+                    float a = mix(0.0f, 1.0f, 0.25f);
                     float complex = mix(nextX(), nextY(), nextT());
-                    double x = 0.0;
-                    double y = 1.0;
-                    double t = 0.25;
+                    double x = 0.0f;
+                    double y = 1.0f;
+                    double t = 0.25f;
                     double d = mix(x, y, t);
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 v = mix(vx, vy, 0.5);
-                    vec3 wrapped = fract(mix(vx, vy, 0.5));
-                    dvec2 px = dvec2(1.0, 2.0);
-                    dvec2 py = dvec2(3.0, 4.0);
-                    dvec2 p = mix(px, py, dvec2(0.25, 0.75));
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 v = mix(vx, vy, 0.5f);
+                    vec3 wrapped = fract(mix(vx, vy, 0.5f));
+                    dvec2 px = dvec2(1.0f, 2.0f);
+                    dvec2 py = dvec2(3.0f, 4.0f);
+                    dvec2 p = mix(px, py, dvec2(0.25f, 0.75f));
                 }
             }
         }
@@ -4001,7 +4068,7 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float a = (0.0 + ((1.0 - 0.0) * 0.25));" in hip_code
+        assert "float a = (0.0f + ((1.0f - 0.0f) * 0.25f));" in hip_code
         assert (
             "__device__ inline float cgl_float_mix(float x, float y, float a)"
             in hip_code
@@ -4026,14 +4093,14 @@ class TestHipCodeGen:
             "return make_double2((x.x + ((y.x - x.x) * a.x)), "
             "(x.y + ((y.y - x.y) * a.y)));" in hip_code
         )
-        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in hip_code
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5f);" in hip_code
         assert (
             "float3 wrapped = cgl_float3_fract("
-            "cgl_float3_mix_scalar(vx, vy, 0.5));" in hip_code
+            "cgl_float3_mix_scalar(vx, vy, 0.5f));" in hip_code
         )
         assert (
             "double2 p = cgl_double2_mix_vector(px, py, "
-            "make_double2(0.25, 0.75));" in hip_code
+            "make_double2(0.25f, 0.75f));" in hip_code
         )
         assert "float complex = (nextX() + ((nextY() - nextX())" not in hip_code
         assert " = mix(" not in hip_code
@@ -4044,24 +4111,24 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float nextX() {
-                    return 0.0;
+                    return 0.0f;
                 }
 
                 float nextY() {
-                    return 1.0;
+                    return 1.0f;
                 }
 
                 float nextT() {
-                    return 0.25;
+                    return 0.25f;
                 }
 
                 void main() {
-                    float a = lerp(0.0, 1.0, 0.25);
+                    float a = lerp(0.0f, 1.0f, 0.25f);
                     float complex = lerp(nextX(), nextY(), nextT());
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 v = lerp(vx, vy, 0.5);
-                    vec3 wrapped = fract(lerp(vx, vy, 0.5));
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 v = lerp(vx, vy, 0.5f);
+                    vec3 wrapped = fract(lerp(vx, vy, 0.5f));
                 }
             }
         }
@@ -4073,7 +4140,7 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "float a = (0.0 + ((1.0 - 0.0) * 0.25));" in hip_code
+        assert "float a = (0.0f + ((1.0f - 0.0f) * 0.25f));" in hip_code
         assert (
             "__device__ inline float cgl_float_mix(float x, float y, float a)"
             in hip_code
@@ -4083,10 +4150,10 @@ class TestHipCodeGen:
             "__device__ inline float3 cgl_float3_mix_scalar"
             "(float3 x, float3 y, float a)" in hip_code
         )
-        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in hip_code
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5f);" in hip_code
         assert (
             "float3 wrapped = cgl_float3_fract("
-            "cgl_float3_mix_scalar(vx, vy, 0.5));" in hip_code
+            "cgl_float3_mix_scalar(vx, vy, 0.5f));" in hip_code
         )
         assert " = lerp(" not in hip_code
         assert "cgl_fract_float(cgl_float3_mix_scalar" not in hip_code
@@ -4100,7 +4167,7 @@ class TestHipCodeGen:
                 }
 
                 void main() {
-                    float adjusted = lerp(0.0, 1.0, 0.25);
+                    float adjusted = lerp(0.0f, 1.0f, 0.25f);
                 }
             }
         }
@@ -4113,9 +4180,11 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ float lerp(float x, float y, float t)" in hip_code
-        assert "float adjusted = lerp(0.0, 1.0, 0.25);" in hip_code
+        assert "float adjusted = lerp(0.0f, 1.0f, 0.25f);" in hip_code
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in hip_code
+        assert "float adjusted = (0.0f + ((1.0f - 0.0f) * 0.25f));" not in hip_code
         assert "cgl_float_mix(0.0, 1.0, 0.25)" not in hip_code
+        assert "cgl_float_mix(0.0f, 1.0f, 0.25f)" not in hip_code
 
     def test_bool_vector_mix_lowers_to_hip_select(self):
         source_code = """
@@ -4178,11 +4247,11 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 float nextX() {
-                    return 0.0;
+                    return 0.0f;
                 }
 
                 float nextY() {
-                    return 1.0;
+                    return 1.0f;
                 }
 
                 bool nextFlag() {
@@ -4191,7 +4260,7 @@ class TestHipCodeGen:
 
                 void main() {
                     bool flag = true;
-                    float literal = mix(0.0, 1.0, flag);
+                    float literal = mix(0.0f, 1.0f, flag);
                     float complexValue = mix(nextX(), nextY(), nextFlag());
                 }
             }
@@ -4209,12 +4278,13 @@ class TestHipCodeGen:
             "(bool condition, float true_value, float false_value)" in hip_code
         )
         assert "return condition ? true_value : false_value;" in hip_code
-        assert "float literal = (flag ? 1.0 : 0.0);" in hip_code
+        assert "float literal = (flag ? 1.0f : 0.0f);" in hip_code
         assert (
             "float complexValue = cgl_float_select("
             "nextFlag(), nextY(), nextX());" in hip_code
         )
         assert "float literal = (0.0 + ((1.0 - 0.0) * flag));" not in hip_code
+        assert "float literal = (0.0f + ((1.0f - 0.0f) * flag));" not in hip_code
         assert (
             "float complexValue = (nextX() + ((nextY() - nextX()) * "
             "nextFlag()));" not in hip_code
@@ -4270,9 +4340,9 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = fract(1.25);
-                    float y = frac(1.75);
-                    double d = 1.25;
+                    float x = fract(1.25f);
+                    float y = frac(1.75f);
+                    double d = 1.25f;
                     double z = fract(d);
                 }
             }
@@ -4289,8 +4359,8 @@ class TestHipCodeGen:
         assert "return value - floorf(value);" in hip_code
         assert "__device__ inline double cgl_fract_double(double value)" in hip_code
         assert "return value - floor(value);" in hip_code
-        assert "float x = cgl_fract_float(1.25);" in hip_code
-        assert "float y = cgl_fract_float(1.75);" in hip_code
+        assert "float x = cgl_fract_float(1.25f);" in hip_code
+        assert "float y = cgl_fract_float(1.75f);" in hip_code
         assert "double z = cgl_fract_double(d);" in hip_code
         assert "fracf(" not in hip_code
         assert " = fract(" not in hip_code
@@ -4301,8 +4371,8 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 v = fract(vec3(1.25, 2.5, 3.75));
-                    dvec2 p = fract(dvec2(1.25, 2.5));
+                    vec3 v = fract(vec3(1.25f, 2.5f, 3.75f));
+                    dvec2 p = fract(dvec2(1.25f, 2.5f));
                 }
             }
         }
@@ -4328,9 +4398,10 @@ class TestHipCodeGen:
             "cgl_fract_double(value.y));" in hip_code
         )
         assert (
-            "float3 v = cgl_float3_fract(" "make_float3(1.25, 2.5, 3.75));" in hip_code
+            "float3 v = cgl_float3_fract("
+            "make_float3(1.25f, 2.5f, 3.75f));" in hip_code
         )
-        assert "double2 p = cgl_double2_fract(make_double2(1.25, 2.5));" in hip_code
+        assert "double2 p = cgl_double2_fract(make_double2(1.25f, 2.5f));" in hip_code
         assert "fracf(" not in hip_code
         assert " = fract(" not in hip_code
 
@@ -4339,17 +4410,17 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
-                    mat2 transform2 = mat2(1.0);
+                    mat2 transform = mat2(1.0f, 0.0f, 0.0f, 1.0f);
+                    mat2 transform2 = mat2(1.0f);
                     mat2 combined = transform + transform2;
                     mat2 product = transform * transform2;
-                    mat2 scaled = 2.0 * transform;
-                    vec2 direction = vec2(1.0, 2.0);
+                    mat2 scaled = 2.0f * transform;
+                    vec2 direction = vec2(1.0f, 2.0f);
                     vec2 transformed = transform * direction;
                     vec2 projected = direction * transform;
                     mat3x4 affine;
-                    dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
-                    dmat2 preciseProduct = precise * dmat2(1.0);
+                    dmat2 precise = dmat2(1.0f, 0.0f, 0.0f, 1.0f);
+                    dmat2 preciseProduct = precise * dmat2(1.0f);
                     dmat4x3 jacobian;
                 }
             }
@@ -4363,16 +4434,16 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float2x2 transform = float2x2(1.0, 0.0, 0.0, 1.0);" in hip_code
-        assert "float2x2 transform2 = float2x2(1.0);" in hip_code
+        assert "float2x2 transform = float2x2(1.0f, 0.0f, 0.0f, 1.0f);" in hip_code
+        assert "float2x2 transform2 = float2x2(1.0f);" in hip_code
         assert "float2x2 combined = (transform + transform2);" in hip_code
         assert "float2x2 product = (transform * transform2);" in hip_code
-        assert "float2x2 scaled = (2.0 * transform);" in hip_code
+        assert "float2x2 scaled = (2.0f * transform);" in hip_code
         assert "float2 transformed = (transform * direction);" in hip_code
         assert "float2 projected = (direction * transform);" in hip_code
         assert "float3x4 affine;" in hip_code
-        assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in hip_code
-        assert "double2x2 preciseProduct = (precise * double2x2(1.0));" in hip_code
+        assert "double2x2 precise = double2x2(1.0f, 0.0f, 0.0f, 1.0f);" in hip_code
+        assert "double2x2 preciseProduct = (precise * double2x2(1.0f));" in hip_code
         assert "double4x3 jacobian;" in hip_code
         assert "__host__ __device__ explicit float2x2(float diagonal)" in hip_code
         assert (
@@ -4424,12 +4495,12 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                    vec2<f64> precise = vec2<f64>(1.0f, 2.0f);
                     vec3<i32> index = vec3<i32>(1, 2, 3);
                     vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
                     vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
                     vec2<i16> shorts = vec2<i16>(1, 2);
-                    vec2<f16> halves = vec2<f16>(1.0, 2.0);
+                    vec2<f16> halves = vec2<f16>(1.0f, 2.0f);
                     vec2<bool> flags = vec2<bool>(true, false);
                 }
             }
@@ -4443,12 +4514,12 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "double2 precise = make_double2(1.0, 2.0);" in hip_code
+        assert "double2 precise = make_double2(1.0f, 2.0f);" in hip_code
         assert "int3 index = make_int3(1, 2, 3);" in hip_code
         assert "uint4 mask = make_uint4(1, 2, 3, 4);" in hip_code
         assert "uchar4 bytes = make_uchar4(1, 2, 3, 4);" in hip_code
         assert "short2 shorts = make_short2(1, 2);" in hip_code
-        assert "half2 halves = __floats2half2_rn(1.0, 2.0);" in hip_code
+        assert "half2 halves = __floats2half2_rn(1.0f, 2.0f);" in hip_code
         assert "uchar2 flags = make_uchar2(true, false);" in hip_code
         assert "u84" not in hip_code
         assert "i162" not in hip_code
@@ -5044,8 +5115,8 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    double x = 4.0;
-                    double y = 2.0;
+                    double x = 4.0f;
+                    double y = 2.0f;
                     double a = sqrt(x);
                     double b = sin(x);
                     double c = cos(x);
@@ -5060,9 +5131,9 @@ class TestHipCodeGen:
                     double l = trunc(x);
                     double m = inversesqrt(x);
                     double n = sqrt(sin(x) + cos(x));
-                    float fx = 4.0;
+                    float fx = 4.0f;
                     float fa = sqrt(fx);
-                    float fb = pow(fx, 2.0);
+                    float fb = pow(fx, 2.0f);
                 }
             }
         }
@@ -5089,7 +5160,7 @@ class TestHipCodeGen:
         assert "double m = (1.0 / sqrt(x));" in hip_code
         assert "double n = sqrt((sin(x) + cos(x)));" in hip_code
         assert "float fa = sqrtf(fx);" in hip_code
-        assert "float fb = powf(fx, 2.0);" in hip_code
+        assert "float fb = powf(fx, 2.0f);" in hip_code
         assert "sqrtf(x)" not in hip_code
         assert "sinf(x)" not in hip_code
         assert "cosf(x)" not in hip_code
@@ -5107,9 +5178,9 @@ class TestHipCodeGen:
             fragment {
                 void main() {
                     sampler2D tex;
-                    vec2 uv = vec2(0.5, 0.5);
+                    vec2 uv = vec2(0.5f, 0.5f);
                     vec4 color = texture(tex, uv);
-                    vec4 lodColor = textureLod(tex, uv, 1.0);
+                    vec4 lodColor = textureLod(tex, uv, 1.0f);
                     vec4 gradColor = textureGrad(tex, uv, uv, uv);
                     vec4 directColor = tex2D(tex, uv);
                 }
@@ -5126,9 +5197,9 @@ class TestHipCodeGen:
 
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "hipTextureObject_t tex;" in hip_code
-        assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
+        assert "float2 uv = make_float2(0.5f, 0.5f);" in hip_code
         assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in hip_code
-        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in hip_code
+        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);" in hip_code
         assert (
             "float4 gradColor = tex2DGrad<float4>(tex, uv.x, uv.y, uv, uv);" in hip_code
         )
@@ -5155,7 +5226,7 @@ class TestHipCodeGen:
                 vec2 ddy
             ) {
                 return texture(tex, state, uv)
-                    + textureLod(tex, state, uv, 1.0)
+                    + textureLod(tex, state, uv, 1.0f)
                     + textureGrad(tex, state, uv, ddx, ddy);
             }
 
@@ -5193,7 +5264,7 @@ class TestHipCodeGen:
         assert "hipTextureObject_t textures[4];" in hip_code
         assert "hipTextureObject_t samplers[4];" in hip_code
         assert "tex2D<float4>(tex, uv.x, uv.y)" in hip_code
-        assert "tex2DLod<float4>(tex, uv.x, uv.y, 1.0)" in hip_code
+        assert "tex2DLod<float4>(tex, uv.x, uv.y, 1.0f)" in hip_code
         assert "tex2DGrad<float4>(tex, uv.x, uv.y, ddx, ddy)" in hip_code
         assert "tex2D<float4>(colorMap, uv.x, uv.y)" in hip_code
         assert "tex2D<float4>(textures[layer], uv.x, uv.y)" in hip_code
@@ -5266,10 +5337,10 @@ class TestHipCodeGen:
                 vec3 ddy3
             ) {
                 vec4 layerColor = texture(paramLayers, uvLayer);
-                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0);
+                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0f);
                 vec4 layerGrad = textureGrad(paramLayers, uvLayer, ddx2, ddy2);
                 vec4 volumeColor = texture(paramVolume, uvw);
-                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0);
+                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0f);
                 vec4 volumeGrad = textureGrad(paramVolume, uvw, ddx3, ddy3);
             }
 
@@ -5294,7 +5365,7 @@ class TestHipCodeGen:
         )
         assert (
             "float4 layerMip = tex2DLayeredLod<float4>"
-            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0);" in hip_code
+            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0f);" in hip_code
         )
         assert (
             "float4 layerGrad = tex2DLayeredGrad<float4>"
@@ -5305,7 +5376,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0f);"
             in hip_code
         )
         assert (
@@ -5338,10 +5409,10 @@ class TestHipCodeGen:
                 vec4 ddyCube
             ) {
                 vec4 rampColor = texture(paramRamp, u);
-                vec4 rampMip = textureLod(paramRamp, u, 2.0);
+                vec4 rampMip = textureLod(paramRamp, u, 2.0f);
                 vec4 rampGrad = textureGrad(paramRamp, u, du, du);
                 vec4 rampArrayColor = texture(paramRampArray, uLayer);
-                vec4 rampArrayMip = textureLod(paramRampArray, uLayer, 3.0);
+                vec4 rampArrayMip = textureLod(paramRampArray, uLayer, 3.0f);
                 vec4 rampArrayGrad = textureGrad(
                     paramRampArray,
                     uLayer,
@@ -5349,7 +5420,7 @@ class TestHipCodeGen:
                     duLayer
                 );
                 vec4 envColor = texture(paramEnv, dir);
-                vec4 envMip = textureLod(paramEnv, dir, 1.0);
+                vec4 envMip = textureLod(paramEnv, dir, 1.0f);
                 vec4 envGrad = textureGrad(paramEnv, dir, ddxCube, ddyCube);
             }
 
@@ -5370,7 +5441,7 @@ class TestHipCodeGen:
         assert "hipTextureObject_t rampArray;" in hip_code
         assert "hipTextureObject_t envMap;" in hip_code
         assert "float4 rampColor = tex1D<float4>(paramRamp, u);" in hip_code
-        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0);" in hip_code
+        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0f);" in hip_code
         assert "float4 rampGrad = tex1DGrad<float4>(paramRamp, u, du, du);" in hip_code
         assert (
             "float4 rampArrayColor = tex1DLayered<float4>"
@@ -5378,7 +5449,7 @@ class TestHipCodeGen:
         )
         assert (
             "float4 rampArrayMip = tex1DLayeredLod<float4>"
-            "(paramRampArray, uLayer.x, uLayer.y, 3.0);" in hip_code
+            "(paramRampArray, uLayer.x, uLayer.y, 3.0f);" in hip_code
         )
         assert (
             "float4 rampArrayGrad = tex1DLayeredGrad<float4>"
@@ -5389,7 +5460,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0f);"
             in hip_code
         )
         assert (
@@ -5412,7 +5483,7 @@ class TestHipCodeGen:
                 vec4 ddyCube
             ) {
                 vec4 color = texture(paramProbes, dirLayer);
-                vec4 mip = textureLod(paramProbes, dirLayer, 2.0);
+                vec4 mip = textureLod(paramProbes, dirLayer, 2.0f);
                 vec4 grad = textureGrad(paramProbes, dirLayer, ddxCube, ddyCube);
             }
 
@@ -5436,7 +5507,7 @@ class TestHipCodeGen:
         )
         assert (
             "float4 mip = texCubemapLayeredLod<float4>"
-            "(paramProbes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0);"
+            "(paramProbes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0f);"
             in hip_code
         )
         assert (
@@ -5785,7 +5856,7 @@ class TestHipCodeGen:
                 vec4 lodOffsetSample = textureLodOffset(
                     colorMap,
                     uv,
-                    1.0,
+                    1.0f,
                     offset
                 );
                 vec4 gradOffsetSample = textureGradOffset(
@@ -5801,11 +5872,11 @@ class TestHipCodeGen:
                     uvw,
                     offset
                 );
-                vec4 projectedLod = textureProjLod(colorMap, uvw, 1.0);
+                vec4 projectedLod = textureProjLod(colorMap, uvw, 1.0f);
                 vec4 projectedLodOffset = textureProjLodOffset(
                     colorMap,
                     uvw,
-                    1.0,
+                    1.0f,
                     offset
                 );
                 vec4 projectedGrad = textureProjGrad(
@@ -5833,19 +5904,19 @@ class TestHipCodeGen:
                 );
                 float shadowProjected = textureCompareProj(
                     shadowMap,
-                    vec4(uv, 0.5, 1.0)
+                    vec4(uv, 0.5f, 1.0f)
                 );
                 float shadowProjectedLodOffset = textureCompareProjLodOffset(
                     shadowMap,
-                    vec4(uv, 0.5, 1.0),
-                    1.0,
+                    vec4(uv, 0.5f, 1.0f),
+                    1.0f,
                     offset
                 );
                 float shadowLodOffset = textureCompareLodOffset(
                     shadowMap,
                     uv,
-                    0.5,
-                    1.0,
+                    0.5f,
+                    1.0f,
                     offset
                 );
             }
@@ -5884,7 +5955,7 @@ class TestHipCodeGen:
         )
         assert (
             "float4 projectedLod = tex2DLod<float4>"
-            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in hip_code
+            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0f);" in hip_code
         )
         assert (
             "float4 projectedGrad = tex2DGrad<float4>"
@@ -6185,7 +6256,7 @@ class TestHipCodeGen:
                 vec4 line = texture(lineTex, u);
                 vec4 lineLayer = texture(lineLayers, uv);
                 vec4 color = texture(tex, uv);
-                vec4 colorLod = textureLod(tex, uv, 1.0);
+                vec4 colorLod = textureLod(tex, uv, 1.0f);
                 vec4 colorGrad = textureGrad(tex, uv, ddx2, ddy2);
                 vec4 layer = texture(layers, uvw);
                 vec4 volumeColor = texture(volume, uvw);
@@ -6199,7 +6270,7 @@ class TestHipCodeGen:
                 vec4 badVolume = texture(volume, uv);
                 vec4 badCube = texture(cubeTex, uv);
                 vec4 badCubeArray = texture(cubeLayers, uvw);
-                vec4 badTexLod = textureLod(tex, u, 1.0);
+                vec4 badTexLod = textureLod(tex, u, 1.0f);
                 vec4 badTexGradCoord = textureGrad(tex, u, ddx2, ddy2);
                 vec4 badTexGradDerivative = textureGrad(tex, uv, du, du);
             }
@@ -6222,7 +6293,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in hip_code
-        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in hip_code
+        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);" in hip_code
         assert (
             "float4 colorGrad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx2, ddy2);"
             in hip_code
@@ -6289,7 +6360,7 @@ class TestHipCodeGen:
 
             void sample(vec2 uv, ivec2 pixel) {
                 ivec4 signedColor = texture(signedTex, uv);
-                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0);
+                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0f);
                 ivec4 signedFetch = texelFetch(signedTex, pixel, 0);
                 uvec4 unsignedFetch = texelFetchOffset(unsignedTex, pixel, 0, pixel);
             }
@@ -6310,7 +6381,7 @@ class TestHipCodeGen:
         assert "hipTextureObject_t unsignedTex;" in hip_code
         assert "int4 signedColor = tex2D<int4>(signedTex, uv.x, uv.y);" in hip_code
         assert (
-            "uint4 unsignedColor = tex2DLod<uint4>(unsignedTex, uv.x, uv.y, 1.0);"
+            "uint4 unsignedColor = tex2DLod<uint4>(unsignedTex, uv.x, uv.y, 1.0f);"
             in hip_code
         )
         assert (
@@ -6803,7 +6874,7 @@ class TestHipCodeGen:
             ) {
                 vec4 sampled = texture(textureGrid[layer][slot], uv);
                 vec4 sampledLayer = texture(layerGrid[layer][slot], uvLayer);
-                vec4 mip = textureLod(textureGrid[layer][slot], uv, 1.0);
+                vec4 mip = textureLod(textureGrid[layer][slot], uv, 1.0f);
                 vec4 grad = textureGrad(textureGrid[layer][slot], uv, uv, uv);
                 vec4 sampledParam = texture(paramTextures[layer][slot], uv);
                 vec4 gathered = textureGather(textureGrid[layer][slot], uv, 1);
@@ -6851,7 +6922,7 @@ class TestHipCodeGen:
             "(layerGrid[layer][slot], uvLayer.x, uvLayer.y, uvLayer.z);" in hip_code
         )
         assert (
-            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0);"
+            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0f);"
             in hip_code
         )
         assert (
@@ -8247,14 +8318,14 @@ class TestHipCodeGen:
             compute {
                 void main() {
                     SampleParams params;
-                    params.uv = vec2(0.5, 0.25);
+                    params.uv = vec2(0.5f, 0.25f);
                     params.pixel = ivec2(0, 0);
                     params.layer = 1;
                     params.slot = 2;
                     vec4 value = passPacked(
                         params,
                         textureGrid,
-                        0.5,
+                        0.5f,
                         imageGrid,
                         textureGrid[1],
                         imageGrid[1]
@@ -8299,7 +8370,7 @@ class TestHipCodeGen:
             "fixedImages_metadata);" in hip_code
         )
         assert (
-            "passPacked(params, textureGrid, textureGrid_metadata, 0.5, imageGrid, "
+            "passPacked(params, textureGrid, textureGrid_metadata, 0.5f, imageGrid, "
             "imageGrid_metadata, textureGrid[1], textureGrid_metadata[1], "
             "imageGrid[1], imageGrid_metadata[1]);" in hip_code
         )
@@ -8764,7 +8835,7 @@ class TestHipCodeGen:
                 ivec2 pixel
             ) {
                 SampleEnvelope envelope;
-                envelope.accum = vec4(0.0);
+                envelope.accum = vec4(0.0f);
                 envelope.chosen = slot;
 
                 if (useAlternate) {
@@ -8814,7 +8885,7 @@ class TestHipCodeGen:
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     ivec2 pixel = ivec2(0, 0);
                     vec4 value = consumeControlled(
                         textureGrid,
@@ -8849,7 +8920,7 @@ class TestHipCodeGen:
         assert "for (int i = 0; (i < 3); i++)" in hip_code
         assert "continue;" in hip_code
         assert "break;" in hip_code
-        assert "envelope.accum = make_float4(0.0, 0.0, 0.0, 0.0);" in hip_code
+        assert "envelope.accum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
         assert "envelope.chosen = slot;" in hip_code
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
@@ -8944,13 +9015,13 @@ class TestHipCodeGen:
                     uv,
                     pixel
                 );
-                SampleResult adjusted = adjustResult(raw, 0.5);
+                SampleResult adjusted = adjustResult(raw, 0.5f);
                 return adjusted.sampled + adjusted.loaded;
             }
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     ivec2 pixel = ivec2(0, 0);
                     vec4 value = consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);
                 }
@@ -9003,7 +9074,7 @@ class TestHipCodeGen:
             "dynTex, dynTex_metadata, dynImages, dynImages_metadata, "
             "layer, slot, uv, pixel);" in hip_code
         )
-        assert "SampleResult adjusted = adjustResult(raw, 0.5);" in hip_code
+        assert "SampleResult adjusted = adjustResult(raw, 0.5f);" in hip_code
         assert (
             "consumeAdjusted(textureGrid, textureGrid_metadata, imageGrid, "
             "imageGrid_metadata, 1, 2, uv, pixel);" in hip_code
@@ -9017,23 +9088,23 @@ class TestHipCodeGen:
         source_code = """
         shader MutableParams {
             float bumpScalar(float weight) {
-                weight = weight + 1.0;
-                return weight * 2.0;
+                weight = weight + 1.0f;
+                return weight * 2.0f;
             }
 
             float bumpArray(float values[3], int slot) {
-                values[slot] = values[slot] + 1.0;
-                values[0] = values[slot] * 0.5;
+                values[slot] = values[slot] + 1.0f;
+                values[0] = values[slot] * 0.5f;
                 return values[slot] + values[0];
             }
 
             compute {
                 void main() {
                     float values[3];
-                    values[0] = 1.0;
-                    values[1] = 2.0;
-                    values[2] = 3.0;
-                    float a = bumpScalar(0.5);
+                    values[0] = 1.0f;
+                    values[1] = 2.0f;
+                    values[2] = 3.0f;
+                    float a = bumpScalar(0.5f);
                     float b = bumpArray(values, 1);
                 }
             }
@@ -9048,14 +9119,14 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__device__ float bumpScalar(float weight)" in hip_code
-        assert "weight = (weight + 1.0);" in hip_code
-        assert "return (weight * 2.0);" in hip_code
+        assert "weight = (weight + 1.0f);" in hip_code
+        assert "return (weight * 2.0f);" in hip_code
         assert "__device__ float bumpArray(float values[3], int slot)" in hip_code
-        assert "values[slot] = (values[slot] + 1.0);" in hip_code
-        assert "values[0] = (values[slot] * 0.5);" in hip_code
+        assert "values[slot] = (values[slot] + 1.0f);" in hip_code
+        assert "values[0] = (values[slot] * 0.5f);" in hip_code
         assert "return (values[slot] + values[0]);" in hip_code
         assert "float values[3];" in hip_code
-        assert "float a = bumpScalar(0.5);" in hip_code
+        assert "float a = bumpScalar(0.5f);" in hip_code
         assert "float b = bumpArray(values, 1);" in hip_code
 
     def test_nested_array_and_struct_member_params_emit_hip_updates(self):
@@ -9067,26 +9138,26 @@ class TestHipCodeGen:
 
         shader NestedMutableParams {
             float bumpNested(float values[2][3], int row, int col) {
-                values[row][col] = values[row][col] + 1.0;
-                values[0][col] = values[row][col] * 0.5;
+                values[row][col] = values[row][col] + 1.0f;
+                values[0][col] = values[row][col] * 0.5f;
                 return values[row][col] + values[0][col];
             }
 
             float bumpPayload(Payload payload, int slot) {
                 payload.values[slot] = payload.values[slot] + payload.bias;
-                payload.bias = payload.values[slot] * 0.5;
+                payload.bias = payload.values[slot] * 0.5f;
                 return payload.values[slot] + payload.bias;
             }
 
             compute {
                 void main() {
                     float grid[2][3];
-                    grid[0][0] = 1.0;
-                    grid[1][2] = 3.0;
+                    grid[0][0] = 1.0f;
+                    grid[1][2] = 3.0f;
                     Payload payload;
-                    payload.values[0] = 2.0;
-                    payload.values[1] = 4.0;
-                    payload.bias = 0.25;
+                    payload.values[0] = 2.0f;
+                    payload.values[1] = 4.0f;
+                    payload.bias = 0.25f;
                     float a = bumpNested(grid, 1, 2);
                     float b = bumpPayload(payload, 1);
                 }
@@ -9107,14 +9178,14 @@ class TestHipCodeGen:
             "__device__ float bumpNested(float values[2][3], int row, int col)"
             in hip_code
         )
-        assert "values[row][col] = (values[row][col] + 1.0);" in hip_code
-        assert "values[0][col] = (values[row][col] * 0.5);" in hip_code
+        assert "values[row][col] = (values[row][col] + 1.0f);" in hip_code
+        assert "values[0][col] = (values[row][col] * 0.5f);" in hip_code
         assert "return (values[row][col] + values[0][col]);" in hip_code
         assert "__device__ float bumpPayload(Payload payload, int slot)" in hip_code
         assert (
             "payload.values[slot] = (payload.values[slot] + payload.bias);" in hip_code
         )
-        assert "payload.bias = (payload.values[slot] * 0.5);" in hip_code
+        assert "payload.bias = (payload.values[slot] * 0.5f);" in hip_code
         assert "return (payload.values[slot] + payload.bias);" in hip_code
         assert "float grid[2][3];" in hip_code
         assert "float a = bumpNested(grid, 1, 2);" in hip_code
@@ -9151,7 +9222,7 @@ class TestHipCodeGen:
             }
 
             float consumeAdjustedOuter(int slot) {
-                OuterPayload adjusted = adjustOuter(makeOuter(1.0, 2.0, 0.25, 4.0), slot);
+                OuterPayload adjusted = adjustOuter(makeOuter(1.0f, 2.0f, 0.25f, 4.0f), slot);
                 return adjusted.inner.values[slot] + adjusted.inner.values[0] + adjusted.scale;
             }
 
@@ -9190,7 +9261,7 @@ class TestHipCodeGen:
         assert "__device__ float consumeAdjustedOuter(int slot)" in hip_code
         assert (
             "OuterPayload adjusted = adjustOuter("
-            "makeOuter(1.0, 2.0, 0.25, 4.0), slot);" in hip_code
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f), slot);" in hip_code
         )
         assert (
             "return ((adjusted.inner.values[slot] + adjusted.inner.values[0]) + "
@@ -9223,15 +9294,15 @@ class TestHipCodeGen:
 
             OuterPayload chooseBranch(bool useSecond) {
                 if (useSecond) {
-                    return makeOuter(3.0, 4.0, 0.5, 5.0);
+                    return makeOuter(3.0f, 4.0f, 0.5f, 5.0f);
                 }
-                return makeOuter(1.0, 2.0, 0.25, 4.0);
+                return makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
             }
 
             OuterPayload chooseTernary(bool useSecond) {
                 return useSecond
-                    ? makeOuter(3.0, 4.0, 0.5, 5.0)
-                    : makeOuter(1.0, 2.0, 0.25, 4.0);
+                    ? makeOuter(3.0f, 4.0f, 0.5f, 5.0f)
+                    : makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
             }
 
             float consumeConditional(int slot, bool useSecond) {
@@ -9260,12 +9331,12 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__device__ OuterPayload chooseBranch(bool useSecond)" in hip_code
-        assert "return makeOuter(3.0, 4.0, 0.5, 5.0);" in hip_code
-        assert "return makeOuter(1.0, 2.0, 0.25, 4.0);" in hip_code
+        assert "return makeOuter(3.0f, 4.0f, 0.5f, 5.0f);" in hip_code
+        assert "return makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in hip_code
         assert "__device__ OuterPayload chooseTernary(bool useSecond)" in hip_code
         assert (
-            "return (useSecond ? makeOuter(3.0, 4.0, 0.5, 5.0) : "
-            "makeOuter(1.0, 2.0, 0.25, 4.0));" in hip_code
+            "return (useSecond ? makeOuter(3.0f, 4.0f, 0.5f, 5.0f) : "
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f));" in hip_code
         )
         assert "OuterPayload branchPayload = chooseBranch(useSecond);" in hip_code
         assert "OuterPayload ternaryPayload = chooseTernary(useSecond);" in hip_code
@@ -9302,9 +9373,9 @@ class TestHipCodeGen:
             }
 
             float readTemporary(int slot) {
-                float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];
-                float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];
-                float biasValue = makePayload(5.0, 6.0, 0.75).bias;
+                float dynamicValue = makePayload(1.0f, 2.0f, 0.25f).values[slot];
+                float fixedValue = makePayload(3.0f, 4.0f, 0.5f).values[0];
+                float biasValue = makePayload(5.0f, 6.0f, 0.75f).bias;
                 return dynamicValue + fixedValue + biasValue;
             }
 
@@ -9330,10 +9401,11 @@ class TestHipCodeGen:
         assert "payload.values[2] = (first + second);" in hip_code
         assert "__device__ float readTemporary(int slot)" in hip_code
         assert (
-            "float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];" in hip_code
+            "float dynamicValue = makePayload(1.0f, 2.0f, 0.25f).values[slot];"
+            in hip_code
         )
-        assert "float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];" in hip_code
-        assert "float biasValue = makePayload(5.0, 6.0, 0.75).bias;" in hip_code
+        assert "float fixedValue = makePayload(3.0f, 4.0f, 0.5f).values[0];" in hip_code
+        assert "float biasValue = makePayload(5.0f, 6.0f, 0.75f).bias;" in hip_code
         assert "return ((dynamicValue + fixedValue) + biasValue);" in hip_code
         assert "float value = readTemporary(1);" in hip_code
 
@@ -9361,10 +9433,10 @@ class TestHipCodeGen:
             }
 
             float readNestedTemporary(int slot) {
-                float dynamicValue = makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];
-                float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];
-                float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;
-                float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;
+                float dynamicValue = makeOuter(1.0f, 2.0f, 0.25f, 4.0f).inner.values[slot];
+                float fixedValue = makeOuter(3.0f, 4.0f, 0.5f, 5.0f).inner.values[0];
+                float biasValue = makeOuter(5.0f, 6.0f, 0.75f, 6.0f).inner.bias;
+                float scaleValue = makeOuter(7.0f, 8.0f, 1.0f, 9.0f).scale;
                 return dynamicValue + fixedValue + biasValue + scaleValue;
             }
 
@@ -9395,16 +9467,17 @@ class TestHipCodeGen:
         assert "__device__ float readNestedTemporary(int slot)" in hip_code
         assert (
             "float dynamicValue = "
-            "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];" in hip_code
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f).inner.values[slot];" in hip_code
         )
         assert (
-            "float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];"
+            "float fixedValue = makeOuter(3.0f, 4.0f, 0.5f, 5.0f).inner.values[0];"
             in hip_code
         )
         assert (
-            "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;" in hip_code
+            "float biasValue = makeOuter(5.0f, 6.0f, 0.75f, 6.0f).inner.bias;"
+            in hip_code
         )
-        assert "float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;" in hip_code
+        assert "float scaleValue = makeOuter(7.0f, 8.0f, 1.0f, 9.0f).scale;" in hip_code
         assert (
             "return (((dynamicValue + fixedValue) + biasValue) + scaleValue);"
             in hip_code
@@ -9434,7 +9507,7 @@ class TestHipCodeGen:
             }
 
             float mutateReturnedLocal(int slot) {
-                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
                 outer.inner.values[slot] = outer.inner.values[slot] + outer.inner.bias;
                 outer.inner.values[0] = outer.inner.values[slot] * outer.scale;
                 outer.scale = outer.inner.values[0] + outer.inner.bias;
@@ -9456,7 +9529,7 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in hip_code
+        assert "OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in hip_code
         assert (
             "outer.inner.values[slot] = "
             "(outer.inner.values[slot] + outer.inner.bias);" in hip_code
@@ -9499,7 +9572,7 @@ class TestHipCodeGen:
             }
 
             float mutateReturnedLocalControl(int slot) {
-                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
                 for (int i = 0; i < 3; i++) {
                     outer.inner.values[i] = outer.inner.values[i] + outer.inner.bias;
                     if (i == slot) {
@@ -9530,7 +9603,7 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__device__ float mutateReturnedLocalControl(int slot)" in hip_code
-        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in hip_code
+        assert "OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in hip_code
         assert "for (int i = 0; (i < 3); i++)" in hip_code
         assert (
             "outer.inner.values[i] = "
@@ -10384,8 +10457,8 @@ class TestHipCodeGen:
                     uint c = atomicCAS_system(outp[i], a, b);
                     int d = atomicMax_system(signedOut[i], -1);
                     int e = atomicExch_system(signedOut[i], 2);
-                    float f = atomicAdd_system(floatOut[i], 1.0);
-                    float badAnd = atomicAnd_system(floatOut[i], 1.0);
+                    float f = atomicAdd_system(floatOut[i], 1.0f);
+                    float badAnd = atomicAnd_system(floatOut[i], 1.0f);
                     uint missing = atomicSub_system(outp[i]);
                     uint2 badVector = atomicAdd_system(
                         vectorCounters[i],
@@ -10404,7 +10477,7 @@ class TestHipCodeGen:
         assert "unsigned int c = atomicCAS_system(&outp[i], a, b);" in hip_code
         assert "int d = atomicMax_system(&signedOut[i], -1);" in hip_code
         assert "int e = atomicExch_system(&signedOut[i], 2);" in hip_code
-        assert "float f = atomicAdd_system(&floatOut[i], 1.0);" in hip_code
+        assert "float f = atomicAdd_system(&floatOut[i], 1.0f);" in hip_code
         assert (
             "float badAnd = /* unsupported HIP atomic: atomicAnd_system on float "
             "requires supported scalar int/uint target */ 0.0f;" in hip_code
@@ -12336,7 +12409,7 @@ class TestHipCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    let scalar = 1.0;
+                    let scalar = 1.0f;
                     let flag = true;
                     let label = "debug";
                     let marker = 'x';
@@ -12352,7 +12425,7 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float scalar = 1.0;" in hip_code
+        assert "float scalar = 1.0f;" in hip_code
         assert "bool flag = true;" in hip_code
         assert 'string label = "debug";' in hip_code
         assert "char marker = 'x';" in hip_code
@@ -12437,15 +12510,15 @@ class TestHipCodeGen:
 
     def test_array_literals_emit_hip_brace_initializers(self):
         source_code = """
-        float globalWeights[4] = {1.0, 2.0};
+        float globalWeights[4] = {1.0f, 2.0f};
 
         float pickScalar(int index) {
-            float values[4] = {1.0, 2.0, 3.0, 4.0};
+            float values[4] = {1.0f, 2.0f, 3.0f, 4.0f};
             return values[index];
         }
 
         vec3 pickColor(int index) {
-            vec3 colors[2] = {vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0)};
+            vec3 colors[2] = {vec3(1.0f, 2.0f, 3.0f), vec3(4.0f, 5.0f, 6.0f)};
             return colors[index];
         }
         """
@@ -12457,11 +12530,11 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "float globalWeights[4] = {1.0, 2.0};" in hip_code
-        assert "float values[4] = {1.0, 2.0, 3.0, 4.0};" in hip_code
+        assert "float globalWeights[4] = {1.0f, 2.0f};" in hip_code
+        assert "float values[4] = {1.0f, 2.0f, 3.0f, 4.0f};" in hip_code
         assert (
-            "float3 colors[2] = {make_float3(1.0, 2.0, 3.0), "
-            "make_float3(4.0, 5.0, 6.0)};"
+            "float3 colors[2] = {make_float3(1.0f, 2.0f, 3.0f), "
+            "make_float3(4.0f, 5.0f, 6.0f)};"
         ) in hip_code
         assert "ArrayLiteralNode" not in hip_code
 
@@ -13220,9 +13293,9 @@ class TestHipCodeGen:
                 vec2 uv
             ) {
                 vec4 volume = texture(paramVolume, uvw);
-                vec4 volumeLod = textureLod(paramVolume, uvw, 2.0);
+                vec4 volumeLod = textureLod(paramVolume, uvw, 2.0f);
                 vec4 color = texture(paramColor, uv);
-                vec4 colorLod = textureLod(paramColor, uv, 1.0);
+                vec4 colorLod = textureLod(paramColor, uv, 1.0f);
                 vec4 direct = tex2D(paramColor, uv);
             }
 
@@ -13245,12 +13318,12 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 volumeLod = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 2.0);"
+            "float4 volumeLod = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 2.0f);"
             in hip_code
         )
         assert "float4 color = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
         assert (
-            "float4 colorLod = tex2DLod<float4>(paramColor, uv.x, uv.y, 1.0);"
+            "float4 colorLod = tex2DLod<float4>(paramColor, uv.x, uv.y, 1.0f);"
             in hip_code
         )
         assert "float4 direct = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
@@ -13277,11 +13350,11 @@ class TestHipCodeGen:
             compute {
                 void main() {
                     VertexInput input;
-                    input.position = vec3(1.0, 2.0, 3.0);
-                    input.normal = vec3(0.0, 1.0, 0.0);
-                    input.texCoord = vec2(0.5, 0.5);
+                    input.position = vec3(1.0f, 2.0f, 3.0f);
+                    input.normal = vec3(0.0f, 1.0f, 0.0f);
+                    input.texCoord = vec2(0.5f, 0.5f);
                     VertexOutput output;
-                    output.clipPos = vec4(input.position, 1.0);
+                    output.clipPos = vec4(input.position, 1.0f);
                     output.worldNormal = input.normal;
                     output.uv = input.texCoord;
                 }
@@ -13303,7 +13376,7 @@ class TestHipCodeGen:
         assert "float4 clipPos;" in hip_code
         assert "float3 worldNormal;" in hip_code
         assert "float2 uv;" in hip_code
-        assert "input.position = make_float3(1.0, 2.0, 3.0);" in hip_code
+        assert "input.position = make_float3(1.0f, 2.0f, 3.0f);" in hip_code
         assert "output.worldNormal = input.normal;" in hip_code
         assert "output.uv = input.texCoord;" in hip_code
         assert "VertexInput input;" in hip_code
@@ -13634,9 +13707,9 @@ class TestHipCodeGen:
         shader VertexPositionShader {
             vertex {
                 void main() {
-                    vec4 position = vec4(1.0, 2.0, 3.0, 1.0);
-                    vec3 normal = vec3(0.0, 1.0, 0.0);
-                    vec2 uv = vec2(0.5, 0.5);
+                    vec4 position = vec4(1.0f, 2.0f, 3.0f, 1.0f);
+                    vec3 normal = vec3(0.0f, 1.0f, 0.0f);
+                    vec2 uv = vec2(0.5f, 0.5f);
                 }
             }
         }
@@ -13649,9 +13722,9 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "__device__ void main()" in hip_code
-        assert "float4 position = make_float4(1.0, 2.0, 3.0, 1.0);" in hip_code
-        assert "float3 normal = make_float3(0.0, 1.0, 0.0);" in hip_code
-        assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
+        assert "float4 position = make_float4(1.0f, 2.0f, 3.0f, 1.0f);" in hip_code
+        assert "float3 normal = make_float3(0.0f, 1.0f, 0.0f);" in hip_code
+        assert "float2 uv = make_float2(0.5f, 0.5f);" in hip_code
         assert "vec4" not in hip_code
         assert "vec3" not in hip_code
         assert "vec2(" not in hip_code
@@ -13666,9 +13739,9 @@ class TestHipCodeGen:
                 vec3 dir
             ) {
                 vec4 ramp = texture(paramRamp, u);
-                vec4 rampLod = textureLod(paramRamp, u, 1.0);
+                vec4 rampLod = textureLod(paramRamp, u, 1.0f);
                 vec4 env = texture(paramEnv, dir);
-                vec4 envLod = textureLod(paramEnv, dir, 2.0);
+                vec4 envLod = textureLod(paramEnv, dir, 2.0f);
             }
 
             compute {
@@ -13684,13 +13757,13 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "float4 ramp = tex1D<float4>(paramRamp, u);" in hip_code
-        assert "float4 rampLod = tex1DLod<float4>(paramRamp, u, 1.0);" in hip_code
+        assert "float4 rampLod = tex1DLod<float4>(paramRamp, u, 1.0f);" in hip_code
         assert (
             "float4 env = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
             in hip_code
         )
         assert (
-            "float4 envLod = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 2.0);"
+            "float4 envLod = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 2.0f);"
             in hip_code
         )
         assert " = texture(" not in hip_code
@@ -13916,7 +13989,7 @@ class TestHipCodeGen:
             StructuredBuffer<int> indices[4];
 
             float sumWeights(StructuredBuffer<float> input, uint count) {
-                float total = 0.0;
+                float total = 0.0f;
                 for (uint i = 0; i < count; i = i + 1) {
                     total = total + input.Load(i);
                 }
@@ -13943,7 +14016,7 @@ class TestHipCodeGen:
         assert "const float* input" in hip_code
         assert "float w = weights[0];" in hip_code
         assert "int idx = indices[0][0];" in hip_code
-        assert "float total = 0.0;" in hip_code
+        assert "float total = 0.0f;" in hip_code
         assert "total = (total + input[i]);" in hip_code
         assert "StructuredBuffer" not in hip_code
         assert "RWStructuredBuffer" not in hip_code

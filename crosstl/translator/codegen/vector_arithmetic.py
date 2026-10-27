@@ -209,7 +209,7 @@ class VectorArithmeticMixin:
                 return self.expression_result_type(raw_args[0])
             if func_name == "cross" and raw_args:
                 return self.expression_result_type(raw_args[0])
-            if func_name in {"dot", "length"} and raw_args:
+            if func_name in {"dot", "distance", "length"} and raw_args:
                 vector_info = self.vector_type_info(
                     self.expression_result_type(raw_args[0])
                 )
@@ -1705,7 +1705,7 @@ class VectorArithmeticMixin:
                 return None
             return f"{helper_name}({args[0]})"
 
-        if func_name in {"dot", "cross"}:
+        if func_name in {"dot", "cross", "distance"}:
             if len(raw_args) != 2:
                 return None
             left_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
@@ -1719,6 +1719,8 @@ class VectorArithmeticMixin:
                 return None
             if func_name == "dot":
                 helper_name = self.require_vector_dot_helper(left_info)
+            elif func_name == "distance":
+                helper_name = self.require_vector_distance_helper(left_info)
             else:
                 helper_name = self.require_vector_cross_helper(left_info)
             if helper_name is None:
@@ -2142,9 +2144,36 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
+    def geometric_component_float_type(self, component_type):
+        """Return the type geometric helpers compute in, or None if unsupported.
+
+        ``half`` components are widened to ``float`` because the generated
+        ``cgl_halfN`` structures have no arithmetic of their own and CUDA/HIP
+        provide no ``sqrt`` overload for ``__half`` in host-compatible code.
+        """
+        if component_type in {"float", "double"}:
+            return component_type
+        if component_type == "half":
+            return "float"
+        return None
+
+    def geometric_component_read(self, component_type, expression):
+        if component_type == "half":
+            return f"__half2float({expression})"
+        return expression
+
+    def geometric_scalar_result(self, component_type, expression):
+        if component_type == "half":
+            return f"__float2half({expression})"
+        return expression
+
+    def geometric_sqrt_name(self, component_type):
+        return "sqrt" if component_type == "double" else "sqrtf"
+
     def require_vector_cross_helper(self, vector_info):
+        component_type = vector_info["component_type"]
         if (
-            vector_info["component_type"] not in {"float", "double"}
+            self.geometric_component_float_type(component_type) is None
             or len(vector_info["components"]) != 3
         ):
             return None
@@ -2154,15 +2183,21 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
+        def read(side, component):
+            return self.geometric_component_read(component_type, f"{side}.{component}")
+
+        terms = []
+        for first, second in (("y", "z"), ("z", "x"), ("x", "y")):
+            terms.append(
+                f"({read('lhs', first)} * {read('rhs', second)} - "
+                f"{read('lhs', second)} * {read('rhs', first)})"
+            )
         constructor = vector_info["constructor"]
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
             f"({vector_type} lhs, {vector_type} rhs)\n"
             "{\n"
-            f"    return {constructor}("
-            "(lhs.y * rhs.z - lhs.z * rhs.y), "
-            "(lhs.z * rhs.x - lhs.x * rhs.z), "
-            "(lhs.x * rhs.y - lhs.y * rhs.x));\n"
+            f"    return {constructor}({', '.join(terms)});\n"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -2170,7 +2205,8 @@ class VectorArithmeticMixin:
 
     def require_vector_length_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
             return None
 
         vector_type = vector_info["type"]
@@ -2178,15 +2214,51 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
-        sqrt_name = "sqrt" if component_type == "double" else "sqrtf"
-        squares = [
-            f"(value.{component} * value.{component})"
-            for component in vector_info["components"]
-        ]
+        squares = []
+        for component in vector_info["components"]:
+            value = self.geometric_component_read(component_type, f"value.{component}")
+            squares.append(f"({value} * {value})")
+        result = self.geometric_scalar_result(
+            component_type,
+            f"{self.geometric_sqrt_name(component_type)}({' + '.join(squares)})",
+        )
         helper = (
             f"__device__ inline {component_type} {helper_name}({vector_type} value)\n"
             "{\n"
-            f"    return {sqrt_name}({' + '.join(squares)});\n"
+            f"    return {result};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_vector_distance_helper(self, vector_info):
+        component_type = vector_info["component_type"]
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
+            return None
+
+        vector_type = vector_info["type"]
+        helper_name = f"cgl_{vector_type}_distance"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        declarations = []
+        squares = []
+        for component in vector_info["components"]:
+            lhs = self.geometric_component_read(component_type, f"lhs.{component}")
+            rhs = self.geometric_component_read(component_type, f"rhs.{component}")
+            declarations.append(f"    {compute_type} d{component} = {lhs} - {rhs};\n")
+            squares.append(f"(d{component} * d{component})")
+        result = self.geometric_scalar_result(
+            component_type,
+            f"{self.geometric_sqrt_name(component_type)}({' + '.join(squares)})",
+        )
+        helper = (
+            f"__device__ inline {component_type} {helper_name}"
+            f"({vector_type} lhs, {vector_type} rhs)\n"
+            "{\n"
+            f"{''.join(declarations)}"
+            f"    return {result};\n"
             "}"
         )
         self.helper_functions[helper_name] = helper
@@ -2194,11 +2266,8 @@ class VectorArithmeticMixin:
 
     def require_vector_normalize_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
-            return None
-
-        length_helper = self.require_vector_length_helper(vector_info)
-        if length_helper is None:
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
             return None
 
         vector_type = vector_info["type"]
@@ -2206,15 +2275,31 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
-        one_literal = "1.0" if component_type == "double" else "1.0f"
+        one_literal = "1.0" if compute_type == "double" else "1.0f"
+        if component_type == "half":
+            # Keep the length in float so a half vector is not rounded twice
+            squares = []
+            for component in vector_info["components"]:
+                value = self.geometric_component_read(
+                    component_type, f"value.{component}"
+                )
+                squares.append(f"({value} * {value})")
+            length_expression = f"sqrtf({' + '.join(squares)})"
+        else:
+            length_helper = self.require_vector_length_helper(vector_info)
+            if length_helper is None:
+                return None
+            length_expression = f"{length_helper}(value)"
+
         components = [
-            f"(value.{component} * inv_length)"
+            f"({self.geometric_component_read(component_type, f'value.{component}')}"
+            " * inv_length)"
             for component in vector_info["components"]
         ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
             "{\n"
-            f"    {component_type} inv_length = {one_literal} / {length_helper}(value);\n"
+            f"    {compute_type} inv_length = {one_literal} / {length_expression};\n"
             f"    return {vector_info['constructor']}({', '.join(components)});\n"
             "}"
         )

@@ -46,6 +46,25 @@ def convert_integer_intervals(intervals, bits, signed):
     return merge_integer_intervals(result)
 
 
+def bitwise_interval(operator, left, right):
+    """Bound ``&``, ``|`` or ``^`` of two's-complement values in ``left`` and ``right``.
+
+    ``x & y`` keeps only bits of a non-negative operand, so it lies in ``[0, x]``. For
+    non-negative operands ``x | y`` and ``x ^ y`` set no bit above the wider operand's
+    highest bit, and ``x | y`` is at least either operand. Other sign mixes are not bounded.
+    """
+    (a, b), (c, d) = left, right
+    if operator == "&":
+        if a < 0 and c < 0:
+            return None
+        upper = min(bound for low, bound in (left, right) if low >= 0)
+        return 0, upper
+    if operator not in {"|", "^"} or a < 0 or c < 0:
+        return None
+    upper = (1 << max(b, d).bit_length()) - 1
+    return (max(a, c) if operator == "|" else 0), upper
+
+
 def integer_arithmetic_intervals(operator, left, right, bits, signed):
     """Bound typed arithmetic; signed overflow cannot establish a range."""
     left = convert_integer_intervals(left, bits, signed)
@@ -84,6 +103,10 @@ def integer_arithmetic_intervals(operator, left, right, bits, signed):
                     bounds = max(a, -maximum) if a < 0 else 0, (
                         min(b, maximum) if b > 0 else 0
                     )
+            elif operator in {"&", "|", "^"}:
+                bounds = bitwise_interval(operator, (a, b), (c, d))
+                if bounds is None:
+                    return None
             else:
                 return None
             if signed and not -(1 << (bits - 1)) <= bounds[0] <= bounds[1] < (

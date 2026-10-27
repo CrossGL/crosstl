@@ -1730,19 +1730,22 @@ class HLSLToCrossGLConverter(
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
-    def format_type_alias_target(self, alias_type, alias):
-        mapped_type = self.map_type(alias_type)
-        sizes = getattr(alias, "array_sizes", None) or []
-        if not any(size is None for size in sizes):
-            return f"{mapped_type}{self.format_array_suffixes(alias)}"
+    def generate_type_alias_declaration(self, alias):
+        """Write an HLSL ``typedef`` or ``using`` alias as a CrossGL ``typedef``.
 
-        type_text = mapped_type
-        for size in reversed(sizes):
-            if size is None:
-                type_text = f"[{type_text}]"
-            else:
-                type_text = f"{type_text}[{self.generate_expression(size)}]"
-        return type_text
+        CrossGL spells an alias as a C declarator, so the array dimensions of
+        ``typedef int Pair[2];`` and ``using Pair = int[2];`` follow the name.
+        """
+        alias_type = getattr(alias, "alias_type", None) or getattr(
+            alias, "original_type", None
+        )
+        if alias_type is None:
+            return ""
+        return (
+            f"typedef {self.map_type(alias_type)} "
+            f"{self.render_type_identifier(alias.name)}"
+            f"{self.format_array_suffixes(alias)};"
+        )
 
     def generate_enum(self, enum, indent=1):
         code = "    " * indent + f"enum {self.render_type_identifier(enum.name)} {{\n"
@@ -3682,16 +3685,10 @@ class HLSLToCrossGLConverter(
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
-        if typedefs:
-            for alias in typedefs:
-                alias_type = getattr(alias, "alias_type", None) or getattr(
-                    alias, "original_type", None
-                )
-                if alias_type is not None:
-                    code += (
-                        f"    type {self.render_type_identifier(alias.name)} = "
-                        f"{self.format_type_alias_target(alias_type, alias)};\n"
-                    )
+        for alias in typedefs:
+            declaration = self.generate_type_alias_declaration(alias)
+            if declaration:
+                code += f"    {declaration}\n"
         if enums:
             for enum in enums:
                 if isinstance(enum, EnumNode):
@@ -4524,10 +4521,48 @@ class HLSLToCrossGLConverter(
                 code += "    " * indent + "}\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
+            elif isinstance(stmt, TypeAliasNode):
+                code += f"{self.generate_type_alias_declaration(stmt)}\n"
+            elif isinstance(stmt, StructNode):
+                code += self.generate_local_struct(stmt, indent, is_main)
             else:
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
+        return code
+
+    def generate_local_struct(self, stmt, indent, is_main=False):
+        """Write a structure declared in a function body as a CrossGL block-scoped structure.
+
+        Declarators after its closing brace (``struct S { ... } a, b;``) follow it as declarations.
+        """
+        unsupported = [
+            label
+            for label, field in (
+                ("member functions", "methods"),
+                ("base classes", "base_classes"),
+            )
+            if getattr(stmt, field, None)
+        ]
+        if unsupported:
+            return self.refuse_import(
+                f"DirectX structure '{stmt.name}' declared in a function body has "
+                f"{' and '.join(unsupported)}, which a CrossGL block-scoped structure "
+                "does not carry"
+            )
+        saved_indentation = self.indentation
+        self.indentation = indent
+        try:
+            text = self.visit_StructNode(stmt)
+        finally:
+            self.indentation = saved_indentation
+        # The semicolon keeps a following statement from reading as a declarator.
+        code = text.rstrip("\n") + ";\n"
+        declarations = list(getattr(stmt, "variable_declarations", None) or [])
+        if declarations:
+            code += self.generate_function_body(
+                declarations, indent, is_main, new_scope=False
+            )
         return code
 
     def generate_function_call_statement(self, stmt, indent=0, is_main=False):

@@ -40,6 +40,19 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.edges import FAMILY as EDGES
+from .templates.forms import FAMILY as FORMS
+from .templates.idioms import (
+    ALIAS_HELPER,
+    ALIASES,
+    CROSSGL_CONDITION,
+    CROSSGL_EQUALITY,
+)
+from .templates.idioms import FAMILY as IDIOMS
+from .templates.idioms import SHADOW_HELPERS
+from .templates.lexical import CROSSGL_NAMES
+from .templates.lexical import FAMILY as LEXICAL
+from .templates.lexical import FILL, SPREAD4, reserved
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 
@@ -516,6 +529,42 @@ CONSTRUCTS: dict[str, Template] = {
         VALUES["struct-matrix-member"].body, prelude=BASIS
     ),
     "struct-conditional": Template(VALUES["struct-conditional"].body, prelude=PAIR),
+    **EDGES,
+    "struct-array-copy": Template(EDGES["struct-array-copy"].body, prelude=PAIR),
+    **LEXICAL,
+    "octal-literal": Template(
+        LEXICAL["octal-literal"]
+        .body.replace("017 + 00", "0o17 + 0o0")
+        .replace("010u", "0o10u")
+        .replace("& 07", "& 0o7")
+        .replace("* 011", "* 0o11")
+    ),
+    "call-result-access": Template(
+        LEXICAL["call-result-access"].body,
+        f"{MAKE_PAIR}\n\n{FILL}\n\n{SPREAD4}",
+        prelude=f"{PAIR}\n{BINS}",
+    ),
+    "reserved-identifier": reserved(CROSSGL_NAMES),
+    **FORMS,
+    # CrossGL has no ^^; it compares two bool values with !=.
+    "logical-xor": Template(
+        "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\nbool r = (p != q) != (iin[i] == 3);\n"
+        "outp[i] = (p != q ? 1.0 : 0.0) + (r ? 2.0 : 0.0) + (!(p != true) ? 4.0 : 0.0);"
+    ),
+    "constant-array-size": Template(
+        FORMS["constant-array-size"].body, prelude="const int N = 4;"
+    ),
+    **IDIOMS,
+    "aggregate-equality": Template(CROSSGL_EQUALITY, prelude=PAIR),
+    "integer-condition": Template(CROSSGL_CONDITION),
+    "global-shadowing": Template(
+        IDIOMS["global-shadowing"].body,
+        SHADOW_HELPERS,
+        prelude="const float scale = 2.0;",
+    ),
+    "type-alias": Template(
+        IDIOMS["type-alias"].body, ALIAS_HELPER, prelude=f"{PAIR}\n{ALIASES}"
+    ),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

@@ -407,6 +407,18 @@ def test_committed_budgets_and_scoreboards_match_the_manifest():
         run.decode(board["cells"], data)
 
 
+def test_every_corpus_workflow_leg_has_a_committed_scoreboard():
+    # corpus.yml names each leg's scoreboard ci-<system>-<machine>: its Linux leg runs on an x86_64 Ubuntu runner and
+    # its Metal leg on an arm64 macOS runner. A leg without a committed scoreboard fails before it compares any cell.
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "corpus.yml"
+    ).read_text()
+    assert "ci-{platform.system()}-{platform.machine()}" in workflow
+    assert '"os": "ubuntu-24.04"' in workflow and '"os": "xcode-27"' in workflow
+    for profile in ("ci-linux-x86_64", "ci-darwin-arm64"):
+        assert (run.SCOREBOARDS / f"{profile}.json").is_file(), profile
+
+
 def test_worker_translates_and_times_one_unit(tmp_path):
     source = tmp_path / "add.comp"
     source.write_text(COMPUTE_GLSL)
