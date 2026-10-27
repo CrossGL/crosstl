@@ -38,6 +38,8 @@ ORDER = (
     "gemv",
     "masked-mv",
     "gather-mv",
+    "steel-attention",
+    "sdpa-vjp",
     "conv",
     "fft",
     "sdpa",

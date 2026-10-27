@@ -33,7 +33,9 @@ from demos.integrations.mlx.portable_host import (
     qmm_layout,
     scan_layout,
     sdpa_layout,
+    sdpa_vjp_layout,
     segmented_mm_layout,
+    steel_attention_layout,
 )
 from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
     MASKED_MM_CACHE,
@@ -110,6 +112,10 @@ from demos.integrations.mlx.portable_host.sdpa_packages import (
     CACHE_DIRECTORY as SDPA_CACHE,
 )
 from demos.integrations.mlx.portable_host.sdpa_packages import SdpaPackageCache
+from demos.integrations.mlx.portable_host.sdpa_vjp_packages import (
+    CACHE_DIRECTORY as SDPA_VJP_CACHE,
+)
+from demos.integrations.mlx.portable_host.sdpa_vjp_packages import SdpaVjpPackageCache
 from demos.integrations.mlx.portable_host.segmented_mm_packages import (
     SEGMENTED_MM_CACHE,
     SegmentedMmPackageCache,
@@ -118,6 +124,12 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
     ALL_SMALL_ROW_ENTRIES,
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
+)
+from demos.integrations.mlx.portable_host.steel_attention_packages import (
+    CACHE_DIRECTORY as STEEL_ATTENTION_CACHE,
+)
+from demos.integrations.mlx.portable_host.steel_attention_packages import (
+    SteelAttentionPackageCache,
 )
 
 # Matrix kernels: one package per entry, launched by the source-specialized
@@ -137,6 +149,8 @@ MATRIX_FAMILIES = {
     "conv": conv_layout.ENTRY_PREFIXES,
     "fft": fft_layout.ENTRY_PREFIXES,
     "sdpa": sdpa_layout.ENTRY_PREFIXES,
+    "steel-attention": steel_attention_layout.ENTRY_PREFIXES,
+    "sdpa-vjp": sdpa_vjp_layout.ENTRY_PREFIXES,
 }
 # Quantized products run through the same executor. Their own upstream
 # verifiers translate their packages ahead; any other test that reaches one
@@ -212,6 +226,12 @@ class LazyPackages:
             "conv": ConvPackageCache(mlx_root, packages / CONV_CACHE, target),
             "fft": FftPackageCache(mlx_root, packages / FFT_CACHE, target),
             "sdpa": SdpaPackageCache(mlx_root, packages / SDPA_CACHE, target),
+            "steel-attention": SteelAttentionPackageCache(
+                mlx_root, packages / STEEL_ATTENTION_CACHE, target
+            ),
+            "sdpa-vjp": SdpaVjpPackageCache(
+                mlx_root, packages / SDPA_VJP_CACHE, target
+            ),
             "quantized-mv": QuantizedMatmulPackageCache(
                 mlx_root, packages / QUANTIZED_MV_CACHE, target
             ),

@@ -443,7 +443,7 @@ def test_the_host_routes_audits_and_prepares_the_vector_attention():
     finally:
         prepare.replace_once = original
     assert "NO_GPU_MULTI(ScaledDotProductAttention)" in replaced
-    assert "NO_GPU_MULTI(ScaledDotProductAttentionVJP)" not in replaced
+    assert "NO_GPU_MULTI(ScaledDotProductAttentionVJP)" in replaced
     assert all(definition in replaced for definition in prepare.ATTENTION_DEFINITIONS)
     assert sources["crosstl_sdpa.inc"] == (HOST / "sdpa.inc").read_bytes()
     assert (

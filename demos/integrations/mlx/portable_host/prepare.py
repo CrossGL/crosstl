@@ -52,13 +52,14 @@ FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm", "CrossEntropy")
 NORMALIZATION_PRIMITIVES = ("LayerNorm", "RMSNorm", "LayerNormVJP", "RMSNormVJP")
 CROSS_ENTROPY_PRIMITIVES = ("CrossEntropy", "CrossEntropyVJP")
 # fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors; sdpa.inc
-# ports the forward attention, whose use_fallback and supports_bool_mask
-# no_gpu defines outright (ATTENTION_DEFINITIONS).
+# ports the forward attention and its fused VJP, whose use_fallback and
+# supports_bool_mask no_gpu defines outright (ATTENTION_DEFINITIONS).
 FAST_PRIMITIVES = (
     *NORMALIZATION_PRIMITIVES,
     *CROSS_ENTROPY_PRIMITIVES,
     "ConvertFP8",
     "ScaledDotProductAttention",
+    "ScaledDotProductAttentionVJP",
 )
 # no_gpu's attention definitions that sdpa.inc replaces with
 # scaled_dot_product_attention.cpp's.
@@ -85,6 +86,12 @@ ATTENTION_DEFINITIONS = (
 """,
     """bool fast::ScaledDotProductAttention::supports_bool_mask() {
   return false;
+}
+""",
+    """bool fast::ScaledDotProductAttentionVJP::use_fallback(
+    const array& q,
+    Stream s) {
+  return true;
 }
 """,
 )

@@ -78,6 +78,8 @@ from demos.integrations.mlx.portable_host import (
     scan_layout,
     sdpa_dispatch,
     sdpa_packages,
+    sdpa_vjp_dispatch,
+    sdpa_vjp_packages,
     searchsorted_dispatch,
     searchsorted_layout,
     slice_update_layout,
@@ -85,6 +87,8 @@ from demos.integrations.mlx.portable_host import (
     softmax_layout,
     sort_dispatch,
     sort_layout,
+    steel_attention_dispatch,
+    steel_attention_packages,
     wide_column_dispatch,
     wide_reduction_dispatch,
     wide_reduction_packages,
@@ -655,6 +659,27 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The full-attention kernel, one per steel_attention pipeline hash name.
+        self.steel_attentions = (
+            steel_attention_packages.SteelAttentionPackageCache(
+                mlx_root,
+                self.directory / steel_attention_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
+        # The fused attention VJP's row products, block gradients and
+        # reductions, one per pipeline name.
+        self.sdpa_vjps = (
+            sdpa_vjp_packages.SdpaVjpPackageCache(
+                mlx_root,
+                self.directory / sdpa_vjp_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -914,6 +939,10 @@ class HostRuntime:
                 return int(self.ffts is not None)
             if sdpa_dispatch.is_entry(name):
                 return int(self.sdpas is not None)
+            if steel_attention_dispatch.is_entry(name):
+                return int(self.steel_attentions is not None)
+            if sdpa_vjp_dispatch.is_entry(name):
+                return int(self.sdpa_vjps is not None)
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
@@ -1159,6 +1188,14 @@ class HostRuntime:
             return fft_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if sdpa_dispatch.is_entry(entry):
             return sdpa_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if steel_attention_dispatch.is_entry(entry):
+            return steel_attention_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if sdpa_vjp_dispatch.is_entry(entry):
+            return sdpa_vjp_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
             return gather_mm_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
