@@ -3200,6 +3200,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
+            if expr.operator == "+":
+                # WGSL has no unary plus. On a number it is the identity, and the
+                # operand text already stands on its own as an expression.
+                if self.boolean_expression_width(expr.operand) is not None:
+                    raise ValueError(
+                        "WGSL has no unary plus, and unary plus on a boolean "
+                        "value has no numeric meaning to preserve"
+                    )
+                return operand
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
