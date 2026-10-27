@@ -3,9 +3,10 @@
 Metal output writes ``using namespace metal;``, which brings the Metal Standard Library (MSL 3.1, chapter 6) into
 the program's scope. A user function named ``fwidth`` or ``clamp`` then makes a call ambiguous, as in
 ``call to 'fwidth' is ambiguous``, or lets the library overload win silently. CrossGL calls the user function, so
-the Metal generator renames it, every overload and every call to it (issue #3156), the way
-:func:`~crosstl.translator.semantics.function_name_collisions.rename_colliding_functions` renames functions that
-share a name with a value. Library calls the generator writes itself then reach the library.
+the Metal generator renames it, every overload and every call that one of its overloads accepts by argument count
+(issue #3156), the way :func:`~crosstl.translator.semantics.function_name_collisions.rename_colliding_functions`
+renames functions that share a name with a value. A call with another argument count, such as ``clamp(x, 0.0, 1.0)``
+beside a user ``clamp(float)``, and the library calls the generator writes itself, reach the library.
 """
 
 from __future__ import annotations
@@ -159,5 +160,5 @@ def rename_msl_library_functions(ast):
     if not names:
         return ast
     ast = deepcopy(ast)
-    rename_functions(ast, names)
+    rename_functions(ast, names, by_arity=True)
     return ast

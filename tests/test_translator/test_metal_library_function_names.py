@@ -22,7 +22,8 @@ shader S {
         void main() {
             uint i = gl_GlobalInvocationID.x;
             values[i] = fwidth(values[i]) + clamp(values[i]) + clamp(values[i], 2.0)
-                + simd_sum(values[i]) + helper(max(values[i], 0.0));
+                + simd_sum(values[i]) + helper(max(values[i], 0.0))
+                + clamp(values[i], 0.0, 1.0);
         }
     }
 }
@@ -49,9 +50,10 @@ def test_user_functions_named_like_library_functions_are_renamed(tmp_path):
     assert "float simd_sum_fn(float x)" in code
     assert "fwidth_fn(values[i])" in code
     assert "clamp_fn(values[i], 2.0)" in code
-    # Other functions and library calls keep their names.
+    # Other functions and library calls keep their names; no user clamp takes three arguments.
     assert "float helper(float x)" in code
     assert "max(values[i], 0.0)" in code
+    assert "clamp(values[i], 0.0, 1.0)" in code
 
 
 def test_metal_compiles(tmp_path):
