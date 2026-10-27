@@ -2799,6 +2799,12 @@ class SlangParser:
             return self.parse_labeled_statement()
         if self.is_anonymous_struct_variable_declaration_start():
             return self.parse_anonymous_struct_variable_declaration()
+        if (
+            self.current_token[0] == "STRUCT"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "IDENTIFIER"
+        ):
+            return self.parse_block_struct_declaration()
         if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
             return self.parse_typedef()
         if self.current_token == ("IDENTIFIER", "defer"):
@@ -3030,6 +3036,17 @@ class SlangParser:
         struct = StructNode(struct_name, members)
         struct.is_anonymous = True
         struct.is_local_declaration = True
+        return [struct, *declarations]
+
+    def parse_block_struct_declaration(self):
+        """Parse ``struct Name { ... } [declarators];`` in a function body.
+
+        The structure stays in the block (``is_block_declaration``) and its declarators follow it as statements.
+        """
+        struct = self.parse_struct()
+        struct.is_block_declaration = True
+        declarations = list(getattr(struct, "variable_declarations", None) or [])
+        struct.variable_declarations = []
         return [struct, *declarations]
 
     def next_anonymous_struct_name(self):

@@ -4342,6 +4342,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         stage_name = self.get_stage_name(stage_type)
         result = f"// {stage_name.title()} Shader\n"
 
+        # Structures declared in the stage block, before the variables and functions that use them.
+        for struct in getattr(stage, "local_structs", None) or []:
+            if isinstance(struct, EnumNode):
+                continue
+            struct_code = self.generate_struct(struct)
+            if struct_code:
+                result += struct_code + "\n\n"
+
         local_variables = getattr(stage, "local_variables", [])
         for local_var in self.slang_stage_global_local_variables(
             stage_name, local_variables
