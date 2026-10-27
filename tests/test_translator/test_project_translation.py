@@ -52078,7 +52078,9 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert diagnostic["target"] == "opengl"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["location"]["file"] == "budgeted_implicit.metal"
-    assert diagnostic["location"]["line"] == 10
+    # The work item is the declaration `ValueT a = 1.0;`; its location is the
+    # statement's first token, not the whitespace after the previous `;`.
+    assert diagnostic["location"]["line"] == 11
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]

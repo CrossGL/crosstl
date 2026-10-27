@@ -825,3 +825,73 @@ def _matrix_values(workflow_text, key):
         assert declared, f"run-time matrix key {key} must declare {name}"
         return _parse_matrix_values(declared.group(1))
     raise AssertionError(f"matrix key not found: {key}")
+
+
+def _static_matrix_legs(matrix):
+    """Count the legs GitHub expands from a matrix, or None for run-time axes."""
+    if not isinstance(matrix, dict):
+        return None
+    axes = {
+        key: value for key, value in matrix.items() if key not in ("include", "exclude")
+    }
+    if not all(isinstance(value, list) for value in axes.values()):
+        return None
+    combinations = [{}]
+    for key, values in axes.items():
+        combinations = [
+            {**base, key: value} for base in combinations for value in values
+        ]
+    if not axes:
+        combinations = []
+    for excluded in matrix.get("exclude") or []:
+        combinations = [
+            combination
+            for combination in combinations
+            if any(combination.get(key) != value for key, value in excluded.items())
+        ]
+    added = 0
+    for entry in matrix.get("include") or []:
+        # An entry extends every combination whose original values it does not
+        # overwrite; when it extends none, it becomes a leg of its own.
+        if not any(
+            all(
+                combination[key] == value for key, value in entry.items() if key in axes
+            )
+            for combination in combinations
+        ):
+            added += 1
+    return len(combinations) + added
+
+
+def test_static_matrix_legs_follow_github_expansion():
+    assert _static_matrix_legs({"os": ["a", "b"], "group": [1, 2, 3]}) == 6
+    assert (
+        _static_matrix_legs(
+            {"os": ["a", "b"], "group": [1, 2], "exclude": [{"os": "a", "group": 1}]}
+        )
+        == 3
+    )
+    assert (
+        _static_matrix_legs(
+            {
+                "os": ["a"],
+                "group": [1, 2],
+                "include": [{"group": 1, "shard": 0}, {"group": 9}],
+            }
+        )
+        == 3
+    )
+    assert _static_matrix_legs({"include": [{"os": "a"}, {"os": "b"}]}) == 2
+    assert _static_matrix_legs({"os": "${{ fromJSON(needs.plan.outputs.os) }}"}) is None
+
+
+@pytest.mark.parametrize(
+    "filename", sorted(path.name for path in WORKFLOW_DIR.glob("*.yml"))
+)
+def test_every_static_matrix_fits_the_github_leg_limit(filename):
+    # GitHub refuses to expand a matrix of more than 256 legs, and the job then
+    # fails without running a single leg.
+    workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
+    for name, job in (workflow.get("jobs") or {}).items():
+        legs = _static_matrix_legs((job.get("strategy") or {}).get("matrix"))
+        assert legs is None or legs <= 256, (name, legs)
