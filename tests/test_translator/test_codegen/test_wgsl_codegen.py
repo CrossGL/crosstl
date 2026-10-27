@@ -9,6 +9,9 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.codegen.wgsl_integer_textures import (
+    WGSLIntegerTextureSampleUnsupportedError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -2703,6 +2706,92 @@ def test_wgsl_codegen_lowers_split_sampler_lod_grad_and_offset_calls():
     assert "textureSample(colorTex, linearSampler, uv, offset)" in generated
     assert "textureSampleBias(colorTex, linearSampler, uv, 0.25, offset)" in generated
     assert "textureSampleBias(colorTex, colorTex_sampler, uv, 0.5, offset)" in generated
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "lookup"),
+    [
+        ("isampler2D", "texture(u0, vec2(0.5))"),
+        ("isampler2DArray", "texture(u0, vec3(0.5))"),
+        ("isampler3D", "texture(u0, vec3(0.5))"),
+        ("usamplerCube", "texture(u0, vec3(0.5))"),
+        ("usampler2D", "textureLod(u0, vec2(0.5), 0.0)"),
+        ("isampler2D", "textureGrad(u0, vec2(0.5), vec2(0.0), vec2(0.0))"),
+        ("usampler2D", "textureOffset(u0, vec2(0.5), ivec2(1, 0))"),
+        ("isampler2D", "textureLodOffset(u0, vec2(0.5), 0.0, ivec2(1, 0))"),
+        (
+            "usampler2D",
+            "textureGradOffset(u0, vec2(0.5), vec2(0.0), vec2(0.0), ivec2(1, 0))",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_filtered_lookups_on_integer_samplers(
+    sampler_type, lookup
+):
+    shader = f"""
+    shader WGSLIntegerSamplerLookup {{
+        uniform {sampler_type} u0;
+        fragment {{
+            vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {{
+                return vec4({lookup});
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        WGSLIntegerTextureSampleUnsupportedError,
+        match=r"cannot lower \w+\(\) on an integer sampler \(u0\).*texelFetch",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-integer-texture-sample-unsupported"
+    )
+    assert raised.value.target == "wgsl"
+    assert raised.value.function_name == lookup.split("(")[0]
+
+
+def test_wgsl_codegen_refuses_filtered_lookups_on_integer_sampler_parameters():
+    shader = """
+    shader WGSLIntegerSamplerParameter {
+        uniform isampler2D u0;
+        vec4 lookup(isampler2D t) {
+            return vec4(texture(t, vec2(0.5)));
+        }
+        fragment {
+            vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {
+                return lookup(u0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        WGSLIntegerTextureSampleUnsupportedError,
+        match=r"cannot lower texture\(\) on an integer sampler \(t\)",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_keeps_texel_fetch_and_size_on_integer_samplers():
+    shader = """
+    shader WGSLIntegerSamplerFetch {
+        uniform isampler2D u0;
+        fragment {
+            vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {
+                ivec2 size = textureSize(u0, 0);
+                return vec4(texelFetch(u0, size - ivec2(1), 0));
+            }
+        }
+    }
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureLoad(u0," in code
+    assert "textureDimensions(u0" in code
+    assert "textureSample" not in code
 
 
 def test_wgsl_codegen_lowers_shadow_textures_and_comparison_samplers():

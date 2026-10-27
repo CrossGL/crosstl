@@ -82,6 +82,11 @@ from .wgsl_integer_operands import (
     wgsl_bitwise_operands,
     wgsl_shift_amount,
 )
+from .wgsl_integer_textures import (
+    FILTERED_TEXTURE_LOOKUPS,
+    WGSLIntegerTextureSampleUnsupportedError,
+    is_integer_sampler_type_name,
+)
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
@@ -4196,6 +4201,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_texture_function_call(self, node, function_name):
         normalized_name = self.semantic_key(function_name)
         args = list(node.arguments)
+        if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
+            self.refuse_integer_texture_sample(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -4230,6 +4237,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
         )
+
+    def refuse_integer_texture_sample(self, texture_expr, function_name):
+        type_name = self.resource_type_name(self.expression_type(texture_expr))
+        if is_integer_sampler_type_name(type_name):
+            raise WGSLIntegerTextureSampleUnsupportedError(
+                function_name, self.generate_expression(texture_expr)
+            )
 
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
         if len(args) == implicit:
