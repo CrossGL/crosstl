@@ -28660,8 +28660,10 @@ class VulkanSPIRVCodeGen(
 
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
-        if node.init:
-            self.process_statement(node.init)
+        # ``for (int a = 0, b = n; ...)`` keeps its declarations as a list, run in order.
+        for init in node.init if isinstance(node.init, list) else [node.init]:
+            if init:
+                self.process_statement(init)
 
         header_label = SpirvId(self.get_id(), SpirvType("label"))
         body_label = SpirvId(self.get_id(), SpirvType("label"))

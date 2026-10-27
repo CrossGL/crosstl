@@ -90,6 +90,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -8497,6 +8498,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             finally:
                 self.atomic_value_context_stack.pop()
 
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.generate_for_header_statement(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "slang",
+            )
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         if isinstance(node, VariableNode):
