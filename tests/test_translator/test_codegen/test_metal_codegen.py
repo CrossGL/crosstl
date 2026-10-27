@@ -1079,6 +1079,31 @@ def test_metal_reserved_stage_keyword_local_identifier_is_escaped():
     compile_with_metal_if_available(generated_code)
 
 
+@pytest.mark.parametrize("name", ["device", "half", "thread", "constant"])
+def test_metal_reserved_shader_scope_constant_is_renamed(name):
+    shader = f"""
+    shader ReservedShaderConstant {{
+        const float {name} = 2.0;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                half h = half(1.0);
+                outp[i] = float(h) + {name};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert f"constant float {name}_ = 2.0;" in generated_code
+    assert f"outp[i] = float(h) + {name}_;" in generated_code
+    assert "half h = half(1.0);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_binary_expression_precedence_preserves_grouping_in_metal():
     shader = """
     shader MetalExpressionGrouping {
