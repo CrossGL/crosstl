@@ -42,9 +42,17 @@ from .templates.base import (
 )
 from .templates.edges import FAMILY as EDGES
 from .templates.forms import FAMILY as FORMS
-from .templates.lexical import CROSSGL_NAMES, FILL, SPREAD4
+from .templates.idioms import (
+    ALIAS_HELPER,
+    ALIASES,
+    CROSSGL_CONDITION,
+    CROSSGL_EQUALITY,
+)
+from .templates.idioms import FAMILY as IDIOMS
+from .templates.idioms import SHADOW_HELPERS
+from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
-from .templates.lexical import reserved
+from .templates.lexical import FILL, SPREAD4, reserved
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 
@@ -545,6 +553,17 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "constant-array-size": Template(
         FORMS["constant-array-size"].body, prelude="const int N = 4;"
+    ),
+    **IDIOMS,
+    "aggregate-equality": Template(CROSSGL_EQUALITY, prelude=PAIR),
+    "integer-condition": Template(CROSSGL_CONDITION),
+    "global-shadowing": Template(
+        IDIOMS["global-shadowing"].body,
+        SHADOW_HELPERS,
+        prelude="const float scale = 2.0;",
+    ),
+    "type-alias": Template(
+        IDIOMS["type-alias"].body, ALIAS_HELPER, prelude=f"{PAIR}\n{ALIASES}"
     ),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
