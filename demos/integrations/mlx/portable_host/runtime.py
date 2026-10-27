@@ -76,6 +76,8 @@ from demos.integrations.mlx.portable_host import (
     row_reduction_layout,
     scan_dispatch,
     scan_layout,
+    sdpa_dispatch,
+    sdpa_packages,
     searchsorted_dispatch,
     searchsorted_layout,
     slice_update_layout,
@@ -645,6 +647,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The vector attention kernels, one per sdpa_vector pipeline hash name.
+        self.sdpas = (
+            sdpa_packages.SdpaPackageCache(
+                mlx_root, self.directory / sdpa_packages.CACHE_DIRECTORY, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -902,6 +912,8 @@ class HostRuntime:
                 return int(self.convs is not None)
             if fft_dispatch.is_entry(name):
                 return int(self.ffts is not None)
+            if sdpa_dispatch.is_entry(name):
+                return int(self.sdpas is not None)
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
@@ -1145,6 +1157,8 @@ class HostRuntime:
             return conv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if fft_dispatch.is_entry(entry):
             return fft_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if sdpa_dispatch.is_entry(entry):
+            return sdpa_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
             return gather_mm_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

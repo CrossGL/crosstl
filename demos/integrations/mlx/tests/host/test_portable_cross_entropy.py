@@ -482,11 +482,13 @@ def test_runtime_and_host_adapter_route_cross_entropy():
     assert "CrossEntropyVJP" not in prepare.FALLBACK_PRIMITIVES
     assert set(prepare.CROSS_ENTROPY_PRIMITIVES) <= set(prepare.FAST_PRIMITIVES)
     backend = (here / "backend.cpp").read_text(encoding="utf-8")
-    # Only the FFT port follows it.
+    # Only the FFT and vector attention ports follow it.
     assert backend.rstrip().endswith(
         '#include "mlx/backend/no_gpu/crosstl_cross_entropy.inc"\n'
         "// And the port of FFT, whose inputs take the strided copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_fft.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_fft.inc"\n'
+        "// And the port of the vector attention kernels, whose views take the copy.\n"
+        '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"'
     )
     # The upstream op audit owns the cross-entropy dispatches.
     assert layout.PREFIX in verify_upstream_ops.RETAINED_VALUES

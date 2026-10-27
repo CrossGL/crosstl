@@ -32,6 +32,7 @@ from demos.integrations.mlx.portable_host import (
     matmul_layout,
     qmm_layout,
     scan_layout,
+    sdpa_layout,
     segmented_mm_layout,
 )
 from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
@@ -105,6 +106,10 @@ from demos.integrations.mlx.portable_host.qmm_packages import (
 )
 from demos.integrations.mlx.portable_host.qmm_packages import QuantizedQmmPackageCache
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
+from demos.integrations.mlx.portable_host.sdpa_packages import (
+    CACHE_DIRECTORY as SDPA_CACHE,
+)
+from demos.integrations.mlx.portable_host.sdpa_packages import SdpaPackageCache
 from demos.integrations.mlx.portable_host.segmented_mm_packages import (
     SEGMENTED_MM_CACHE,
     SegmentedMmPackageCache,
@@ -131,6 +136,7 @@ MATRIX_FAMILIES = {
     "gemm-splitk": gemm_splitk_layout.ENTRY_PREFIXES,
     "conv": conv_layout.ENTRY_PREFIXES,
     "fft": fft_layout.ENTRY_PREFIXES,
+    "sdpa": sdpa_layout.ENTRY_PREFIXES,
 }
 # Quantized products run through the same executor. Their own upstream
 # verifiers translate their packages ahead; any other test that reaches one
@@ -205,6 +211,7 @@ class LazyPackages:
             ),
             "conv": ConvPackageCache(mlx_root, packages / CONV_CACHE, target),
             "fft": FftPackageCache(mlx_root, packages / FFT_CACHE, target),
+            "sdpa": SdpaPackageCache(mlx_root, packages / SDPA_CACHE, target),
             "quantized-mv": QuantizedMatmulPackageCache(
                 mlx_root, packages / QUANTIZED_MV_CACHE, target
             ),

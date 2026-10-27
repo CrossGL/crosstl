@@ -51,8 +51,43 @@ COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
 FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm", "CrossEntropy")
 NORMALIZATION_PRIMITIVES = ("LayerNorm", "RMSNorm", "LayerNormVJP", "RMSNormVJP")
 CROSS_ENTROPY_PRIMITIVES = ("CrossEntropy", "CrossEntropyVJP")
-# fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors.
-FAST_PRIMITIVES = (*NORMALIZATION_PRIMITIVES, *CROSS_ENTROPY_PRIMITIVES, "ConvertFP8")
+# fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors; sdpa.inc
+# ports the forward attention, whose use_fallback and supports_bool_mask
+# no_gpu defines outright (ATTENTION_DEFINITIONS).
+FAST_PRIMITIVES = (
+    *NORMALIZATION_PRIMITIVES,
+    *CROSS_ENTROPY_PRIMITIVES,
+    "ConvertFP8",
+    "ScaledDotProductAttention",
+)
+# no_gpu's attention definitions that sdpa.inc replaces with
+# scaled_dot_product_attention.cpp's.
+ATTENTION_DEFINITIONS = (
+    """bool fast::ScaledDotProductAttention::use_fallback(
+    const array& q,
+    const array& k,
+    const array& v,
+    bool has_mask,
+    bool has_arr_mask,
+    bool do_causal,
+    bool has_sinks,
+    bool is_training,
+    bool output_logsumexp,
+    bool force_fused,
+    Stream s) {
+  if (force_fused) {
+    throw std::invalid_argument(
+        "[scaled_dot_product_attention] force_fused=True but no fused "
+        "kernel is available in CPU backend.");
+  }
+  return true;
+}
+""",
+    """bool fast::ScaledDotProductAttention::supports_bool_mask() {
+  return false;
+}
+""",
+)
 
 
 def replace_once(text, before, after):
@@ -128,6 +163,12 @@ def adapted_sources(original, primitives, events):
             f"{macro}({primitive})",
             f"// {primitive} is implemented by the registered native dispatch backend.",
         )
+    for definition in ATTENTION_DEFINITIONS:
+        primitives = replace_once(
+            primitives,
+            definition,
+            "// sdpa.inc ports this ScaledDotProductAttention member.\n",
+        )
     events = replace_once(
         events,
         "void Event::wait(Stream stream) {",
@@ -176,6 +217,7 @@ else()
         "crosstl_conv.inc": (HERE / "conv.inc").read_bytes(),
         "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
         "crosstl_fft.inc": (HERE / "fft.inc").read_bytes(),
+        "crosstl_sdpa.inc": (HERE / "sdpa.inc").read_bytes(),
     }
 
 

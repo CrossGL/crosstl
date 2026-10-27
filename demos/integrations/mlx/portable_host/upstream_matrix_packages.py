@@ -40,6 +40,7 @@ ORDER = (
     "gather-mv",
     "conv",
     "fft",
+    "sdpa",
 )
 _CACHES = {}
 
