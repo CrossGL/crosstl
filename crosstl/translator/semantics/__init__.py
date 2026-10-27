@@ -38,6 +38,7 @@ from .constant_reference_layouts import (
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .declaration_scopes import separate_initializer_scopes
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
+from .default_buffer_layouts import mark_default_buffer_layouts
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -378,6 +379,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     declare_interface_block_instances(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
     hoist_constant_reference_layouts(program, report.target)

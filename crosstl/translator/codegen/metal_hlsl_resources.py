@@ -29,6 +29,7 @@ from ..ast import (
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
+    STD430_LAYOUT,
     declared_buffer_layout,
     member_explicit_alignment,
 )
@@ -36,9 +37,12 @@ from .hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
     HlslLayoutError,
-    buffer_layout_from_attributes,
 )
 from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
+
+# Element layouts of structured buffers and buffer pointers that Metal declarations reproduce: HLSL's, and the
+# std430 rules of a CrossGL buffer (marked by ``semantics.default_buffer_layouts`` where MSL's differ).
+ELEMENT_LAYOUTS = (HLSL_STRUCTURED_LAYOUT, STD430_LAYOUT)
 
 
 def metal_layout_refusal(message, layout):
@@ -216,8 +220,8 @@ class MetalHlslResourceMixin:
                 ):
                     self.metal_hlsl_cbuffer_array_members[member.name] = member
         for node in self.metal_hlsl_structured_declarations(ast):
-            layout = buffer_layout_from_attributes(getattr(node, "attributes", None))
-            if layout != HLSL_STRUCTURED_LAYOUT:
+            layout = declared_buffer_layout(getattr(node, "attributes", None))
+            if layout not in ELEMENT_LAYOUTS:
                 continue
             vtype = getattr(
                 node,
@@ -228,22 +232,22 @@ class MetalHlslResourceMixin:
                 # A helper's buffer pointer: its pointee gets the storage of the buffers passed to it.
                 self.metal_hlsl_pointer_parameters[id(node)] = (
                     self.metal_hlsl_pointer_storage(
-                        planner, node, vtype.pointee_type, "pointer"
+                        planner, node, vtype.pointee_type, "pointer", layout
                     )
                 )
                 continue
             if isinstance(vtype, ArrayType) and isinstance(node, ParameterNode):
                 if vtype.size is not None:
                     raise metal_layout_refusal(
-                        f"Cannot reproduce the HLSL structured-buffer layout of array "
+                        f"Cannot reproduce the {LAYOUT_LABELS[layout]} buffer layout of array "
                         f"parameter '{node.name}' in Metal: only a runtime-sized buffer "
                         "parameter takes a buffer layout",
-                        HLSL_STRUCTURED_LAYOUT,
+                        layout,
                     )
                 # A bound runtime array (``var<storage> x: array<T>``) is a buffer pointer in Metal.
                 self.metal_hlsl_pointer_parameters[id(node)] = (
                     self.metal_hlsl_pointer_storage(
-                        planner, node, vtype.element_type, "buffer parameter"
+                        planner, node, vtype.element_type, "buffer parameter", layout
                     )
                 )
                 continue
@@ -252,42 +256,47 @@ class MetalHlslResourceMixin:
                 continue
             element_type = type_name.split("<", 1)[1][:-1].strip()
             try:
-                storage = planner.plan_structured_element(element_type)
+                storage = planner.plan_structured_element(element_type, layout)
             except HlslLayoutError as exc:
                 raise metal_layout_refusal(
-                    f"Cannot reproduce the HLSL layout of structured buffer "
+                    f"Cannot reproduce the {LAYOUT_LABELS[layout]} layout of structured buffer "
                     f"'{node.name}' in Metal: {exc}",
-                    HLSL_STRUCTURED_LAYOUT,
+                    layout,
                 ) from exc
             previous = self.metal_hlsl_structured_buffers.get(node.name)
             if previous is not None and previous != storage:
                 raise ValueError(
-                    f"Cannot reproduce the HLSL layouts of the structured buffers named "
+                    f"Cannot reproduce the {LAYOUT_LABELS[layout]} layouts of the structured buffers named "
                     f"'{node.name}' in Metal: they hold different element types"
                 )
             self.metal_hlsl_structured_buffers[node.name] = storage
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
 
-    def metal_hlsl_pointer_storage(self, planner, node, element_type, kind):
+    def metal_hlsl_pointer_storage(
+        self, planner, node, element_type, kind, layout=HLSL_STRUCTURED_LAYOUT
+    ):
         """The Metal storage of the elements of a pointer or runtime-array parameter marked
-        ``@buffer_layout(hlsl_structured)``."""
+        ``@buffer_layout(hlsl_structured)`` or ``@buffer_layout(std430)``."""
         element_type = self.convert_type_node_to_string(element_type)
         try:
-            return planner.plan_structured_element(str(element_type))
+            return planner.plan_structured_element(str(element_type), layout)
         except HlslLayoutError as exc:
             raise metal_layout_refusal(
-                f"Cannot reproduce the HLSL layout of {kind} "
+                f"Cannot reproduce the {LAYOUT_LABELS[layout]} layout of {kind} "
                 f"'{node.name}' in Metal: {exc}",
-                HLSL_STRUCTURED_LAYOUT,
+                layout,
             ) from exc
 
     @staticmethod
     def metal_hlsl_structured_declarations(ast):
-        """Global structured buffers, then the parameters of every function, in program order."""
+        """Global and stage structured buffers, then the parameters of every function, in program order."""
         yield from getattr(ast, "global_variables", []) or []
-        functions = list(getattr(ast, "functions", []) or [])
         stages = getattr(ast, "stages", None) or {}
-        for stage in stages.values() if isinstance(stages, dict) else stages:
+        stages = list(stages.values() if isinstance(stages, dict) else stages)
+        for stage in stages:
+            yield from getattr(stage, "local_variables", None) or []
+        functions = list(getattr(ast, "functions", []) or [])
+        for stage in stages:
             functions.extend(getattr(stage, "local_functions", None) or [])
             if getattr(stage, "entry_point", None) is not None:
                 functions.append(stage.entry_point)
