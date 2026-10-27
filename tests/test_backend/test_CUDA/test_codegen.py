@@ -155,7 +155,8 @@ class TestCudaCodeGen:
         assert "f32 y;" in result
         assert "f32 z;" in result
         assert "f32 w;" in result
-        assert "typedef struct float4 float4;" in result
+        # The self-alias declares nothing CrossGL has not already got.
+        assert "float4 float4" not in result
         assert "__device_builtin__" not in result
         assert "__builtin_align__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -7855,7 +7856,7 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(std::vector<float> h) {" in result
+        assert "void prepare(inout std::vector<float> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
         assert "u32 count(std::vector<float> h) {" in result
         assert "return h.size();" in result
@@ -10040,7 +10041,8 @@ class TestCudaCodeGen:
 
         assert "var mask: u32 = 0xffu;" in result
         assert "var bits: u32 = 0b1010u;" in result
-        assert "var oct: u32 = 0777u;" in result
+        # 0777u is octal in C++; CrossGL spells octal 0o777u.
+        assert "var oct: u32 = 0o777u;" in result
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
         assert "var hex: f32 = 0x1.0p-14f;" in result

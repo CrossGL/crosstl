@@ -6428,8 +6428,8 @@ def test_glslang_matrix_transpose_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "float3x4 sum34 @input @location(0);" in generated_code
-    assert "float4x3 m43 @output @location(0);" in generated_code
+    assert "mat3x4 sum34 @input @location(0);" in generated_code
+    assert "mat4x3 m43 @output @location(0);" in generated_code
     assert "m43 = transpose(sum34);" in generated_code
     assert "m43 = transposed;" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -6443,7 +6443,7 @@ def test_spirv_spec_outer_product_codegen_reparse():
     parse_crossgl(generated_code)
     assert "float3 column @input @location(0);" in generated_code
     assert "float2 row @input @location(1);" in generated_code
-    assert "float3x2 basis @output @location(0);" in generated_code
+    assert "mat3x2 basis @output @location(0);" in generated_code
     assert "basis = outerProduct(column, row);" in generated_code
     assert "basis = outer;" not in generated_code
     assert "spirv_OuterProduct" not in generated_code

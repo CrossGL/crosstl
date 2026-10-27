@@ -699,10 +699,23 @@ def o_fmod(inp):
     )
 
 
+def o_array_values(inp):
+    """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
+    x = inp.astype(np.int64)
+    return (16 * x + 21).astype(np.int32)
+
+
 def o_half_mul(inp):
     return (
         (inp.astype(np.float16) * np.float16(3.0)).astype(np.float16).astype(np.float32)
     )
+
+
+def o_reference_params(inp):
+    """x = inp + 5 through bump(int&); swap_pair(Pair&) leaves p = (i, x); 7x + 3i + x + 2x."""
+    x = inp.astype(np.int64) + 5
+    i = np.arange(inp.size, dtype=np.int64)
+    return (10 * x + 3 * i).astype(np.int32)
 
 
 def o_fib(inp):
@@ -733,6 +746,57 @@ def o_buffer_count(inp):
     return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
 
 
+def o_assignment_operand(inp):
+    """Assignments and compound assignments used as operands contribute the value they store."""
+    out = []
+    for x in inp.astype(np.int64):
+        b = x + 1
+        c = b * 2
+        b += 3
+        d = b - 1
+        b -= 2
+        e = -b
+        c = c + 1
+        if c > 5:
+            d = d * 2
+            f = d + 1
+        else:
+            e = e - 7
+            f = e - 1
+        b *= 3
+        out.extend([b, c, d, e, f, 10 * b])
+    return np.array(out, dtype=np.int32)
+
+
+def row_major_inputs():
+    """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
+    rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
+        np.float32
+    )
+    words = np.zeros((64, 2, 4), dtype=np.float32)
+    words[:, :, :3] = rows
+    return words.reshape(-1)
+
+
+def o_row_major_members(inp):
+    """The row-major mat4x2 results, row by row, followed by the columns read back from them."""
+    rows = inp.reshape(64, 2, 4)[:, :, :3].astype(np.float64)
+    out_w, out_o = [], []
+    for m in rows:  # m[r][c]: row r, column c
+        col = m[:, 2]
+        e = m[0, 1]
+        mv = m @ np.array([1.0, 2.0, 3.0])
+        w = np.stack(
+            [m[:, 0], m[:, 1], m[:, 2], col + e + mv[0] + mv[1]], axis=1
+        )  # 2 rows, 4 columns
+        w[0, 0] += 1.0
+        w[1, 1] += 1.0
+        w[:, 2] += 0.5
+        out_w.extend(w.reshape(-1))
+        out_o.extend([w[0, 0], w[1, 0], w[0, 1], w[1, 1]])
+    return np.array(out_w + out_o, dtype=np.float32)
+
+
 def o_mirror(inp):
     """Each 64-element group reversed: workgroup memory is shared by the group."""
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
@@ -753,6 +817,17 @@ def o_array_constants(inp):
 
 def o_warp(inp):
     return inp.astype(np.int64).reshape(-1, 32).sum(axis=1).astype(np.int32)
+
+
+def o_array_list_assignment(inp):
+    """Brace lists that read the array they replace see its old elements: a rotation, a struct swap, a row swap."""
+    out = []
+    for x in inp.astype(np.int64):
+        a = [x + 2, x, x + 1]
+        q = [(x + 5) * 100 + 1, x * 100 + 1]
+        g = 2 * 1000 + 3 * 100 + x * 10 + 1
+        out.extend(a + q + [g, x * 4, x * 2 + x * 3])
+    return np.array(out, dtype=np.int32)
 
 
 def _width_check(inp, out, group=64, divergent=False):
@@ -1593,6 +1668,15 @@ CASES = [
         lambda inp: inp[3:67].astype(np.int32),
     ),
     Case(
+        "u_reference_params",
+        "H17",
+        "int& and Pair& parameters written by the callee, const int& read",
+        "C++ lvalue reference parameters bind the caller's object",
+        SMALL[:64].copy(),
+        np.int32,
+        o_reference_params,
+    ),
+    Case(
         "m_ptr_arith",
         "H17",
         "p = inp + 3; p[i]",
@@ -1717,6 +1801,16 @@ CASES = [
         threads=128,
         group=32,
         out_count=128 * warp_cases.RESULTS,
+    ),
+    Case(
+        "x_array_list_assignment",
+        "composite",
+        "Brace lists assigned to int, struct and nested arrays whose elements read the array being assigned",
+        "GLSL 4.60 section 5.8: an assignment stores the value of its right operand, so a list's elements "
+        "are all computed before the array changes, as for the equivalent array constructor",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_array_list_assignment,
     ),
     Case(
         "m_simd_sum",
@@ -1914,6 +2008,35 @@ CASES = [
         np.int32,
         control_flow_cases.short_circuit_reference,
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_assignment_operand",
+        "control",
+        "Parenthesized =, +=, -= and *= used as operands of arithmetic, unary minus and both arms of ?:",
+        "GLSL 4.60 section 5.8: an assignment expression has the value of its left operand after the "
+        "assignment; section 5.9: ?: evaluates only the selected expression",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_assignment_operand,
+    ),
+    Case(
+        "g_row_major_members",
+        "S20",
+        "layout(row_major) mat3x2 and mat4x2 block members: matrix, column and element reads, a matrix times a "
+        "vector, whole and compound writes",
+        "GLSL 4.60 section 7.6.2.2: a row-major matrix is laid out like an array of its row vectors",
+        row_major_inputs(),
+        np.float32,
+        o_row_major_members,
+    ),
+    Case(
+        "u_array_values",
+        "H17",
+        "local, member and two-dimensional arrays read through const T v[N] parameters",
+        "C++ arrays hold N elements with the first extent outermost",
+        SMALL[:64].copy(),
+        np.int32,
+        o_array_values,
     ),
     Case(
         "u_atomic_add",

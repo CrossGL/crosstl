@@ -48398,7 +48398,8 @@ def test_hlsl_private_pointer_rejects_unprovable_rebase(body, detail):
 
             void main() {{
                 float backing[8];
-                write_values(backing, 2);
+                // A count no call bounds: a bounded one seeds the analysis.
+                write_values(backing, next_offset());
             }}
         }}
     }}
@@ -51566,7 +51567,7 @@ def test_hlsl_software_subgroup_rejects_unsupported_operation():
     assert excinfo.value.operation == "WaveActiveBitOr"
 
 
-def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():
+def test_hlsl_software_subgroup_lowers_mixed_metal_shuffle_operations():
     code = """
     shader HLSLSoftwareSubgroupMixedMetalShuffles {
         compute {
@@ -51585,14 +51586,15 @@ def test_hlsl_software_subgroup_rejects_mixed_metal_shuffle_operations():
         software_subgroup_width=32,
     )
 
-    with pytest.raises(
-        DirectXSoftwareSubgroupError,
-        match="does not support 'WaveShuffleUp'",
-    ) as excinfo:
-        codegen.generate(parse_code(tokenize_code(code)))
+    generated = codegen.generate(parse_code(tokenize_code(code)))
 
-    assert excinfo.value.reason == "operation-unsupported"
-    assert excinfo.value.operation == "WaveShuffleUp"
+    # Both plain Metal shuffles exchange through the logical subgroup scratch.
+    assert "__crossgl_software_subgroup_shuffle_down_uint(" in generated
+    assert "__crossgl_software_subgroup_shuffle_up_uint(" in generated
+    assert "bool sourceValid = delta <= lane;" in generated
+    assert "uint sourceLane = sourceValid ? lane - delta : lane;" in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveGetLaneIndex" not in generated
 
 
 def test_hlsl_software_subgroup_rejects_short_circuit_shuffle_control_flow():

@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateInitializerError,
@@ -2623,9 +2624,9 @@ def test_codegen_pre_2018_fixed_width_typedef_names_from_dxc_reparse():
 
     output = generate_crossgl(hlsl)
 
-    assert "type uint16_t = uint;" in output
-    assert "type int16_t = int;" in output
-    assert "type float64_t = float;" in output
+    assert "typedef uint uint16_t;" in output
+    assert "typedef int int16_t;" in output
+    assert "typedef float float64_t;" in output
     assert "uint16 unsignedValue;" in output
     assert "int16 signedValue;" in output
     assert "double floatValue;" in output
@@ -2637,7 +2638,7 @@ def test_codegen_const_incomplete_array_typedef_from_dxc_reparse():
     # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
     output = generate_crossgl("typedef const int inta[];")
 
-    assert "type inta = [int];" in output
+    assert "typedef int inta[];" in output
     parse_crossgl(output)
 
 
@@ -3382,7 +3383,7 @@ def test_codegen_numthreads_attribute_emitted():
 def test_codegen_enum_and_typedef():
     output = generate_crossgl(ENUM_TYPEDEF_HLSL)
     assert "enum BlendMode" in output
-    assert "type Color = vec4;" in output
+    assert "typedef vec4 Color;" in output
     parse_crossgl(output)
 
 
@@ -3401,9 +3402,9 @@ def test_codegen_using_alias_declarations_from_hlsl_spec():
 
     output = generate_crossgl(hlsl)
 
-    assert "type Float = float;" in output
-    assert "type Color = vec4;" in output
-    assert "type IndexPair = int[2];" in output
+    assert "typedef float Float;" in output
+    assert "typedef vec4 Color;" in output
+    assert "typedef int IndexPair[2];" in output
     assert "Color main(Color input) @ gl_FragData[0]" in output
     parse_crossgl(output)
 
@@ -3419,11 +3420,38 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
         }
     """)
 
+    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes.
+    with pytest.raises(
+        DirectXImportRefused, match=r"vector<half, 16> has 16 components"
+    ):
+        generate_crossgl(hlsl)
+
+
+def test_codegen_block_scope_type_aliases_stay_typedefs():
+    # Reproducer from #3309, extended with block-scope ``typedef`` and ``using``.
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> outp : register(u0);
+        typedef float real;
+
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            typedef float2 pair;
+            using count = uint;
+            real x = real(outp[id.x]);
+            pair p = pair(x, 2.0);
+            count n = (count)p.y;
+            outp[id.x] = x * p.y + n;
+        }
+    """)
+
     output = generate_crossgl(hlsl)
 
-    assert "type half16" not in output
-    assert "vec4 srcF16" not in output
-    assert "half16 srcF16 = buffer_load(BAB, 128);" in output
+    assert "typedef float real;" in output
+    assert "type real" not in output
+    assert "        typedef vec2 pair;\n" in output
+    assert "        typedef uint count;\n" in output
+    assert "real x = real(outp[id.x]);" in output
+    assert "pair p = pair(x, 2.0);" in output
     parse_crossgl(output)
 
 
@@ -3464,7 +3492,7 @@ def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
 
     output = generate_crossgl(hlsl)
 
-    assert "type type = AnonymousStruct_type[3];" in output
+    assert "typedef AnonymousStruct_type type[3];" in output
     assert "struct AnonymousStruct_type" in output
     parse_crossgl(output)
 
@@ -3488,7 +3516,7 @@ def test_codegen_directx_samples_alias_and_scoped_types_parse_crossgl():
 
     output = generate_crossgl(hlsl)
 
-    assert "type MyAttributes = BuiltInTriangleIntersectionAttributes;" in output
+    assert "typedef BuiltInTriangleIntersectionAttributes MyAttributes;" in output
     assert "SignedDistancePrimitive_Enum primitiveType" in output
     assert "SignedDistancePrimitive_Enum localPrimitive" in output
     assert "SignedDistancePrimitive_Enum(primitiveType)" in output
@@ -7698,7 +7726,7 @@ def test_codegen_linalg_post_type_attributes_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "type Mat10by20 = __builtin_LinAlgMatrix;" in output
+    assert "typedef __builtin_LinAlgMatrix Mat10by20;" in output
     assert "void f2(__builtin_LinAlgMatrix mat2_)" in output
     assert "__builtin_LinAlgMatrix mat1;" in output
     assert "Mat10by20 f3()" in output
@@ -7729,7 +7757,7 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "type MyHandleT = __builtin_LinAlgMatrix;" in output
+    assert "typedef __builtin_LinAlgMatrix MyHandleT;" in output
     assert "@ numthreads(4, 4, 4)" in output
     assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
     parse_crossgl(output)

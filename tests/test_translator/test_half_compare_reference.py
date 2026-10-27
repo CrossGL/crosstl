@@ -49,7 +49,7 @@ def test_hlsl_compares_against_a_half_reference(tmp_path):
     path = tmp_path / "shader.hlsl"
     path.write_text(hlsl)
     result = subprocess.run(
-        [dxc, "-T", "ps_6_2", "-enable-16bit-types", "-E", "frag_main", str(path)],
+        [dxc, "-T", "ps_6_2", "-enable-16bit-types", "-E", "PSMain", str(path)],
         capture_output=True,
         text=True,
     )

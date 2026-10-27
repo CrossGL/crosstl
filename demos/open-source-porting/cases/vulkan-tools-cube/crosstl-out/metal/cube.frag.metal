@@ -31,6 +31,6 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float>
     float3 dY = dfdy(input.frag_pos);
     float3 normal = normalize(cross(dX, dY));
     float light = max(0.0, dot(lightDir, normal));
-    uFragColor = linearToSrgb(float4(light) * tex.sample(sampler(mag_filter::linear, min_filter::linear), input.texcoord.xy));
+    uFragColor = linearToSrgb(light * tex.sample(sampler(mag_filter::linear, min_filter::linear), input.texcoord.xy));
     return uFragColor;
 }
