@@ -1882,6 +1882,54 @@ class TestHipCodeGen:
         assert "expf(q)" not in hip_code
         assert "powf(h" not in hip_code
 
+    def test_half_vector_mix_fract_step_atan_fma_use_float_helpers(self):
+        source_code = """
+        shader M {
+            f16vec3 f(f16vec3 v, f16vec3 w, half s) {
+                f16vec3 e = mix(v, w, s);
+                f16vec3 g = fract(v);
+                f16vec3 h = step(w, v);
+                f16vec3 m = atan(v, w);
+                f16vec3 o = fma(v, w, v);
+                return e + g + h + m + o;
+            }
+            f16vec4 q(f16vec4 v) {
+                return fract(v);
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "cgl_half3 e = cgl_cgl_half3_mix_scalar(v, w, s);" in hip_code
+        assert "cgl_half3 g = cgl_cgl_half3_fract(v);" in hip_code
+        assert (
+            "cgl_half3 h = cgl_cgl_half3_step_vector_edge_vector_value(w, v);"
+            in hip_code
+        )
+        assert "cgl_half3 m = cgl_cgl_half3_atan2(v, w);" in hip_code
+        assert (
+            "cgl_half3 o = cgl_cgl_half3_fma_cgl_half3_xyz_cgl_half3_xyz_cgl_half3_xyz(v, w, v);"
+            in hip_code
+        )
+        assert "return cgl_cgl_half4_fract(v);" in hip_code
+        assert "__float2half(cgl_fract_float(__half2float(value.x)))" in hip_code
+        assert "__float2half((__half2float(x.x)" in hip_code
+        assert (
+            "__float2half(((__half2float(value.x)) < (__half2float(edge.x))" in hip_code
+        )
+        assert "__float2half(atan2f(__half2float(y.x), __half2float(x.x)))" in hip_code
+        assert (
+            "__float2half(fmaf(__half2float(arg0.x), __half2float(arg1.x), __half2float(arg2.x)))"
+            in hip_code
+        )
+        assert "cgl_half3 e = mix(v, w, s);" not in hip_code
+        assert "cgl_half3 g = fract(v);" not in hip_code
+        assert "cgl_half3 h = step(w, v);" not in hip_code
+        assert "cgl_half3 m = atanf(v, w);" not in hip_code
+        assert "cgl_half3 o = fmaf(v, w, v);" not in hip_code
+
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
         shader Widen {
