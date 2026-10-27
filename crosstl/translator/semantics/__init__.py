@@ -85,6 +85,7 @@ from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
 )
+from .local_structs import LocalStructUnsupportedError, hoist_local_structs
 from .lower import Lowerer, RuleInexpressibleError
 from .matrix_spellings import (
     AmbiguousMatrixSpellingError,
@@ -185,6 +186,7 @@ __all__ = [
     "ImplicitLodStageUnsupportedError",
     "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
+    "LocalStructUnsupportedError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
@@ -238,6 +240,7 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
+    Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -327,6 +330,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    hoist_local_structs(program, report.target)
     refuse_undeclared_types(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)

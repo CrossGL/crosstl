@@ -3,6 +3,7 @@
 import re
 from decimal import Decimal, InvalidOperation
 
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
@@ -755,6 +756,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         for node in [*ast.structs, *local_structs]:
             if self.is_forward_struct_declaration(node):
                 continue
+            if getattr(node, "is_block_declaration", False):
+                # Written in its block by generate_function_body.
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
@@ -1310,9 +1314,24 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        }
+        if names & {"ref", "__ref"}:
+            # A Slang ref parameter names the caller's storage (Slang language reference, "ref" parameters);
+            # CrossGL inout copies in and copies out, which differs whenever the argument aliases other storage.
+            raise SlangImportRefused(
+                [
+                    f"ref parameter {param.name} binds the caller's storage; CrossGL "
+                    "has only copy-in/copy-out inout parameters"
+                ]
+            )
         if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+            # out and inout carry the parameter's direction for every function, not only for entry points.
+            allowed_qualifiers = {"out", "inout"}
+        else:
+            allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
@@ -1341,6 +1360,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         for stmt in body:
             if isinstance(stmt, DeferNode):
                 deferred_statements.append(stmt.body)
+                continue
+            if isinstance(stmt, StructNode) and getattr(
+                stmt, "is_block_declaration", False
+            ):
+                code += self.generate_block_struct(stmt, indent)
                 continue
             if isinstance(stmt, StructNode) and getattr(
                 stmt, "is_local_declaration", False
@@ -1428,6 +1452,36 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 code += "discard;\n"
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
+
+    def generate_block_struct(self, node, indent):
+        """Write a structure declared in a function body as a CrossGL block-scoped structure."""
+        unsupported = [
+            label
+            for label, field in (
+                ("member functions", "methods"),
+                ("nested type aliases", "typedefs"),
+                ("nested enumerations", "enums"),
+                ("nested structures", "structs"),
+                ("generic parameters", "generic_parameters"),
+                ("interface conformances", "conformances"),
+            )
+            if getattr(node, field, None)
+        ]
+        if unsupported:
+            raise SlangImportRefused(
+                [
+                    f"Slang structure '{node.name}' declared in a function body has "
+                    f"{' and '.join(unsupported)}, which a CrossGL block-scoped "
+                    "structure does not carry"
+                ]
+            )
+        pad = "    " * indent
+        code = f"{pad}struct {self.format_struct_declaration_name(node)} {{\n"
+        for member in node.members:
+            code += self.matrix_layout_attributes(member, indent + 1)
+            code += f"{pad}    {self.generate_struct_member(node, member)};\n"
+        # The semicolon keeps a following statement from reading as a declarator.
+        return code + f"{pad}}};\n"
 
     def generate_statement_label(self, stmt, indent=0):
         label = getattr(stmt, "label", None)
@@ -2135,8 +2189,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
         if not float_like and integer_suffix:
-            return self.normalize_integer_suffix(body, integer_suffix)
-        if not float_like or integer_suffix:
+            return crossgl_legacy_octal(
+                self.normalize_integer_suffix(body, integer_suffix)
+            )
+        if not float_like:
+            return crossgl_legacy_octal(value)
+        if integer_suffix:
             return value
 
         try:
@@ -2509,7 +2567,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
 
         def visit_statement(statement):
             if isinstance(statement, StructNode):
-                if getattr(statement, "is_local_declaration", False):
+                if getattr(statement, "is_local_declaration", False) or getattr(
+                    statement, "is_block_declaration", False
+                ):
                     marker = id(statement)
                     if marker not in seen:
                         seen.add(marker)

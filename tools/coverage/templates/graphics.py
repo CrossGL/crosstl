@@ -13,6 +13,7 @@ from . import (
     composites,
     constructors,
     declarations,
+    edges,
     evaluation,
     functions,
     lvalues,
@@ -65,6 +66,7 @@ GLSL = {
     **C_FAMILY,
     **aggregates.FAMILY,
     **values.FAMILY,
+    **edges.FAMILY,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -179,6 +181,7 @@ HLSL = {
     **evaluation.HLSL,
     **values.FAMILY,
     **values.HLSL,
+    **edges.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -331,6 +334,8 @@ METAL = {
     **aggregates.METAL,
     **values.FAMILY,
     **values.METAL,
+    **edges.FAMILY,
+    **edges.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -528,6 +533,7 @@ WGSL = {
     **lvalues.WGSL,
     **aggregates.WGSL,
     **values.WGSL,
+    **edges.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

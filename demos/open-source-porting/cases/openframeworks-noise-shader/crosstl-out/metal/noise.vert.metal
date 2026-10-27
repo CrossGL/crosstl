@@ -24,12 +24,12 @@ float4 rand(float2 A, float2 B, float2 C, float2 D) {
 float noise(float2 coord, float d) {
     float2 C[4];
     float d1 = 1.0 / d;
-    C[0] = floor(coord * float2(d)) * d1;
+    C[0] = floor(coord * d) * d1;
     C[1] = C[0] + float2(d1, 0.0);
     C[2] = C[0] + float2(d1, d1);
     C[3] = C[0] + float2(0.0, d1);
-    float2 p = fract(coord * float2(d));
-    float2 q = float2(1.0) - p;
+    float2 p = fract(coord * d);
+    float2 q = 1.0 - p;
     float4 w = float4(q.x * q.y, p.x * q.y, p.x * p.y, q.x * p.y);
     return dot(float4(rand(C[0], C[1], C[2], C[3])), w);
 }

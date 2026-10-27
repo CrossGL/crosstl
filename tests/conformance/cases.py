@@ -699,10 +699,23 @@ def o_fmod(inp):
     )
 
 
+def o_array_values(inp):
+    """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
+    x = inp.astype(np.int64)
+    return (16 * x + 21).astype(np.int32)
+
+
 def o_half_mul(inp):
     return (
         (inp.astype(np.float16) * np.float16(3.0)).astype(np.float16).astype(np.float32)
     )
+
+
+def o_reference_params(inp):
+    """x = inp + 5 through bump(int&); swap_pair(Pair&) leaves p = (i, x); 7x + 3i + x + 2x."""
+    x = inp.astype(np.int64) + 5
+    i = np.arange(inp.size, dtype=np.int64)
+    return (10 * x + 3 * i).astype(np.int32)
 
 
 def o_fib(inp):
@@ -731,6 +744,28 @@ def o_buffer_length(inp, header=4):
 def o_buffer_count(inp):
     n = len(inp)
     return (np.roll(inp, -1).astype(np.int64) + (n << 16)).astype(np.int32)
+
+
+def o_assignment_operand(inp):
+    """Assignments and compound assignments used as operands contribute the value they store."""
+    out = []
+    for x in inp.astype(np.int64):
+        b = x + 1
+        c = b * 2
+        b += 3
+        d = b - 1
+        b -= 2
+        e = -b
+        c = c + 1
+        if c > 5:
+            d = d * 2
+            f = d + 1
+        else:
+            e = e - 7
+            f = e - 1
+        b *= 3
+        out.extend([b, c, d, e, f, 10 * b])
+    return np.array(out, dtype=np.int32)
 
 
 def row_major_inputs():
@@ -1633,6 +1668,15 @@ CASES = [
         lambda inp: inp[3:67].astype(np.int32),
     ),
     Case(
+        "u_reference_params",
+        "H17",
+        "int& and Pair& parameters written by the callee, const int& read",
+        "C++ lvalue reference parameters bind the caller's object",
+        SMALL[:64].copy(),
+        np.int32,
+        o_reference_params,
+    ),
+    Case(
         "m_ptr_arith",
         "H17",
         "p = inp + 3; p[i]",
@@ -1966,6 +2010,16 @@ CASES = [
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
     ),
     Case(
+        "g_assignment_operand",
+        "control",
+        "Parenthesized =, +=, -= and *= used as operands of arithmetic, unary minus and both arms of ?:",
+        "GLSL 4.60 section 5.8: an assignment expression has the value of its left operand after the "
+        "assignment; section 5.9: ?: evaluates only the selected expression",
+        np.arange(-20, 44, dtype=np.int32),
+        np.int32,
+        o_assignment_operand,
+    ),
+    Case(
         "g_row_major_members",
         "S20",
         "layout(row_major) mat3x2 and mat4x2 block members: matrix, column and element reads, a matrix times a "
@@ -1974,6 +2028,15 @@ CASES = [
         row_major_inputs(),
         np.float32,
         o_row_major_members,
+    ),
+    Case(
+        "u_array_values",
+        "H17",
+        "local, member and two-dimensional arrays read through const T v[N] parameters",
+        "C++ arrays hold N elements with the first extent outermost",
+        SMALL[:64].copy(),
+        np.int32,
+        o_array_values,
     ),
     Case(
         "u_atomic_add",

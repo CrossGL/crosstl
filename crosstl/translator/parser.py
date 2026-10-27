@@ -79,6 +79,7 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .codegen.array_utils import evaluate_literal_int_expression
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
@@ -2104,6 +2105,26 @@ class Parser:
 
         return self.parse_type()
 
+    def parse_array_template_type(self):
+        """Parse ``array<T, N>`` as the ``ArrayType`` that ``T name[N]`` declares, wherever a type is written.
+
+        Parameters, locals, struct members, globals and return types all take this spelling, and a plain
+        ``NamedType`` left every generator without array semantics for it. Two forms keep the ``array`` template
+        type: an extent of zero, the zero-extent standard array that C-style ``T name[0]`` cannot declare
+        (MSL 2.3.4 ``array<T, 0>``), and ``array<T>`` with no extent, whose meaning depends on where it is declared.
+        """
+        self.eat("IDENTIFIER")
+        generic_args = self.parse_generic_arguments()
+        if len(generic_args) == 2:
+            element_type, extent = generic_args
+            if isinstance(element_type, IdentifierNode):
+                element_type = NamedType(element_type.name, [])
+            if isinstance(element_type, TypeNode) and (
+                evaluate_literal_int_expression(extent) != 0
+            ):
+                return ArrayType(element_type, extent)
+        return NamedType("array", generic_args)
+
     def current_token_starts_var_address_space_declaration(self):
         """Return whether the current token starts ``var<address-space>`` syntax."""
         return self.current_token[0] == "VAR" and self.peek()[0] == "LESS_THAN"
@@ -2779,6 +2800,13 @@ class Parser:
 
         elif self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "def":
             base_type = self.parse_callable_type()
+
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "array"
+            and self.peek()[0] == "LESS_THAN"
+        ):
+            base_type = self.parse_array_template_type()
 
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
@@ -4147,6 +4175,11 @@ class Parser:
         """Parse any statement form supported by CrossGL."""
         if self.current_token_starts_statement_attribute():
             return self.parse_attributed_statement()
+        if self.current_token[0] == "SEMICOLON":
+            # A null statement does nothing (GLSL 4.60 section 6.1, C++ [stmt.expr]/1): it adds no node, and a
+            # braceless body made of one becomes an empty block through parse_substatement.
+            self.eat("SEMICOLON")
+            return []
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -4175,6 +4208,9 @@ class Parser:
             return ContinueNode()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.current_token[0] == "STRUCT" and self.peek()[0] == "IDENTIFIER":
+            # A structure declared in a block; semantics.local_structs hoists it to module scope.
+            return self.parse_local_struct_statement()
         elif self.current_token_starts_inferred_var_declaration():
             return self.parse_inferred_var_declaration()
         elif self.is_variable_declaration():
@@ -4188,6 +4224,35 @@ class Parser:
                 return ExpressionStatementNode(expr, is_tail_expression=True)
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
+
+    def parse_local_struct_statement(self):
+        """Parse ``struct Name { ... } [declarators];`` in a block, refusing one it cannot read.
+
+        Declarators after the closing brace (``struct S { float x; } a, b[2];``) declare variables of the
+        structure, as in C and GLSL, and follow it in the block.
+        """
+        node = self.parse_struct()
+        if not isinstance(node, StructNode):
+            raise SyntaxError(
+                "CrossGL could not parse the structure declared in a block, at "
+                f"{self.current_token[0]} {self.current_token[1]!r}"
+            )
+        node.is_local_declaration = True
+        if self.peek(-1)[0] == "SEMICOLON" or not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.peek()[0] in {"SEMICOLON", "COMMA", "LBRACKET", "EQUALS"}
+        ):
+            return node
+        declarations = []
+        while True:
+            declarations.append(
+                self.parse_variable_declarator(NamedType(node.name), [], [])
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        self.eat("SEMICOLON")
+        return [node, *declarations]
 
     def current_token_starts_statement_attribute(self):
         """Return whether the current token starts statement-level metadata."""
@@ -6504,6 +6569,10 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if cases and not cases[-1].statements:
+            # GLSL ES 3.00 section 6.2 and C++ [stmt.label] (before C++23), which MSL and HLSL follow, need a
+            # statement after the last label. Leaving the switch from there is what that label already does.
+            cases[-1].statements.append(BreakNode())
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):
