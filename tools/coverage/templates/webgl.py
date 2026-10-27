@@ -12,6 +12,7 @@ from .abstractions import FAMILY as _ABSTRACTIONS
 from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
+from .blocks import WEBGL as _BLOCKS
 from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
@@ -87,6 +88,7 @@ WEBGL = {
     **_HELPERS,
     **_LAYOUTS,
     **_ELEMENTS,
+    **_BLOCKS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

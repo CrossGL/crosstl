@@ -43,6 +43,7 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.blocks import CROSSGL as BLOCKS_CROSSGL
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
 from .templates.forms import FAMILY as FORMS
@@ -599,6 +600,7 @@ CONSTRUCTS: dict[str, Template] = {
     **HELPERS_CROSSGL,
     **LAYOUTS_CROSSGL,
     **ELEMENTS_CROSSGL,
+    **BLOCKS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

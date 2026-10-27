@@ -377,6 +377,20 @@ def test_a_kernel_template_can_give_the_output_element_type():
     assert "vec4* outp" in crossgl_probe
 
 
+def test_a_uniform_float_array_reads_one_word_per_row_in_every_language():
+    # std140 and a cbuffer give each float its own 16-byte row; languages that pack a float array declare vectors.
+    padded = probes.build(_feature("glsl", "uniform-array"), "glsl").source
+    assert "float w[4];" in padded and "+ w[k])" in padded
+    for language, declaration in (
+        ("metal", "float4 w[4];"),
+        ("wgsl", "w: array<vec4<f32>, 4>,"),
+        ("cuda", "float4 w[4];"),
+        ("rust", "w: [Vec4; 4],"),
+    ):
+        source = probes.build(_feature(language, "uniform-array"), language).source
+        assert declaration in source and "w[k].x" in source
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {

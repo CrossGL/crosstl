@@ -9,6 +9,7 @@ from . import (
     abstractions,
     aggregates,
     assignments,
+    blocks,
     branches,
     calls,
     composites,
@@ -90,6 +91,7 @@ GLSL = {
     **helpers.GLSL,
     **layouts.GLSL,
     **elements.GLSL,
+    **blocks.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -214,6 +216,7 @@ HLSL = {
     **helpers.FAMILY,
     **layouts.FAMILY,
     **elements.FAMILY,
+    **blocks.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -383,6 +386,7 @@ METAL = {
     **helpers.METAL,
     **layouts.METAL,
     **elements.METAL,
+    **blocks.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -590,6 +594,7 @@ WGSL = {
     **helpers.WGSL,
     **layouts.WGSL,
     **elements.WGSL,
+    **blocks.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
