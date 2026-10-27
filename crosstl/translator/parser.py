@@ -4147,6 +4147,11 @@ class Parser:
         """Parse any statement form supported by CrossGL."""
         if self.current_token_starts_statement_attribute():
             return self.parse_attributed_statement()
+        if self.current_token[0] == "SEMICOLON":
+            # A null statement does nothing (GLSL 4.60 section 6.1, C++ [stmt.expr]/1): it adds no node, and a
+            # braceless body made of one becomes an empty block through parse_substatement.
+            self.eat("SEMICOLON")
+            return []
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -6504,6 +6509,10 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if cases and not cases[-1].statements:
+            # GLSL ES 3.00 section 6.2 and C++ [stmt.label] (before C++23), which MSL and HLSL follow, need a
+            # statement after the last label. Leaving the switch from there is what that label already does.
+            cases[-1].statements.append(BreakNode())
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):
