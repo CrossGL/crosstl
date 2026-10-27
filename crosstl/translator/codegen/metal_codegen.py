@@ -10294,6 +10294,26 @@ class MetalCodeGen(
                     )
                     if common is not None:
                         return f"{common}{self.vector_value_width(left_mapped)}"
+            if self.is_vector_value_type(left_type) != self.is_vector_value_type(
+                right_type
+            ):
+                # metal_hlsl_values.py: vector op scalar has the common component type.
+                vector_type, scalar = (
+                    (left_type, expr.right)
+                    if self.is_vector_value_type(left_type)
+                    else (right_type, expr.left)
+                )
+                vector_mapped = self.map_type(vector_type)
+                component = self.vector_component_type(vector_mapped)
+                common = (
+                    self.metal_vector_scalar_common_component(
+                        operator, component, scalar
+                    )
+                    if component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                    else None
+                )
+                if common is not None and common != component:
+                    return f"{common}{self.vector_value_width(vector_mapped)}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
