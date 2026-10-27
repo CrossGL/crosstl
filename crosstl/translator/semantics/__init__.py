@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .aggregate_equality import (
+    AggregateEqualityOperandError,
+    AggregateEqualityUnsupportedError,
+    lower_aggregate_equality,
+)
 from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
@@ -149,6 +154,8 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
+    "AggregateEqualityOperandError",
+    "AggregateEqualityUnsupportedError",
     "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
     "BindingIndexUnresolvedError",
@@ -242,8 +249,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
-    scalars become vector constructors (:mod:`.scalar_swizzles`). ``&&``/``||`` on boolean vectors become ``and``/``or``
-    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
+    scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
+    structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
+    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
@@ -340,6 +348,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
+    lower_aggregate_equality(program, report.target)
     lower_vector_logic(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
