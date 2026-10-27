@@ -56,6 +56,13 @@ class _Aggregate:
 
 
 @dataclass(frozen=True)
+class _Handle:
+    """An opaque pointer, buffer or texture: it may be passed on, but reads through it are unknown."""
+
+    source_type: object
+
+
+@dataclass(frozen=True)
 class _CallResult:
     value: object
     updates: dict
@@ -82,6 +89,37 @@ class _ReturnAnalysis:
         if "volatile" in name.split():
             return {}
         return self.generator.glsl_struct_member_types(name)
+
+    def is_empty_aggregate(self, source_type):
+        """Whether ``source_type`` is a declared struct without instance members.
+
+        Such a value, for example a tag or an ``integral_constant`` whose only member is
+        static, carries no state, so it is fully known even when it is a caller's value.
+        """
+        if source_type is None or isinstance(
+            source_type, (PointerType, ReferenceType, ArrayType)
+        ):
+            return False
+        generator = self.generator
+        name = generator.glsl_source_type_identifier_name(
+            generator.type_name_string(source_type) or ""
+        )
+        members = generator.struct_member_types.get(name)
+        return members is not None and not members
+
+    def is_handle_type(self, source_type):
+        """Whether ``source_type`` is a pointer, a structured buffer or an opaque texture or sampler."""
+        if isinstance(source_type, PointerType):
+            return True
+        if source_type is None or isinstance(source_type, (ReferenceType, ArrayType)):
+            return False
+        generator = self.generator
+        return bool(
+            generator.is_structured_buffer_type(source_type)
+            or generator.is_opaque_resource_type(
+                generator.type_name_string(source_type)
+            )
+        )
 
     def owned_path(self, expression):
         if isinstance(expression, IdentifierNode):
@@ -157,7 +195,7 @@ class _ReturnAnalysis:
             for value in values
         ):
             return None
-        if isinstance(first, _MetadataArray):
+        if isinstance(first, (_MetadataArray, _Handle)):
             return first if all(value == first for value in values) else None
         if isinstance(first, _Aggregate):
             return _Aggregate(
@@ -259,6 +297,10 @@ class _ReturnAnalysis:
                     for member in fields
                 },
             )
+        if self.is_empty_aggregate(
+            source_type
+        ) and generator.glsl_side_effect_free_expression(expression):
+            return _Aggregate(source_type, {})
         if isinstance(expression, IdentifierNode):
             prefix = f"@metadata:{expression.name}["
             elements = {}
@@ -281,6 +323,8 @@ class _ReturnAnalysis:
                 elements[int(index)] = value
             if elements:
                 return _MetadataArray(source_type, elements)
+            if self.is_handle_type(source_type):
+                return _Handle(source_type)
         info = generator.glsl_value_type_info(source_type)
         if info is not None and 2 <= info["width"] <= 4:
             components = tuple(
@@ -294,8 +338,8 @@ class _ReturnAnalysis:
         if (
             left is None
             or right is None
-            or isinstance(left, (_MetadataArray, _Aggregate))
-            or isinstance(right, (_MetadataArray, _Aggregate))
+            or isinstance(left, (_MetadataArray, _Aggregate, _Handle))
+            or isinstance(right, (_MetadataArray, _Aggregate, _Handle))
         ):
             return None
         source_type = self.generator.glsl_common_arithmetic_type(
@@ -453,7 +497,7 @@ class _ReturnAnalysis:
             return _Value(source_type, result) if result is not None else None
         if isinstance(expression, BinaryOpNode):
             operator = generator.map_operator(expression.op)
-            if operator not in {"+", "-", "*", "/", "%"}:
+            if operator not in {"+", "-", "*", "/", "%", "&", "|", "^"}:
                 return None
             left = self.expression(expression.left, bindings, active)
             right = self.expression(expression.right, bindings, active)
@@ -464,7 +508,7 @@ class _ReturnAnalysis:
             name = generator.function_call_name(expression)
             arguments = list(expression.arguments or ())
             values = [
-                self.expression(argument, bindings, active) for argument in arguments
+                self.argument(argument, bindings, active) for argument in arguments
             ]
             if any(value is None for value in values):
                 return None
@@ -481,7 +525,29 @@ class _ReturnAnalysis:
             return self.call(expression, values, active)
         return None
 
+    def argument(self, argument, bindings, active):
+        """Evaluate a call argument; an untyped caller name may still bind a handle parameter.
+
+        Resource specialization can leave a caller's hidden buffer argument without a source
+        type. Such a name can only bind a pointer or resource parameter (see ``score``), and
+        every read through that parameter is unknown, so no value is invented for it.
+        """
+        value = self.expression(argument, bindings, active)
+        if (
+            value is None
+            and bindings is None
+            and isinstance(argument, IdentifierNode)
+            and self.generator.glsl_source_expression_type(argument) is None
+        ):
+            return _Handle(None)
+        return value
+
     def score(self, value, parameter):
+        if isinstance(value, _Handle):
+            if not self.is_handle_type(parameter.param_type):
+                return None
+            if value.source_type is None:
+                return 0
         if isinstance(
             value, _MetadataArray
         ) and self.generator.is_structured_buffer_type(value.source_type):
@@ -670,6 +736,12 @@ class _ReturnAnalysis:
                 ):
                     return None
                 bindings[parameter.name] = _MetadataArray(source_type, value.elements)
+                readonly.add(parameter.name)
+                continue
+            if isinstance(value, _Handle):
+                if not self.is_handle_type(source_type):
+                    return None
+                bindings[parameter.name] = _Handle(source_type)
                 readonly.add(parameter.name)
                 continue
             if (

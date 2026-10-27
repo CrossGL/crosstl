@@ -109,7 +109,7 @@ def dispatches():
             for shape in CONSTANT_SHAPES
             if math.prod(shape)
         )
-    sequence.extend(
-        [(COPY_ENTRY, 6), ("v_copyint32float32", 6), (COPY_ENTRY, 6), (COPY_ENTRY, 6)]
-    )
+    # AsType casts the broadcast's three contiguous source elements in place;
+    # each Full then materializes the 2 x 3 result.
+    sequence.extend([("v_copyint32float32", 3), (COPY_ENTRY, 6), (COPY_ENTRY, 6)])
     return sequence
