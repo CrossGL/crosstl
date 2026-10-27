@@ -771,11 +771,11 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "enum Mode {",
-            "typealias ModeTypedef = Mode;",
+            "typedef Mode ModeTypedef;",
             "const ModeTypedef mode = Mode::Add;",
             "outputBuffer[id.x] = uint(mode);",
         ],
-        "not_contains": ["typedef Mode ModeTypedef;"],
+        "not_contains": ["typealias ModeTypedef = Mode;"],
     },
     {
         "id": "slang_func_keyword_default_parameter_from_current_docs",

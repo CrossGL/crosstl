@@ -7789,6 +7789,12 @@ class HipToCrossGLConverter:
         if dim3_constructor is not None:
             return dim3_constructor
 
+        alias_constructor = self.format_concrete_alias_constructor_call(
+            func_name, args_str
+        )
+        if alias_constructor is not None:
+            return alias_constructor
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         if (
@@ -7799,6 +7805,20 @@ class HipToCrossGLConverter:
         ):
             crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_concrete_alias_constructor_call(self, func_name, args_str):
+        """Write ``real(x)`` through an erased alias as a call of the aliased type.
+
+        Concrete aliases are erased from the CrossGL program (each declaration
+        names the aliased type instead), so a functional cast through the alias
+        must name that type too or it calls an undeclared function (#3309).
+        """
+        if not isinstance(func_name, str) or not self.is_simple_identifier(func_name):
+            return None
+        resolved = self.resolve_concrete_type_alias(func_name)
+        if resolved == func_name:
+            return None
+        return f"{resolved}({args_str})"
 
     def format_std_numeric_limits_call(self, function_name, args):
         parsed = self.parse_cpp_template_static_member(function_name)

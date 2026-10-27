@@ -799,18 +799,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         return code
 
     def generate_typedef(self, node):
+        # CrossGL reads only the C spelling as an alias; ``typealias A = B;``
+        # would declare nothing and leave every use of ``A`` undeclared (#3309).
         original_type = self.map_type(node.original_type)
-        new_type = node.new_type
-        if self.requires_typealias_spelling(original_type):
-            return f"typealias {new_type} = {original_type};"
-        return f"typedef {original_type} {new_type};"
-
-    def requires_typealias_spelling(self, type_name):
-        type_name = str(type_name)
-        return (
-            type_name not in self.CROSSGL_BUILTIN_TYPE_NAMES
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name) is not None
-        )
+        return f"typedef {original_type} {node.new_type};"
 
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
@@ -1426,6 +1418,8 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 code += self.generate_jump_statement("continue", stmt) + "\n"
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
+            elif isinstance(stmt, TypedefNode):
+                code += f"{self.generate_typedef(stmt)}\n"
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
 

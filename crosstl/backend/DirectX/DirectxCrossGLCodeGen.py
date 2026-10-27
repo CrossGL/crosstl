@@ -1730,19 +1730,22 @@ class HLSLToCrossGLConverter(
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
-    def format_type_alias_target(self, alias_type, alias):
-        mapped_type = self.map_type(alias_type)
-        sizes = getattr(alias, "array_sizes", None) or []
-        if not any(size is None for size in sizes):
-            return f"{mapped_type}{self.format_array_suffixes(alias)}"
+    def generate_type_alias_declaration(self, alias):
+        """Write an HLSL ``typedef`` or ``using`` alias as a CrossGL ``typedef``.
 
-        type_text = mapped_type
-        for size in reversed(sizes):
-            if size is None:
-                type_text = f"[{type_text}]"
-            else:
-                type_text = f"{type_text}[{self.generate_expression(size)}]"
-        return type_text
+        CrossGL spells an alias as a C declarator, so the array dimensions of
+        ``typedef int Pair[2];`` and ``using Pair = int[2];`` follow the name.
+        """
+        alias_type = getattr(alias, "alias_type", None) or getattr(
+            alias, "original_type", None
+        )
+        if alias_type is None:
+            return ""
+        return (
+            f"typedef {self.map_type(alias_type)} "
+            f"{self.render_type_identifier(alias.name)}"
+            f"{self.format_array_suffixes(alias)};"
+        )
 
     def generate_enum(self, enum, indent=1):
         code = "    " * indent + f"enum {self.render_type_identifier(enum.name)} {{\n"
@@ -3682,16 +3685,10 @@ class HLSLToCrossGLConverter(
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
-        if typedefs:
-            for alias in typedefs:
-                alias_type = getattr(alias, "alias_type", None) or getattr(
-                    alias, "original_type", None
-                )
-                if alias_type is not None:
-                    code += (
-                        f"    type {self.render_type_identifier(alias.name)} = "
-                        f"{self.format_type_alias_target(alias_type, alias)};\n"
-                    )
+        for alias in typedefs:
+            declaration = self.generate_type_alias_declaration(alias)
+            if declaration:
+                code += f"    {declaration}\n"
         if enums:
             for enum in enums:
                 if isinstance(enum, EnumNode):
@@ -4524,6 +4521,8 @@ class HLSLToCrossGLConverter(
                 code += "    " * indent + "}\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
+            elif isinstance(stmt, TypeAliasNode):
+                code += f"{self.generate_type_alias_declaration(stmt)}\n"
             else:
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         self.current_variable_types = previous_types

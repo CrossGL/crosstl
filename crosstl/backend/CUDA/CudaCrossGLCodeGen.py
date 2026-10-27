@@ -6134,11 +6134,26 @@ class CudaToCrossGLConverter:
             self.emit(f"// delete: {target}")
 
     def visit_TypeAliasNode(self, node):
+        """Write ``typedef``/``using`` as a CrossGL ``typedef`` (#3309).
+
+        CrossGL has no ``decltype``, so such an alias stays a comment and its
+        uses are refused downstream as undeclared types.
+        """
         self.register_type_alias(node.name, node.alias_type)
-        if str(node.alias_type).strip().startswith(("struct ", "union ")):
+        elaborated = re.fullmatch(
+            r"(?:struct|union)\s+([A-Za-z_]\w*)", str(node.alias_type).strip()
+        )
+        if elaborated is not None:
+            # ``typedef struct Pair PairT;`` names the record ``Pair``; the
+            # self-alias ``typedef struct Q {...} Q;`` declares nothing new.
+            alias_type = elaborated.group(1)
+            if alias_type == node.name:
+                return
+        elif str(node.alias_type).strip().startswith(("struct ", "union ")):
             alias_type = node.alias_type
         elif self.is_decltype_type_name(node.alias_type):
-            alias_type = node.alias_type
+            self.emit(f"// typedef {node.alias_type} {node.name};")
+            return
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
             layouts = getattr(self, "emitted_buffer_layouts", None)
@@ -6148,7 +6163,7 @@ class CudaToCrossGLConverter:
                 and not getattr(node, "declarator_type_suffix", "")
             ):
                 layouts.alias(node.name, alias_type)
-        self.emit(f"// typedef {alias_type} {node.name};")
+        self.emit(f"typedef {alias_type} {node.name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
