@@ -122,6 +122,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - SPIR-V output declares immutable scalar, vector and matrix globals with constant initializers as constants, so `constant uint T = W * 3;` is valid, and flattens structure members of vertex outputs and fragment inputs that carry no location, such as the nested structures of a Metal mesh pipeline's `[[stage_in]]`. They used to overlap the next member's location.
 - GLSL output of a multi-stage file emits each helper only under the macros of the stages that call it, so a fragment-only helper that calls `fwidth` no longer breaks the vertex stage. Written half-precision stage inputs are copied into locals, and varyings no longer take the names of entry resource parameters.
 - Depth comparisons with 16-bit float reference values translate.
+- The OpenCL importer reads a vector constructor whose type is a `typedef` of an OpenCL vector type, such as `(duo)(x, 3.0f)` for `typedef float2 duo;`, as a vector constructor, resolving the alias to its target type. It used to read it as a cast of a comma expression, so `duo b = (duo)(x, 3.0f);` lowered to `vec2<f32>((x , 3.0f))`, which keeps only the last operand; the DirectX generator then refused the initializer and the Metal generator wrote `float2({x, 3.0})`.
 
 ---
 
