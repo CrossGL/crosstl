@@ -2714,12 +2714,12 @@ class HLSLParser:
             return None
 
         if self.current_token_is_keyword("USING", "using"):
-            self.parse_using_directive()
-            return None
+            # A block-scope alias is a statement: it names a type from here to
+            # the end of the block.
+            return self.parse_using_directive()
 
         if self.current_token[0] == "TYPEDEF":
-            self.parse_typedef()
-            return None
+            return self.parse_typedef()
 
         if self.is_class_declaration_prefix():
             self.parse_class_declaration()

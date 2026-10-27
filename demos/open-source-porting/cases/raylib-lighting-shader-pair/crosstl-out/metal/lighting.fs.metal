@@ -41,7 +41,7 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
                 light = normalize(uniforms.lights[i].position - input.fragPosition);
             }
             float NdotL = max(dot(normal, light), 0.0);
-            lightDot += uniforms.lights[i].color.rgb * float3(NdotL);
+            lightDot += uniforms.lights[i].color.rgb * NdotL;
             float specCo = 0.0;
             if (NdotL > 0.0) {
                 specCo = pow(max(0.0, dot(viewD, reflect(-light, normal))), 16.0);
@@ -50,7 +50,7 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
         }
     }
     finalColor = texelColor * ((tint + float4(specular, 1.0)) * float4(lightDot, 1.0));
-    finalColor += texelColor * (uniforms.ambient / float4(10.0)) * tint;
+    finalColor += texelColor * (uniforms.ambient / 10.0) * tint;
     finalColor = pow(finalColor, float4(1.0 / 2.2));
     return finalColor;
 }

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from . import runner, runtimes, scoreboard, toolchains, validators
-from .cases import BY_ID, CASES, compare
+from .cases import BY_ID, CASES, CASES_DIR, compare
 from .heldout import heldout_cases
 from .interface import InterfaceChanged, hlsl_reflected_strides, interface
 from .process import CommandResult, require_artifact, run
@@ -28,7 +28,15 @@ def test_hazard_inventory_and_oracles():
     # structs with a three-component vector member, and constants
     # blocks in GLSL std140, SPIR-V std140 and std430 push constants, HLSL cbuffer packing, HLSL row_major cbuffer
     # matrices and MSL layout.
-    assert len(CASES) == len(BY_ID) == 113
+    # Every case has its fixture directory and every fixture directory its case, so a case cannot leave the
+    # catalogue while its source stays, or the reverse. The floor is the catalogue size when it was last raised.
+    assert len(CASES) == len(BY_ID) >= 116
+    fixtures = sorted(
+        path.name
+        for path in CASES_DIR.iterdir()
+        if path.is_dir() and not path.name.startswith(("_", "."))
+    )
+    assert sorted(BY_ID) == fixtures
     assert {case.lang for case in CASES} == {
         "metal",
         "hlsl",

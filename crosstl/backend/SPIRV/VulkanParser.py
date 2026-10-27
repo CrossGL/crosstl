@@ -1207,6 +1207,7 @@ class VulkanParser:
             decorations, member_decorations, group_decorates, group_member_decorates
         )
         self.spirv_register_struct_type_names(types, names, member_names)
+        self.spirv_name_struct_constants(constants, types)
         self.spirv_assign_flattened_resource_block_member_aliases(
             variables,
             names,
@@ -5845,7 +5846,29 @@ class VulkanParser:
             self.spirv_constant_operand_expression(constituent_id, names, constants)
             for constituent_id in constituent_ids
         ]
-        return FunctionCallNode(type_name or "spirv_constant_composite", args)
+        kind = types.get(type_id, {}).get("kind")
+        if kind in {"array", "runtime_array"}:
+            # CrossGL writes array values as initializer lists, as OpCompositeConstruct does.
+            return InitializerListNode(args)
+        if kind == "struct":
+            # Struct types are named only once every OpName is read;
+            # spirv_name_struct_constants gives the constructor its name then.
+            constructor = FunctionCallNode(type_id, args)
+            constructor.spirv_struct_type_id = type_id
+            return constructor
+        if type_name is None:
+            raise SpirvInstructionUnsupportedError(
+                "OpConstantComposite", f"of type {type_id} has no CrossGL constructor"
+            )
+        return FunctionCallNode(type_name, args)
+
+    @staticmethod
+    def spirv_name_struct_constants(constants, types):
+        """Name the struct constructors of constant composites after their now-registered struct types."""
+        for value in constants.values():
+            type_id = getattr(value, "spirv_struct_type_id", None)
+            if isinstance(value, FunctionCallNode) and type_id is not None:
+                value.name = types[type_id]["name"]
 
     def spirv_spec_constant_op_expression(
         self, operation, operands, names, constants, types
