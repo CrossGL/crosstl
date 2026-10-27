@@ -205,6 +205,11 @@ from .spirv_short_circuit import (
     lower_short_circuit_logical,
     lower_short_circuit_ternary,
 )
+from .spirv_single_evaluation import (
+    evaluate_subscript_index,
+    recording_subscript_indices,
+    subscript_index_scope,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -20133,6 +20138,11 @@ class VulkanSPIRVCodeGen(
 
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
+        # spirv_single_evaluation.py: the alias probes and the value path share one index evaluation.
+        with subscript_index_scope(self):
+            return self.process_variable_declaration_body(node)
+
+    def process_variable_declaration_body(self, node: VariableNode):
         var_type_source = self.current_cooperative_matrix_role_overrides.get(
             id(node), getattr(node, "var_type", getattr(node, "vtype", "float"))
         )
@@ -20144,14 +20154,14 @@ class VulkanSPIRVCodeGen(
             var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
         infer_declared_type = var_type_source is None or var_type_name == "auto"
-        if self.process_local_resource_alias_declaration(
-            node, var_type_source, var_type_name
-        ):
-            return
-        if self.process_local_array_pointer_alias_declaration(
-            node, var_type_source, var_type_name
-        ):
-            return
+        # Alias probes build the initializer's access chain; the value path below reuses its index.
+        with recording_subscript_indices(self):
+            if self.process_local_resource_alias_declaration(
+                node, var_type_source, var_type_name
+            ) or self.process_local_array_pointer_alias_declaration(
+                node, var_type_source, var_type_name
+            ):
+                return
 
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
             raise ValueError(
@@ -26840,7 +26850,7 @@ class VulkanSPIRVCodeGen(
         elif isinstance(expr, str):
             name = expr
         elif isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
             if index is None:
                 return None
             access, _ = self.create_array_element_access(expr.array, index, expr.index)
@@ -27459,7 +27469,7 @@ class VulkanSPIRVCodeGen(
                 )
             return access
         if isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
             if index is None:
                 return None
             if not self.validate_tessellation_patch_builtin_index(
@@ -29881,7 +29891,7 @@ class VulkanSPIRVCodeGen(
             return self.process_array_literal(expr)
 
         elif isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
 
             if index is None:
                 self.refuse_lowering(f"Failed to evaluate array access")
@@ -29909,17 +29919,20 @@ class VulkanSPIRVCodeGen(
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, AssignmentNode):
-            self.process_assignment(expr)
             target = getattr(
                 expr, "name", getattr(expr, "target", getattr(expr, "left", None))
             )
-            return (
-                self.process_expression(target)
-                if isinstance(
-                    target, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+            # spirv_single_evaluation.py: reading the target back reuses the index the store used.
+            with subscript_index_scope(self):
+                with recording_subscript_indices(self):
+                    self.process_assignment(expr)
+                return (
+                    self.process_expression(target)
+                    if isinstance(
+                        target, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+                    )
+                    else None
                 )
-                else None
-            )
 
         elif isinstance(expr, BinaryOpNode):
             if expr.op == ",":
