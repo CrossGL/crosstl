@@ -53,6 +53,8 @@ from .templates.idioms import (
 )
 from .templates.idioms import FAMILY as IDIOMS
 from .templates.idioms import SHADOW_HELPERS
+from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
+from .templates.initializers import FAMILY as INITIALIZERS
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
@@ -589,6 +591,8 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "intrinsic-name": intrinsic_names(SHADER_NAMES),
     "array-return": Template(GLSL_ARRAY, GLSL_SPREAD),
+    **INITIALIZERS,
+    **INITIALIZERS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

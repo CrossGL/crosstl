@@ -21,6 +21,8 @@ from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
 from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
+from .initializers import FAMILY as _INITIALIZERS
+from .initializers import GLSL as _INITIALIZERS_GLSL
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
 from .portability import FAMILY as _PORTABILITY
@@ -77,6 +79,8 @@ WEBGL = {
     **_PORTABILITY,
     **_PORTABILITY_GLSL,
     **_PORTABILITY_WEBGL,
+    **_INITIALIZERS,
+    **_INITIALIZERS_GLSL,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
