@@ -1,11 +1,14 @@
-"""Execute translated MLX Stockham and Rader FFT packages and commit guarded outputs.
+"""Execute translated MLX Stockham, Rader and Bluestein FFT packages and commit guarded outputs.
 
 ``FFT`` binds the input and output transform batches, the transform size and
 the batch count, as ``mlx/backend/metal/fft.cpp`` binds them to the ``fft``
 kernel, in fft.cpp's threadgroups; Rader plans bind the ``rader_fft``
-kernel's tables and Rader factor too. Each launch is checked against
-``fft_layout``'s plan for its hash name, and each Rader table against the
-plan's generator powers and kernel spectrum. ``complex64`` operands travel as
+kernel's tables and Rader factor too, and Bluestein plans the
+``bluestein_fft`` kernel's chirp ``w_k``, its spectrum ``w_q``, the
+transform length and the convolution size. Each launch is checked against
+``fft_layout``'s plan for its hash name, each Rader table against the
+plan's generator powers and kernel spectrum, and each Bluestein table
+against its double-precision value. ``complex64`` operands travel as
 the ``float2`` vectors fft.metal declares, each holding the real and
 imaginary float32 bits; ``float32`` and ``int16`` operands as their bits.
 Inputs are followed by poisoned elements no transform reads, the output
@@ -18,6 +21,7 @@ changes.
 
 import ctypes
 import hashlib
+import math
 import struct
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -44,6 +48,11 @@ POISON = {"float32": 0x3FC00000, COMPLEX: 0x3FC000003FC00000, "int16": 0x3FC0}
 # The absolute error, per table element, that pocketfft's float32 FFT of the
 # Rader kernel may differ from its double-precision DFT, per transform size.
 RADER_SPECTRUM_TOLERANCE = 1e-5
+# The absolute error per element of the float32 Bluestein chirp, rounded
+# from double precision, and per element and convolution size of its
+# pocketfft float32 spectrum.
+BLUESTEIN_CHIRP_TOLERANCE = 1e-6
+BLUESTEIN_SPECTRUM_TOLERANCE = 1e-5
 # How every target reflects fft.metal's float2 storage element.
 VECTOR_LAYOUT = {
     "physicalType": "float2",
@@ -82,9 +91,29 @@ def _complex(word):
     return complex(real, imag)
 
 
+def _check_bluestein_tables(info, supplied):
+    length = buffer_words(supplied["length"], "int32")[0]
+    chirp, spectrum = layout.bluestein_tables(length, info["n"])
+    for name, expected, tolerance in (
+        ("w_k", chirp, BLUESTEIN_CHIRP_TOLERANCE),
+        ("w_q", spectrum, BLUESTEIN_SPECTRUM_TOLERANCE * info["n"]),
+    ):
+        words = buffer_words(supplied[name], COMPLEX)
+        if len(words) != len(expected) or any(
+            abs(_complex(word) - value) > tolerance
+            for word, value in zip(words, expected)
+        ):
+            raise ValueError(
+                f"{LABEL} Bluestein {name} differs from compute_bluestein_constants"
+            )
+
+
 def check_tables(entry, supplied):
-    """Refuse Rader tables other than compute_raders_constants' for the plan."""
+    """Refuse Rader and Bluestein tables other than fft.cpp's for the plan."""
     info = layout.signature(entry)
+    if info["kind"] == "bluestein":
+        _check_bluestein_tables(info, supplied)
+        return
     if info["kind"] != "rader":
         return
     g_q, g_minus_q = layout.rader_generator_tables(info["raderN"])
@@ -132,6 +161,25 @@ def validate(entry, supplied, threads, execution):
             raise ValueError(f"{LABEL} output overlaps its input")
     check_tables(entry, supplied)
     return metadata
+
+
+def native_execution(descriptor, execution):
+    """The launch at the workgroup size the translated entry declares.
+
+    Direct3D 12 and OpenGL cap a workgroup's z dimension at 64 threads, so
+    fft.cpp's ``(1, batch, threads_per_fft)`` threadgroups past 64 threads per
+    transform are declared linearized, ``(batch * threads_per_fft, 1, 1)``,
+    with the thread positions rebuilt inside the entry. The workgroup count
+    stays fft.cpp's.
+    """
+    config = descriptor["entryPoint"].get("executionConfig", {})
+    declared = config.get("numthreads", config.get("local_size"))
+    size = list(execution["workgroupSize"])
+    if declared is None or list(declared) == size:
+        return execution
+    if list(declared) != [math.prod(size), 1, 1]:
+        raise ValueError(f"{LABEL} entry declares another workgroup")
+    return {**execution, "workgroupSize": list(declared)}
 
 
 def _inputs(host, entry, descriptor, storage):
@@ -195,6 +243,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
             tail = reach.get(name, len(words)) - len(words) + GUARD_COUNT
             storage[name] = words + [POISON[dtype]] * tail
     descriptor, directory = host.ffts.get(entry)
+    launch_size = execution["workgroupSize"]
+    execution = native_execution(descriptor, execution)
     inputs, observed, output = _inputs(host, entry, descriptor, storage)
     outputs = {output: {k: v for k, v in inputs[output].items() if k != "values"}}
     request = build_native_loader_dispatch_request(
@@ -232,6 +282,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "target": host.target,
             "threads": threads,
             **execution,
+            **(
+                {"launchWorkgroupSize": list(launch_size)}
+                if list(launch_size) != execution["workgroupSize"]
+                else {}
+            ),
             "dispatchVersion": DISPATCH_VERSION,
             "artifact": descriptor["artifact"],
             "packageRoot": str(directory),

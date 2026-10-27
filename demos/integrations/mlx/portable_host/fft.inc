@@ -5,8 +5,10 @@
 // constants, threadgroups and grid: complex-to-complex, real-to-complex (two
 // real rows per transform) and complex-to-real. Plans with one Rader factor
 // run the translated rader_fft kernel the same way, with the tables
-// compute_raders_constants builds on the CPU. Bluestein and four-step plans
-// are refused by name before any allocation or launch.
+// compute_raders_constants builds on the CPU, and Bluestein plans run the
+// translated bluestein_fft kernel with the tables compute_bluestein_constants
+// builds. Four-step plans and Bluestein's twiddle-table plans are refused by
+// name before any allocation or launch.
 // fft_layout checks each launch against the same plan; the host names each
 // pipeline by fft.cpp's hash name, whose translated entry has the function
 // constants that name implies frozen. crosstl_backend.cpp includes this file
@@ -249,6 +251,44 @@ FFTRaderTables fft_rader_tables(int rader_n) {
   return tables;
 }
 
+// fft.cpp's twiddle-table selection for Bluestein plans.
+constexpr int fft_bluestein_twiddle_table_fft_size = 4096;
+constexpr int fft_min_bluestein_twiddle_table_batch = 1024;
+
+// fft.cpp compute_bluestein_constants without the radix twiddle table:
+// w_k = exp(-i pi k^2 / n) and w_q = fft(1 / w_k) over 1 - n .. n - 1,
+// zero padded to bluestein_n, in double precision and then float32.
+struct FFTBluesteinTables {
+  std::vector<std::complex<float>> w_k;
+  std::vector<std::complex<float>> w_q;
+};
+
+FFTBluesteinTables fft_bluestein_tables(int n, int bluestein_n) {
+  FFTBluesteinTables tables;
+  tables.w_k.resize(n);
+  std::vector<std::complex<float>> w_q_vec(bluestein_n, 0);
+  for (int i = -n + 1; i < n; i++) {
+    double theta = pow(i, 2) * M_PI / (double)n;
+    w_q_vec[i + n - 1] = std::exp(std::complex<double>(0, theta));
+    if (i >= 0) {
+      tables.w_k[i] = std::exp(std::complex<double>(0, -theta));
+    }
+  }
+  tables.w_q.resize(bluestein_n);
+  std::ptrdiff_t item_size = sizeof(std::complex<float>);
+  size_t fft_size = bluestein_n;
+  pocketfft::c2c(
+      /* shape= */ {fft_size},
+      /* stride_in= */ {item_size},
+      /* stride_out= */ {item_size},
+      /* axes= */ {0},
+      /* forward= */ true,
+      /* data_in= */ w_q_vec.data(),
+      /* data_out= */ tables.w_q.data(),
+      /* scale= */ 1.0f);
+  return tables;
+}
+
 void fft_launch(
     const std::string& entry,
     std::vector<CrosstlMlxBuffer>& buffers,
@@ -333,9 +373,7 @@ void fft_op(
   if (plan.four_step) {
     fft_unported(plan.bluestein_n > 0 ? "multi-upload Bluestein plans" : "four-step plans");
   }
-  if (plan.bluestein_n > 0) {
-    fft_unported("fused Bluestein plans");
-  }
+  const bool bluestein = plan.bluestein_n > 0;
   const size_t size = real_output ? out.size() : in.size();
   if (size % n != 0 || size > size_t(std::numeric_limits<int32_t>::max()) ||
       in.size() > size_t(std::numeric_limits<int32_t>::max()) ||
@@ -347,9 +385,17 @@ void fft_op(
         allocator::malloc(out.nbytes()), out_data_size, out_strides,
         in_contiguous.flags());
   }
-  const int fft_size = int(n);
+  const int fft_size = bluestein ? plan.bluestein_n : int(n);
   const int elems_per_thread = fft_elems_per_thread(plan);
   const int total_batch_size = int(size / n);
+  static const std::vector<int> bluestein_twiddle_table_plan = {
+      0, 0, 4, 0, 0, 0, 0, 0, 0};
+  if (bluestein && !real &&
+      plan.bluestein_n == fft_bluestein_twiddle_table_fft_size &&
+      plan.stockham == bluestein_twiddle_table_plan &&
+      total_batch_size >= fft_min_bluestein_twiddle_table_batch) {
+    fft_unported("Bluestein twiddle-table plans");
+  }
   const int threads_per_fft = (fft_size + elems_per_thread - 1) / elems_per_thread;
   const int threadgroup_batch_size =
       std::max(fft_min_threadgroup_mem_size / fft_size, 1);
@@ -365,9 +411,10 @@ void fft_op(
   }
   const char* in_type_str = real_input ? "float" : "float2";
   const char* out_type_str = real_output ? "float" : "float2";
-  const bool rader = plan.rader_n > 1;
+  const bool rader = !bluestein && plan.rader_n > 1;
   std::ostringstream kname;
-  kname << (rader ? "rader_fft_mem_" : "fft_mem_") << threadgroup_mem_size << "_"
+  kname << (bluestein ? "bluestein_fft_mem_" : rader ? "rader_fft_mem_" : "fft_mem_")
+        << threadgroup_mem_size << "_"
         << in_type_str << "_" << out_type_str << "_n" << fft_size << "_inv_"
         << inverse;
   const std::string entry = kname.str();
@@ -398,6 +445,19 @@ void fft_op(
          {"raders_g_q", "int16", tables.g_q.data(), table_count, 0},
          {"raders_g_minus_q", "int16", tables.g_minus_q.data(), table_count, 0}});
     buffers.push_back({"rader_n", "int32", &rader_value, 1, 0});
+  }
+  FFTBluesteinTables bluestein_tables;
+  int32_t length_value = int32_t(n);
+  if (bluestein) {
+    // fft.cpp binds w_q and w_k at 2 and 3, then n, bluestein_n and
+    // total_batch_size, which bluestein_fft names length, n and batch_size.
+    bluestein_tables = fft_bluestein_tables(int(n), plan.bluestein_n);
+    buffers.insert(
+        buffers.begin() + 2,
+        {{"w_q", "complex64", bluestein_tables.w_q.data(),
+          uint64_t(plan.bluestein_n), 0},
+         {"w_k", "complex64", bluestein_tables.w_k.data(), uint64_t(n), 0},
+         {"length", "int32", &length_value, 1, 0}});
   }
   const CrosstlMlxLaunch launch{
       {uint32_t(batch_size), 1, 1},

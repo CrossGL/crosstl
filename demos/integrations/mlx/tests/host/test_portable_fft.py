@@ -1,4 +1,4 @@
-"""The portable host's port of fft.cpp's Stockham and Rader FFT launches."""
+"""The portable host's port of fft.cpp's Stockham, Rader and Bluestein FFT launches."""
 
 import ctypes
 import json
@@ -104,7 +104,11 @@ def test_hash_names_freeze_fft_cpp_constants_and_threadgroups():
         "rader_fft_mem_256_float2_float2_n8_inv_0",  # a Stockham plan
         "rader_fft_mem_256_float2_float2_n47_inv_0",  # a Bluestein plan
         "rader_fft_mem_512_float2_float2_n17_inv_0",
-        "bluestein_fft_mem_256_float2_float2_n47_inv_0",
+        "bluestein_fft_mem_256_float2_float2_n47_inv_0",  # not bluestein_n
+        "bluestein_fft_mem_256_float2_float2_n64_inv_0",  # no length plans at 64
+        "bluestein_fft_mem_512_float2_float2_n128_inv_0",
+        "bluestein_fft_mem_256_float2_float2_n128_inv_0_precomputed",
+        "fft_mem_256_float2_float2_n128_inv_0_precomputed",
     ],
 )
 def test_other_names_are_refused(entry):
@@ -290,8 +294,10 @@ def _complex_word(real, imag):
 class FakeCache:
     """Reflects each parameter as fft.metal's float2, float and int bindings."""
 
-    def __init__(self, target):
+    def __init__(self, target, declared=None):
         self.target = target
+        # The workgroup size the translated entry declares, when it differs.
+        self.declared = declared
 
     def get(self, entry):
         bindings = []
@@ -317,7 +323,12 @@ class FakeCache:
                     "provenance": {"sourceResource": {"parameter": name}},
                 }
             )
-        return {"bindings": bindings, "artifact": {"id": entry}}, Path("/packages")
+        config = {} if self.declared is None else {"local_size": self.declared}
+        return {
+            "bindings": bindings,
+            "artifact": {"id": entry},
+            "entryPoint": {"name": "main", "executionConfig": config},
+        }, Path("/packages")
 
 
 def rader_tables(rader_n, fault=None):
@@ -339,9 +350,25 @@ def rader_tables(rader_n, fault=None):
     }
 
 
+def bluestein_tables(length, bluestein_n, fault=None):
+    """compute_bluestein_constants' tables as the host binds them."""
+    chirp, spectrum = fft_layout.bluestein_tables(length, bluestein_n)
+    w_k = [_complex_word(value.real, value.imag) for value in chirp]
+    w_q = [_complex_word(value.real, value.imag) for value in spectrum]
+    if fault == "chirp":
+        w_k[1] = _complex_word(chirp[1].real, -chirp[1].imag)
+    if fault == "spectrum":
+        w_q[5] = _complex_word(0.0, 0.0)
+    return {
+        "w_q": (ctypes.c_uint64 * bluestein_n)(*w_q),
+        "w_k": (ctypes.c_uint64 * length)(*w_k),
+    }
+
+
 def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     info = fft_layout.signature(entry)
-    spans = fft_layout.extents(info, total)
+    length = overrides.get("transform_length", info["lengths"][0])
+    spans = fft_layout.extents(info, total, length)
     source_type = ctypes.c_uint64 if info["input"] == "complex64" else ctypes.c_uint32
     output_type = ctypes.c_uint64 if info["output"] == "complex64" else ctypes.c_uint32
     memory = {
@@ -350,6 +377,9 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     }
     if info["kind"] == "rader":
         memory.update(rader_tables(info["raderN"], fault))
+    if info["kind"] == "bluestein":
+        memory.update(bluestein_tables(length, info["n"], fault))
+        memory["length"] = (ctypes.c_int32 * 1)(overrides.get("length", length))
     memory["n"] = (ctypes.c_int32 * 1)(overrides.get("n", info["n"]))
     memory["batch_size"] = (ctypes.c_int32 * 1)(total)
     if info["kind"] == "rader":
@@ -370,7 +400,7 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
         )
     )
     host = SimpleNamespace(
-        ffts=FakeCache("opengl"),
+        ffts=FakeCache("opengl", overrides.get("declared")),
         target="opengl",
         trace=tmp_path / "dispatch.jsonl",
         trace_values=True,
@@ -521,16 +551,139 @@ def test_the_host_routes_and_audits_stockham_and_rader_ffts():
         lazy_package_evidence.family("rader_fft_mem_256_float2_float2_n17_inv_0")
         == "fft"
     )
-    assert lazy_package_evidence.family("bluestein_fft_mem_256_float2_float2") is None
+    assert (
+        lazy_package_evidence.family("bluestein_fft_mem_256_float2_float2_n128_inv_0")
+        == "fft"
+    )
     port = (HOST / "fft.inc").read_text()
     assert 'fft_unported("Rader plans")' not in port
+    assert 'fft_unported("fused Bluestein plans")' not in port
     assert '"rader_fft_mem_"' in port and "pocketfft::c2c(" in port
-    for route in ("fused Bluestein plans", "four-step plans"):
+    assert '"bluestein_fft_mem_"' in port and "fft_bluestein_tables(" in port
+    for route in ("Bluestein twiddle-table plans", "four-step plans"):
         assert f'fft_unported("{route}")' in port or route in port
     assert "void FFT::eval_gpu" in port
     prepare = (HOST / "prepare.py").read_text()
     assert '"crosstl_fft.inc": (HERE / "fft.inc").read_bytes()' in prepare
     assert (
-        '#include "mlx/backend/no_gpu/crosstl_fft.inc"'
-        in (HOST / "backend.cpp").read_text()
+        '#include "mlx/backend/no_gpu/crosstl_fft.inc"' in (
+            HOST / "backend.cpp"
+        ).read_text()
     )
+
+
+def test_threadgroups_past_the_z_limit_dispatch_at_the_declared_linear_size(
+    monkeypatch, tmp_path
+):
+    entry = "fft_mem_1024_float2_float2_n1024_inv_0"
+    assert fft_layout.signature(entry)["workgroupSize"] == (1, 1, 128)
+    source = [_complex_word(index, 1.0) for index in range(2048)]
+    values, event, _host, request = run(
+        monkeypatch, tmp_path, entry, 2, source, declared=[128, 1, 1]
+    )
+    assert values == source
+    assert request["execution"] == {
+        "workgroupCount": [2, 1, 1],
+        "workgroupSize": [128, 1, 1],
+    }
+    assert event["workgroupSize"] == [128, 1, 1]
+    assert event["launchWorkgroupSize"] == [1, 1, 128]
+    with pytest.raises(ValueError, match="declares another workgroup"):
+        run(monkeypatch, tmp_path, entry, 2, source, declared=[64, 2, 1])
+
+
+def test_bluestein_names_carry_the_convolution_size_and_freeze_its_constants():
+    entry = "bluestein_fft_mem_256_float2_float2_n128_inv_0"
+    for length in (47, 59):
+        assert fft_layout.entry_name(length, False, "float2", "float2") == entry
+    info = fft_layout.signature(entry)
+    assert (info["kind"], info["n"], info["lengths"]) == ("bluestein", 128, (47, 59))
+    # 128-point convolutions batch two to a threadgroup's 256 elements.
+    assert info["workgroupSize"] == (1, 2, 32)
+    constants = info["constants"]
+    assert constants["is_power_of_2_"] is True
+    assert constants["elems_per_thread_"] == 4
+    assert (constants["radix_4_steps_"], constants["radix_2_steps_"]) == (3, 1)
+    assert not any(constants[name] for name in fft_layout.RADER_CONSTANTS)
+    assert constants[fft_layout.TWIDDLE_TABLE_CONSTANT] is False
+    # fft.cpp sets the twiddle-table constant for complex transforms only.
+    real = fft_layout.signature("bluestein_fft_mem_256_float_float2_n128_inv_0")
+    assert fft_layout.TWIDDLE_TABLE_CONSTANT not in real["constants"]
+    large = fft_layout.signature(fft_layout.entry_name(1031, True, "float2", "float"))
+    assert (large["source"], large["workgroupSize"]) == (
+        "bluestein_fft_mem_4096_float2_float",
+        (1, 1, 512),
+    )
+    assert 2039 in large["lengths"] and 1031 in large["lengths"]
+    # Every length a size convolves plans the same steps and threads.
+    for size in (128, 256, 512, 1024, 2048, 4096):
+        lengths = fft_layout.bluestein_lengths(size)
+        assert lengths
+        assert {
+            fft_layout.compute_elems_per_thread(fft_layout.plan_fft(length))
+            for length in lengths
+        } == {
+            fft_layout.signature(
+                fft_layout.entry_name(lengths[0], False, "float2", "float2")
+            )["constants"]["elems_per_thread_"]
+        }
+
+
+def test_bluestein_launches_span_the_transform_length():
+    info = fft_layout.signature("bluestein_fft_mem_256_float_float2_n128_inv_0")
+    assert fft_layout.extents(info, 3, 47) == {
+        "in": 141,
+        "out": 72,
+        "w_q": 128,
+        "w_k": 47,
+    }
+    assert fft_layout.footprint(info, 3, 47) == {"in": 141, "out": 72}
+    with pytest.raises(ValueError, match="length"):
+        fft_layout.extents(info, 3, 48)
+    execution = fft_layout.launch(info, 3)
+    assert execution == {"workgroupCount": [1, 1, 1], "workgroupSize": [1, 2, 32]}
+    counts = {"in": 141, "out": 72, "w_q": 128, "w_k": 47}
+    values = {"length": 47, "n": 128, "batch_size": 3}
+    entry = "bluestein_fft_mem_256_float_float2_n128_inv_0"
+    metadata = fft_layout.plan_launch(entry, counts, values, 72, execution)
+    assert metadata["length"] == 47 and metadata["n"] == 128
+    for changed in (
+        {"length": 46},
+        {"length": 64},
+        {"n": 47},
+        {"length": None},
+    ):
+        with pytest.raises(ValueError):
+            fft_layout.plan_launch(entry, counts, {**values, **changed}, 72, execution)
+    with pytest.raises(ValueError):
+        fft_layout.plan_launch(entry, dict(counts, w_k=48), values, 72, execution)
+
+
+def test_bluestein_tables_follow_compute_bluestein_constants():
+    numpy = pytest.importorskip("numpy")
+    for length, size in ((47, 128), (289, 1024), (2039, 4096)):
+        chirp, spectrum = fft_layout.bluestein_tables(length, size)
+        k = numpy.arange(-length + 1, length)
+        padded = numpy.zeros(size, dtype=complex)
+        padded[: 2 * length - 1] = numpy.exp(1j * numpy.pi * k**2 / length)
+        assert numpy.allclose(spectrum, numpy.fft.fft(padded), atol=1e-9)
+        assert numpy.allclose(
+            chirp, numpy.exp(-1j * numpy.pi * numpy.arange(length) ** 2 / length)
+        )
+
+
+@pytest.mark.parametrize("entry", ["bluestein_fft_mem_256_float2_float2_n128_inv_0"])
+def test_bluestein_tables_travel_and_are_checked(monkeypatch, tmp_path, entry):
+    source = [_complex_word(index, -1.0) for index in range(2 * 47)]
+    values, event, _host, request = run(monkeypatch, tmp_path, entry, 2, source)
+    assert values == source
+    assert request["inputs"]["lengthBinding"]["values"] == [47]
+    assert request["inputs"]["nBinding"]["values"] == [128]
+    assert len(request["inputs"]["w_qBinding"]["values"]) == 2 * (128 + 32)
+    assert len(request["inputs"]["w_kBinding"]["values"]) == 2 * (47 + 32)
+    assert event["fftMetadata"]["length"] == 47
+    for fault, message in (("chirp", "w_k differs"), ("spectrum", "w_q differs")):
+        with pytest.raises(ValueError, match=message):
+            run(monkeypatch, tmp_path, entry, 2, source, fault)
+    with pytest.raises(ValueError, match="length"):
+        run(monkeypatch, tmp_path, entry, 2, source, length=46)

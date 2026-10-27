@@ -1,4 +1,4 @@
-"""Plan, name and bound MLX's single-threadgroup Stockham and Rader FFT launches.
+"""Plan, name and bound MLX's single-threadgroup Stockham, Rader and Bluestein FFT launches.
 
 ``mlx/backend/metal/fft.cpp`` plans every 1-D transform, sets the function
 constants of ``fft.metal``'s kernels from the plan and names each pipeline
@@ -16,7 +16,12 @@ and complex-to-real. The ``rader_fft`` kernel runs plans with one Rader
 factor in the same threadgroups, with the tables fft.cpp's
 compute_raders_constants builds on the CPU: the FFT of the Rader kernel
 ``raders_b_q`` and the generator powers ``raders_g_q`` and
-``raders_g_minus_q``. Bluestein and four-step plans use other kernels.
+``raders_g_minus_q``. The ``bluestein_fft`` kernel runs plans of any other
+size up to 2048 as a ``bluestein_n``-point Stockham convolution in the same
+threadgroups, with the chirp ``w_k`` and its spectrum ``w_q``
+compute_bluestein_constants builds on the CPU; its hash name carries
+``bluestein_n``, and the transform length binds as ``length``. Four-step
+plans use other kernels.
 """
 
 import cmath
@@ -58,10 +63,10 @@ TRANSFORMS = {
     ("float2", "float"): "c2r",
 }
 # The plan kind each fft.metal kernel runs, by kernel name.
-KERNELS = {"fft": "stockham", "rader_fft": "rader"}
-ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_")
+KERNELS = {"fft": "stockham", "rader_fft": "rader", "bluestein_fft": "bluestein"}
+ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_", "bluestein_fft_mem_")
 ENTRY = re.compile(
-    r"(?P<source>(?P<kernel>rader_fft|fft)_mem_(?P<memory>[0-9]+)_"
+    r"(?P<source>(?P<kernel>bluestein_fft|rader_fft|fft)_mem_(?P<memory>[0-9]+)_"
     r"(?P<input>float2|float)_(?P<output>float2|float))_n(?P<n>[1-9][0-9]*)"
     r"_inv_(?P<inverse>[01])"
 )
@@ -78,9 +83,14 @@ PARAMETERS = {
         "batch_size",
         "rader_n",
     ),
+    "bluestein": ("in", "out", "w_q", "w_k", "length", "n", "batch_size"),
 }
 OUTPUT = "out"
-SCALARS = {"stockham": ("n", "batch_size"), "rader": ("n", "batch_size", "rader_n")}
+SCALARS = {
+    "stockham": ("n", "batch_size"),
+    "rader": ("n", "batch_size", "rader_n"),
+    "bluestein": ("length", "n", "batch_size"),
+}
 # The tables fft.cpp computes on the CPU for each kernel, and their storage.
 TABLES = {
     "stockham": {},
@@ -89,6 +99,7 @@ TABLES = {
         "raders_g_q": "int16",
         "raders_g_minus_q": "int16",
     },
+    "bluestein": {"w_q": "complex64", "w_k": "complex64"},
 }
 # Every device index the host binds stays a signed 32-bit element offset.
 SIGNED_MAX = (1 << 31) - 1
@@ -252,6 +263,44 @@ def rader_kernel_spectrum(rader_n):
     )
 
 
+def _fft(values):
+    """The forward DFT of a power-of-two sequence in double precision."""
+    size = len(values)
+    if size == 1:
+        return list(values)
+    even, odd = _fft(values[0::2]), _fft(values[1::2])
+    out = [0j] * size
+    for k in range(size // 2):
+        twiddled = cmath.exp(complex(0, -2.0 * math.pi * k / size)) * odd[k]
+        out[k], out[k + size // 2] = even[k] + twiddled, even[k] - twiddled
+    return out
+
+
+@functools.lru_cache(maxsize=16)
+def bluestein_tables(length, bluestein_n):
+    """compute_bluestein_constants' ``w_k`` and ``w_q`` in double precision:
+    the chirp ``exp(-i pi k^2 / length)`` and the forward DFT of its inverse
+    over ``1 - length .. length - 1``, zero padded to ``bluestein_n``, which
+    fft.cpp computes with pocketfft in float32."""
+    chirp = [cmath.exp(complex(0, -(k**2) * math.pi / length)) for k in range(length)]
+    padded = [0j] * bluestein_n
+    for k in range(1 - length, length):
+        padded[k + length - 1] = cmath.exp(complex(0, k**2 * math.pi / length))
+    return tuple(chirp), tuple(_fft(padded))
+
+
+@functools.lru_cache(maxsize=None)
+def bluestein_lengths(bluestein_n):
+    """The transform lengths fft.cpp runs as a ``bluestein_n``-point
+    Bluestein convolution in one threadgroup."""
+    lengths = []
+    for length in range(bluestein_n // 4 + 1, bluestein_n // 2 + 1):
+        plan = plan_fft(length)
+        if plan_kind(plan) == "bluestein" and plan["bluestein_n"] == bluestein_n:
+            lengths.append(length)
+    return tuple(lengths)
+
+
 def compute_elems_per_thread(plan):
     """fft.cpp compute_elems_per_thread's heuristics."""
     n = plan["n"]
@@ -285,19 +334,36 @@ def plan_kind(plan):
     return "stockham"
 
 
-def plan_constants(n, inverse, kind):
-    """The function constants fft.cpp sets for a ``kind`` plan of ``n``."""
-    plan = plan_fft(n)
+def plan_constants(n, inverse, kind, transform="c2c"):
+    """The function constants fft.cpp sets for a ``kind`` plan of ``n``.
+
+    For Bluestein plans ``n`` is the hash name's ``bluestein_n``: fft.cpp
+    plans every length it convolves at that size with the same Stockham
+    steps and elements per thread. It also sets ``rader_m_`` to the length,
+    which no Bluestein kernel reads, and caches the pipeline by hash name,
+    so the first length compiled serves every other; the entry freezes the
+    smallest length. ``use_bluestein_twiddle_table_`` is set for
+    complex-to-complex plans only, false outside twiddle-table plans.
+    """
+    if kind == "bluestein":
+        lengths = bluestein_lengths(n) if is_power_of_2(n) else ()
+        if not lengths:
+            raise ValueError(f"FFT size {n} is not a Bluestein convolution size")
+        plan = plan_fft(lengths[0])
+    else:
+        plan = plan_fft(n)
     if plan_kind(plan) != kind or kind not in PARAMETERS:
         raise ValueError(f"FFT size does not have a single-threadgroup {kind} plan")
     constants = {
         "inv_": bool(inverse),
         "is_power_of_2_": is_power_of_2(n),
         "elems_per_thread_": compute_elems_per_thread(plan),
-        "rader_m_": n // plan["rader_n"],
+        "rader_m_": plan["n"] // plan["rader_n"],
     }
     constants.update(zip(STOCKHAM_CONSTANTS, plan["stockham"]))
     constants.update(zip(RADER_CONSTANTS, plan["rader"]))
+    if kind == "bluestein" and transform == "c2c":
+        constants[TWIDDLE_TABLE_CONSTANT] = False
     return constants
 
 
@@ -312,14 +378,21 @@ def threadgroup_batch_size(n):
 
 
 def entry_name(n, inverse, input_type, output_type):
-    """fft.cpp's pipeline hash name for one single-threadgroup transform."""
-    kernel = {"stockham": "fft", "rader": "rader_fft"}.get(plan_kind(plan_fft(n)))
-    if kernel is None:
+    """fft.cpp's pipeline hash name for one single-threadgroup transform of
+    length ``n``; a Bluestein plan's name carries its ``bluestein_n``."""
+    plan = plan_fft(n)
+    kind = plan_kind(plan)
+    kernel = {"stockham": "fft", "rader": "rader_fft", "bluestein": "bluestein_fft"}
+    if kind not in kernel:
         raise ValueError(
-            f"FFT size {n} has no single-threadgroup Stockham or Rader plan"
+            f"FFT size {n} has no single-threadgroup Stockham, Rader or Bluestein plan"
         )
-    memory = next_power_of_2(threadgroup_batch_size(n) * n)
-    return f"{kernel}_mem_{memory}_{input_type}_{output_type}_n{n}_inv_{int(bool(inverse))}"
+    size = plan["bluestein_n"] if kind == "bluestein" else n
+    memory = next_power_of_2(threadgroup_batch_size(size) * size)
+    return (
+        f"{kernel[kind]}_mem_{memory}_{input_type}_{output_type}_n{size}"
+        f"_inv_{int(bool(inverse))}"
+    )
 
 
 def signature(entry):
@@ -327,7 +400,7 @@ def signature(entry):
     other name."""
     match = ENTRY.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
-        raise ValueError(f"Not an MLX Stockham or Rader FFT entry: {entry!r}")
+        raise ValueError(f"Not an MLX single-threadgroup FFT entry: {entry!r}")
     n, inverse = int(match["n"]), match["inverse"] == "1"
     transform = TRANSFORMS.get((match["input"], match["output"]))
     kind = KERNELS[match["kernel"]]
@@ -337,19 +410,20 @@ def signature(entry):
         or (transform == "c2r" and not inverse)
         or not 2 <= n <= MAX_STOCKHAM_FFT_SIZE
     ):
-        raise ValueError(f"Not an MLX Stockham or Rader FFT entry: {entry!r}")
-    constants = plan_constants(n, inverse, kind)
+        raise ValueError(f"Not an MLX single-threadgroup FFT entry: {entry!r}")
+    constants = plan_constants(n, inverse, kind, transform)
     batch = threadgroup_batch_size(n)
     memory = next_power_of_2(batch * n)
+    lengths = bluestein_lengths(n) if kind == "bluestein" else (n,)
     if (
         memory not in MEMORY_SIZES
         or int(match["memory"]) != memory
-        or entry_name(n, inverse, match["input"], match["output"]) != entry
+        or entry_name(lengths[0], inverse, match["input"], match["output"]) != entry
     ):
         raise ValueError(f"FFT entry does not name fft.cpp's pipeline: {entry!r}")
     elems = constants["elems_per_thread_"]
     threads = (n + elems - 1) // elems
-    plan = plan_fft(n)
+    plan = plan_fft(lengths[0])
     return {
         "kind": kind,
         "source": match["source"],
@@ -357,6 +431,7 @@ def signature(entry):
         "n": n,
         "inverse": inverse,
         "raderN": plan["rader_n"],
+        "lengths": lengths,
         "input": STORAGE[match["input"]],
         "output": STORAGE[match["output"]],
         "memory": memory,
@@ -393,17 +468,25 @@ def parameter_type(entry, name):
     return {"in": info["input"], "out": info["output"]}.get(name, "int32")
 
 
-def extents(info, total):
+def extents(info, total, length=None):
     """The elements of ``in`` and ``out`` that ``total`` transforms span, and
-    of every table the kernel reads."""
-    n, half = info["n"], info["n"] // 2 + 1
+    of every table the kernel reads. Bluestein transforms span ``length``
+    elements each; their ``w_q`` holds ``bluestein_n`` elements and ``w_k``
+    one per element of a transform."""
+    bluestein = info["kind"] == "bluestein"
+    if bluestein and length not in info["lengths"]:
+        raise ValueError("Bluestein FFT length differs from its pipeline")
+    n = length if bluestein else info["n"]
+    half = n // 2 + 1
     spans = {
         "c2c": {"in": total * n, "out": total * n},
         "r2c": {"in": total * n, "out": total * half},
         "c2r": {"in": total * half, "out": total * n},
     }[info["transform"]]
+    if bluestein:
+        spans.update(w_q=info["n"], w_k=n)
     for name in TABLES[info["kind"]]:
-        spans[name] = info["raderN"] - 1
+        spans.setdefault(name, info["raderN"] - 1)
     return spans
 
 
@@ -432,14 +515,15 @@ def _cooperative_io_end(n, rows, threads, elems, batch_rows, width):
     return end
 
 
-def footprint(info, total):
+def footprint(info, total, length=None):
     """The elements of ``in`` and ``out`` the kernel touches for ``total``
     transforms: their extents, and for complex-to-complex transforms the
     tail the generic ReadWriter's cooperative copy reads and writes past a
     partial last threadgroup's transforms."""
-    spans = extents(info, total)
+    spans = extents(info, total, length)
     footprint = {"in": spans["in"], "out": spans["out"]}
-    if info["transform"] != "c2c":
+    # Bluestein's padded load and write touch only each transform's elements.
+    if info["transform"] != "c2c" or info["kind"] == "bluestein":
         return footprint
     n, batch = info["n"], info["threadgroupBatchSize"]
     groups = (total + batch - 1) // batch
@@ -476,9 +560,14 @@ def plan_launch(entry, counts, values, threads, execution):
     """
     info = signature(entry)
     total = values.get("batch_size")
+    length = values.get("length")
     expected_values = {"n": info["n"], "batch_size": total}
     if info["kind"] == "rader":
         expected_values["rader_n"] = info["raderN"]
+    if info["kind"] == "bluestein":
+        if type(length) is not int or length not in info["lengths"]:
+            raise ValueError("Bluestein FFT length differs from its pipeline")
+        expected_values["length"] = length
     if (
         set(values) != set(SCALARS[info["kind"]])
         or values != expected_values
@@ -487,7 +576,7 @@ def plan_launch(entry, counts, values, threads, execution):
     ):
         raise ValueError("FFT launch size or batch differs from its pipeline")
     expected = launch(info, total)
-    spans = extents(info, total)
+    spans = extents(info, total, length)
     if (
         execution != expected
         or not 0 < expected["workgroupCount"][0] <= MAX_WORKGROUPS
@@ -499,8 +588,9 @@ def plan_launch(entry, counts, values, threads, execution):
     return {
         "kind": info["kind"],
         "transform": info["transform"],
-        "footprint": footprint(info, total),
+        "footprint": footprint(info, total, length),
         "n": info["n"],
+        **({"length": length} if info["kind"] == "bluestein" else {}),
         "batchSize": total,
         "inverse": info["inverse"],
         "elements": spans,
