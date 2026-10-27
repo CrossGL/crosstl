@@ -59,6 +59,7 @@ from .templates.idioms import FAMILY as IDIOMS
 from .templates.idioms import SHADOW_HELPERS
 from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
 from .templates.initializers import FAMILY as INITIALIZERS
+from .templates.integers import CROSSGL as INTEGERS_CROSSGL
 from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
@@ -607,6 +608,7 @@ CONSTRUCTS: dict[str, Template] = {
     **WORKGROUPS_CROSSGL,
     **RECORDS_CROSSGL,
     **IDENTIFIERS_CROSSGL,
+    **INTEGERS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

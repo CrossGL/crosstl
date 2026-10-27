@@ -436,6 +436,29 @@ def test_reserved_name_probes_use_their_own_language_s_words_at_every_declaratio
     assert "pub struct var {" in rust and "var { a: x * 2.0, b: 3 }" in rust
 
 
+def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
+    crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
+    assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl
+    for language, member, use in (
+        ("wgsl", "u1: u32,", "f32(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("cuda", "unsigned int u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("opencl", "uint u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("rust", "u1: u32,", "(params.u2 % 1000 + (params.u3 >> 24)) as f32"),
+        ("mojo", "var u1: UInt32", "Float32(params.u2 % 1000 + (params.u3 >> 24))"),
+    ):
+        source = probes.build(_feature(language, "uniform-unsigned"), language).source
+        assert member in source and use in source, language
+    mojo = probes.build(_feature("mojo", "uniform-integer"), "mojo").source
+    assert "params.n3 // 1000000" in mojo
+    for language, local in (
+        ("wgsl", "let v = params.iv;"),
+        ("mojo", "var v = params.iv"),
+    ):
+        vector = probes.build(_feature(language, "uniform-integer-vector"), language)
+        assert local in vector.source and "$" not in vector.source, language
+    assert "(v[0] >> 20) + (v[1] >> 20) + (v[3] >> 24)" in vector.source
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {

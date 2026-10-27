@@ -27,6 +27,7 @@ from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
 from .initializers import FAMILY as _INITIALIZERS
 from .initializers import GLSL as _INITIALIZERS_GLSL
+from .integers import WEBGL as _INTEGERS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
@@ -95,6 +96,7 @@ WEBGL = {
     **_WORKGROUPS,
     **_RECORDS,
     **_IDENTIFIERS,
+    **_INTEGERS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
