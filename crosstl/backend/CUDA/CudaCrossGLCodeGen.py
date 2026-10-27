@@ -11,6 +11,7 @@ from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BlockNode,
     CastNode,
     DesignatedInitializerNode,
     EnumNode,
@@ -6286,6 +6287,22 @@ class CudaToCrossGLConverter:
 
         value = self.visit(node.value)
         return f"{''.join(designators)} = {value}"
+
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
 
     def visit_IfNode(self, node):
         condition = self.visit(node.condition)
