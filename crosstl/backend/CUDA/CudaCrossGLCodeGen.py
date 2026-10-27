@@ -236,7 +236,16 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
+    # ``let`` and ``match`` are CrossGL lexer keywords like ``kernel`` and ``var``.
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "buffer",
+        "in",
+        "kernel",
+        "let",
+        "match",
+        "precision",
+        "var",
+    }
 
     def __init__(self, threadgroup_size=None):
         # The host picks a CUDA kernel's block size at launch time; this option names it.
@@ -6708,6 +6717,9 @@ class CudaToCrossGLConverter:
         scoped_type = self.convert_cuda_scoped_type_to_crossgl(cuda_type)
         if scoped_type is not None:
             return scoped_type
+        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(cuda_type)
         return cuda_type
 
     def unqualified_leading_cuda_std_type_name(self, cuda_type):

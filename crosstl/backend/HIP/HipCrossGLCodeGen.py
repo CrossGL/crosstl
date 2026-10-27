@@ -313,7 +313,8 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
+    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
@@ -10006,6 +10007,9 @@ class HipToCrossGLConverter:
         if self.is_decltype_type_name(hip_type):
             return "auto"
 
+        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)
 
     def is_decltype_type_name(self, type_name):

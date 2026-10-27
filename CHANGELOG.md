@@ -57,6 +57,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- The CUDA, HIP and OpenCL C importers rename a struct named `let`, `match` or `var` (and the CUDA importer one named `kernel`) to `let_`, `match_`, `var_` or `kernel_` everywhere it is used, as the HLSL importer does, instead of writing CrossGL that does not parse (#3386).
+
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.
