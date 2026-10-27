@@ -46,6 +46,7 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
@@ -368,6 +369,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Generate complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        ast_node = rename_cuda_library_functions(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
         ast_node = materialize_structured_buffer_counters(
             ast_node, _refuse_buffer_counter
