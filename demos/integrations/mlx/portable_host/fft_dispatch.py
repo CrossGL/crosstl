@@ -1,4 +1,4 @@
-"""Execute translated MLX Stockham, Rader and Bluestein FFT packages and commit guarded outputs.
+"""Execute translated MLX Stockham, Rader, Bluestein and four-step FFT packages and commit guarded outputs.
 
 ``FFT`` binds the input and output transform batches, the transform size and
 the batch count, as ``mlx/backend/metal/fft.cpp`` binds them to the ``fft``
@@ -8,7 +8,9 @@ kernel's tables and Rader factor too, and Bluestein plans the
 transform length and the convolution size. Each launch is checked against
 ``fft_layout``'s plan for its hash name, each Rader table against the
 plan's generator powers and kernel spectrum, and each Bluestein table
-against its double-precision value. ``complex64`` operands travel as
+against its double-precision value; four-step passes bind ``n1``,
+``n2`` and their row or column count, checked against fft.cpp's split.
+``complex64`` operands travel as
 the ``float2`` vectors fft.metal declares, each holding the real and
 imaginary float32 bits; ``float32`` and ``int16`` operands as their bits.
 Inputs are followed by poisoned elements no transform reads, the output

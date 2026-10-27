@@ -1,7 +1,8 @@
-"""Cache translated MLX Stockham, Rader and Bluestein FFT entries, one per fft.cpp pipeline.
+"""Cache translated MLX Stockham, Rader, Bluestein and four-step FFT entries, one per fft.cpp pipeline.
 
-Each entry is the pinned ``fft.metal`` ``fft``, ``rader_fft`` or ``bluestein_fft`` kernel at one threadgroup
-memory size and input/output type pair, with the function constants
+Each entry is the pinned ``fft.metal`` ``fft``, ``rader_fft``, ``bluestein_fft`` or ``four_step_fft``
+kernel at one threadgroup memory size and input/output type pair (and, for
+``four_step_fft``, one pass), with the function constants
 fft.cpp sets for one transform size and direction frozen into it, at
 fft.cpp's ``(1, threadgroup_batch_size, threads_per_fft)`` threadgroups.
 The host names it by fft.cpp's pipeline hash name (``fft_layout``). OpenGL
@@ -109,20 +110,33 @@ def build_entries(root, packages, target, entries, jobs):
     )
 
 
+# Both directions of each transform: (inverse, input type, output type).
+DIRECTIONS = (
+    (False, "float2", "float2"),
+    (True, "float2", "float2"),
+    (False, "float", "float2"),
+    (True, "float2", "float"),
+)
+
+
 def verification_entries():
     """Both directions of every transform kind at two Stockham sizes, one
     Rader size and one Bluestein size, and at a Stockham size whose
-    threadgroups pass the 64-thread z limit of Direct3D and OpenGL."""
-    return [
-        layout.entry_name(n, inverse, input_type, output_type)
+    threadgroups pass the 64-thread z limit of Direct3D and OpenGL; and both
+    passes of the four-step transforms of 8,192 points and of 2**23 points,
+    whose 4,096- and 2,048-point passes also pass that limit."""
+    single = [
+        layout.entry_name(n, *direction)
         for n in (8, 100, 17, 47, 1024)
-        for inverse, input_type, output_type in (
-            (False, "float2", "float2"),
-            (True, "float2", "float2"),
-            (False, "float", "float2"),
-            (True, "float2", "float"),
-        )
+        for direction in DIRECTIONS
     ]
+    four_step = [
+        name
+        for n in (1 << 13, 1 << 23)
+        for direction in DIRECTIONS
+        for name in layout.four_step_entry_names(n, *direction)
+    ]
+    return single + four_step
 
 
 def main(argv=None):

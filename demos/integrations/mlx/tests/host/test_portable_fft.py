@@ -68,6 +68,117 @@ def test_the_largest_four_step_plan_grows_n2_and_larger_sizes_are_refused():
         fft_layout.plan_fft(1 << 25)
 
 
+def test_four_step_plans_name_fft_cpp_passes():
+    assert fft_layout.four_step_entry_names(8192, False, "float2", "float2") == (
+        "four_step_mem_512_float2_float2_0_false_n128_inv_0",
+        "four_step_mem_256_float2_float2_1_false_n64_inv_0",
+    )
+    # Real transforms pass through fft.cpp's complex64 temporary.
+    assert fft_layout.four_step_entry_names(8192, False, "float", "float2") == (
+        "four_step_mem_512_float_float2_0_true_n128_inv_0",
+        "four_step_mem_256_float2_float2_1_true_n64_inv_0",
+    )
+    assert fft_layout.four_step_entry_names(8192, True, "float2", "float") == (
+        "four_step_mem_512_float2_float2_0_true_n128_inv_1",
+        "four_step_mem_256_float2_float_1_true_n64_inv_1",
+    )
+    # Past 65,536 points n2 is 1024, and 2**23 grows n2 past n1's limit.
+    assert fft_layout.four_step_splits()[1 << 17] == (128, 1024)
+    assert fft_layout.four_step_splits()[1 << 23] == (4096, 2048)
+    first, second = fft_layout.four_step_entry_names(1 << 24, True, "float2", "float2")
+    assert first == "four_step_mem_4096_float2_float2_0_false_n4096_inv_1"
+    info = fft_layout.signature(first)
+    assert (info["kind"], info["transform"], info["step"]) == ("four_step", "c2c", 0)
+    assert info["workgroupSize"] == (1, 1, 512)
+    assert info["source"] == "four_step_mem_4096_float2_float2_0_false"
+    # Each pass freezes the Stockham constants of its own size.
+    assert info["constants"] == fft_layout.stockham_constants(4096, True)
+    assert fft_layout.parameters(second) == ("in", "out", "n1", "n2", "batch_size")
+    assert fft_layout.scalars(second) == ("n1", "n2", "batch_size")
+    assert fft_dispatch.is_entry(second)
+    for n, types, inverse in (
+        (4096, ("float2", "float2"), False),  # a Stockham plan
+        (8193, ("float2", "float2"), False),  # a multi-upload Bluestein plan
+        (8192, ("float", "float2"), True),
+        (8192, ("float2", "float"), False),
+    ):
+        with pytest.raises(ValueError):
+            fft_layout.four_step_entry_names(n, inverse, *types)
+
+
+def test_four_step_launches_follow_fft_cpp_splits_and_extents():
+    entry = "four_step_mem_512_float2_float2_0_false_n128_inv_0"
+    info = fft_layout.signature(entry)
+    # Three 8192-point transforms: 192 columns of 128, four per threadgroup.
+    execution = fft_layout.launch(info, 192)
+    assert execution == {"workgroupCount": [48, 1, 1], "workgroupSize": [1, 4, 32]}
+    spans = {"in": 3 * 8192, "out": 3 * 8192}
+    metadata = fft_layout.plan_launch(
+        entry, spans, {"n1": 128, "n2": 64, "batch_size": 192}, 3 * 8192, execution
+    )
+    assert (metadata["n1"], metadata["n2"], metadata["step"]) == (128, 64, 0)
+    assert metadata["footprint"] == spans
+    # The second r2c pass writes n / 2 + 1 elements of each transform, and
+    # real passes do not pair rows.
+    r2c = fft_layout.signature("four_step_mem_256_float2_float2_1_true_n64_inv_0")
+    assert fft_layout.launch(r2c, 384)["workgroupCount"] == [96, 1, 1]
+    assert fft_layout.four_step_extents(r2c, 384, 128, 64) == {
+        "in": 3 * 8192,
+        "out": 3 * 4097,
+    }
+    c2r = fft_layout.signature("four_step_mem_512_float2_float2_0_true_n128_inv_1")
+    assert fft_layout.four_step_extents(c2r, 192, 128, 64) == {
+        "in": 3 * 4097,
+        "out": 3 * 8192,
+    }
+    for values, counts, threads, launch in (
+        ({"n1": 64, "n2": 128, "batch_size": 192}, spans, 3 * 8192, execution),
+        # fft.cpp splits 16,384 points as 256 x 64.
+        ({"n1": 128, "n2": 128, "batch_size": 192}, spans, 3 * 8192, execution),
+        ({"n1": 128, "n2": 64, "batch_size": 190}, spans, 3 * 8192, execution),
+        ({"n1": 128, "n2": 64}, spans, 3 * 8192, execution),
+        (
+            {"n1": 128, "n2": 64, "batch_size": 192},
+            {"in": 3 * 8192, "out": 2 * 8192},
+            3 * 8192,
+            execution,
+        ),
+        ({"n1": 128, "n2": 64, "batch_size": 192}, spans, 2 * 8192, execution),
+        (
+            {"n1": 128, "n2": 64, "batch_size": 192},
+            spans,
+            3 * 8192,
+            dict(execution, workgroupCount=[24, 1, 1]),
+        ),
+    ):
+        with pytest.raises(ValueError):
+            fft_layout.plan_launch(entry, counts, values, threads, launch)
+
+
+def test_four_step_passes_bind_the_split_and_dispatch(monkeypatch, tmp_path):
+    entry = "four_step_mem_256_float2_float2_1_false_n64_inv_0"
+    source = [_complex_word(index % 7, 1.0) for index in range(8192)]
+    values, event, _, request = run(
+        monkeypatch, tmp_path, entry, 128, source, split=(128, 64)
+    )
+    assert values == source
+    assert request["inputs"]["n1Binding"]["values"] == [128]
+    assert request["inputs"]["n2Binding"]["values"] == [64]
+    assert request["inputs"]["batch_sizeBinding"]["values"] == [128]
+    assert event["fftMetadata"]["kind"] == "four_step"
+    assert event["workgroupCount"] == [32, 1, 1]
+    with pytest.raises(ValueError, match="dispatch|split"):
+        run(
+            monkeypatch,
+            tmp_path,
+            entry,
+            128,
+            source,
+            split=(128, 64),
+            scalars=(256, 32),
+        )
+
+
 def test_hash_names_freeze_fft_cpp_constants_and_threadgroups():
     entry = "fft_mem_256_float2_float2_n100_inv_0"
     assert fft_layout.entry_name(100, False, "float2", "float2") == entry
@@ -109,6 +220,14 @@ def test_hash_names_freeze_fft_cpp_constants_and_threadgroups():
         "bluestein_fft_mem_512_float2_float2_n128_inv_0",
         "bluestein_fft_mem_256_float2_float2_n128_inv_0_precomputed",
         "fft_mem_256_float2_float2_n128_inv_0_precomputed",
+        "four_step_mem_256_float2_float2_0_false_n64_inv_0",  # 64 is never n1
+        "four_step_mem_256_float2_float2_1_false_n128_inv_0",  # 128 is never n2
+        "four_step_mem_256_float2_float2_0_false_n128_inv_0",  # not its memory
+        "four_step_mem_512_float_float2_0_true_n128_inv_1",  # an inverse r2c pass
+        "four_step_mem_512_float2_float_0_true_n128_inv_1",  # c2r writes complex
+        "four_step_mem_512_float2_float2_0_false_n128_inv_0_precomputed",
+        "four_step_mem_512_float2_float2_2_false_n128_inv_0",
+        "four_step_fft_mem_512_float2_float2_0_false_n128_inv_0",
     ],
 )
 def test_other_names_are_refused(entry):
@@ -368,7 +487,13 @@ def bluestein_tables(length, bluestein_n, fault=None):
 def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     info = fft_layout.signature(entry)
     length = overrides.get("transform_length", info["lengths"][0])
-    spans = fft_layout.extents(info, total, length)
+    four_step = info["kind"] == "four_step"
+    split = overrides.get("split", (0, 0))
+    spans = (
+        fft_layout.four_step_extents(info, total, *split)
+        if four_step
+        else fft_layout.extents(info, total, length)
+    )
     source_type = ctypes.c_uint64 if info["input"] == "complex64" else ctypes.c_uint32
     output_type = ctypes.c_uint64 if info["output"] == "complex64" else ctypes.c_uint32
     memory = {
@@ -380,7 +505,12 @@ def run(monkeypatch, tmp_path, entry, total, source, fault=None, **overrides):
     if info["kind"] == "bluestein":
         memory.update(bluestein_tables(length, info["n"], fault))
         memory["length"] = (ctypes.c_int32 * 1)(overrides.get("length", length))
-    memory["n"] = (ctypes.c_int32 * 1)(overrides.get("n", info["n"]))
+    if four_step:
+        n1, n2 = overrides.get("scalars", split)
+        memory["n1"] = (ctypes.c_int32 * 1)(n1)
+        memory["n2"] = (ctypes.c_int32 * 1)(n2)
+    else:
+        memory["n"] = (ctypes.c_int32 * 1)(overrides.get("n", info["n"]))
     memory["batch_size"] = (ctypes.c_int32 * 1)(total)
     if info["kind"] == "rader":
         memory["rader_n"] = (ctypes.c_int32 * 1)(
@@ -560,8 +690,10 @@ def test_the_host_routes_and_audits_stockham_and_rader_ffts():
     assert 'fft_unported("fused Bluestein plans")' not in port
     assert '"rader_fft_mem_"' in port and "pocketfft::c2c(" in port
     assert '"bluestein_fft_mem_"' in port and "fft_bluestein_tables(" in port
-    for route in ("Bluestein twiddle-table plans", "four-step plans"):
-        assert f'fft_unported("{route}")' in port or route in port
+    assert 'fft_unported("four-step plans")' not in port
+    assert '"four_step_mem_"' in port and "FFTFourStepParams" in port
+    for route in ("Bluestein twiddle-table plans", "multi-upload Bluestein plans"):
+        assert f'fft_unported("{route}")' in port
     assert "void FFT::eval_gpu" in port
     prepare = (HOST / "prepare.py").read_text()
     assert '"crosstl_fft.inc": (HERE / "fft.inc").read_bytes()' in prepare

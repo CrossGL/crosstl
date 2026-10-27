@@ -7,8 +7,11 @@
 // run the translated rader_fft kernel the same way, with the tables
 // compute_raders_constants builds on the CPU, and Bluestein plans run the
 // translated bluestein_fft kernel with the tables compute_bluestein_constants
-// builds. Four-step plans and Bluestein's twiddle-table plans are refused by
-// name before any allocation or launch.
+// builds. Four-step plans of powers of two run fft.cpp's four_step_fft
+// passes, n1 columns into a complex64 temporary and n2 rows out of it, with
+// the translated four_step_fft kernel. Multi-upload Bluestein plans and
+// Bluestein's twiddle-table plans are refused by name before any allocation
+// or launch.
 // fft_layout checks each launch against the same plan; the host names each
 // pipeline by fft.cpp's hash name, whose translated entry has the function
 // constants that name implies frozen. crosstl_backend.cpp includes this file
@@ -28,6 +31,7 @@ constexpr int fft_max_stockham_size = 4096;
 constexpr int fft_max_rader_size = 2048;
 constexpr int fft_max_bluestein_size = 2048;
 constexpr int fft_min_threadgroup_mem_size = 256;
+constexpr int fft_min_coalesce_width = 4;
 
 [[noreturn]] void fft_unported(const char* route) {
   throw std::invalid_argument(
@@ -334,29 +338,97 @@ array fft_input(const array& x, size_t axis) {
   return x_copy;
 }
 
-// fft.cpp fft_op without four-step parameters.
+// fft.cpp FourStepParams: a four-step pass transforms n1 columns first and
+// n2 rows second.
+struct FFTFourStepParams {
+  bool required = false;
+  bool first_step = true;
+  int n1 = 0;
+  int n2 = 0;
+};
+
+// The transform types fft.cpp's kernels instantiate: complex64 both ways, or
+// one float32 side for a real transform. A four-step pass of a real
+// transform reads or writes fft.cpp's complex64 temporary instead.
+void fft_require_types(
+    bool real_input,
+    bool real_output,
+    bool complex_input,
+    bool complex_output,
+    bool inverse,
+    bool real,
+    const FFTFourStepParams& four_step_params) {
+  bool valid = (complex_input || real_input) && (complex_output || real_output);
+  if (four_step_params.required && real) {
+    // r2c: float32 -> temporary -> complex64; c2r: complex64 -> temporary
+    // -> float32.
+    const bool first = four_step_params.first_step;
+    valid = valid && !real_output == (!inverse || first) &&
+        !real_input == (inverse || !first) && !(real_input && real_output);
+  } else {
+    valid = valid && !(real_input && (!real || inverse)) &&
+        !(real_output && (!real || !inverse)) &&
+        !(real && real_input == real_output);
+  }
+  if (!valid) {
+    throw std::invalid_argument(
+        "CrossTL FFT requires fft.cpp's complex64 and float32 transform types.");
+  }
+}
+
 void fft_op(
     const array& in,
     array& out,
     size_t axis,
     bool inverse,
     bool real,
+    const FFTFourStepParams& four_step_params,
+    bool inplace);
+
+// fft.cpp four_step_fft for powers of two: the n1 pass writes a complex64
+// temporary that the n2 pass reads. Multi-upload Bluestein plans are refused.
+void four_step_fft(
+    const array& in,
+    array& out,
+    size_t axis,
+    bool inverse,
+    bool real,
+    const HostFFTPlan& plan,
+    bool inplace) {
+  if (plan.bluestein_n > 0) {
+    fft_unported("multi-upload Bluestein plans");
+  }
+  FFTFourStepParams four_step_params{true, true, plan.n1, plan.n2};
+  auto temp_shape = (real && inverse) ? out.shape() : in.shape();
+  array temp(temp_shape, complex64, nullptr, {});
+  fft_op(in, temp, axis, inverse, real, four_step_params, /*inplace=*/false);
+  four_step_params.first_step = false;
+  fft_op(temp, out, axis, inverse, real, four_step_params, inplace);
+}
+
+// fft.cpp fft_op.
+void fft_op(
+    const array& in,
+    array& out,
+    size_t axis,
+    bool inverse,
+    bool real,
+    const FFTFourStepParams& four_step_params,
     bool inplace) {
   require_runtime();
-  const size_t n = out.dtype() == float32 ? out.shape(axis) : in.shape(axis);
+  size_t n = out.dtype() == float32 ? out.shape(axis) : in.shape(axis);
   if (n == 1) {
     out.copy_shared_buffer(in);
     return;
   }
+  if (four_step_params.required) {
+    n = four_step_params.first_step ? four_step_params.n1 : four_step_params.n2;
+  }
   const bool real_input = in.dtype() == float32;
   const bool real_output = out.dtype() == float32;
-  if ((in.dtype() != complex64 && !real_input) ||
-      (out.dtype() != complex64 && !real_output) ||
-      (real_input && (!real || inverse)) || (real_output && (!real || !inverse)) ||
-      (real && real_input == real_output)) {
-    throw std::invalid_argument(
-        "CrossTL FFT requires fft.cpp's complex64 and float32 transform types.");
-  }
+  fft_require_types(
+      real_input, real_output, in.dtype() == complex64, out.dtype() == complex64,
+      inverse, real, four_step_params);
   const array in_contiguous = fft_input(in, axis);
   // real to complex: n -> (n/2)+1; complex to real: (n/2)+1 -> n.
   auto out_strides = in_contiguous.strides();
@@ -371,10 +443,15 @@ void fft_op(
   }
   const auto plan = fft_plan(int(n));
   if (plan.four_step) {
-    fft_unported(plan.bluestein_n > 0 ? "multi-upload Bluestein plans" : "four-step plans");
+    four_step_fft(in, out, axis, inverse, real, plan, inplace);
+    return;
   }
+  const bool four_step = four_step_params.required;
   const bool bluestein = plan.bluestein_n > 0;
-  const size_t size = real_output ? out.size() : in.size();
+  size_t size = real_output ? out.size() : in.size();
+  if (real && inverse && four_step) {
+    size = out.size();
+  }
   if (size % n != 0 || size > size_t(std::numeric_limits<int32_t>::max()) ||
       in.size() > size_t(std::numeric_limits<int32_t>::max()) ||
       out.size() > size_t(std::numeric_limits<int32_t>::max())) {
@@ -397,11 +474,17 @@ void fft_op(
     fft_unported("Bluestein twiddle-table plans");
   }
   const int threads_per_fft = (fft_size + elems_per_thread - 1) / elems_per_thread;
-  const int threadgroup_batch_size =
-      std::max(fft_min_threadgroup_mem_size / fft_size, 1);
+  int threadgroup_batch_size = std::max(fft_min_threadgroup_mem_size / fft_size, 1);
+  if (four_step) {
+    // Batch four-step passes to coalesce their strided accesses, within
+    // threadgroup memory.
+    threadgroup_batch_size = std::max(
+        threadgroup_batch_size,
+        std::min(fft_min_coalesce_width, fft_max_stockham_size / fft_size));
+  }
   const int threadgroup_mem_size = next_power_of_2(threadgroup_batch_size * fft_size);
   int batch_size = (total_batch_size + threadgroup_batch_size - 1) / threadgroup_batch_size;
-  if (real) {
+  if (real && !four_step) {
     // Two real transforms share one complex transform.
     batch_size = (batch_size + 2 - 1) / 2;
   }
@@ -413,16 +496,26 @@ void fft_op(
   const char* out_type_str = real_output ? "float" : "float2";
   const bool rader = !bluestein && plan.rader_n > 1;
   std::ostringstream kname;
-  kname << (bluestein ? "bluestein_fft_mem_" : rader ? "rader_fft_mem_" : "fft_mem_")
-        << threadgroup_mem_size << "_"
-        << in_type_str << "_" << out_type_str << "_n" << fft_size << "_inv_"
-        << inverse;
+  if (bluestein || rader || !four_step) {
+    kname << (bluestein ? "bluestein_fft_mem_" : rader ? "rader_fft_mem_" : "fft_mem_")
+          << threadgroup_mem_size << "_" << in_type_str << "_" << out_type_str;
+  } else {
+    kname << "four_step_mem_" << threadgroup_mem_size << "_" << in_type_str << "_"
+          << out_type_str << "_" << (four_step_params.first_step ? 0 : 1) << "_"
+          << (real ? "true" : "false");
+  }
+  kname << "_n" << fft_size << "_inv_" << inverse;
   const std::string entry = kname.str();
   require_entry(entry);
   int32_t n_value = fft_size;
   int32_t batch_value = total_batch_size;
-  const uint64_t in_count = uint64_t(total_batch_size) * in_contiguous.shape(axis);
-  const uint64_t out_count = uint64_t(total_batch_size) * out.shape(axis);
+  // The transforms along the axis: four-step passes run total_batch_size
+  // rows or columns of them.
+  const uint64_t transforms = four_step
+      ? uint64_t(total_batch_size) * n / (uint64_t(four_step_params.n1) * four_step_params.n2)
+      : uint64_t(total_batch_size);
+  const uint64_t in_count = transforms * in_contiguous.shape(axis);
+  const uint64_t out_count = transforms * out.shape(axis);
   if (in_contiguous.data_size() != in_count || out.data_size() != out_count) {
     throw std::invalid_argument("CrossTL FFT operands are not dense transform batches.");
   }
@@ -433,6 +526,18 @@ void fft_op(
       {"n", "int32", &n_value, 1, 0},
       {"batch_size", "int32", &batch_value, 1, 0},
   };
+  int32_t n1_value = four_step_params.n1;
+  int32_t n2_value = four_step_params.n2;
+  if (four_step && !bluestein && !rader) {
+    // fft.cpp binds n1, n2 and total_batch_size at 2 to 4.
+    buffers = {
+        buffers[0],
+        buffers[1],
+        {"n1", "int32", &n1_value, 1, 0},
+        {"n2", "int32", &n2_value, 1, 0},
+        {"batch_size", "int32", &batch_value, 1, 0},
+    };
+  }
   FFTRaderTables tables;
   int32_t rader_value = plan.rader_n;
   if (rader) {
@@ -489,7 +594,7 @@ void nd_fft_op(
     const bool step_real = real && index == int(axes.size()) - 1;
     const array& in_arr = i == int(axes.size()) - 1 ? in : temp_arrs[i % 2];
     array& out_arr = i == 0 ? out : temp_arrs[1 - i % 2];
-    fft_op(in_arr, out_arr, axis, inverse, step_real, inplace);
+    fft_op(in_arr, out_arr, axis, inverse, step_real, FFTFourStepParams(), inplace);
   }
 }
 
@@ -500,7 +605,7 @@ void FFT::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (axes_.size() > 1) {
     nd_fft_op(in, out, axes_, inverse_, real_);
   } else {
-    fft_op(in, out, axes_[0], inverse_, real_, /*inplace=*/false);
+    fft_op(in, out, axes_[0], inverse_, real_, FFTFourStepParams(), /*inplace=*/false);
   }
 }
 

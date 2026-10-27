@@ -21,7 +21,11 @@ size up to 2048 as a ``bluestein_n``-point Stockham convolution in the same
 threadgroups, with the chirp ``w_k`` and its spectrum ``w_q``
 compute_bluestein_constants builds on the CPU; its hash name carries
 ``bluestein_n``, and the transform length binds as ``length``. Four-step
-plans use other kernels.
+plans of powers of two run the ``four_step_fft`` kernel twice, ``n1``
+columns and then ``n2`` rows through a complex64 temporary, in threadgroups
+batched to coalesce their strided accesses; each pass's hash name carries
+its own size, and ``n1`` and ``n2`` bind as scalars. Multi-upload Bluestein
+plans compose those transforms with other kernels.
 """
 
 import cmath
@@ -64,12 +68,30 @@ TRANSFORMS = {
 }
 # The plan kind each fft.metal kernel runs, by kernel name.
 KERNELS = {"fft": "stockham", "rader_fft": "rader", "bluestein_fft": "bluestein"}
-ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_", "bluestein_fft_mem_")
+ENTRY_PREFIXES = ("fft_mem_", "rader_fft_mem_", "bluestein_fft_mem_", "four_step_mem_")
 ENTRY = re.compile(
     r"(?P<source>(?P<kernel>bluestein_fft|rader_fft|fft)_mem_(?P<memory>[0-9]+)_"
     r"(?P<input>float2|float)_(?P<output>float2|float))_n(?P<n>[1-9][0-9]*)"
     r"_inv_(?P<inverse>[01])"
 )
+# fft.cpp's four_step_fft hash names: the step's transform size follows the
+# step and real template arguments fft.metal instantiates.
+FOUR_STEP_ENTRY = re.compile(
+    r"(?P<source>four_step_mem_(?P<memory>[0-9]+)_(?P<input>float2|float)_"
+    r"(?P<output>float2|float)_(?P<step>[01])_(?P<real>true|false))"
+    r"_n(?P<n>[1-9][0-9]*)_inv_(?P<inverse>[01])"
+)
+# fft.metal instantiate_four_step: the transform each (input, output, step,
+# real) instantiation serves. four_step_fft's first step writes, and its
+# second reads, fft.cpp's complex64 temporary.
+FOUR_STEP_TRANSFORMS = {
+    ("float2", "float2", 0, False): "c2c",
+    ("float2", "float2", 1, False): "c2c",
+    ("float", "float2", 0, True): "r2c",
+    ("float2", "float2", 1, True): "r2c",
+    ("float2", "float2", 0, True): "c2r",
+    ("float2", "float", 1, True): "c2r",
+}
 # The parameters fft.cpp binds to each kernel, in buffer order.
 PARAMETERS = {
     "stockham": ("in", "out", "n", "batch_size"),
@@ -84,12 +106,14 @@ PARAMETERS = {
         "rader_n",
     ),
     "bluestein": ("in", "out", "w_q", "w_k", "length", "n", "batch_size"),
+    "four_step": ("in", "out", "n1", "n2", "batch_size"),
 }
 OUTPUT = "out"
 SCALARS = {
     "stockham": ("n", "batch_size"),
     "rader": ("n", "batch_size", "rader_n"),
     "bluestein": ("length", "n", "batch_size"),
+    "four_step": ("n1", "n2", "batch_size"),
 }
 # The tables fft.cpp computes on the CPU for each kernel, and their storage.
 TABLES = {
@@ -100,6 +124,7 @@ TABLES = {
         "raders_g_minus_q": "int16",
     },
     "bluestein": {"w_q": "complex64", "w_k": "complex64"},
+    "four_step": {},
 }
 # Every device index the host binds stays a signed 32-bit element offset.
 SIGNED_MAX = (1 << 31) - 1
@@ -395,9 +420,127 @@ def entry_name(n, inverse, input_type, output_type):
     )
 
 
+@functools.lru_cache(maxsize=None)
+def four_step_splits():
+    """fft.cpp plan_fft's ``(n1, n2)`` split of every power of two past the
+    largest Stockham size, by size, up to the largest it plans."""
+    splits, n = {}, 2 * MAX_STOCKHAM_FFT_SIZE
+    while n <= MAX_STOCKHAM_FFT_SIZE * MAX_STOCKHAM_FFT_SIZE:
+        plan = plan_fft(n)
+        splits[n] = (plan["n1"], plan["n2"])
+        n *= 2
+    return splits
+
+
+def four_step_threadgroup_batch_size(n):
+    """fft.cpp's transforms per threadgroup in a four-step pass of ``n``:
+    batched to coalesce the strided accesses, within threadgroup memory."""
+    return max(
+        threadgroup_batch_size(n),
+        min(MIN_COALESCE_WIDTH, MAX_STOCKHAM_FFT_SIZE // n),
+    )
+
+
+def four_step_entry_names(n, inverse, input_type, output_type):
+    """fft.cpp's hash names for the two passes of a four-step transform of
+    the power of two ``n``: ``n1`` columns, then ``n2`` rows, through a
+    complex64 temporary."""
+    plan = plan_fft(n)
+    if plan_kind(plan) != "four_step" or plan["bluestein_n"] > 0:
+        raise ValueError(f"FFT size {n} has no power-of-two four-step plan")
+    transform = TRANSFORMS.get((input_type, output_type))
+    if (
+        transform is None
+        or (transform == "r2c" and inverse)
+        or (transform == "c2r" and not inverse)
+    ):
+        raise ValueError("FFT four-step transform types differ from fft.cpp's")
+    real = "false" if transform == "c2c" else "true"
+    names = []
+    for step, size, types in (
+        (0, plan["n1"], (input_type, "float2")),
+        (1, plan["n2"], ("float2", output_type)),
+    ):
+        memory = next_power_of_2(four_step_threadgroup_batch_size(size) * size)
+        names.append(
+            f"four_step_mem_{memory}_{types[0]}_{types[1]}_{step}_{real}_n{size}"
+            f"_inv_{int(bool(inverse))}"
+        )
+    return tuple(names)
+
+
+def _four_step_signature(entry):
+    """The launch a ``four_step_fft`` hash name implies."""
+    match = FOUR_STEP_ENTRY.fullmatch(entry)
+    if match is None:
+        raise ValueError(f"Not an MLX four-step FFT entry: {entry!r}")
+    n, inverse = int(match["n"]), match["inverse"] == "1"
+    step, real = int(match["step"]), match["real"] == "true"
+    transform = FOUR_STEP_TRANSFORMS.get((match["input"], match["output"], step, real))
+    sizes = {split[step] for split in four_step_splits().values()}
+    if (
+        transform is None
+        or (transform == "r2c" and inverse)
+        or (transform == "c2r" and not inverse)
+        or n not in sizes
+    ):
+        raise ValueError(f"Not an MLX four-step FFT entry: {entry!r}")
+    batch = four_step_threadgroup_batch_size(n)
+    memory = next_power_of_2(batch * n)
+    if memory not in MEMORY_SIZES or int(match["memory"]) != memory:
+        raise ValueError(f"FFT entry does not name fft.cpp's pipeline: {entry!r}")
+    # fft.cpp plans each pass as the Stockham transform of its size.
+    constants = plan_constants(n, inverse, "stockham")
+    elems = constants["elems_per_thread_"]
+    threads = (n + elems - 1) // elems
+    return {
+        "kind": "four_step",
+        "source": match["source"],
+        "transform": transform,
+        "n": n,
+        "step": step,
+        "real": real,
+        "inverse": inverse,
+        "raderN": 1,
+        "lengths": (n,),
+        "input": STORAGE[match["input"]],
+        "output": STORAGE[match["output"]],
+        "memory": memory,
+        "threadgroupBatchSize": batch,
+        "threadsPerFFT": threads,
+        "constants": constants,
+        "workgroupSize": (1, batch, threads),
+    }
+
+
+def four_step_extents(info, total, n1, n2):
+    """The elements of ``in`` and ``out`` one four-step pass spans over its
+    ``total`` transforms of ``n1 * n2``-point transforms split as fft.cpp
+    splits them, refusing other splits, sizes and batches."""
+    overall = n1 * n2
+    if (
+        four_step_splits().get(overall) != (n1, n2)
+        or info["n"] != (n1, n2)[info["step"]]
+        or total * info["n"] % overall
+    ):
+        raise ValueError("FFT four-step split differs from fft.cpp's plan")
+    transforms = total * info["n"] // overall
+    full, half = transforms * overall, transforms * (overall // 2 + 1)
+    return {
+        ("c2c", 0): {"in": full, "out": full},
+        ("c2c", 1): {"in": full, "out": full},
+        ("r2c", 0): {"in": full, "out": full},
+        ("r2c", 1): {"in": full, "out": half},
+        ("c2r", 0): {"in": half, "out": full},
+        ("c2r", 1): {"in": full, "out": full},
+    }[(info["transform"], info["step"])]
+
+
 def signature(entry):
-    """The launch a ``fft`` or ``rader_fft`` hash name implies, refusing every
-    other name."""
+    """The launch a ``fft``, ``rader_fft``, ``bluestein_fft`` or
+    ``four_step_fft`` hash name implies, refusing every other name."""
+    if isinstance(entry, str) and entry.startswith("four_step_mem_"):
+        return _four_step_signature(entry)
     match = ENTRY.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError(f"Not an MLX single-threadgroup FFT entry: {entry!r}")
@@ -544,12 +687,50 @@ def footprint(info, total, length=None):
 def launch(info, total):
     """fft.cpp's dispatch_threads grid as whole threadgroups."""
     groups = (total + info["threadgroupBatchSize"] - 1) // info["threadgroupBatchSize"]
-    if info["transform"] in {"r2c", "c2r"}:
-        # Two real transforms share one complex transform, either way.
+    if info["transform"] in {"r2c", "c2r"} and info["kind"] != "four_step":
+        # Two real transforms share one complex transform, either way;
+        # four-step passes run every row and column on its own.
         groups = (groups + 1) // 2
     return {
         "workgroupCount": [groups, 1, 1],
         "workgroupSize": list(info["workgroupSize"]),
+    }
+
+
+def _plan_four_step_launch(info, counts, values, threads, execution):
+    """Check one four-step pass's launch; ``plan_launch`` for its entries."""
+    total, n1, n2 = values.get("batch_size"), values.get("n1"), values.get("n2")
+    if (
+        set(values) != set(SCALARS["four_step"])
+        or any(type(value) is not int for value in (total, n1, n2))
+        or total < 1
+    ):
+        raise ValueError("FFT launch size or batch differs from its pipeline")
+    spans = four_step_extents(info, total, n1, n2)
+    expected = launch(info, total)
+    if (
+        execution != expected
+        # Whole threadgroups: compute_strided_indices coalesces each
+        # threadgroup's transforms along one stride.
+        or total % info["threadgroupBatchSize"]
+        or not 0 < expected["workgroupCount"][0] <= MAX_WORKGROUPS
+        or counts != spans
+        or max(spans.values()) > SIGNED_MAX
+        or threads != spans["out"]
+    ):
+        raise ValueError("FFT launch differs from fft.cpp's dispatch")
+    return {
+        "kind": "four_step",
+        "transform": info["transform"],
+        # Whole threadgroups touch only their transforms' elements.
+        "footprint": dict(spans),
+        "n": info["n"],
+        "step": info["step"],
+        "n1": n1,
+        "n2": n2,
+        "batchSize": total,
+        "inverse": info["inverse"],
+        "elements": spans,
     }
 
 
@@ -559,6 +740,8 @@ def plan_launch(entry, counts, values, threads, execution):
     ``values`` holds the scalar each of the entry's scalar parameters binds.
     """
     info = signature(entry)
+    if info["kind"] == "four_step":
+        return _plan_four_step_launch(info, counts, values, threads, execution)
     total = values.get("batch_size")
     length = values.get("length")
     expected_values = {"n": info["n"], "batch_size": total}
