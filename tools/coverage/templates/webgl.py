@@ -23,6 +23,9 @@ from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .portability import FAMILY as _PORTABILITY
+from .portability import GLSL as _PORTABILITY_GLSL
+from .portability import WEBGL as _PORTABILITY_WEBGL
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
 
@@ -71,6 +74,9 @@ WEBGL = {
     **_IDIOMS_GLSL,
     **_ABSTRACTIONS,
     **_ABSTRACTIONS_GLSL,
+    **_PORTABILITY,
+    **_PORTABILITY_GLSL,
+    **_PORTABILITY_WEBGL,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

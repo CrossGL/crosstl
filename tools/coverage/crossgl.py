@@ -56,6 +56,14 @@ from .templates.idioms import SHADOW_HELPERS
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
+from .templates.portability import FAMILY as PORTABILITY
+from .templates.portability import (
+    GLSL_ARRAY,
+    GLSL_SPREAD,
+    SHADER_NAMES,
+    constants,
+    intrinsic_names,
+)
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 
@@ -575,6 +583,12 @@ CONSTRUCTS: dict[str, Template] = {
     "const-parameter": Template(
         ABSTRACTIONS["const-parameter"].body, WEIGH, prelude=PAIR
     ),
+    **PORTABILITY,
+    "constant-expression": Template(
+        PORTABILITY["constant-expression"].body, prelude=constants("const")
+    ),
+    "intrinsic-name": intrinsic_names(SHADER_NAMES),
+    "array-return": Template(GLSL_ARRAY, GLSL_SPREAD),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
