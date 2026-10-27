@@ -1,8 +1,9 @@
 """``for (int a = 0, b = n; a < b; a++, b--)`` declares both counters in one initializer.
 
-The CrossGL parser keeps the two declarations as a list. GLSL, MSL and Slang output wrote that list's Python repr
-into the loop header, SPIR-V output refused the program ("Unknown variable a"), and the GLSL interval analysis kept
-``a`` at its initial value inside the loop, so it dropped ``if (a == 1) continue;`` as unreachable.
+The CrossGL parser keeps the two declarations, and the two updates, as lists. GLSL, MSL and Slang output wrote the
+declarations' Python repr into the loop header, CUDA output wrote the updates' repr, HIP output ran the updates once
+before the loop, SPIR-V output refused the program ("Unknown variable a"), and the GLSL interval analysis kept ``a``
+at its initial value inside the loop, so it dropped ``if (a == 1) continue;`` as unreachable.
 """
 
 import shutil
@@ -77,12 +78,22 @@ def test_initializers_one_declaration_cannot_write_are_refused(parts, declaratio
         join_for_initializer(parts, declarations, "opengl")
 
 
-@pytest.mark.parametrize("backend", ["opengl", "metal", "slang", "directx"])
+@pytest.mark.parametrize(
+    "backend", ["opengl", "metal", "slang", "directx", "cuda", "hip"]
+)
 def test_loop_header_declares_both_counters(tmp_path, backend):
     code = " ".join(_translate(tmp_path, backend).split())
     assert "for (int a = 0, b = n;" in code
     assert "VariableNode" not in code
     assert "continue;" in code
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_keep_both_updates_in_the_loop_header(tmp_path, backend):
+    # CUDA output wrote the update list's repr, and HIP output ran both updates once before the loop.
+    code = " ".join(_translate(tmp_path, backend).split())
+    assert "; a++, b--) {" in code or "; a++, b--)" in code
+    assert "a++;" not in code
 
 
 def test_opengl_output_validates(tmp_path):

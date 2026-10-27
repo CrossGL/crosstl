@@ -74,6 +74,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
 )
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -3618,15 +3619,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def hip_for_clause(self, node):
+        """One for-loop initializer or update clause; a list is one declaration or one comma expression."""
+        if not node:
+            return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.hip_for_clause(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "hip",
+            )
+        if isinstance(node, VariableNode):
+            return self.format_variable_declaration(node)
+        if hasattr(node, "expression"):
+            return self.visit_discarded_expression(node.expression)
+        return self.visit_discarded_expression(node)
+
     def visit_ForNode(self, node) -> str:
-        if isinstance(node.init, VariableNode):
-            init = self.format_variable_declaration(node.init)
-        elif hasattr(node.init, "expression"):
-            init = self.visit_discarded_expression(node.init.expression)
-        else:
-            init = self.visit_discarded_expression(node.init) if node.init else ""
+        init = self.hip_for_clause(node.init)
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit_discarded_expression(node.update) if node.update else ""
+        update = self.hip_for_clause(node.update)
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
