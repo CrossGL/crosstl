@@ -40,7 +40,15 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
+from .c_float_literals import c_float_literal_text
+from .c_reference_parameters import (
+    is_output_parameter,
+    multi_component_swizzle_arguments,
+    overlapping_output_arguments,
+    reference_declarator,
+)
 from .cuda_refusals import CudaLoweringRefused
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -1476,9 +1484,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
             else:
                 self.register_variable_type(param_name, declaration_type, param)
-                params.append(
-                    self.format_typed_declarator(declaration_type, param_name)
-                )
+                declarator = self.format_typed_declarator(declaration_type, param_name)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declarator = reference_declarator(declarator, param_name)
+                params.append(declarator)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
@@ -2893,6 +2903,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return a for-clause expression, preserving CUDA metadata sidecars."""
         if node is None:
             return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.format_for_clause_expression(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "cuda",
+            )
         if isinstance(node, VariableNode):
             return self.format_variable_declaration(node)
 
@@ -2960,6 +2976,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and not isinstance(value, bool)
         ):
             return f"{value}u"
+        if literal_type == "float":
+            float_text = c_float_literal_text(value)
+            if float_text is not None:
+                return float_text
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
@@ -3066,7 +3086,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if object_node is None or components is None or len(components) <= 1:
             return None
 
-        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        object_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if object_info is None:
             return None
         result_type = self.vector_type_for_components(
@@ -3523,7 +3545,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if smoothstep_call is not None:
                 return smoothstep_call
 
-        if func_name in {"dot", "cross", "length", "normalize"}:
+        if func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
@@ -5638,7 +5660,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Flatten vector arguments passed to CUDA make_* constructors."""
         if len(args) == 1:
             arg_type = self.expression_result_type(raw_args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
+            if arg_type is not None and not self.swizzle_result_vector_info(arg_type):
                 return args * len(vector_info["components"])
 
         generated_args = []
@@ -5656,7 +5678,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return generated_args[: len(vector_info["components"])]
                 continue
 
-            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            arg_info = self.swizzle_result_vector_info(
+                self.expression_result_type(raw_arg)
+            )
             if arg_info is None:
                 generated_args.append(arg_expr)
             else:
@@ -5702,7 +5726,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -6276,7 +6302,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -6665,8 +6693,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("continue;")
 
     def visit_BlockNode(self, node):
-        """Visit block statement"""
-        self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.emit("{")
+        self.indent_level += 1
+        try:
+            self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.emit("}")
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
@@ -7378,6 +7415,31 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return args + self.cuda_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise CudaLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; CUDA references would not copy out separately"
+                ]
+            )
+        swizzles = multi_component_swizzle_arguments(
+            params, raw_args, self.member_swizzle_components
+        )
+        if swizzles:
+            raise CudaLoweringRefused(
+                [
+                    f"swizzle passed to an out/inout parameter: {func_name} receives "
+                    + ", ".join(
+                        f"'.{swizzle}' as argument {position}"
+                        for position, swizzle in swizzles
+                    )
+                    + "; CUDA builds a swizzle of several components as a new vector, "
+                    "which a reference cannot bind to; copy it into a local, pass that "
+                    "and assign it back"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):

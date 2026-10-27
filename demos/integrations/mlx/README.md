@@ -64,7 +64,11 @@ job rather than the MLX Metal project porting job: ternary and `binary_two`
 (group `elementwise`), scaled dot-product attention and its two-pass first pass
 (`attention`), rope and gated delta (`sequence`), the gated delta backward
 (`backward`), sort (`ordering`), and the unfold, depthwise and Winograd
-convolutions (`convolution`). The job has one matrix leg per runner and group. Each leg
+convolutions (`convolution`). The job has one matrix leg per runner and group.
+GitHub expands at most 256 legs from one matrix, so the quantized groups run in
+`mlx-current-quantized-parity` and the GEMM and steel convolution groups in
+`mlx-current-gemm-parity`. Both reuse the first job's steps through a YAML
+alias, and a workflow test keeps every matrix within the limit. Each leg
 repeats the porting job's toolchain setup and pinned kernel checkout, runs only
 its group's bounded steps, and uploads its results as
 `mlx-current-parity-<os>-<group>`. A workflow test checks that each group's
@@ -217,10 +221,10 @@ same defect.
 `tests/kernels/test_current_gemm.py` translates the unchanged
 `steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2` entry at commit
 `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
-verification and native Metal or DirectX loader. Both targets compare generated
-execution with an exact matrix-product reference. Metal additionally compares
-with the independently compiled upstream kernel; Windows does not claim to run
-the original Metal control.
+verification and native Metal, DirectX or OpenGL loader. All three targets
+compare generated execution with an exact matrix-product reference. Metal
+additionally compares with the independently compiled upstream kernel; Windows
+and Linux do not claim to run the original Metal control.
 Fifteen cases cover scalar, partial-tile, aligned-tile and multi-tile matrices,
 contiguous and two-dimensional broadcast batches, padded rows and batch strides,
 and extra workgroups. Output padding and eight trailing guard values must remain
@@ -236,21 +240,30 @@ The original Metal kernel receives matching native function constants.
 The test uses the source-backed fragment mapping documented in
 `contracts/cooperative-matrix-fragment-mapping.json`, a 32-by-2-by-2 workgroup,
 and reflected parameter layouts. It does not edit upstream or generated kernels,
-or substitute a reference shader. DirectX uses two source-backed workgroup
-access assertions for the complete vector loads in `steel/gemm/loader.h`.
+or substitute a reference shader. DirectX and OpenGL use two source-backed
+workgroup access assertions for the complete vector loads in
+`steel/gemm/loader.h`.
 For this entry, 128 threads load four adjacent floats each into A's 32-by-20
 and B's 16-by-36 shared arrays. The test enumerates every destination, proves
 unique coverage of the live elements, and bounds the addresses to 0..635 and
-0..571 respectively. Both this header and `steel/gemm/gemm.h` are hash-checked
-against the pin before execution. No unchecked index ranges are supplied.
+0..571 respectively. This header, `steel/gemm/gemm.h` and `steel/gemm/mma.h`
+are hash-checked against the pin before execution. DirectX takes no
+index-range assertions. GLSL indexes with 32-bit integers, so OpenGL takes
+eleven: the four device reads of each loader vector and the float and
+`int64_t` device helpers stay below 2^31 elements, as MLX buffers do, and the
+A and B shared-array helpers stay in the same 0..635 and 0..571. A lane-level
+model of `mma.h`'s tile reads must reach exactly the slots the loaders write.
+OpenGL lowers the simdgroup matrix products to 32-lane software subgroups, as
+DirectX does.
 The original source is compiled with Metal 3.2 and the C++17/C++20 extension
 warning exceptions from upstream's kernel build. Both original and generated
 compilation disable fast math and treat remaining warnings as errors.
 
-The existing macOS and Windows project-porting jobs run this required check and retain
+The macOS, Windows and Linux project-porting jobs run this required check and retain
 translation reports, packages, compiler logs, input records, compiled modules,
 readbacks and per-case parity results. Windows requires DXC compilation with
-warnings as errors and Direct3D 12 execution. Quarter-integer inputs make these
+warnings as errors and Direct3D 12 execution; Linux requires glslangValidator
+and spirv-val and Mesa EGL execution. Quarter-integer inputs make these
 products and sums exactly representable; this gate does not replace the separate
 rounding-sensitive cooperative-matrix controls tracked by #2193.
 Run it locally against a clean checkout
@@ -265,13 +278,291 @@ python -m pytest -q -n auto \
   demos/integrations/mlx/tests/kernels/test_current_gemm.py
 ```
 
-This proves one float32 NN entry and six function-constant configurations, not
-the complete GEMM family or the upstream MLX suite. Transposed operands, other
-element types and every mixed alignment combination are not covered. OpenGL
-collective participation and live-offset bounds remain separate translation
-gaps tracked by #2186 and #2179. This check does not establish full host-runtime
+This proves one float32 NN entry and six function-constant configurations. The
+family gate below extends it to the other real-typed entries; neither covers
+the upstream MLX suite or every mixed alignment combination. OpenGL's
+device offsets are asserted, not checked against runtime metadata, which #2179
+tracks. This check does not establish full host-runtime
 redirection for any backend. A configured gate is not proof of success until
 its native job passes for the relevant revision.
+
+#### GEMM family
+
+`test_current_gemm_family.py` executes all 72 float32, float16 and bfloat16
+entries of `steel_gemm_fused.metal`: six tile shapes and the four NN, NT, TN
+and TT transpositions per type. `gemm_fused_model.py` follows `gemm.h`,
+`loader.h` and `mma.h` to name every entry's two `BlockLoader` instantiations,
+the slots they write, and the slots `BlockMMA` reads; a non-native test
+requires the reads to equal the writes for all 96 entries. Each entry's
+DirectX and OpenGL assertions come from that model, as the representative's
+do, and its workgroup is `(32, WN, WM)`.
+
+Each entry runs three frozen configurations: unaligned (shapes 4x5x7,
+33x35x17 with two padded batches and a spare threadgroup per axis, and
+70x69x41, which spans several tiles in every dimension), aligned (one tile,
+then 64x64x32), and broadcast batches with `alpha * AB + beta * C`. Transposed
+operands store the same logical matrices, so all four layouts share one
+reference. float32 and float16 use quarter-integer operands; bfloat16 uses
+halves so every product, sum and epilogue keeps within its 8 significant bits.
+The tests check that every reference value is exact in the output type, so
+accumulation order and the final conversion round nothing; they do not test
+rounding. Outputs are compared word for word, guards included, and on macOS
+with the original source as well. The current-tree native parity job runs the
+216 entry and configuration pairs in five shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY=1 \
+CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT=5 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+```
+
+The 24 complex64 entries are not covered yet. Their `BlockMMA` partial
+specialization now matches through the `complex64_t` alias, but its local tile
+types and `reinterpret_cast` float views stop translation with a typed
+diagnostic; #2261 tracks the partial-specialization materialization.
+
+#### GEMM split-K
+
+`test_current_gemm_splitk.py` executes all 192 float32, float16 and bfloat16
+`gemm_splitk` entries of `steel_gemm_splitk.metal` (four tile shapes, four
+transpositions and four `MN_aligned`/`K_aligned` pairs per type) and the six
+real-typed `gemm_splitk_accum` and `_axpby` kernels. `gemm_splitk_model.py`
+names every entry and reproduces the partition count, iteration count and
+partition size that `matmul.cpp` dispatches. Entries unaligned in both run
+4x5x7, 33x35x70 with padded leading dimensions and a spare threadgroup in each
+tile axis, and 17x40x100, which splits into four partitions with a `K` tail in
+the last one. `K`-aligned entries use multiples of 16 for `K`, and
+`MN`-aligned entries scale `M` and `N` to whole tiles. Every partition word of
+`C_split`, guards included, is compared with an exact reference, and on macOS
+with the original source too. The accumulation kernels sum two to four
+partitions, with `alpha * sum + beta * C` over a strided addend for `_axpby`.
+
+Two struct specializations whose spelled arguments differed only in
+punctuation, such as `!flag` and `flag`, used to receive one name, so the
+second one reused the first one's members. The Metal frontend now gives them
+distinct names, and `tests/test_backend/test_metal/test_struct_specialization_names.py`
+covers the case independently of MLX. The current-tree native parity job runs
+the entries in seven shards per operating system; shard 0 also runs the
+accumulation kernels:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_SPLITK=1 \
+CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_splitk.py
+```
+
+The 64 complex64 split-K entries and two complex64 accumulation kernels are
+not covered; they need the same `BlockMMA` partial specialization as the
+fused complex64 entries (#2261).
+
+#### Gathered GEMM
+
+`test_current_gemm_gather.py` executes all 60 float32, float16 and bfloat16
+`gather_mm` entries of `steel_gemm_gather.metal` (five tile shapes and four
+transpositions per type), each with three frozen function-constant
+configurations: unaligned without an output batch, unaligned with
+`has_batch`, and fully aligned. `gemm_gather_model.py` names every entry,
+`gather_mm_rhs` included, and the test checks that list against entry
+discovery. The dispatch binds the buffers `matmul.cpp` binds: `lhs_indices`
+and `rhs_indices` select operand batches from a two-dimensional `A` batch and
+a one-dimensional `B` batch, with repeated and reordered indices, a strided
+`lhs_indices` read and `rhs_indices` broadcast along the first index axis. The
+multi-product cases also pad every leading dimension and batch stride and add
+a spare threadgroup in each tile axis. Every output
+word, guards included, is compared with an exact reference, and on macOS with
+the original source too. The current-tree native parity job runs the 180
+entry-variant pairs in seven shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_GATHER=1 \
+CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
+```
+
+The two `gather_mm_rhs` entries are not covered. They derive each row tile
+from `offsets` with subgroup scans and return early on their reduction.
+Immutable `offsets` storage (#2263) is not enough: DirectX and OpenGL can
+lower the early return only once reductions of values equal in every subgroup
+count as workgroup-uniform (#2546).
+
+#### Block-masked GEMM
+
+`test_current_gemm_masked.py` executes all 768 `block_masked_gemm` entries of
+`steel_gemm_masked.metal`: three element types, two tile shapes, four
+transpositions, four alignment pairs and the eight pairings of a boolean,
+multiplicative or absent output mask with an operand mask.
+`gemm_masked_model.py` names every entry and gives the block-masked product:
+a false or zero output-mask block is written as zeros, a K block contributes
+only when its lhs and rhs mask values are both non-zero, and multiplicative
+masks also scale. Each entry runs three dispatches with the buffers
+`BlockMaskedMM::eval_gpu` binds: no batch, a one-dimensional batch, and a
+two-dimensional batch that takes the `elem_to_loc` path. Operands and masks
+broadcast along batch axes, mask matrices are row- or column-major with
+padding, and unread mask words hold a value no mask uses. The shapes give
+partial tiles and K tails as each entry's alignment allows. The masks are
+declared immutable (`immutable_storage`), which lets the DirectX and OpenGL
+software-subgroup proofs treat mask reads at uniform indices as uniform.
+Every output word, guards included, is compared with an exact reference, and
+on macOS with the original source too. The current-tree native parity job
+runs the entries in thirteen shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_MASKED=1 \
+CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT=13 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_masked.py
+```
+
+#### Segmented GEMM
+
+`test_current_gemm_segmented.py` executes all 60 `segmented_mm` entries of
+`steel_gemm_segmented.metal`: three element types, five tile shapes and four
+transpositions. Output batch `z` multiplies A and B over the inner range that
+`segments` gives for it, as pairs (`segments_contiguous`) or as consecutive
+boundaries. Each entry is translated with four frozen function-constant
+configurations, which take both segment layouts and every `align_M` and
+`align_N` pair, and runs two dispatches with the buffers `segmented_mm`
+binds: one segment over all of K, and five segments that are empty, shorter
+than a K tile, exactly one tile, several tiles with a tail, unaligned or
+overlapping, with padded strides and extra threadgroups.
+`gemm_segmented_model.py` names every entry and gives the segment product.
+The segments are declared immutable (`immutable_storage`), so the DirectX and
+OpenGL software-subgroup proofs read the K range, and with it the K loop's
+trip count, as uniform. Every output word, guards included, is compared with
+an exact reference, and on macOS with the original source too. The
+current-tree native parity job runs the pairs in seven shards per operating
+system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_GEMM_SEGMENTED=1 \
+CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_COUNT=7 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_segmented.py
+```
+
+#### Implicit-GEMM convolution
+
+`test_current_steel_conv.py` executes all 108 `implicit_gemm_conv_2d` entries
+of `steel_conv.metal` and all 36 `implicit_gemm_conv_3d` entries of
+`steel_conv_3d.metal`: three element types and six block shapes, with the
+general-channel input loader for small or large filters and, in 2-D, the
+loaders for one to four channels per group. `steel_conv_model.py` names every
+entry, models the threadgroup slots each loader writes and `BlockMMA` reads,
+and rebuilds the `MLXConvParams<N>` and `ImplicitGemmConv{2,3}DParams` that
+`implicit_gemm_conv_{2,3}D_gpu` encode; the test checks the entry lists
+against entry discovery. Each entry runs three convolutions that meet its
+loader preconditions: padded with a full output tile, strided, dilated and
+flipped with a partial column tile and several row tiles, and grouped with a
+surplus threadgroup in each tile axis. The host never selects the `bm64_bn32`
+entries or the 64-row entries for four or fewer channels; the gate executes
+them all the same. Every output word, guards included, is compared with an
+exact reference, and on macOS with the original source too. The current-tree
+native parity job runs the entries in six shards per operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV=1 \
+CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_INDEX=0 \
+CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT=6 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv.py
+```
+
+`test_current_steel_conv_general.py` executes all 18
+`implicit_gemm_conv_2d_general` entries of `steel_conv_general.metal`, each
+translated twice with `align_C` frozen true and false.
+`steel_conv_general_model.py` rebuilds the jump parameters, the
+`base_h`/`base_w` residue tables, the grid and the block selection of
+`implicit_gemm_conv_2D_general_gpu`. A Python walk of the kernel's tap loop
+over those tables must store every output exactly once with the exact
+reference. Each specialization runs three one-group convolutions, chosen so
+that `align_C` matches the channel count as the host sets it. One is
+undilated with a full output tile. One is input-dilated, dilated, strided and
+flipped, with partial tiles and a surplus threadgroup in each tile axis. In
+the third, filter taps are several taps apart, or residues have no tap at
+all. Outputs are compared as in the `steel_conv` gate, in three shards per
+operating system:
+
+```sh
+CROSTL_MLX_CURRENT_ROOT=/path/to/mlx \
+CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV_GENERAL=1 \
+python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
+```
+
+### Full-Entry Attention Execution
+
+`tests/kernels/test_current_attention.py` translates seventeen configurations
+of unchanged entries of `steel_attention.metal` at commit
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The float32 float-mask entries cover
+head dimensions 64, 72, 80, 96, 128 and 256 and the asymmetric query and value
+head dimensions (96, 64)
+(`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd72`,
+`bd80`, `bd96_bv64` counterparts,
+`steel_attention_float32_bq32_bk16_bd128_bv128_wm4_wn1_maskfloat32` and
+`steel_attention_float32_bq32_bk16_bd256_bv256_wm4_wn2_maskfloat32`).
+The float16 and bfloat16 float-mask entries cover head dimension 64. The
+boolean-mask (`maskbool_`) entries cover float32 at 64 and 256, float16 at 96
+and 128 and bfloat16 at 80. Head dimension 256 uses the `wm4_wn2` entries:
+two simdgroups per query row each multiply half of the head dimension and add
+their partial scores through the K/V tile reinterpreted as float32. Each entry
+is dispatched through the native Metal, DirectX or OpenGL loader. These
+thirteen freeze the six function constants to the aligned, masked
+configuration. Four more freeze other sets the host selects: unaligned
+sequences with attention sinks (float32 float mask at 64, float16 boolean mask
+at 128), an unaligned causal mask with the logsumexp (float32 at 80) and an
+aligned causal mask with sinks and the logsumexp (bfloat16 at 64). The host
+returns the logsumexp only without an array mask. Not yet covered: head
+dimension 192, whose 16-bit tiles the OpenGL and bfloat16 DirectX outputs
+widen past the 32 KiB workgroup limit (#2307), and the float16 and bfloat16
+`wn2` entries, which multiply a float32 score tile by a 16-bit value tile
+(#2306). `AttnParams` and
+`AttnMaskParams` are filled as
+`scaled_dot_product_attention.cpp` fills them, and the grid is the upstream
+`(NQ, H, B)` grid of `(32, 4, WN)` threadgroups.
+
+Every entry runs two cases. The first has two heads with 64-row queries and keys and
+a per-head mask. The second has two batches, four query heads over two
+key/value heads, a 96-row key sequence (`qL_off = 64`), the sequence-major Q/O
+layout and a mask broadcast over heads. Inputs are rounded to the entry's
+element type, and buffers use the storage each backend reflects: the element
+type on Metal, 16-bit words on DirectX, float32 on OpenGL, and 32-bit words
+for DirectX and OpenGL booleans. A boolean mask keeps three quarters of the
+keys; every third query row drops its whole first key block, which the online
+softmax must then discard. Unaligned entries run a 50-row query over 77 keys
+with a per-head mask, and a single partial 21-row query block over 70 keys in
+the second layout, so both the partial query block and the partial key block
+are exercised. A causal row keeps the keys up to its own position plus
+`qL_off`, and a sink adds one logit per query head without a value.
+
+With `WN == 1` the kernel widens its tiles to float32, and the float32 `wn2`
+entries need no widening. Both accumulate in float32, so each case must match a
+float64 evaluation of `softmax(scale * Q K^T + mask) V` to within
+`1e-5 * (1 + |reference|)`. A float16 or bfloat16 output must also be a value
+that its final store can round that interval to. A saved logsumexp is float32
+and must meet the same tolerance. Every case must leave four output guards
+unchanged, as well as the four `lse` guards or the unused `lse` buffer. On
+Metal, the original MLX
+kernel, compiled with the same constants, must meet the same reference. The
+CI step runs the entries in parallel `loadgroup` groups, one translation each.
+
+The threadgroup Q, K and V views need no access assertions: OpenGL proves
+their offsets from the loaders and from `BaseMMAFrag::get_coord`, and the view
+identity selects the tile each accessor reads. OpenGL asserts that device
+offsets, including the boolean mask's, stay below 2^31 elements, as the GEMM
+gate does. DirectX and OpenGL accept the causal bound because their software
+subgroup proofs follow the block limit's writes outside loops, including the
+locals declared in the causal branch. DirectX and OpenGL lower the `wn2`
+score exchange's `reinterpret_cast<threadgroup float*>` of the float32 K/V
+tile as the tile itself, because the cast keeps the element type. This does
+not cover head dimension 192, the float16 and bfloat16 `wn2` entries or the
+upstream suite.
 
 ### Resource-Index Controls
 
@@ -1625,10 +1916,313 @@ mutated models that drop the bias term, share one scale per block, reverse
 each pack, ignore the simdgroup row or the weight batch offset are rejected.
 Every word is compared exactly, eight trailing guards must keep their values
 and inputs must be unchanged; Metal also runs the unchanged upstream kernels,
-which must produce the same words. The other matrix-vector and
-matrix-matrix kernels of `quantized.metal` are not gated yet. This covers
+which must produce the same words. The gates below cover the other
+matrix-vector and matrix-matrix kernels of `quantized.metal`. This covers
 162/17,832 entries; it does not run the upstream MLX test suite or redirect
 the MLX host runtime.
+
+`contracts/quantized_qmv_unaligned.current-tree.translation.json` pins a
+further 162 entries of `quantized.metal` and their 486 artifacts:
+`affine_qmv` with and without batching and `affine_gather_qmv`, for the same
+element types, group sizes and bit widths, which `quantized.cpp`'s `qmv` and
+`gather_qmv` pick over the `_fast` kernels whenever `N` is not a multiple of 8
+or `K` of `qmv_fast_k_alignment(bits)`. `qmv_impl` reads one pack per lane,
+runs whole blocks and then a tail that `load_vector_safe` and `qdot_safe`
+read only where it reaches the lane; below eight output rows it guards each
+row and a simdgroup past the last row returns before `simd_sum`, and
+otherwise its last tile moves back to end on row `N - 1`. These
+simdgroup-uniform returns now converge on the 32-lane software subgroups of
+OpenGL and DirectX, which are given the index-range preconditions of
+`qmv_fast`. For 3-, 5- and 6-bit packs `qdot_safe` advances its private
+`x_thread` pointer by a count that only the caller's `clamp` bounds, so the
+DirectX private pointer analysis now seeds a helper's signed integer
+parameters with the hull of their arguments at every call. Required CI
+executes 486 dispatches and 21,060 checked elements
+per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`quantized-qmv-unaligned-0` through `quantized-qmv-unaligned-3` legs, on
+`(32, 2, 1)` threadgroups over a `(M, ceil(N / 8), B)` grid. Unbatched
+entries run five guarded rows, three rows whose second simdgroup returns
+with `K` below one block for most widths, thirteen rows whose last tile is
+moved back, and whole tiles with a misaligned `K`; batched and gather entries
+combine guarded, returning and moved tiles with the layouts of the
+`qmv_fast` gate, and `K` grows by a group wherever `quantized.cpp` would pick
+`qmv_fast` or `qmv_quad` instead. The inputs of `qmv_fast` keep every float32
+intermediate exact; only the final `static_cast<T>` rounds, which 5,103
+float16 and bfloat16 results need, 1,362 of them halfway cases. A lane-level
+model of the blocks, the tail, the guarded rows, the return and the moved
+tile must reach direct dequantized dot products, store every row once and
+each moved row twice with the same value, and mutated models that drop the
+tail, the bias, the simdgroup row or the weight batch offset, share one
+scale per block or reverse a pack are rejected. Every word is compared
+exactly, eight trailing guards must keep their values and inputs must be
+unchanged; Metal also runs the unchanged upstream kernels, which must produce
+the same words. This covers 162/17,832 entries; it does not run the upstream
+MLX test suite or redirect the MLX host runtime.
+
+`contracts/quantized_qmv_wide.current-tree.translation.json` pins a further
+432 entries of `quantized.metal` and their 1,296 artifacts: `affine_qmv_wide`
+with and without batching, for the same element types, group sizes and bit
+widths and its tiles of 2, 3, 4 and 5 input vectors, each output row reduced
+by eight lanes. Its `simd_shuffle_down` ladder lowers to 32-lane software
+subgroups on OpenGL and DirectX, DirectX keeping a lane's own value past the
+simdgroup's end as Metal does, and OpenGL is given the 7 batched index-range
+preconditions of `qmv_fast`, each reached by some case and shown by the model
+to name an element inside its buffer. `dequantize` deduces its output pointer
+type from the local `w_dq` array; DirectX now decays that array to a thread
+pointer as C++ and the OpenGL output do, so the 3, 5 and 6-bit steps
+`w_local += 8 * i` move the view's base. Required CI executes 1,080
+dispatches and 117,504 checked elements per target on Metal, Mesa EGL and
+Direct3D 12 WARP in the `quantized-qmv-wide-0` through `quantized-qmv-wide-8`
+legs, following `quantized.cpp`'s `qmv_wide`: `(32, 2, 1)` threadgroups over
+a `(ceil(M / vecs_per_tg), ceil(N / 8), B)` grid, where every case's `M` is
+one `qmv_wide` gives the entry's tile, below the vector limit of 13, and `K`
+avoids `qmv_quad`'s 64 and 128. Unbatched entries run one tile against nine
+groups per row, so lane 0 of each row reduces two, and a tiled matrix whose
+last row group, and for tiles of 4 and 5 last vector tile, is partial; the
+unchanged upstream kernel gets only the eight buffers MLX binds unbatched.
+Batched entries run stacked batches, a two-dimensional batch with transposed
+activations and broadcast weights, and strided activations sharing one
+weight matrix. The inputs of `qmv_fast` make every dequantized weight,
+product, partial sum and shuffle a multiple of 2^-5 below 2^19, exact in any
+order; only the final `static_cast<T>` rounds, which 26,506 float16 and
+bfloat16 results need, 7,567 of them halfway cases. A lane-level model of
+`dequantize`'s eight-value sub-chunks, the shuffle ladder and the
+partial-tile guards must reach direct dequantized dot products and write
+every output once, and mutated models that drop the bias, reverse a
+sub-chunk, drop the six-bit steps, give a lane one group, stream one vector,
+ignore the lane's row, sum all 32 lanes or ignore the weight batch offset are
+rejected. Every word is compared exactly, eight trailing guards must keep
+their values and inputs must be unchanged; Metal also runs the unchanged
+upstream kernels, which must produce the same words. This covers
+432/17,832 entries; it does not run the upstream MLX test suite or redirect
+the MLX host runtime.
+
+`contracts/quantized_qvm.current-tree.translation.json` pins a further 162
+entries of `quantized.metal` and their 486 artifacts: `affine_qvm` with and
+without batching and `affine_gather_qvm`, for the same element types, group
+sizes and bit widths, which `quantized.cpp`'s `qvm` and `gather_qvm` pick
+for weights that are not transposed, `K` rows of `N` codes, when `M` is
+below 4 and, for `qvm`, `K` below 1,024. `qvm_impl` gives each simdgroup 32
+output columns and each lane one input row per block of 32: the lane copies
+its row's `vec_w` record, reads it through a private byte view and `qouter`
+adds `x * (scale * w + bias)` into all 32 results, which `simd_sum` reduces
+on 32-lane software subgroups on OpenGL and DirectX. On DirectX, `qouter`'s
+pointer becomes an array parameter emitted once per backing; for 3, 5 and
+6 bits its own default backing would become the same HLSL overload as the
+byte view, so DirectX emits only the backings that calls reach and refuses
+any two that remain indistinguishable. After the whole blocks,
+a last pass reads only where `K` reaches the lane and zeroes `x`, the scale
+and the bias of the other lanes, and a simdgroup whose first column is past
+`N` returns before `simd_sum`. Required CI executes 432 dispatches and
+293,760 checked elements per target on Metal, Mesa EGL and Direct3D 12 WARP
+in the `quantized-qvm-0` through `quantized-qvm-3` legs, on `(32, 2, 1)`
+threadgroups over a `(M, ceil(N / 64), B)` grid. Unbatched entries run a `K`
+of 13 below one block, whole blocks and two blocks with a nine-lane last
+pass, with an odd number of 32-column groups where group size 32 allows it so
+that the last simdgroup returns; batched and gather entries combine them with
+the layouts of the `qmv_fast` gate. Its inputs keep every float32
+intermediate exact; only the final `static_cast<T>` rounds, which 61,872
+float16 and bfloat16 results need, 19,574 of them halfway cases. A
+lane-level model of the blocks, the last pass and the return must reach
+direct dequantized dot products and store every column once, and mutated
+models that drop the bias, the last pass, the simdgroup column offset, the
+column group or the weight batch offset, keep the first block's scales or
+reverse a pack are rejected. Every word is compared exactly, eight trailing
+guards must keep their values and inputs must be unchanged; Metal also runs
+the unchanged upstream kernels, which must produce the same words. This
+covers 162/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/quantized_qvm_split_k.current-tree.translation.json` pins a
+further 108 entries of `quantized.metal` and their 324 artifacts:
+`affine_qvm_split_k` for the same element types, group sizes and bit widths
+and `split_k` 8 and 32, which `quantized.cpp`'s `qvm` picks for weights that
+are not transposed when `M` is below 4 and `K` is 1,024 or more, with
+`split_k` 32 above `K = 8,192`. The host splits `K` into `split_k` parts of
+`split_D = ceil(K / split_k)` rows, the last one of
+`final_block_size = K - (split_k - 1) * split_D`, adds a batch dimension of
+`split_k` to the activation, weight, scale and bias views, and each `tid.z`
+runs `qvm_impl` on its part with the whole `K` as the activation row stride,
+writing one partial product per column to an intermediate that a separate
+reduction sums. Required CI executes 540 dispatches and 3,229,920 checked
+elements per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`quantized-qvm-split-k-0` through `quantized-qvm-split-k-3` legs, on
+`(32, 2, 1)` threadgroups over a `(M, ceil(N / 64), B * split_k)` grid.
+The cases bind the host's own views, split sizes and final sizes; they reach
+a routed `K` of 1,100 with four blocks and a last pass per part, parts of one
+whole block, parts of a block and a last pass followed by a whole final
+part, parts that are a last pass alone and a final part of another size,
+with one or more rows, stacked weights and broadcast weights. The `split_k`
+32 entries run the same formulas at smaller `K`, which the kernel cannot
+tell apart. The intermediate keeps every float32 partial exact; only the
+final `static_cast<T>` rounds, which 273,197 float16 and bfloat16 partials
+need, 106,975 of them halfway cases. The qvm gate's lane-level model replays
+each part and must reach the dequantized partial dot products; its seven
+mutations and two more that give every part the final part's size or step
+activation rows by the part's size instead of `K` are rejected. Every word
+is compared exactly, guards and inputs must be unchanged, and Metal also
+runs the unchanged upstream kernels, which must produce the same words. This
+covers 108/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/quantized_qmm_t.current-tree.translation.json` pins a further 216
+entries of `quantized.metal` and their 648 artifacts: `affine_qmm_t` for the
+same element types, group sizes and bit widths, with aligned and unaligned
+`N`, with and without batching. `quantized.cpp`'s `qmm` picks it for
+transposed weights when `M` reaches the vector limit (33 at most for `K` and
+`N` up to 2,048), for batches, and for single matrices where `qmm_splitk`
+finds no split, on devices without NAX kernels. Each `(32, 2, 2)`
+threadgroup of a `(ceil(N / 32), ceil(M / 32), B)` grid computes a 32 by 32
+tile: per block of 32 codes a `BlockLoader` copies the activations and a
+`QuantizedBlockLoader` dequantizes the weights into threadgroup tiles, and
+`BlockMMA`'s four simdgroups multiply them as eight by eight fragments,
+which DirectX and OpenGL lower to software fragments with
+`BaseMMAFrag::get_coord`'s lane mapping. Required CI executes 540 dispatches
+and 1,697,328 checked elements per target on Metal, Mesa EGL and Direct3D 12
+WARP in the `quantized-qmm-t-0` through `quantized-qmm-t-6` legs. The cases
+reach every loop and store path: whole and partial row tiles, whole and
+partial column tiles where `N` is unaligned, one to three column tiles, one
+or two groups along `K`, stacked, broadcast and shared weights. Every
+dequantized weight is exact in the element type and float32 holds every
+accumulator exactly; only the final `static_cast<T>` rounds, which 222,077
+float16 and bfloat16 outputs need, 82,302 of them halfway cases. A
+tile-level model replays both loaders, the group-stepped scales and the
+fragment products and must reach direct dequantized dot products; ten
+mutations, among them dropped scale steps, steps every block, a transposed
+weight tile and whole-tile stores past `M` and `N`, are rejected where they
+are defects. Every word is compared exactly, guards and inputs must be
+unchanged, and Metal also runs the unchanged upstream kernels, which must
+produce the same words. This covers 216/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/quantized_qmm_n.current-tree.translation.json` pins a further 108
+entries and their 324 artifacts: `affine_qmm_n` for the same element types,
+group sizes and bit widths, with and without batching. `quantized.cpp`'s
+`qmm` picks it for weights that are not transposed, `K` rows of `N` codes
+quantized along `N`, once `M` reaches the vector limit of 4, on devices
+without NAX kernels; there is no split-K fallback. It runs the same
+`(32, 2, 2)` threadgroups over a `(N / 32, ceil(M / 32), B)` grid, but its
+activation `BlockLoader` copies two rows of four elements per thread, its
+`QuantizedBlockLoader` reduces along its 32 weight rows and steps the scales
+by a block of rows, and a `K` that is not a multiple of 32 ends with a pass
+that loads only the remaining rows of both tiles. Required CI executes 324
+dispatches and 1,274,400 checked elements per target on Metal, Mesa EGL and
+Direct3D 12 WARP in the `quantized-qmm-n-0` through `quantized-qmm-n-4`
+legs. The cases reach every loop and store path: whole and partial row tiles,
+each with whole blocks of `K` only and with a last partial block, a `K`
+below one block at the vector limit, two to four column tiles, stacked,
+broadcast and shared weights. As for `qmm_t`, only the final
+`static_cast<T>` rounds, which 261,891 float16 and bfloat16 outputs need,
+84,915 of them halfway cases. The tile-level model replays both loaders, the
+row-stepped scales and the fragment products and must reach direct
+dequantized dot products; twelve mutations, among them dropped or unbounded
+last blocks, scales stepped as along `K` and a transposed weight tile, are
+rejected where they are defects. Every word is compared exactly, guards and
+inputs must be unchanged, and Metal also runs the unchanged upstream kernels,
+which must produce the same words. This covers 108/17,832 entries; it does
+not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/quantized_qmm_t_splitk.current-tree.translation.json` pins a
+further 108 entries and their 324 artifacts: `affine_qmm_t_splitk` for the
+same element types, group sizes and bit widths, with aligned and unaligned
+`N`. `quantized.cpp`'s `QuantizedMatmul` sends single matrices with
+transposed weights and `M` at the vector limit to `qmm_splitk` on every
+device, which splits `K` into `split_k` partitions of whole groups and whole
+32-column blocks, aiming at about 512 threadgroups, and falls back to `qmm`
+when no split exists. Each `(32, 2, 2)` threadgroup of a `(ceil(N / 32),
+ceil(M / 32), split_k)` grid moves the activations, the weight bytes, the
+scales and the biases to its partition's first column and its output to the
+partition's `M` by `N` slice, then runs `qmm_t_impl` over the partition's
+columns while the rows keep the stride `K`; the weights reach it as a
+`uint32_t` view of the moved byte pointer, which DirectX and OpenGL now lower
+by restoring the viewed word storage. The kernel writes the `(split_k, M, N)`
+partial sums that a strided reduction then folds. Required CI executes 216
+dispatches and 1,349,136 checked elements per target on Metal, Mesa EGL and
+Direct3D 12 WARP in the `quantized-qmm-t-splitk-0` through
+`quantized-qmm-t-splitk-4` legs. The cases split `K` into two and three
+partitions over whole and partial row tiles and whole and partial column
+tiles, reaching every load and store path; only each partition's final
+`static_cast<T>` rounds, which 116,872 float16 and bfloat16 partial sums
+need, 52,184 of them halfway cases. The tile-level model replays
+`qmm_t_impl` per partition and must reach direct dequantized partial dot
+products; fifteen mutations, among them partitions that keep the first
+partition's activations, weights or scales, run over all of `K` or overlap
+their output slices, are rejected where they are defects. Every word is
+compared exactly, guards and inputs must be unchanged, and Metal also runs
+the unchanged upstream kernels, which must produce the same words. This
+covers 108/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/quantized_gather_qmm.current-tree.translation.json` pins a further
+162 entries and their 486 artifacts: `affine_gather_qmm_t`, with aligned and
+unaligned `N`, and `affine_gather_qmm_n` for the same element types, group
+sizes and bit widths. `quantized.cpp`'s `GatherQMM` sends gathered products
+with `M` at or above the vector limit to `gather_qmm` on devices without NAX
+kernels. Each `(32, 2, 2)` threadgroup of a `(ceil(N / 32), ceil(M / 32), B)`
+grid reads its batch's lhs and rhs indices in `adjust_matrix_offsets`, moves
+the activations, weights, scales and biases to the matrices they select and
+its output to its batch's slice, then runs `qmm_t_impl` or `qmm_n_impl`. The
+cases take the gather_qmv and gather_qvm gates' interleaved one-dimensional
+indices and their `(2, 2)` batch with broadcast rhs indices, over shapes that
+reach every load and store path of both implementations. Required CI executes
+324 dispatches and 2,531,808 checked elements per target on Metal, Mesa EGL
+and Direct3D 12 WARP in the `quantized-gather-qmm-0` through
+`quantized-gather-qmm-6` legs; only the final `static_cast<T>` rounds, which
+467,366 float16 and bfloat16 outputs need, 154,413 of them halfway cases. The
+qmm_t and qmm_n tile-level models replay the gathered offsets and must reach
+direct dequantized dot products; their mutations, and one that uses `tid.z`
+in place of the gathered indices, are rejected where they are defects. Every
+word is compared exactly, guards and inputs must be unchanged, and Metal also
+runs the unchanged upstream kernels, which must produce the same words. This
+covers 162/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/quantized_qmv_quad.current-tree.translation.json` pins a further
+216 entries and 504 artifacts: `affine_qmv_quad` for the same element
+types, group sizes and bit widths, `D` of 64 and 128, with and without
+batching. `quantized.cpp`'s `dispatch_qmv` sends every matrix-vector product
+with `K` of 64 or 128 and a power-of-two width to `qmv_quad`: one simdgroup
+of `(32, 1, 1)` threads per 64 output rows over an `(M, ceil(N / 64), B)`
+grid, each of its eight quads computing eight rows eight apart and each quad
+lane a quarter of `K`, combined by `quad_sum`. DirectX and OpenGL lower
+`quad_sum` to a software reduction over four consecutive invocations, the
+grouping of Metal's `quadgroup_index_in_threadgroup`. For 3, 5 and 6 bits
+`qmv_quad_impl`'s `32 / bits` pack factor misplaces each lane's codes, and
+`qdot` advances `x_thread` cumulatively (`x_thread += 8 * i`), so a lane with
+three or more steps reads past its `D / 4` values: 3 and 5 bits at `D` 128 and
+6 bits at both widths, 72 entries that no host path dispatches. Out-of-bounds
+pointer arithmetic is undefined in the C++14 that the Metal Shading Language
+builds on ([expr.add]), so DirectX and OpenGL refuse those 72 with their
+`private-pointer-unsupported` bounds diagnostic, whose element counts the
+gate derives from the same pointer steps; Metal keeps the upstream
+arithmetic. Every other artifact is translated, compiled and validated per
+platform. The 90 entries the host can dispatch, power-of-two widths whose
+group size divides `D`, also execute: `quantize` needs `K` to be a multiple of
+the group size, and `dispatch_qmv` routes only power-of-two widths to
+`qmv_quad`. Required CI
+executes 270 dispatches and 26,955 checked elements per target on Metal, Mesa
+EGL and Direct3D 12 WARP in the `quantized-qmv-quad-0` through
+`quantized-qmv-quad-2` legs. The cases reach whole tiles, a partial last tile
+and quads with no row below `N`, unbatched and with stacked, broadcast and
+shared weights. A row past `N` skips its `qdot` and store but still loads its
+scale and bias, so the cases continue both buffers with poison through the
+last tile and the model shows those values never reach an output. Only the
+final `static_cast<T>` rounds, which 4,040 float16 and bfloat16 outputs need,
+1,216 of them halfway cases. The lane-level model replays `load_vector`,
+`qdot` and the row guard and must reach direct dequantized dot products; six
+mutations, among them a store of lane 0's partial sum in place of the
+`quad_sum` and rows that ignore the quad's offset, are rejected where they are
+defects. Every word is compared exactly, guards and inputs must be unchanged,
+and Metal also runs the unchanged upstream kernels, which must produce the
+same words. This covers 216/17,832 entries; it does not run the upstream MLX
+test suite or redirect the MLX host runtime.
+
+The quantized gates now cover 1,944 of the 2,052 `quantized.metal` entries.
+The 108 `affine_gather_qmm_rhs_nt` and `affine_gather_qmm_rhs_nn` entries are
+not covered. Like `gather_mm_rhs`, they derive each row tile from `offsets`
+with subgroup scans and return early on their reduction, which DirectX and
+OpenGL can lower only once reductions of values equal in every subgroup count
+as workgroup-uniform (#2546).
 
 Checked column-reduction translation now retains the promoted value of local
 integer arithmetic such as an `int` group count multiplied by a byte-sized
@@ -3814,9 +4408,9 @@ their contracts, and both compiled modules have SHA-256
 This verifies these five controls for each historical pin; it does not establish
 the `9c3d3557` corpus, arbitrary FFT plans or physical driver-upload bytes.
 
-The current FFT source now also emits a 124,401-byte GLSL artifact with
+The current FFT source now also emits a 120,398-byte GLSL artifact with
 SHA-256
-`ce27978c20089f86b6b00955503b1aede87d1ae6f7400e1adfe88961e3be77ef`.
+`1b7abf82bf713abc5640208cc0606232b228f683473f603debcb8898954a1f26`.
 Resource-aggregate lowering currently retains one file-level source mapping,
 not the preceding artifact's 84 finer-grained mappings. Diagnostics preserve
 the original source path but do not yet identify individual rewritten lines.

@@ -56,7 +56,7 @@ if (index < size) d[index] = a[index] ? b[index] : c[index]; }
     assert source.read_bytes() == original
     assert index["family"] == "selection"
     assert set(index["descriptors"]) == set(packages.SELECTION_ENTRIES)
-    assert len(packages.ENTRIES) == 93
+    assert len(packages.ENTRIES) == 97
     return root / "selection", index
 
 

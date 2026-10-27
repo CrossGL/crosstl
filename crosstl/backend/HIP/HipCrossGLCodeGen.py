@@ -3,7 +3,9 @@
 import hashlib
 import re
 
+from ...translator.integer_literals import crossgl_legacy_octal
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.reference_parameters import ReferenceParameters
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -580,6 +582,7 @@ class HipToCrossGLConverter:
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
@@ -845,8 +848,8 @@ class HipToCrossGLConverter:
             body = integer_literal.group("body").replace("'", "")
             suffix = integer_literal.group("suffix").lower()
             if "u" in suffix:
-                return f"{body}u"
-            return body
+                return crossgl_legacy_octal(f"{body}u")
+            return crossgl_legacy_octal(body)
 
         if "'" in value and self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
             return value.replace("'", "")
@@ -5152,7 +5155,14 @@ class HipToCrossGLConverter:
                     output_name = self.register_identifier_name(param_name)
                     self.register_vector1_name(param_name, raw_type)
                     self.register_variable_type(param_name, param_type)
-                    params.append(f"{param_type} {output_name}")
+                    if getattr(self, "reference_parameters", None) is None:
+                        self.reference_parameters = ReferenceParameters(None)
+                    mode = self.reference_parameters.mode(node, index)
+                    params.append(
+                        f"{mode} {param_type} {output_name}"
+                        if mode
+                        else f"{param_type} {output_name}"
+                    )
 
             param_str = ", ".join(params)
             function_name = self.format_function_declaration_name(node.name)
@@ -7347,15 +7357,7 @@ class HipToCrossGLConverter:
                 raw_parameter_type = self.parameter_type(parameter)
                 target = self.record_definition_from_type(raw_parameter_type)
                 source = self.infer_record_expression_definition(argument)
-                if source is not None and self.is_nonconst_record_reference_type(
-                    raw_parameter_type, target
-                ):
-                    issues.append(
-                        (
-                            "non-const record reference parameter writeback",
-                            target,
-                        )
-                    )
+                # Record reference parameters import as inout or by value (ReferenceParameters).
                 for definition in (source, target):
                     issue = self.record_layout_issue(definition)
                     if issue is not None:
@@ -7789,6 +7791,12 @@ class HipToCrossGLConverter:
         if dim3_constructor is not None:
             return dim3_constructor
 
+        alias_constructor = self.format_concrete_alias_constructor_call(
+            func_name, args_str
+        )
+        if alias_constructor is not None:
+            return alias_constructor
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         if (
@@ -7799,6 +7807,20 @@ class HipToCrossGLConverter:
         ):
             crossgl_func = self.format_function_declaration_name(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_concrete_alias_constructor_call(self, func_name, args_str):
+        """Write ``real(x)`` through an erased alias as a call of the aliased type.
+
+        Concrete aliases are erased from the CrossGL program (each declaration
+        names the aliased type instead), so a functional cast through the alias
+        must name that type too or it calls an undeclared function (#3309).
+        """
+        if not isinstance(func_name, str) or not self.is_simple_identifier(func_name):
+            return None
+        resolved = self.resolve_concrete_type_alias(func_name)
+        if resolved == func_name:
+            return None
+        return f"{resolved}({args_str})"
 
     def format_std_numeric_limits_call(self, function_name, args):
         parsed = self.parse_cpp_template_static_member(function_name)
@@ -9615,6 +9637,22 @@ class HipToCrossGLConverter:
 
     def visit_ContinueNode(self, node):
         self.emit("continue;")
+
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
 
     def visit_IfNode(self, node):
         self.validate_record_scalar_context(node.condition, "if condition")
