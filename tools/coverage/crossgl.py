@@ -42,9 +42,9 @@ from .templates.base import (
 )
 from .templates.edges import FAMILY as EDGES
 from .templates.forms import FAMILY as FORMS
-from .templates.lexical import CROSSGL_NAMES, FILL, SPREAD4
+from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
-from .templates.lexical import reserved
+from .templates.lexical import FILL, SPREAD4, reserved
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 
