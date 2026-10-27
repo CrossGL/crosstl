@@ -4523,10 +4523,46 @@ class HLSLToCrossGLConverter(
                 code += f"{stmt};\n"
             elif isinstance(stmt, TypeAliasNode):
                 code += f"{self.generate_type_alias_declaration(stmt)}\n"
+            elif isinstance(stmt, StructNode):
+                code += self.generate_local_struct(stmt, indent, is_main)
             else:
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
+        return code
+
+    def generate_local_struct(self, stmt, indent, is_main=False):
+        """Write a structure declared in a function body as a CrossGL block-scoped structure.
+
+        Declarators after its closing brace (``struct S { ... } a, b;``) follow it as declarations.
+        """
+        unsupported = [
+            label
+            for label, field in (
+                ("member functions", "methods"),
+                ("base classes", "base_classes"),
+            )
+            if getattr(stmt, field, None)
+        ]
+        if unsupported:
+            return self.refuse_import(
+                f"DirectX structure '{stmt.name}' declared in a function body has "
+                f"{' and '.join(unsupported)}, which a CrossGL block-scoped structure "
+                "does not carry"
+            )
+        saved_indentation = self.indentation
+        self.indentation = indent
+        try:
+            text = self.visit_StructNode(stmt)
+        finally:
+            self.indentation = saved_indentation
+        # The semicolon keeps a following statement from reading as a declarator.
+        code = text.rstrip("\n") + ";\n"
+        declarations = list(getattr(stmt, "variable_declarations", None) or [])
+        if declarations:
+            code += self.generate_function_body(
+                declarations, indent, is_main, new_scope=False
+            )
         return code
 
     def generate_function_call_statement(self, stmt, indent=0, is_main=False):
