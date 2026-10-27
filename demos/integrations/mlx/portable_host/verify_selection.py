@@ -23,7 +23,6 @@ NEGATIVE_CHECKS = {
     "int64": "No translated package for v_Selectint64",
     "uint8": "No translated package for v_Selectuint8",
     "float16": "No translated package for v_Selectfloat16",
-    "over-limit": "at most 65535 elements",
     "absolute-missing": "No translated package for v_Absint32int32",
     # Without the pinned source no package serves 16-bit absolute values.
     "absolute-int16": "No translated package for v_Absint16int16",
@@ -62,7 +61,7 @@ def worker(args):
     if args.worker in NEGATIVE_CHECKS:
         check = args.worker.removeprefix("absolute-")
         dtype = check if check in {"int64", "int16", "uint8", "float16"} else "int32"
-        count = 65536 if check == "over-limit" else 3
+        count = 3
         values = mx.array(np.arange(count).astype(dtype))
         if args.worker == "absolute-large-allocation":
             values = mx.as_strided(values, (65536,), (1,))

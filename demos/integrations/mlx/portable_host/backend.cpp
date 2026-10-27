@@ -2782,9 +2782,6 @@ void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument(
         "CrossTL selection requires Boolean conditions and matching values of a GPU dtype.");
   }
-  if (out.size() > 65535) {
-    throw std::invalid_argument("CrossTL selection supports at most 65535 elements.");
-  }
   for (const auto& in : inputs) {
     if (in.shape() != out.shape()) {
       throw std::invalid_argument(
@@ -2799,23 +2796,29 @@ void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto condition = dense_input(inputs[0]);
   auto left = dense_input(inputs[1]);
   auto right = dense_input(inputs[2]);
-  uint32_t size = static_cast<uint32_t>(out.size());
   std::string entry = std::string("v_Select") + dtype;
-  CrosstlMlxBuffer buffers[] = {
-      {"a", "bool_", condition.data<void>(), size, 0},
-      {"b", dtype, left.data<void>(), size, 0},
-      {"c", dtype, right.data<void>(), size, 0},
-      {"d", dtype, out.data<void>(), size, 1},
-      {"size", "uint32", &size, 1, 0},
-  };
-  const auto launch = elementwise_launch(size);
-  char error[2048] = {};
-  int status = dispatch_callback.load()(
-      entry.c_str(), buffers, 5, size, &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(
-        std::string("CrossTL native selection failed: ") + error);
+  // v_Select reads one independent element per invocation, so a selection
+  // runs as consecutive launches of at most 65535 elements.
+  for (uint64_t first = 0; first < out.size();) {
+    uint32_t size =
+        static_cast<uint32_t>(std::min<uint64_t>(out.size() - first, 65535));
+    CrosstlMlxBuffer buffers[] = {
+        {"a", "bool_", condition.data<uint8_t>() + first * condition.itemsize(), size, 0},
+        {"b", dtype, left.data<uint8_t>() + first * left.itemsize(), size, 0},
+        {"c", dtype, right.data<uint8_t>() + first * right.itemsize(), size, 0},
+        {"d", dtype, out.data<uint8_t>() + first * out.itemsize(), size, 1},
+        {"size", "uint32", &size, 1, 0},
+    };
+    const auto launch = elementwise_launch(size);
+    char error[2048] = {};
+    int status = dispatch_callback.load()(
+        entry.c_str(), buffers, 5, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(
+          std::string("CrossTL native selection failed: ") + error);
+    }
+    first += size;
   }
 }
 
