@@ -2619,7 +2619,7 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
-    def test_half_vector_modulo_uses_float_mod_helper(self):
+    def test_half_vector_remainder_takes_the_float_fmodf(self):
         source_code = """
         shader Mod {
             f16vec3 f(f16vec3 v, f16vec3 w) {
@@ -2637,20 +2637,18 @@ class TestCudaCodeGen:
         ast = Parser(Lexer(source_code).tokens).parse()
         cuda_code = CudaCodeGen().generate(ast)
 
+        # `%` is the truncated remainder of the float components (fmodf);
+        # GLSL mod() floors the quotient.
         assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs.x)))" in cuda_code
         )
         assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.x), __half2float(rhs.x)))"
-            in cuda_code
+            "__float2half(fmodf(__half2float(lhs.z), __half2float(rhs)))" in cuda_code
         )
-        assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.z), __half2float(rhs)))"
-            in cuda_code
-        )
-        assert "fmodf(__half2float" not in cuda_code
+        assert "floorf(__half2float(lhs.x) / __half2float(rhs.x))" in cuda_code
         assert "return cgl_cgl_half3_mod(v, w);" in cuda_code
         assert "return cgl_cgl_half3_mod_scalar(v, h);" in cuda_code
+        assert "return cgl_cgl_half3_glsl_mod(v, w);" in cuda_code
         assert "(lhs.x % rhs.x)" not in cuda_code
         assert "(lhs.x % rhs)" not in cuda_code
 
@@ -3487,31 +3485,19 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "int scalar = (5 % 2);" in cuda_code
+        # `%` and `%=` are the truncated remainder (fmodf); mod() floors.
         assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+            "return make_float3(fmodf(lhs.x, rhs.x), "
+            "fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));" in cuda_code
         )
-        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
         assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_float3_glsl_mod(float3 lhs, float3 rhs)"
             in cuda_code
         )
-        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
-        assert (
-            "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
-            in cuda_code
-        )
-        assert (
-            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
-            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in cuda_code
-        )
-        assert (
-            "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
-            in cuda_code
-        )
-        assert (
-            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
-            "cgl_mod_double(lhs.y, rhs.y));" in cuda_code
-        )
+        assert "(lhs.x - rhs.x * floorf(lhs.x / rhs.x))" in cuda_code
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in cuda_code
         assert (
             "__device__ inline uint4 cgl_uint4_mod(uint4 lhs, uint4 rhs)" in cuda_code
@@ -3519,7 +3505,7 @@ class TestCudaCodeGen:
         assert "float3 vf = cgl_float3_mod(a, b);" in cuda_code
         assert "float3 vs = cgl_float3_mod_scalar(a, 2.0);" in cuda_code
         assert "float3 sv = cgl_scalar_mod_float3(10.0, b);" in cuda_code
-        assert "float3 builtin = cgl_float3_mod(a, b);" in cuda_code
+        assert "float3 builtin = cgl_float3_glsl_mod(a, b);" in cuda_code
         assert "a = cgl_float3_mod(a, b);" in cuda_code
         assert "double2 dm = cgl_double2_mod(da, db);" in cuda_code
         assert "da = cgl_double2_mod(da, db);" in cuda_code
@@ -3530,16 +3516,8 @@ class TestCudaCodeGen:
         assert "ua = cgl_uint4_mod(ua, ub);" in cuda_code
         assert "float3 vf = (a % b);" not in cuda_code
         assert "float3 builtin = fmodf(a, b);" not in cuda_code
-        assert "a %= b;" not in cuda_code
-        assert "da %= db;" not in cuda_code
-        assert "fmodf(" not in cuda_code
-        assert "fmod(" not in cuda_code
-        assert "int3 im = (ia % ib);" not in cuda_code
-        assert "ia %= ib;" not in cuda_code
-        assert "uint4 um = (ua % ub);" not in cuda_code
-        assert "ua %= ub;" not in cuda_code
 
-    def test_scalar_float_modulo_uses_cuda_floor_semantics(self, tmp_path):
+    def test_scalar_float_remainder_is_truncated_fmodf(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
@@ -3572,30 +3550,20 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
-        )
-        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
-        assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
-            in cuda_code
-        )
-        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
-        assert "float fm = cgl_mod_float(fa, fb);" in cuda_code
-        assert "float flit = cgl_mod_float(5.5, 2.0);" in cuda_code
-        assert "fa = cgl_mod_float(fa, fb);" in cuda_code
-        assert "double dm = cgl_mod_double(da, db);" in cuda_code
-        assert "da = cgl_mod_double(da, db);" in cuda_code
+        # `%` and `%=` on floats are the truncated remainder, as in HLSL, MSL and C.
+        assert "float fm = fmodf(fa, fb);" in cuda_code
+        assert "float flit = fmodf(5.5, 2.0);" in cuda_code
+        assert "fa = fmodf(fa, fb);" in cuda_code
+        assert "double dm = fmod(da, db);" in cuda_code
+        assert "da = fmod(da, db);" in cuda_code
         assert "int im = (ia % ib);" in cuda_code
         assert "ia %= ib;" in cuda_code
         assert "uint um = (ua % ub);" in cuda_code
         assert "ua %= ub;" in cuda_code
-        assert "float fm = (fa % fb);" not in cuda_code
-        assert "double dm = (da % db);" not in cuda_code
         assert "fa %= fb;" not in cuda_code
         assert "da %= db;" not in cuda_code
-        assert "fmodf(" not in cuda_code
-        assert "fmod(" not in cuda_code
+        assert "floorf(" not in cuda_code
+        assert "cgl_mod_float" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_user_defined_mod_function_is_not_lowered_to_cuda_builtin(self):

@@ -4111,7 +4111,7 @@ def test_wave_intrinsics_validate_target_result_types():
     assert "WaveOpNode" not in generated_code
 
 
-def test_floating_binary_modulo_lowers_to_slang_floor_semantics_expression():
+def test_floating_binary_modulo_keeps_the_slang_truncated_remainder():
     code = """
     shader BinaryModuloGap {
         compute {
@@ -4136,26 +4136,16 @@ def test_floating_binary_modulo_lowers_to_slang_floor_semantics_expression():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float wrapped = ((a) - (floor((a) / (2.0)) * (2.0)));" in generated_code
-    assert "a = ((a) - (floor((a) / (3.0)) * (3.0)));" in generated_code
-    assert (
-        "float2 wrappedVec = ((v) - (floor((v) / (float2(2.0))) * "
-        "(float2(2.0))));" in generated_code
-    )
-    assert "v = ((v) - (floor((v) / (float2(3.0))) * (float2(3.0))));" in generated_code
-    assert "double wrappedDouble = ((d) - (floor((d) / (2.0)) * (2.0)));" in (
-        generated_code
-    )
-    assert "d = ((d) - (floor((d) / (3.0)) * (3.0)));" in generated_code
+    # Slang's floating % and %= are the truncated remainder, which is CrossGL's.
+    assert "float wrapped = a % 2.0;" in generated_code
+    assert "a %= 3.0;" in generated_code
+    assert "float2 wrappedVec = v % float2(2.0);" in generated_code
+    assert "v %= float2(3.0);" in generated_code
+    assert "double wrappedDouble = d % 2.0;" in generated_code
+    assert "d %= 3.0;" in generated_code
     assert "int i = 5 % 2;" in generated_code
     assert "i %= 2;" in generated_code
-    assert "float wrapped = a % 2.0;" not in generated_code
-    assert "float2 wrappedVec = v % float2(2.0);" not in generated_code
-    assert "double wrappedDouble = d % 2.0;" not in generated_code
-    assert "a %= 3.0;" not in generated_code
-    assert "v %= float2(3.0);" not in generated_code
-    assert "d %= 3.0;" not in generated_code
-    assert "fmod(" not in generated_code
+    assert "floor(" not in generated_code
 
 
 def test_floating_modulo_with_uninferred_builtin_operand_does_not_crash():
@@ -4174,12 +4164,8 @@ def test_floating_modulo_with_uninferred_builtin_operand_does_not_crash():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert (
-        "float wrapped = ((sin(a)) - (floor((sin(a)) / (1.0)) * (1.0)));"
-        in generated_code
-    )
-    assert "float wrapped = sin(a) % 1.0;" not in generated_code
-    assert "fmod(" not in generated_code
+    assert "float wrapped = sin(a) % 1.0;" in generated_code
+    assert "floor(" not in generated_code
 
 
 def test_multiple_stage_entry_points_emit():

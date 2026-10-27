@@ -898,8 +898,12 @@ class VectorArithmeticMixin:
         right_expr,
         operator,
     ):
-        """Lower vector binary arithmetic into a helper call when required."""
-        if operator not in {"+", "-", "*", "/", "%"}:
+        """Lower vector binary arithmetic into a helper call when required.
+
+        ``%`` is the C, HLSL and CrossGL remainder, truncated toward zero on floating components; the pseudo-operator
+        ``mod`` is GLSL's ``mod``, which floors the quotient.
+        """
+        if operator not in {"+", "-", "*", "/", "%", "mod"}:
             return None
         left_type = self.expression_result_type(left_node)
         right_type = self.expression_result_type(right_node)
@@ -1557,6 +1561,7 @@ class VectorArithmeticMixin:
             "*": "mul",
             "/": "div",
             "%": "mod",
+            "mod": "glsl_mod",
         }
         operation_name = operator_names[operator]
         helper_name = f"cgl_{vector_info['type']}_{operation_name}"
@@ -1620,19 +1625,24 @@ class VectorArithmeticMixin:
         if operator == "%" and component_type in {"float", "double"}:
             func_name = "fmod" if component_type == "double" else "fmodf"
             return f"{func_name}({left}, {right})"
-        if operator == "%" and component_type == "half":
+        if operator == "mod" and component_type in {"float", "double"}:
+            # GLSL mod floors the quotient; the operands are parameter names.
+            floor_name = "floor" if component_type == "double" else "floorf"
+            return f"({left} - {right} * {floor_name}({left} / {right}))"
+        if operator in {"%", "mod"} and component_type == "half":
             # ``__half`` has no ``%`` operator: take the remainder of the
-            # components converted to ``float`` the way float vectors do, so
-            # the GLSL floor semantics of the CUDA and HIP generators carry
-            # over, and round the result back to half.
+            # components converted to ``float`` the way float vectors do and
+            # round the result back to half.
             remainder = self.format_vector_binary_component(
                 "float", operator, f"__half2float({left})", f"__half2float({right})"
             )
             return f"__float2half({remainder})"
+        if operator == "mod":
+            operator = "%"
         return f"({left} {operator} {right})"
 
     def generate_mod_call(self, raw_args, args):
-        """Lower vector mod builtins through the same path as binary modulo."""
+        """Lower vector GLSL ``mod`` builtins, which floor the quotient."""
         if len(raw_args) != 2 or len(args) != 2:
             return None
         return self.lower_vector_binary_operation(
@@ -1640,8 +1650,17 @@ class VectorArithmeticMixin:
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
+
+    def is_floating_value_type(self, vtype):
+        """Whether ``vtype`` is a floating-point scalar or vector."""
+        if vtype is None:
+            return False
+        vector_info = self.vector_type_info(vtype)
+        if vector_info is not None:
+            return vector_info["component_type"] in {"float", "double", "half"}
+        return self.scalar_component_type(vtype) in {"float", "double", "half"}
 
     def require_vector_negation_helper(self, vector_info):
         """Register and return a helper function for vector unary negation."""

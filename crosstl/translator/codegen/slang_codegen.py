@@ -8437,10 +8437,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_slang_floor(
-            node.left, node.right
-        ):
-            return f"{left} = {self.generate_slang_mod_expression(left, right)}"
+        # Slang's floating % and %= are the truncated remainder, as CrossGL's.
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
@@ -8463,12 +8460,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         prelude, _results, right = self.generate_expression_with_prelude(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_slang_floor(
-            node.left, node.right
-        ):
-            statement = f"{left} = {self.generate_slang_mod_expression(left, right)};"
-        else:
-            statement = f"{left} {node.operator} {right};"
+        # Slang's floating % and %= are the truncated remainder, as CrossGL's.
+        statement = f"{left} {node.operator} {right};"
         return self.statement_with_prelude(prelude, statement)
 
     def tail_expression_returns(self, node):
@@ -8983,19 +8976,6 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         self.register_helper_function(helper_name, helper)
         return helper_name
-
-    def modulo_requires_slang_floor(self, left_expr, right_expr):
-        """Return whether scalar/vector modulo needs GLSL floor semantics lowering."""
-        left_component = self.vector_component_type(
-            self.expression_result_type(left_expr)
-        )
-        right_component = self.vector_component_type(
-            self.expression_result_type(right_expr)
-        )
-        return left_component in {"float", "double"} or right_component in {
-            "float",
-            "double",
-        }
 
     def generate_slang_mod_expression(self, left, right):
         return f"(({left}) - (floor(({left}) / ({right})) * ({right})))"
@@ -9543,8 +9523,6 @@ class SlangCodeGen(LoweringRefusalMixin):
             left = f"({left})"
         if self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
-        if node.op == "%" and self.modulo_requires_slang_floor(node.left, node.right):
-            return self.generate_slang_mod_expression(left, right)
         if node.op == "*" and self.binary_requires_slang_mul(
             self.expression_result_type(node.left),
             self.expression_result_type(node.right),
