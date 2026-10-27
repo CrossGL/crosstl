@@ -7855,7 +7855,7 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(std::vector<float> h) {" in result
+        assert "void prepare(inout std::vector<float> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
         assert "u32 count(std::vector<float> h) {" in result
         assert "return h.size();" in result

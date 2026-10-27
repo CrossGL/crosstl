@@ -3236,8 +3236,16 @@ class HipParser:
             self.skip_newlines()
 
             param_name = ""
-            function_pointer_name = self.parse_function_pointer_parameter_declarator()
-            if function_pointer_name is not None:
+            reference_array_name = self.parse_reference_array_parameter_declarator()
+            function_pointer_name = (
+                None
+                if reference_array_name is not None
+                else self.parse_function_pointer_parameter_declarator()
+            )
+            if reference_array_name is not None:
+                param_type += " & "
+                param_name = reference_array_name
+            elif function_pointer_name is not None:
                 param_type += " (*)"
                 param_name = function_pointer_name
             elif self.is_declarator_name_token():
@@ -3276,6 +3284,28 @@ class HipParser:
             and self.peek()
             and self.peek().type in {"ASTERISK", "STAR"}
         )
+
+    def parse_reference_array_parameter_declarator(self):
+        """Consume the ``(&name)`` of a reference-to-array parameter ``T (&name)[N]`` and return the name."""
+        name_token = self.peek(2)
+        if not (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type == "AMPERSAND"
+            and name_token
+            and name_token.type in self.DECLARATOR_NAME_TOKENS
+            and self.peek(3)
+            and self.peek(3).type == "RPAREN"
+            and self.peek(4)
+            and self.peek(4).type == "LBRACKET"
+        ):
+            return None
+        self.consume("LPAREN")
+        self.advance()
+        name = self.current_token.value
+        self.advance()
+        self.consume("RPAREN")
+        return name
 
     def parse_function_pointer_parameter_declarator(self):
         if not (
