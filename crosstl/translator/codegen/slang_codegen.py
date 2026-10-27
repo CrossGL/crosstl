@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ConstructorNode,
@@ -8368,6 +8369,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.generate_match(node)
         elif isinstance(node, SwitchNode):
             return self.generate_switch(node)
+        elif isinstance(node, BlockNode):
+            return self.generate_block_statement(node)
         elif isinstance(node, BreakNode):
             return "break;"
         elif isinstance(node, ContinueNode):
@@ -8383,6 +8386,23 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
+
+    def generate_block_statement(self, node):
+        """A nested ``{ ... }`` block; a declaration in it ends with the block, as in HLSL and C."""
+        saved_types = (dict(self.variable_types), dict(self.local_variable_types))
+        result = "{\n"
+        self.indent_level += 1
+        try:
+            for stmt in self.get_statements(node):
+                result += self.emit_statement(stmt) + "\n"
+        finally:
+            self.indent_level -= 1
+            for table, saved in zip(
+                (self.variable_types, self.local_variable_types), saved_types
+            ):
+                table.clear()
+                table.update(saved)
+        return result + self.indent() + "}"
 
     def generate_variable_statement(self, node):
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
