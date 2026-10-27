@@ -14396,7 +14396,7 @@ void main() {
 
     assert "static const int N = 3;" in hip_code
     assert "\nint N = 3;" not in hip_code
-    assert "const float scale = 2.0;" in hip_code
+    assert "const float scale = 2.0f;" in hip_code
 
 
 def test_hip_const_resource_pointer_is_not_qualified_twice():
