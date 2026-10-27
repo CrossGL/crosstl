@@ -48,6 +48,11 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
+from .c_reference_parameters import (
+    is_output_parameter,
+    overlapping_output_arguments,
+    reference_declarator,
+)
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -2105,7 +2110,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     )
                 )
             else:
-                param_declarations.append(self.visit_parameter(param))
+                declaration = self.visit_parameter(param)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declaration = reference_declarator(declaration, param_name)
+                param_declarations.append(declaration)
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
@@ -8684,6 +8693,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return args + self.hip_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise HipLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; HIP references would not copy out separately"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):
