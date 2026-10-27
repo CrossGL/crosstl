@@ -55,6 +55,19 @@ BAG_SUM = (
     "b.items[0].pos.y + b.items[1].pos.y * 32.0 + b.items[0].w[1] * 1024.0 + b.items[1].w[0] * 16384.0"
     " + b.items[0].w[0] * 262144.0 + b.items[1].w[1] * 4194304.0"
 )
+# limit returns early from a void function, after changing its argument.
+LIMIT = (
+    "void limit(inout float x, float hi) {\n    if (x > hi) {\n        x = hi;\n        return;\n    }\n"
+    "    x = x * 2.0;\n}"
+)
+# grow changes its argument, and copy2 writes both of its outputs.
+GROW = (
+    "void grow(inout float a) {\n    a = a * 2.0 + 1.0;\n}\n\n"
+    "void copy2(float x, out float a, out float b) {\n    a = x;\n    b = x * 2.0;\n}"
+)
+LVALUE_SUM = "values[0] + values[1] * 16.0 + values[2] * 256.0 + p.a * 4096.0 + p.b * 65536.0 + v.y * 1048576.0"
+# The sum of what an lvalue-increment probe counts, weighted so that each count stays recoverable.
+COUNT_SUM = "counts[0] + counts[1] * 8 + counts[2] * 256 + k * 8192 + c.x * 16384 + c.y * 524288"
 # Fills the named float[4] with iin[i], iin[i] + 1, iin[i] + 2 and iin[i] + 3.
 _FILL = "for (int k = 0; k < 4; k++) {{\n    {0}[k] = float(iin[i] + k);\n}}\n"
 
@@ -500,6 +513,84 @@ C_FAMILY = {
         "bool flags[4];\nfor (int j = 0; j < 4; j++) {\n    flags[j] = ((iin[i] >> j) & 1) == 1;\n}\n"
         "bool either = flags[0] || flags[3];\nflags[1] = !flags[1];\n"
         "outp[i] = (flags[1] ? 1.0 : 0.0) + (flags[2] ? 2.0 : 0.0) + (either ? 4.0 : 0.0) + float(iin[i]) * 8.0;"
+    ),
+    # Values from 2^31 up do not fit an int, so they convert correctly only as unsigned, and float to uint truncates.
+    "unsigned-float-conversion": Template(
+        "uint k = uint(iin[i] & 15);\nfloat big = float(k) * 268435456.0;\nuint u = uint(big);\n"
+        "uint v = u + 2147483648u;\nfloat back = float(v);\n"
+        "outp[i] = float(u >> 24u) + float(v >> 28u) * 512.0 + float(uint(float(k) * 2.75)) * 8192.0"
+        " + (back >= 2147483648.0 ? 524288.0 : 0.0);"
+    ),
+    # An assignment is an expression whose value is the value stored, and chained assignments store right to left.
+    "chained-assignment": Template(
+        "float a;\nfloat b;\nfloat c;\na = b = c = float(iin[i]) * 2.0;\nint j;\nint k;\nj = k = iin[i] + 1;\n"
+        "$vec2 v;\n$vec2 w;\nv = w = $vec2(1.0, float(j));\nc = (b = c + 1.0) * 2.0;\n"
+        "outp[i] = a + b * 32.0 + c * 1024.0 + float(k) * 65536.0 + (v.y == w.y ? 2097152.0 : 0.0);"
+    ),
+    # The default label comes first, and a case may be negative or share its statements with another.
+    "switch-default-position": Template(
+        "int k = iin[i] - 3;\nfloat acc = 0.0;\nswitch (k) {\n    default:\n        acc = 1.0;\n        break;\n"
+        "    case -1:\n        acc = 2.0;\n        break;\n    case 2:\n    case 5:\n        acc = 4.0;\n"
+        "        break;\n    case 0:\n        acc = 8.0;\n        break;\n}\noutp[i] = acc + float(k) * 16.0;"
+    ),
+    # for loops without an initializer or an increment, and loops that count down, one of them unsigned.
+    "for-loop-variants": Template(
+        "int k = iin[i] & 7;\nfloat acc = 0.0;\nfor (; k < 10;) {\n    acc += 1.0;\n    k += 3;\n}\nint j = 0;\n"
+        "for (; j < 4; j++) {\n    acc += 16.0;\n}\nfor (uint u = 4u; u > 0u; u--) {\n    acc += float(u) * 64.0;\n}\n"
+        "for (int m = 9; m >= 0; m -= 4) {\n    acc += 1024.0;\n}\n"
+        "outp[i] = acc + float(k) * 16384.0 + float(j) * 262144.0;"
+    ),
+    "void-return": Template(
+        "float x = float(iin[i]);\nlimit(x, 9.0);\nfloat y = float(iin[i] & 3);\nlimit(y, 2.0);\n"
+        "outp[i] = x + y * 32.0;",
+        LIMIT,
+    ),
+    # Swizzles of a parenthesized expression and of an array element the input picks.
+    "expression-swizzle": Template(
+        "$vec4 v = $vec4(float(iin[i]), 1.0, 2.0, 3.0);\n$vec2 a = (v * 2.0).wy;\n$vec2 b = (v + v.wzyx).zx;\n"
+        "$vec4 arr[2];\narr[0] = v;\narr[1] = v.wzyx;\n$vec2 d = arr[iin[i] & 1].zx;\n"
+        "outp[i] = a.x + a.y * 16.0 + b.x * 256.0 + b.y * 4096.0 + d.x * 65536.0 + d.y * 1048576.0;"
+    ),
+    # Arguments for inout and out parameters that are an array element the input picks, a member and a component.
+    "inout-argument-lvalues": Template(
+        "float values[3];\nvalues[0] = 1.0;\nvalues[1] = 2.0;\nvalues[2] = 3.0;\nint j = iin[i] % 3;\nPair p;\n"
+        "p.a = 0.0;\np.b = 0.5;\n$vec2 v = $vec2(4.0, float(iin[i]));\ngrow(values[j]);\ngrow(p.b);\ngrow(v.y);\n"
+        f"copy2(fin[i], p.a, values[2 - j]);\noutp[i] = {LVALUE_SUM};",
+        PAIR + "\n" + GROW,
+    ),
+    # Two cases declare a local of the same name, in one of them with another type.
+    "switch-case-scope": Template(
+        "float acc = 0.0;\nswitch (iin[i] & 3) {\n    case 0: {\n        float t = fin[i];\n        acc = t * 2.0;\n"
+        "        break;\n    }\n    case 1: {\n        float t = 3.0;\n        int n = iin[i] * 5;\n"
+        "        acc = t + float(n);\n        break;\n    }\n    default: {\n        int t = iin[i] * 4;\n"
+        "        acc = float(t) + 0.5;\n        break;\n    }\n}\noutp[i] = acc;"
+    ),
+    # Locals declared without a value get one on every path before they are read, last only in a loop that runs.
+    "deferred-initialization": Template(
+        "float x;\nif (iin[i] > 7) {\n    x = fin[i];\n} else {\n    x = 2.0;\n}\nint last;\n"
+        "for (int k = 0; k < 3; k++) {\n    last = iin[i] + k;\n}\n$vec2 v;\nv.x = x;\nv.y = float(last);\n"
+        "outp[i] = v.x + v.y * 16.0;"
+    ),
+    # The extremes of int and uint, written in decimal and in hexadecimal.
+    "integer-literal-limits": Template(
+        "int hi = 2147483647;\nint lo = -2147483647 - 1;\nuint top = 4294967295u;\nuint mask = 0x80000000u;\n"
+        "int k = iin[i];\noutp[i] = float((hi - k) >> 24) + float(lo >> 28) * 256.0"
+        " + float((top - uint(k)) >> 28u) * 4096.0 + float(mask >> 31u) * 65536.0"
+        " + float(int(0xFFFFFFF0u) + k) * 131072.0;"
+    ),
+    # Unsigned vectors wrap, shift logically and divide without a sign.
+    "unsigned-vector-arithmetic": Template(
+        "$uvec2 a = $uvec2(uint(iin[i]), 4294967295u);\n$uvec2 b = a * 3u + $uvec2(1u, 2u);\n"
+        "$uvec2 c = (b >> $uvec2(1u, 28u)) | (a & $uvec2(8u, 8u));\n"
+        "$uvec2 d = b / $uvec2(5u, 7u) + b % $uvec2(4u, 3u);\n"
+        "outp[i] = float(c.x) + float(c.y) * 64.0 + float(d.x) * 1024.0 + float(d.y >> 24u) * 65536.0;"
+    ),
+    # Increments of an array element the input picks, of an index inside a subscript, and of vector components.
+    "lvalue-increment": Template(
+        "int counts[3];\ncounts[0] = 0;\ncounts[1] = 10;\ncounts[2] = 20;\nint j = iin[i] % 3;\ncounts[j]++;\n"
+        "++counts[2];\nint k = 0;\nfloat vals[3];\nvals[k++] = fin[i];\nvals[k++] = 2.0;\nvals[k] = float(k);\n"
+        "$ivec2 c = $ivec2(iin[i], 5);\nc.y++;\n--c.x;\n"
+        f"outp[i] = float({COUNT_SUM}) + vals[0] * 4.0 + vals[1] * 16.0 + vals[2] * 64.0;"
     ),
     "compute": Template("outp[i] = fin[i];"),
     **OPERATORS,
