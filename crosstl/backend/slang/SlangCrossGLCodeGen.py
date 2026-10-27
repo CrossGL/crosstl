@@ -1987,6 +1987,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             if matrix_cast is not None:
                 return matrix_cast
             value = self.generate_expression(expr.expression, is_main)
+            base_type, bracket, array_suffix = expr.target_type.partition("[")
+            if bracket:
+                # `(float4[2])0` keeps its array suffix after the mapped element type.
+                return f"{self.map_type(base_type)}[{array_suffix}({value})"
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
             self.refuse_matrix_row_update(expr)

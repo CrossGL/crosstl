@@ -4329,6 +4329,46 @@ def test_c_style_user_type_identifier_cast_codegen_reparse_from_enum_sample():
     cgl_translator.parse(generated_code)
 
 
+def test_c_style_array_type_cast_codegen_reparse():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float a[3] = (float[3])0;
+        float4 v[2] = (float4[2])0;
+        a[1] = outp[tid.x];
+        outp[tid.x] = a[0] + a[1] + v[1].x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float a[3] = float[3](0);" in generated_code
+    assert "vec4 v[2] = vec4[2](0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_parenthesized_index_expression_is_not_an_array_cast():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float values[2] = { 1.0, 2.0 };
+        outp[tid.x] = (values[1]) - 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "outp[tid.x] = values[1] - 1.0;" in generated_code
+
+
 def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     code = """
     RWStructuredBuffer<int> outputBuffer;
