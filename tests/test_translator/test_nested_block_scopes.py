@@ -85,6 +85,6 @@ def test_slangc_accepts_nested_blocks(tmp_path):
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
 def test_cuda_and_hip_keep_nested_blocks(tmp_path, backend):
     compact = " ".join(_translate(tmp_path, backend).split())
-    assert "{ float x = 2.0; r += x; }" in compact
+    assert "{ float x = 2.0f; r += x; }" in compact
     assert "case 0: { float t = fin[i];" in compact
     assert "default: { int t = (iin[i] * 4);" in compact
