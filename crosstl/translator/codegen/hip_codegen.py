@@ -54,6 +54,7 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_vector_reductions import generate_vector_reduction_call
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -4308,6 +4309,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
         mapped_name = self.function_map.get(func_name, func_name)
+
+        reduction_call = generate_vector_reduction_call(
+            self, "HIP", func_name, raw_args, args
+        )
+        if reduction_call is not None:
+            return reduction_call
 
         if func_name == "abs":
             if len(args) == 1:
