@@ -116,6 +116,7 @@ from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_local_structs import module_structs
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -1695,7 +1696,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_ShaderNode(self, node: ShaderNode) -> str:
         """Render a full shader/program AST as a HIP translation unit."""
-        structs = getattr(node, "structs", [])
+        structs = module_structs(node, "HIP")
         self.add_generated_code(
             generate_enum_constants(
                 self,

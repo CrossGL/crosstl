@@ -71,6 +71,7 @@ from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_local_structs import module_structs
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -1114,8 +1115,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if self.has_mesh_task_stage(node):
             self.emit_generated_code(self.generate_cuda_mesh_task_helpers())
 
-        structs = getattr(node, "structs", [])
-        for struct in structs:
+        for struct in module_structs(node, "CUDA"):
             self.visit(struct)
             self.emit("")
 
