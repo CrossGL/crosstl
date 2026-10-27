@@ -645,3 +645,81 @@ def test_strided_complex_copies_move_one_storage_word_per_element():
     # storage_type has no complex64 name, so it must not choose the carrier.
     assert copy_into.index("complex64") < copy_into.index("storage_type(in.dtype())")
     assert "ggn2_dynamic_copyuint64uint64" in copy_packages.ENTRIES
+
+
+def _general_copy(seed):
+    rng = np.random.default_rng(seed)
+    shape = [int(size) for size in rng.integers(1, 5, int(rng.integers(0, 4)))]
+    source = [int(stride) for stride in rng.integers(-3, 4, len(shape))]
+    order = rng.permutation(len(shape))
+    destination, step = [0] * len(shape), 1
+    for axis in order[::-1]:
+        destination[axis] = step * (-1 if rng.integers(2) else 1)
+        step *= shape[axis]
+    reach = [
+        sum((size - 1) * max(0, -stride) for size, stride in zip(shape, strides))
+        for strides in (source, destination)
+    ]
+    metadata = {
+        "shape": shape,
+        "sourceStrides": source,
+        "sourceOffset": reach[0] + int(rng.integers(0, 3)),
+        "destinationStrides": destination,
+        "destinationOffset": reach[1] + int(rng.integers(0, 3)),
+    }
+    count = metadata["sourceOffset"] + sum(
+        (size - 1) * max(0, stride) for size, stride in zip(shape, source)
+    )
+    values = [int(word) for word in rng.integers(0, 1 << 32, count + 3)]
+    initial = [
+        int(word)
+        for word in rng.integers(0, 1 << 32, metadata["destinationOffset"] + step + 2)
+    ]
+    return rng, metadata, values, initial
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_general_copy_audit_checks_the_elementwise_result_whole(seed):
+    rng, metadata, values, initial = _general_copy(seed)
+    outputs = copy_evidence.expected_copy(metadata, values, initial)
+    payload = bytes((ctypes.c_uint32 * len(outputs))(*outputs))
+    check = copy_evidence._require_general_copy
+    assert check("copy", metadata, values, initial, outputs, "float32") == payload
+    index = int(rng.integers(0, len(outputs)))
+    wrong = list(outputs)
+    wrong[index] ^= 1
+    with pytest.raises(ValueError, match=f"Copy result {index} of copy differs"):
+        check("copy", metadata, values, initial, wrong, "float32")
+    with pytest.raises(ValueError, match="not float32 words"):
+        check("copy", metadata, values, initial, [*outputs[:-1], 1 << 32], "float32")
+    # Words of another type, and destinations whose strides do not prove the
+    # writes distinct, go to the element-wise check.
+    assert (
+        check("copy", metadata, values, initial, [*outputs[:-1], 1.0], "float32")
+        is None
+    )
+    if any(size > 1 for size in metadata["shape"]):
+        axis = next(i for i, size in enumerate(metadata["shape"]) if size > 1)
+        shared = dict(metadata, destinationStrides=list(metadata["destinationStrides"]))
+        shared["destinationStrides"][axis] = 0
+        assert check("copy", shared, values, initial, outputs, "float32") is None
+
+
+def test_general_copy_indices_match_the_layout_enumeration():
+    for seed in range(40):
+        _, metadata, _, _ = _general_copy(seed)
+        for prefix in ("source", "destination"):
+            layout = {
+                "shape": metadata["shape"],
+                "destinationStrides": metadata[prefix + "Strides"],
+                "destinationOffset": metadata[prefix + "Offset"],
+            }
+            assert copy_evidence.strided_indices(
+                np,
+                metadata["shape"],
+                layout["destinationStrides"],
+                layout["destinationOffset"],
+            ).tolist() == list(copy_layout.destination_indices(layout))
+    assert copy_evidence.strided_indices(np, [], [], 5).tolist() == [5]
+    assert copy_evidence.strided_indices(np, [3, 0], [1, 1], 5).tolist() == []
+    assert copy_evidence.strided_indices(np, [2, 2], [3], 1).tolist() == [1, 1, 4, 4]

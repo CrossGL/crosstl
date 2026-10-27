@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from crosstl.project import runtime_values
 from demos.integrations.mlx.portable_host import runtime, trace_records
 
 
@@ -239,3 +240,31 @@ def test_trace_summary_streams_only_the_checked_fields(tmp_path):
         {"details": {"x": [1] * 9}},
         {},
     ]
+
+
+def test_digests_from_known_item_types_equal_the_scanned_digests():
+    class Wide(int):
+        pass
+
+    lists = (
+        [True, False] * 200,
+        list(range(-300, 300)),
+        [1 << 70, *range(400)],
+        [0.5 * i for i in range(400)],
+        [float("nan"), *map(float, range(400))],
+        [1, 2.0, None, "x", True] * 80,
+        [Wide(i) for i in range(400)],
+        [*range(399), Wide(7)],
+    )
+    for values in lists:
+        types = runtime_values.scalar_types(values)
+        assert trace_records.value_digest(values, types=types) == (
+            trace_records.value_digest(values)
+        )
+        compact = trace_records.compact_trace_values({"v": values})["v"]
+        assert compact == {
+            "compactedValues": {
+                "length": len(values),
+                "sha256": trace_records.value_digest(tuple(values)),
+            }
+        }

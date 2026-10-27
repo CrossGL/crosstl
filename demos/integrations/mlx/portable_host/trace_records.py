@@ -7,7 +7,7 @@ import sys
 from array import array
 from pathlib import Path
 
-from crosstl.project.runtime_values import exact_types_within
+from crosstl.project.runtime_values import exact_types_within, scalar_types
 
 COMPACT_TRACE_LIMIT = 256
 # Longer strings, such as hex input observations, keep only length and digest.
@@ -25,16 +25,21 @@ def _little_endian(values):
     return values.tobytes()
 
 
-def _typed_encoding(values):
+def _typed_encoding(values, types=None):
     """Tagged machine words of a list of one exact type, or ``None``.
 
     Booleans, int64 integers and finite floats encode as bytes, int64 words
     and float64 words. Each such list has exactly one JSON encoding and one
     word encoding, so two lists share either encoding exactly when they share
     the other; NaN, infinities and wider integers keep their JSON encoding.
+    ``types``, when given, are the exact types of the items (``scalar_types``).
     """
     kind = type(values[0])
-    if not exact_types_within(values, frozenset({kind})):
+    if not (
+        types == {kind}
+        if types is not None
+        else exact_types_within(values, frozenset({kind}))
+    ):
         return None
     if kind is bool:
         return b"bool\0" + bytes(values)
@@ -63,17 +68,22 @@ def _plain(item):
     raise TypeError("Trace values must be JSON scalars")
 
 
-def value_digest(values):
+def value_digest(values, *, types=None):
     """SHA-256 of a long scalar array, equal exactly when its JSON is.
 
     Arrays of one exact type hash their tagged words (``_typed_encoding``),
     which is several times faster than encoding them; others hash their
-    compact JSON encoding, which no word encoding can equal.
+    compact JSON encoding, which no word encoding can equal. ``types``, when
+    given, are the exact types of the items of the list ``values``.
     """
     if type(values) is not list:
-        values = list(values)
-    encoded = _typed_encoding(values) if values else None
-    if encoded is None and not exact_types_within(values, _SCALAR_TYPES):
+        values, types = list(values), None
+    encoded = _typed_encoding(values, types) if values else None
+    if encoded is None and not (
+        types <= _SCALAR_TYPES
+        if types is not None
+        else exact_types_within(values, _SCALAR_TYPES)
+    ):
         values = [_plain(item) for item in values]
         encoded = _typed_encoding(values)
     if encoded is None:
@@ -151,16 +161,25 @@ def compact_trace_values(value):
     if isinstance(value, dict):
         return {key: compact_trace_values(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
+        # One scan finds a long list's item types for both checks.
+        types = (
+            scalar_types(value)
+            if len(value) > COMPACT_TRACE_LIMIT and type(value) is list
+            else None
+        )
         if len(value) > COMPACT_TRACE_LIMIT and (
-            exact_types_within(value, _SCALAR_TYPES)
+            (
+                types <= _SCALAR_TYPES
+                if types is not None
+                else exact_types_within(value, _SCALAR_TYPES)
+            )
             or all(
                 item is None or isinstance(item, (bool, int, float, str))
                 for item in value
             )
         ):
-            return {
-                "compactedValues": {"length": len(value), "sha256": value_digest(value)}
-            }
+            digest = value_digest(value, types=types)
+            return {"compactedValues": {"length": len(value), "sha256": digest}}
         return [compact_trace_values(item) for item in value]
     return value
 

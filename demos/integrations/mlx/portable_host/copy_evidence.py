@@ -18,6 +18,7 @@ import ctypes
 import hashlib
 from fractions import Fraction
 
+from crosstl.project.runtime_values import exact_types_within
 from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.copy_packages import VECTOR, signature
 from demos.integrations.mlx.portable_host.element_storage import (
@@ -249,6 +250,71 @@ def expected_copy(metadata, source, initial):
     return result
 
 
+def strided_indices(np, shape, strides, offset):
+    """``copy_layout.destination_indices`` as one int64 array, in its order."""
+    shape = list(shape)
+    if any(size <= 0 for size in shape):
+        return np.zeros(0, dtype=np.int64)
+    strides = list(strides)[: len(shape)]
+    strides += [0] * (len(shape) - len(strides))
+    index = np.array([offset], dtype=np.int64)
+    for size, stride in zip(shape, strides):
+        steps = np.arange(size, dtype=np.int64) * stride
+        index = (index[:, None] + steps).reshape(-1)
+    return index
+
+
+_WORD_TYPES = frozenset((int,))
+
+
+def _require_general_copy(entry, metadata, values, initial, outputs, destination):
+    """Check a general copy whole; return its output bytes, or ``None``.
+
+    The result must be ``expected_copy``'s, word for word. ``None`` leaves
+    lists that are not all ``int`` words, and destinations whose strides do
+    not prove each write lands on its own element, to the element-wise check,
+    which applies overlapping writes in order.
+    """
+    import numpy as np
+
+    shape = list(metadata["shape"])
+    strides = list(metadata["destinationStrides"])[: len(shape)]
+    strides += [0] * (len(shape) - len(strides))
+    if not copy_layout.distinct_by_strides(shape, strides) or not all(
+        exact_types_within(words, _WORD_TYPES) for words in (values, initial, outputs)
+    ):
+        return None
+    dtype = np.dtype(CTYPES[destination])
+    try:
+        source = np.asarray(values, dtype=dtype)
+        result = np.array(initial, dtype=dtype)
+        actual = np.asarray(outputs, dtype=dtype)
+    except OverflowError:
+        require(False, f"Copy values of {entry} are not {destination} words")
+    reads = strided_indices(
+        np, shape, metadata["sourceStrides"], metadata["sourceOffset"]
+    )
+    writes = strided_indices(np, shape, strides, metadata["destinationOffset"])
+    require(
+        reads.size == 0
+        or (
+            reads.min() >= 0
+            and reads.max() < source.size
+            and writes.min() >= 0
+            and writes.max() < result.size
+        ),
+        f"Copy indices of {entry} leave the retained values",
+    )
+    result[writes] = source[reads]
+    wrong = actual != result
+    if wrong.any():
+        index = int(np.argmax(wrong))
+        require(
+            False, f"Copy result {index} of {entry} differs from its retained values"
+        )
+    return actual.tobytes()
+
+
 def matches(actual, expected, dtype):
     if actual == expected or expected != NAN:
         return actual == expected
@@ -323,7 +389,12 @@ def audit_event(event, cache=None, *, native=True):
             and metadata["destinationCount"] == len(initial) == len(outputs),
             "Copy readback extent differs",
         )
-        expected = expected_copy(metadata, values, initial)
+        payload = _require_general_copy(
+            entry, metadata, values, initial, outputs, destination
+        )
+        expected = (
+            () if payload is not None else expected_copy(metadata, values, initial)
+        )
     for index, (actual, wanted) in enumerate(zip(outputs, expected)):
         require(
             matches(actual, wanted, destination),
