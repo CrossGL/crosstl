@@ -9399,6 +9399,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if byte_address_buffer_type is not None:
             return byte_address_buffer_type
 
+        if type_str.startswith("ptr<") and type_str.endswith(">"):
+            return f"{self.map_type(type_str[4:-1])}*"
+
         canonical_type = self.canonical_resource_type(type_str)
         mapped_type = self.type_map.get(canonical_type or type_str, type_str)
         return self.hip_mapped_type_result(mapped_type)
