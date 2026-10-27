@@ -434,23 +434,24 @@ def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
 
 # glslang folds the swizzle probe's v.wzyx.x to one OpCompositeExtract.
 _UNANCHORED_TYPES = {"swizzle"}
+# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc; DXC lowers the
+# HLSL probe's % to OpFRem.
+_HLSL_ANCHORED = {"float-remainder"}
 
 
-def test_operator_and_type_probes_compile_to_their_anchors():
-    # glslang lowers the GLSL probe of each operator and type to the instructions the construct is anchored to; it
-    # writes a signed remainder as OpSMod, which the probes' non-negative operands make equal to OpSRem. Scalar
-    # widths are anchored to capabilities, which this leaves out.
-    if not validators.can_lower("glsl"):
-        pytest.skip("glslangValidator or spirv-dis is not installed")
+def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
+    """The anchors of the operator and type constructs (or of ``names``) that ``language``'s probe lowers without."""
     missing = []
     for construct in constructs.universe(GRAMMAR):
         if construct.category not in ("operator", "type"):
             continue
-        if construct.name in _UNANCHORED_TYPES:
+        if names is None and construct.name in _UNANCHORED_TYPES | _HLSL_ANCHORED:
             continue
-        probe = probes.build(_feature("glsl", construct.name), "glsl")
+        if names is not None and construct.name not in names:
+            continue
+        probe = probes.build(_feature(language, construct.name), language)
         assembly, log = validators.lower(
-            "glsl", probe.source, probe.entry, "compute", raw_ids=False
+            language, probe.source, probe.entry, "compute", raw_ids=False
         )
         assert assembly, log
         found = set(re.findall(r"\bOp\w+", assembly))
@@ -459,7 +460,22 @@ def test_operator_and_type_probes_compile_to_their_anchors():
             for a in construct.anchors
             if a.startswith("Op") and a not in found
         ]
-    assert not missing
+    return missing
+
+
+def test_hlsl_anchored_probes_compile_to_their_anchors():
+    if not validators.can_lower("hlsl"):
+        pytest.skip("dxc or spirv-dis is not installed")
+    assert not _missing_anchors("hlsl", _HLSL_ANCHORED)
+
+
+def test_operator_and_type_probes_compile_to_their_anchors():
+    # glslang lowers the GLSL probe of each operator and type to the instructions the construct is anchored to; it
+    # writes a signed remainder as OpSMod, which the probes' non-negative operands make equal to OpSRem. Scalar
+    # widths are anchored to capabilities, which this leaves out.
+    if not validators.can_lower("glsl"):
+        pytest.skip("glslangValidator or spirv-dis is not installed")
+    assert not _missing_anchors("glsl")
 
 
 def test_c_operator_probes_cast_rather_than_construct():
