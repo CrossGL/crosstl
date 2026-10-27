@@ -14221,8 +14221,6 @@ class GLSLCodeGen(
             None,
         )
         if cache_key in cache:
-            if cache[cache_key] and parameter is not None:
-                parameter._glsl_scalar_array_view_inout = True
             return cache[cache_key]
         if cache_key in active:
             raise OpenGLPrivatePointerParameterError(
@@ -14244,8 +14242,10 @@ class GLSLCodeGen(
             return False
 
         def mark_mutated():
+            # Whether the callee writes the array is a fact about the callee alone. Only a caller that passes
+            # caller-visible storage, such as ``&local``, needs those writes back
+            # (:meth:`glsl_mark_fixed_array_writeback`); an unqualified array parameter is copied in.
             cache[cache_key] = True
-            parameter._glsl_scalar_array_view_inout = True
             return True
 
         nodes = list(self.walk_ast(getattr(function, "body", [])))
@@ -14316,7 +14316,9 @@ class GLSLCodeGen(
                         )
                     callee_parameter = callee_parameters[argument_index]
                     callee_qualifiers = set(
-                        self.glsl_parameter_qualifiers(callee_parameter)
+                        self.glsl_parameter_qualifiers(
+                            callee_parameter, array_view_writeback=False
+                        )
                     )
                     if callee_qualifiers.intersection({"out", "inout"}):
                         return mark_mutated()
@@ -14362,6 +14364,70 @@ class GLSLCodeGen(
             return False
         finally:
             active.discard(cache_key)
+
+    def glsl_fixed_array_forwarded_parameters(self, function, parameter_name):
+        """The fixed-array parameters of helpers that ``function`` passes its parameter ``parameter_name`` to."""
+        nodes = list(self.walk_ast(getattr(function, "body", [])))
+        lexical_call_source_types = self.glsl_scalar_array_view_lexical_bindings(
+            function
+        )["call_source_types"]
+        forwarded = []
+        for call in nodes:
+            if not isinstance(call, FunctionCallNode):
+                continue
+            arguments = list(
+                getattr(call, "arguments", getattr(call, "args", [])) or []
+            )
+            indices = [
+                index
+                for index, argument in enumerate(arguments)
+                if self.glsl_fixed_array_forwarding_kind(argument, parameter_name)
+                is not None
+            ]
+            if not indices:
+                continue
+            callee = self.glsl_fixed_array_mutation_callee(
+                function,
+                call,
+                parameter_name,
+                lexical_source_types=lexical_call_source_types.get(id(call), {}),
+            )
+            if callee is None:
+                continue
+            callee_parameters = list(
+                getattr(callee, "parameters", getattr(callee, "params", [])) or []
+            )
+            for index in indices:
+                if index < len(callee_parameters) and (
+                    self.glsl_fixed_array_parameter_shape(callee_parameters[index])
+                    is not None
+                ):
+                    forwarded.append((callee, callee_parameters[index]))
+        return forwarded
+
+    def glsl_mark_fixed_array_writeback(self, function, parameter_name, visited=None):
+        """Give ``function``'s fixed-array parameter ``parameter_name`` writeback when the function writes it.
+
+        The caller passes storage it reads back, so the parameter becomes ``inout``, as does every fixed-array
+        parameter of a helper the function forwards it to and that writes it in turn.
+        """
+        visited = set() if visited is None else visited
+        key = (id(function), parameter_name)
+        if key in visited:
+            return
+        visited.add(key)
+        if not self.glsl_fixed_array_parameter_is_mutated(function, parameter_name):
+            return
+        parameters = getattr(function, "parameters", getattr(function, "params", []))
+        for parameter in parameters or []:
+            if getattr(parameter, "name", None) == parameter_name:
+                parameter._glsl_scalar_array_view_inout = True
+        for callee, callee_parameter in self.glsl_fixed_array_forwarded_parameters(
+            function, parameter_name
+        ):
+            self.glsl_mark_fixed_array_writeback(
+                callee, getattr(callee_parameter, "name", None), visited
+            )
 
     def glsl_fixed_array_target_root_name(self, expression):
         current = expression
@@ -20525,7 +20591,7 @@ class GLSLCodeGen(
             return None
         return func_name
 
-    def glsl_parameter_qualifiers(self, parameter):
+    def glsl_parameter_qualifiers(self, parameter, array_view_writeback=True):
         qualifiers = []
         seen = set()
         source_qualifiers = {
@@ -20539,7 +20605,8 @@ class GLSLCodeGen(
                 seen.add(normalized)
         raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
         if (
-            getattr(parameter, "_glsl_scalar_array_view_inout", False)
+            array_view_writeback
+            and getattr(parameter, "_glsl_scalar_array_view_inout", False)
             and not seen.intersection({"out", "inout"})
             and not source_qualifiers.intersection(
                 {"const", "constant", "readonly", "in"}
@@ -24538,16 +24605,14 @@ class GLSLCodeGen(
                     )
                     or []
                 )
-                if index < len(resolved_parameters) and (
-                    self.glsl_fixed_array_parameter_is_mutated(
-                        resolved_function,
-                        _parameter_name,
-                    )
-                ):
+                if index < len(resolved_parameters):
                     # ``&local`` denotes caller-visible storage. GLSL's
                     # unqualified array parameters are copy-in only, so retain
-                    # source writeback explicitly on the exact resolved helper.
-                    resolved_parameters[index]._glsl_scalar_array_view_inout = True
+                    # source writeback explicitly on the exact resolved helper
+                    # and on the helpers it forwards the view to.
+                    self.glsl_mark_fixed_array_writeback(
+                        resolved_function, _parameter_name
+                    )
                 views[binding_id] = {
                     "binding_kind": binding["kind"],
                     "element_type": element_type,
