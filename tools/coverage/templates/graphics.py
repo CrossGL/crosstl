@@ -14,7 +14,9 @@ from . import (
     constructors,
     declarations,
     edges,
+    lexical,
     evaluation,
+    forms,
     functions,
     lvalues,
     operators,
@@ -67,6 +69,9 @@ GLSL = {
     **aggregates.FAMILY,
     **values.FAMILY,
     **edges.FAMILY,
+    **lexical.FAMILY,
+    **forms.FAMILY,
+    **forms.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -182,6 +187,8 @@ HLSL = {
     **values.FAMILY,
     **values.HLSL,
     **edges.FAMILY,
+    **lexical.FAMILY,
+    **forms.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -336,6 +343,10 @@ METAL = {
     **values.METAL,
     **edges.FAMILY,
     **edges.METAL,
+    **lexical.FAMILY,
+    **forms.FAMILY,
+    **lexical.METAL,
+    **forms.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -534,6 +545,8 @@ WGSL = {
     **aggregates.WGSL,
     **values.WGSL,
     **edges.WGSL,
+    **lexical.WGSL,
+    **forms.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -608,6 +621,8 @@ WGSL = {
 
 def _slang(template: Template, stage: str = "") -> Template:
     """An HLSL template as Slang: slangc assigns bindings itself, and a stage program names its stage."""
+    if template is ABSENT:
+        return template
     declarations = re.sub(r"\s*:\s*register\(\w+\)", "", template.declarations)
     program = f'[shader("{stage}")]\n{template.program}' if stage else template.program
     return replace(template, declarations=declarations, program=program)

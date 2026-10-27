@@ -4212,6 +4212,9 @@ class Parser:
             return ContinueNode()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.current_token[0] == "STRUCT" and self.peek()[0] == "IDENTIFIER":
+            # A structure declared in a block; semantics.local_structs hoists it to module scope.
+            return self.parse_local_struct_statement()
         elif self.current_token_starts_inferred_var_declaration():
             return self.parse_inferred_var_declaration()
         elif self.is_variable_declaration():
@@ -4225,6 +4228,35 @@ class Parser:
                 return ExpressionStatementNode(expr, is_tail_expression=True)
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
+
+    def parse_local_struct_statement(self):
+        """Parse ``struct Name { ... } [declarators];`` in a block, refusing one it cannot read.
+
+        Declarators after the closing brace (``struct S { float x; } a, b[2];``) declare variables of the
+        structure, as in C and GLSL, and follow it in the block.
+        """
+        node = self.parse_struct()
+        if not isinstance(node, StructNode):
+            raise SyntaxError(
+                "CrossGL could not parse the structure declared in a block, at "
+                f"{self.current_token[0]} {self.current_token[1]!r}"
+            )
+        node.is_local_declaration = True
+        if self.peek(-1)[0] == "SEMICOLON" or not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.peek()[0] in {"SEMICOLON", "COMMA", "LBRACKET", "EQUALS"}
+        ):
+            return node
+        declarations = []
+        while True:
+            declarations.append(
+                self.parse_variable_declarator(NamedType(node.name), [], [])
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        self.eat("SEMICOLON")
+        return [node, *declarations]
 
     def current_token_starts_statement_attribute(self):
         """Return whether the current token starts statement-level metadata."""
