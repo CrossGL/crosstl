@@ -111,7 +111,8 @@ def test_stage_constants_stay_const(backend):
 def test_constant_arrays_and_vectors_are_static_device_globals(backend):
     declarations = _declarations(_generate(backend))
     assert (
-        "__device__ const float WEIGHTS[4] = {0.125f, 0.25f, 0.5f, 1.0f};" in declarations
+        "__device__ const float WEIGHTS[4] = {0.125f, 0.25f, 0.5f, 1.0f};"
+        in declarations
     )
     # make_float2 is not constexpr: a device variable needs the brace list to be initialized statically.
     assert "__device__ const float2 OFFSET = {1.0f, 2.0f};" in declarations
