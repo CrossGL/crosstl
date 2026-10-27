@@ -139,23 +139,37 @@ class IndexRangeAssertion:
     value_range: IntegerRange
     source: str = "*"
     function: str | None = None
+    # The storage the expression indexes. A scoped assertion applies only
+    # while an index into that storage is proved, so one function may carry
+    # different ranges for subscripts of different arrays.
+    indexed: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.expression, str) or not self.expression.strip():
             raise ValueError("index range assertion expression must be non-empty")
         if not isinstance(self.source, str) or not self.source.strip():
             raise ValueError("index range assertion source must be non-empty")
-        if self.function is not None and (
-            not isinstance(self.function, str) or not self.function.strip()
-        ):
-            raise ValueError("index range assertion function must be non-empty")
+        for field_name in ("function", "indexed"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"index range assertion {field_name} must be non-empty"
+                )
+            object.__setattr__(self, field_name, value.strip())
         object.__setattr__(self, "expression", self.expression.strip())
         object.__setattr__(self, "source", self.source.strip())
-        if self.function is not None:
-            object.__setattr__(self, "function", self.function.strip())
 
-    def applies_to(self, expression: str, function: str | None) -> bool:
+    def applies_to(
+        self,
+        expression: str,
+        function: str | None,
+        indexed: str | None = None,
+    ) -> bool:
         if _normalize_expression(expression) != _normalize_expression(self.expression):
+            return False
+        if self.indexed is not None and self.indexed != indexed:
             return False
         return self.function is None or self.function == function
 
@@ -168,6 +182,8 @@ class IndexRangeAssertion:
         }
         if self.function is not None:
             payload["function"] = self.function
+        if self.indexed is not None:
+            payload["indexed"] = self.indexed
         return payload
 
 
@@ -399,6 +415,7 @@ def parse_index_range_assertions(
         expression = record.get("expression")
         source = record.get("source", "*")
         function = record.get("function")
+        indexed = record.get("indexed")
         minimum = _range_bound(record, "minimum", "min", record_path)
         maximum = _range_bound(record, "maximum", "max", record_path)
         assertions.append(
@@ -406,6 +423,7 @@ def parse_index_range_assertions(
                 expression=str(expression) if expression is not None else "",
                 source=str(source) if source is not None else "",
                 function=(str(function) if function is not None else None),
+                indexed=(str(indexed) if indexed is not None else None),
                 value_range=IntegerRange(
                     minimum,
                     maximum,

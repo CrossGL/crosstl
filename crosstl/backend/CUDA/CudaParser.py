@@ -5,6 +5,7 @@ from .CudaAst import (
     AssignmentNode,
     AtomicOperationNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CastNode,
@@ -3389,12 +3390,18 @@ class CudaParser:
             elif self.current_token[0] != terminator:
                 break
 
+    def parse_scoped_statement(self):
+        """A statement of a block or a ``case``; a nested ``{ ... }`` keeps its own scope as a ``BlockNode``."""
+        if self.current_token[0] == "LBRACE":
+            return BlockNode(self.parse_block())
+        return self.parse_statement()
+
     def parse_block(self):
         self.eat("LBRACE")
         statements = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            stmt = self.parse_statement()
+            stmt = self.parse_scoped_statement()
             if stmt:
                 if isinstance(stmt, list):
                     statements.extend(stmt)
@@ -3976,7 +3983,7 @@ class CudaParser:
                 self.eat("COLON")
                 body = []
                 while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE"]:
-                    body.append(self.parse_statement())
+                    body.append(self.parse_scoped_statement())
                 case = CaseNode(value, body)
                 cases.append(case)
                 ordered_cases.append(case)
@@ -3988,7 +3995,7 @@ class CudaParser:
                 self.eat("COLON")
                 default_case = []
                 while self.current_token[0] not in ["CASE", "RBRACE"]:
-                    default_case.append(self.parse_statement())
+                    default_case.append(self.parse_scoped_statement())
                 ordered_cases.append(CaseNode(None, default_case))
             else:
                 self.eat(self.current_token[0])

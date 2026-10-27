@@ -6,10 +6,15 @@ from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
-from .block_member_names import instance_block_member_names, rename_shadowing_locals
+from .block_member_names import (
+    function_variable_names,
+    instance_block_member_names,
+    rename_shadowing_locals,
+)
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1405,71 +1410,9 @@ class GLSLToCrossGLConverter:
                 name = getattr(item, "name", None)
                 if name:
                     names.add(name)
-        # A function-local or parameter name shadows the instance inside that function,
-        # so the instance name must avoid those declarations too.
-        for function in getattr(node, "functions", []) or []:
-            self.collect_function_declaration_names(function, names)
+        # A local or parameter of the same name would shadow the instance inside its function.
+        names.update(function_variable_names(node))
         return names
-
-    def collect_function_declaration_names(self, function, names):
-        for param in getattr(function, "params", []) or []:
-            if isinstance(param, tuple) and len(param) == 2:
-                names.add(param[1])
-                continue
-            name = getattr(param, "name", None)
-            if name:
-                names.add(name)
-        self.collect_statement_declaration_names(getattr(function, "body", None), names)
-
-    def collect_statement_declaration_names(self, statement, names):
-        if statement is None:
-            return
-        if isinstance(statement, (list, tuple)):
-            for item in statement:
-                self.collect_statement_declaration_names(item, names)
-        elif isinstance(statement, VariableNode):
-            if getattr(statement, "name", None):
-                names.add(statement.name)
-        elif isinstance(statement, AssignmentNode):
-            # generate_assignment renders a typed left-hand side as a declaration.
-            lhs = getattr(statement, "left", None)
-            if isinstance(lhs, VariableNode) and getattr(lhs, "vtype", None):
-                names.add(lhs.name)
-        elif isinstance(statement, StructNode):
-            if getattr(statement, "name", None):
-                names.add(statement.name)
-        elif isinstance(statement, BlockNode):
-            for child in statement.statements:
-                self.collect_statement_declaration_names(child, names)
-        elif isinstance(statement, IfNode):
-            self.collect_statement_declaration_names(
-                getattr(statement, "if_body", None), names
-            )
-            else_if_chain = []
-            if hasattr(statement, "else_if_conditions") and hasattr(
-                statement, "else_if_bodies"
-            ):
-                else_if_chain = list(
-                    zip(statement.else_if_conditions, statement.else_if_bodies)
-                )
-            elif hasattr(statement, "else_if_chain"):
-                else_if_chain = statement.else_if_chain
-            for _, elif_body in else_if_chain:
-                self.collect_statement_declaration_names(elif_body, names)
-            for _, chain_body in getattr(statement, "if_chain", None) or []:
-                self.collect_statement_declaration_names(chain_body, names)
-            self.collect_statement_declaration_names(
-                getattr(statement, "else_body", None), names
-            )
-        elif isinstance(statement, ForNode):
-            self.collect_statement_declaration_names(statement.init, names)
-            self.collect_statement_declaration_names(statement.condition, names)
-            self.collect_statement_declaration_names(statement.body, names)
-        elif isinstance(statement, (WhileNode, DoWhileNode)):
-            self.collect_statement_declaration_names(statement.body, names)
-        elif isinstance(statement, SwitchNode):
-            for _, clause_statements in ordered_switch_clauses(statement):
-                self.collect_statement_declaration_names(clause_statements, names)
 
     def is_anonymous_ssbo_struct(self, struct):
         qualifiers = {
@@ -3723,6 +3666,13 @@ class GLSLToCrossGLConverter:
             return f"return {value}" if value else "return"
         return f"return {self.generate_expression(node.value)}"
 
+    def generate_operand(self, node):
+        """Render an operand, keeping an assignment operand as one group."""
+        expression = self.generate_expression(node)
+        if isinstance(node, AssignmentNode):
+            return f"({expression})"
+        return expression
+
     def generate_expression(self, node):
         """Render an OpenGL backend expression node as CrossGL syntax."""
         if node is None:
@@ -3749,11 +3699,14 @@ class GLSLToCrossGLConverter:
                 return ssbo_member
             return node.name
         elif isinstance(node, BinaryOpNode):
-            left = self.generate_expression(node.left)
-            right = self.generate_expression(node.right)
             operator = self.operator_map.get(node.op, node.op)
             if operator == ",":
+                # Assignment binds tighter than the comma operator.
+                left = self.generate_expression(node.left)
+                right = self.generate_expression(node.right)
                 return f"({left}, {right})"
+            left = self.generate_operand(node.left)
+            right = self.generate_operand(node.right)
             equality = lower_aggregate_equality(self, node, left, right)
             if equality is not None:
                 return equality
@@ -3761,12 +3714,12 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, UnaryOpNode):
             if node.op in {"++", "--"}:
                 self.mark_structured_element_reference(node.operand)
-            operand = self.generate_expression(node.operand)
+            operand = self.generate_operand(node.operand)
             operator = self.operator_map.get(node.op, node.op)
             return f"({operator}{operand})"
         elif isinstance(node, PostfixOpNode):
             self.mark_structured_element_reference(node.operand)
-            operand = self.generate_expression(node.operand)
+            operand = self.generate_operand(node.operand)
             return f"({operand}{node.op})"
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
@@ -3777,9 +3730,9 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, ArrayAccessNode):
             return self.generate_array_access(node)
         elif isinstance(node, TernaryOpNode):
-            condition = self.generate_expression(node.condition)
-            true_expr = self.generate_expression(node.true_expr)
-            false_expr = self.generate_expression(node.false_expr)
+            condition = self.generate_operand(node.condition)
+            true_expr = self.generate_operand(node.true_expr)
+            false_expr = self.generate_operand(node.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(node, VectorConstructorNode):
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
@@ -3805,15 +3758,15 @@ class GLSLToCrossGLConverter:
         if long_integer_match:
             suffix = long_integer_match.group("suffix")
             if "u" in suffix.lower():
-                return f"{long_integer_match.group('body')}u"
-            return long_integer_match.group("body")
+                return crossgl_legacy_octal(f"{long_integer_match.group('body')}u")
+            return crossgl_legacy_octal(long_integer_match.group("body"))
         match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if not match:
-            return text
+            return crossgl_legacy_octal(text)
         suffix = match.group("suffix")
         if suffix[0].lower() == "u":
-            return f"{match.group('body')}u"
-        return match.group("body")
+            return crossgl_legacy_octal(f"{match.group('body')}u")
+        return crossgl_legacy_octal(match.group("body"))
 
     def generate_function_call(self, node):
         structured_length = self.structured_buffer_length_call(node)

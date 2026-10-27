@@ -9,7 +9,7 @@ emulated integer and boolean matrices, and HLSL logical intrinsics.
 
 import re
 
-from ..ast import FunctionCallNode, LiteralNode
+from ..ast import FunctionCallNode, LiteralNode, UnaryOpNode
 from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
 
 
@@ -157,6 +157,35 @@ class MetalHlslValueMixin:
             return None
         return common
 
+    def metal_vector_scalar_common_component(self, operator, vector_component, scalar):
+        """Component type of ``vector op scalar`` under the source languages' conversions.
+
+        HLSL and GLSL convert both operands to their common type (``int4 * 0.5`` is a ``float4``), while MSL
+        converts the scalar to the vector's component type (MSL 2.12). A floating literal takes a ``half``
+        vector's precision instead, as an HLSL literal float does, so ``h * 2.0`` stays ``half4``.
+        Returns ``None`` when the operator or the scalar's type gives no common type.
+        """
+        if operator not in self.METAL_COMMON_TYPE_OPERATORS:
+            return None
+        scalar_type = self.map_type(self.expression_result_type(scalar))
+        if not self.is_scalar_value_type(scalar_type):
+            return None
+        scalar_component = self.vector_component_type(scalar_type)
+        if scalar_component not in self.METAL_ARITHMETIC_COMPONENT_RANKS:
+            return None
+        literal = scalar
+        while isinstance(literal, UnaryOpNode) and literal.operator in {"-", "+"}:
+            literal = literal.operand
+        if (
+            vector_component == "half"
+            and isinstance(literal, LiteralNode)
+            and isinstance(literal.value, float)
+        ):
+            return vector_component
+        return self.metal_binary_common_component(
+            operator, vector_component, scalar_component
+        )
+
     def metal_mixed_vector_binary_operands(self, expr, operator, left, right):
         """Convert vector operands with different component types.
 
@@ -189,6 +218,18 @@ class MetalHlslValueMixin:
             info = left_info or right_info
             other = expr.right if left_info is not None else expr.left
             other_type = self.map_type(self.expression_result_type(other))
+            common = self.metal_vector_scalar_common_component(operator, info[1], other)
+            if common is not None:
+                # MSL converts the scalar to the vector's component type
+                # (MSL 2.12), while HLSL and GLSL convert both operands to
+                # their common type: int4 * 0.5 is float4(a) * 0.5.
+                if common != info[1]:
+                    converted_type = f"{common}{info[2]}"
+                    if left_info is not None:
+                        left = f"{converted_type}({left})"
+                    else:
+                        right = f"{converted_type}({right})"
+                    info = (converted_type, common, info[2])
             if operator == "%" and info[1] in {"float", "half"}:
                 # fmod has no vector-scalar overloads.
                 if left_info is None and self.is_scalar_value_type(other_type):
