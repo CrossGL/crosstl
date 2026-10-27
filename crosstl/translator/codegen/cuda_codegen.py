@@ -6679,8 +6679,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("continue;")
 
     def visit_BlockNode(self, node):
-        """Visit block statement"""
-        self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.emit("{")
+        self.indent_level += 1
+        try:
+            self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.emit("}")
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
