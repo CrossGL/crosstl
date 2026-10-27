@@ -9,6 +9,7 @@ from .HipAst import (
     ASTNode,
     AtomicOperationNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CastNode,
@@ -3565,7 +3566,7 @@ class HipParser:
                 while self.current_token and not self.match(
                     "CASE", "DEFAULT", "RBRACE"
                 ):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         body.append(stmt)
                 case = CaseNode(value, body)
@@ -3579,7 +3580,7 @@ class HipParser:
                 self.consume("COLON")
                 default_case = []
                 while self.current_token and not self.match("CASE", "RBRACE"):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         default_case.append(stmt)
                 ordered_cases.append(CaseNode(None, default_case))
@@ -3713,6 +3714,12 @@ class HipParser:
 
         return clobbers
 
+    def parse_scoped_statement(self):
+        """A statement of a block or a ``case``; a nested ``{ ... }`` keeps its own scope as a ``BlockNode``."""
+        if self.match("LBRACE"):
+            return BlockNode(self.parse_block())
+        return self.parse_statement()
+
     def parse_block(self):
         self.consume("LBRACE")
         statements = []
@@ -3720,7 +3727,7 @@ class HipParser:
         self.block_depth += 1
         try:
             while self.current_token and not self.match("RBRACE"):
-                stmt = self.parse_statement()
+                stmt = self.parse_scoped_statement()
                 if stmt:
                     if isinstance(stmt, list):
                         statements.extend(stmt)

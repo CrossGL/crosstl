@@ -9616,6 +9616,22 @@ class HipToCrossGLConverter:
     def visit_ContinueNode(self, node):
         self.emit("continue;")
 
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
+
     def visit_IfNode(self, node):
         self.validate_record_scalar_context(node.condition, "if condition")
         condition = self.visit(node.condition)

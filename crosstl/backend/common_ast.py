@@ -437,6 +437,20 @@ class ContinueNode(ASTNode):
         return "ContinueNode()"
 
 
+class BlockNode(ASTNode):
+    """A compound statement nested in a block or a ``case``: ``{ ... }``.
+
+    A declaration in it ends with it (C++17 [basic.scope.block], C11 6.2.1), so it may reuse a name declared outside
+    it or in another ``case``. The bodies of ``if``, loops and functions stay statement lists.
+    """
+
+    def __init__(self, statements):
+        self.statements = list(statements)
+
+    def __repr__(self):
+        return f"BlockNode(statements={len(self.statements)})"
+
+
 class BreakNode(ASTNode):
     """Node representing a break statement."""
 

@@ -18813,6 +18813,32 @@ class TestHipCodeGen:
         assert "values[1].bits = 2u;" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_union_shadowed_in_a_nested_block_tracks_its_own_active_member(self):
+        # The nested block keeps its scope, so each union object has its own active member.
+        code = """
+        union Bits { int value; unsigned bits; };
+        __global__ void probe(int* output) {
+            Bits value;
+            value.value = 1;
+            {
+                Bits value;
+                value.bits = 2u;
+                output[0] = int(value.bits);
+            }
+            output[1] = value.value;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        compact = " ".join(result.split())
+        assert (
+            "{ var value: Bits; value.bits = 2u; output[0] = i32(value.bits); } "
+            "output[1] = value.value;"
+        ) in compact
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_dynamic_union_array_object_fails_closed(self):
         code = """
         union Bits { int value; unsigned bits; };
@@ -18879,14 +18905,6 @@ class TestHipCodeGen:
                 "__global__ void probe(int* output) { Bits value; value.value=1; "
                 "output[0]=read(value); }",
                 "union function argument active storage",
-            ),
-            (
-                "union-flattened-shadow",
-                "union Bits { int value; unsigned bits; }; "
-                "__global__ void probe(int* output) { Bits value; value.value=1; "
-                "{ Bits value; value.bits=2u; output[0]=int(value.bits); } "
-                "output[1]=value.value; }",
-                "union lexical shadowing with flattened scope",
             ),
             (
                 "union-copy",
