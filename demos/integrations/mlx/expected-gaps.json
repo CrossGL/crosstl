@@ -4045,8 +4045,8 @@
       "pruned_candidate_count": 2120
     },
     "artifact": {
-      "sha256": "ce27978c20089f86b6b00955503b1aede87d1ae6f7400e1adfe88961e3be77ef",
-      "size_bytes": 124401,
+      "sha256": "1b7abf82bf713abc5640208cc0606232b228f683473f603debcb8898954a1f26",
+      "size_bytes": 120398,
       "source_remap_mapping_count": 1,
       "pointer_transport": "concrete-workgroup-and-storage-resource-offsets",
       "default_null_resource_pointer_transport": "statically-unobserved-chain-pruned",

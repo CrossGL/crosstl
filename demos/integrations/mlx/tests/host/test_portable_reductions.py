@@ -42,7 +42,14 @@ def test_invalid_all_reduce_stage_is_rejected(count):
 
 @pytest.mark.parametrize(
     "dtype,itemsize",
-    [("float32", 4), ("int32", 4), ("uint32", 4), ("bool_", 1), ("bfloat16", 2)],
+    [
+        ("float32", 4),
+        ("int32", 4),
+        ("uint32", 4),
+        ("bool_", 1),
+        ("bfloat16", 2),
+        ("float16", 2),
+    ],
 )
 @pytest.mark.parametrize(
     "boundary", [65536, 131075, "before", "at", "after", 2**31 - 1]
@@ -66,7 +73,7 @@ def test_large_reduction_stage_uses_logical_bytes(dtype, itemsize, boundary):
     assert final["workgroupSize"] == [32 if rows == 128 else 1024, 1, 1]
 
 
-@pytest.mark.parametrize("dtype", [None, [], "bool", "float16", "uint64", 4])
+@pytest.mark.parametrize("dtype", [None, [], "bool", "half", "int16", "uint64", 4])
 def test_reduction_plan_rejects_unsupported_logical_dtype(dtype):
     with pytest.raises(ValueError, match="dtype"):
         reduction_layout.stage(65536, dtype)
