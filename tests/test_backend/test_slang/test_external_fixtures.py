@@ -771,11 +771,11 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "enum Mode {",
-            "typealias ModeTypedef = Mode;",
+            "typedef Mode ModeTypedef;",
             "const ModeTypedef mode = Mode::Add;",
             "outputBuffer[id.x] = uint(mode);",
         ],
-        "not_contains": ["typedef Mode ModeTypedef;"],
+        "not_contains": ["typealias ModeTypedef = Mode;"],
     },
     {
         "id": "slang_func_keyword_default_parameter_from_current_docs",
@@ -1270,9 +1270,10 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "struct MatrixData {",
             "mat4 m1;",
-            "float2x4 m2;",
-            "float3x2 m3;",
+            "mat4x2 m2;",
+            "mat2x3 m3;",
             "outputBuffer[0] = MatrixData().m1[0][0];",
+            "outputBuffer[1] = MatrixData().m2[3][1];",
         ],
         "not_contains": ["MATRIX_LAYOUT", "row_major", "column_major"],
     },
@@ -1792,7 +1793,7 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2D texFrame;",
-            "bool mandelbrot(vec2 z, int i)",
+            "bool mandelbrot(inout vec2 z, out int i)",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
             "texFrame[thread] = vec4(color, 1.0);",
         ],

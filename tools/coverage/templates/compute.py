@@ -2,7 +2,27 @@
 
 from __future__ import annotations
 
-from . import composites, constructors, functions, operators
+from . import (
+    aggregates,
+    assignments,
+    branches,
+    calls,
+    composites,
+    constructors,
+    declarations,
+    edges,
+    evaluation,
+    forms,
+    functions,
+    idioms,
+    lexical,
+    lvalues,
+    operators,
+    scopes,
+    shapes,
+    statements,
+    values,
+)
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 _CSTDINT = "#include <cstdint>"
@@ -26,6 +46,7 @@ _GRAPHICS = (
 
 CUDA = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "function-call": Template(
         C_FAMILY["function-call"].body,
         "__device__ float twice(float x) {\n    return x * 2.0f;\n}",
@@ -42,6 +63,21 @@ CUDA = {
     **composites.CUDA,
     **functions.CUDA,
     **constructors.CUDA,
+    **scopes.CUDA,
+    **declarations.CUDA,
+    **calls.CUDA,
+    **branches.CUDA,
+    **shapes.CUDA,
+    **evaluation.CUDA,
+    **assignments.CUDA,
+    **statements.CUDA,
+    **lvalues.CUDA,
+    **aggregates.CUDA,
+    **values.CUDA,
+    **edges.CUDA,
+    **lexical.CUDA,
+    **forms.CUDA,
+    **idioms.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -115,6 +151,7 @@ _OPENCL_PAIR = "typedef struct {\n    float a;\n    float b;\n} Pair;"
 # structs, no matrices, and buffers whose length the kernel is not told.
 OPENCL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "short-circuit-logic": Template(
         "if (iin[i] > 0 && fin[i] / (float)iin[i] > 1.0f) {\n    outp[i] = 1.0f;\n}"
         " else if (iin[i] < 0 || fin[i] < 0.0f) {\n    outp[i] = 2.0f;\n}"
@@ -140,6 +177,21 @@ OPENCL = {
     **composites.OPENCL,
     **functions.OPENCL,
     **constructors.OPENCL,
+    **scopes.OPENCL,
+    **declarations.OPENCL,
+    **calls.OPENCL,
+    **branches.OPENCL,
+    **shapes.OPENCL,
+    **evaluation.OPENCL,
+    **assignments.OPENCL,
+    **statements.OPENCL,
+    **lvalues.OPENCL,
+    **aggregates.OPENCL,
+    **values.OPENCL,
+    **edges.OPENCL,
+    **lexical.OPENCL,
+    **forms.OPENCL,
+    **idioms.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -258,6 +310,21 @@ MOJO = {
     **composites.MOJO,
     **functions.MOJO,
     **constructors.MOJO,
+    **scopes.MOJO,
+    **declarations.MOJO,
+    **calls.MOJO,
+    **branches.MOJO,
+    **shapes.MOJO,
+    **evaluation.MOJO,
+    **assignments.MOJO,
+    **statements.MOJO,
+    **lvalues.MOJO,
+    **aggregates.MOJO,
+    **values.MOJO,
+    **edges.MOJO,
+    **lexical.MOJO,
+    **forms.MOJO,
+    **idioms.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -443,6 +510,21 @@ RUST = {
     **composites.RUST,
     **functions.RUST,
     **constructors.RUST,
+    **scopes.RUST,
+    **declarations.RUST,
+    **calls.RUST,
+    **branches.RUST,
+    **shapes.RUST,
+    **evaluation.RUST,
+    **assignments.RUST,
+    **statements.RUST,
+    **lvalues.RUST,
+    **aggregates.RUST,
+    **values.RUST,
+    **edges.RUST,
+    **lexical.RUST,
+    **forms.RUST,
+    **idioms.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

@@ -8,9 +8,21 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 
 from __future__ import annotations
 
+from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
+from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
+from .edges import FAMILY as _EDGES
+from .evaluation import WEBGL as _EVALUATION
+from .forms import FAMILY as _FORMS
+from .forms import GLSL as _FORMS_GLSL
+from .idioms import FAMILY as _IDIOMS
+from .idioms import GLSL as _IDIOMS_GLSL
+from .lexical import FAMILY as _LEXICAL
+from .lexical import WEBGL as _LEXICAL_WEBGL
+from .scopes import WEBGL as _SCOPES
+from .values import FAMILY as _VALUES
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -46,9 +58,21 @@ _ABSENT = (
 
 WEBGL = {
     **C_FAMILY,
+    **_AGGREGATES,
+    **_VALUES,
+    **_EDGES,
+    **_LEXICAL,
+    **_LEXICAL_WEBGL,
+    **_FORMS,
+    **_FORMS_GLSL,
+    **_IDIOMS,
+    **_IDIOMS_GLSL,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
+    **_SCOPES,
+    **_CALLS,
+    **_EVALUATION,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),

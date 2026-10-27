@@ -160,6 +160,7 @@ from .extended_arithmetic_builtins import (
     emit_metal_extended_arithmetic_helpers,
     metal_extended_arithmetic_call,
 )
+from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -363,6 +364,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .metal_array_copies import (
     generate_metal_array_copy,
     generate_metal_array_initializer,
@@ -390,6 +392,7 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
     rename_metal_keyword_parameters,
 )
+from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_narrow_vectors import MetalNarrowVectorMixin
@@ -2036,6 +2039,7 @@ class MetalCodeGen(
         self.validate_supported_stage_types(ast, target_stage)
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
+        ast = rename_msl_library_functions(ast)
         ast = rename_metal_keyword_parameters(ast)
         ast = split_metal_stage_input_builtins(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
@@ -7019,6 +7023,11 @@ class MetalCodeGen(
             )
 
     def metal_reachable_functions(self, root_func):
+        """``root_func`` and every user function a call reaches from it, in breadth-first order.
+
+        A call reaches the overloads of its name that accept its argument count; among several, the one whose
+        parameter types match the known argument types, or all of them when the types do not decide (#3168).
+        """
         reachable = []
         pending = [root_func]
         visited = set()
@@ -7028,11 +7037,70 @@ class MetalCodeGen(
                 continue
             visited.add(id(func))
             reachable.append(func)
-            for called_name in sorted(self.called_user_function_names(func)):
-                called_func = (self.functions_by_name or {}).get(called_name)
-                if called_func is not None and id(called_func) not in visited:
+            for called_func in self.metal_called_user_function_overloads(func):
+                if id(called_func) not in visited:
                     pending.append(called_func)
         return reachable
+
+    def metal_called_user_function_overloads(self, func):
+        """The user overloads that the calls in ``func`` can select, in a deterministic order."""
+        selected = []
+        seen = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name not in self.user_function_names or name == getattr(
+                func, "name", None
+            ):
+                continue
+            arguments = list(
+                getattr(node, "args", getattr(node, "arguments", [])) or []
+            )
+            for candidate in self.metal_call_overload_candidates(name, arguments):
+                if id(candidate) not in seen:
+                    seen.add(id(candidate))
+                    selected.append(candidate)
+        return selected
+
+    def metal_call_overload_candidates(self, name, arguments):
+        overloads = list(self.function_overloads_by_name.get(name, []))
+        if not overloads:
+            single = (self.functions_by_name or {}).get(name)
+            return [single] if single is not None else []
+        by_arity = [
+            overload
+            for overload in overloads
+            if self.metal_user_function_accepts_argument_count(overload, len(arguments))
+        ] or overloads
+        if len(by_arity) == 1:
+            return by_arity
+        argument_types = [
+            self.map_type(argument_type) if argument_type is not None else None
+            for argument_type in (
+                self.expression_result_type(argument) for argument in arguments
+            )
+        ]
+        by_type = [
+            overload
+            for overload in by_arity
+            if self.metal_overload_matches_argument_types(overload, argument_types)
+        ]
+        return by_type if len(by_type) == 1 else by_arity
+
+    def metal_overload_matches_argument_types(self, overload, argument_types):
+        parameters = list(
+            getattr(overload, "parameters", getattr(overload, "params", [])) or []
+        )
+        for parameter, argument_type in zip(parameters, argument_types):
+            if argument_type is None:
+                return False
+            parameter_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if parameter_type is None or self.map_type(parameter_type) != argument_type:
+                return False
+        return True
 
     def function_uses_metal_fragment_invocation_density(self, func):
         for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
@@ -9799,16 +9867,52 @@ class MetalCodeGen(
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{carrier}({native}({rendered}))"
 
+    def metal_narrow_update_repeatable_lvalue(self, target):
+        """Return whether ``target`` can be read and written by repeating it.
+
+        The widened update renders the lvalue twice, so every subexpression
+        must name the same storage on both evaluations: variables, fields and
+        array elements whose indices are side-effect-free.
+        """
+        if isinstance(target, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(target, MemberAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(target.object_expr)
+        if isinstance(target, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(
+                target.array_expr
+            ) and self.metal_narrow_update_repeatable_index(target.index_expr)
+        return False
+
+    def metal_narrow_update_repeatable_index(self, index):
+        if isinstance(index, LiteralNode):
+            return True
+        if isinstance(index, (IdentifierNode, VariableNode, MemberAccessNode)):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, BinaryOpNode):
+            return self.metal_narrow_update_repeatable_index(
+                index.left
+            ) and self.metal_narrow_update_repeatable_index(index.right)
+        if isinstance(index, UnaryOpNode):
+            return str(index.operator) not in {
+                "++",
+                "--",
+            } and self.metal_narrow_update_repeatable_index(index.operand)
+        if isinstance(index, CastNode):
+            return self.metal_narrow_update_repeatable_index(
+                getattr(index, "expression", None)
+            )
+        return False
+
     def metal_narrow_integer_update_expression(
         self, node, target, operator, value=None
     ):
         value_type = self.expression_result_type(target)
         if self.metal_narrow_integer_conversion_expression("value", value_type) is None:
             return None
-        owner = target
-        while isinstance(owner, MemberAccessNode):
-            owner = owner.object_expr
-        if not isinstance(owner, (IdentifierNode, VariableNode)):
+        if not self.metal_narrow_update_repeatable_lvalue(target):
             raise UnsupportedMetalFeatureError(
                 "byte-update",
                 "Narrow integer updates require a stable variable or field",
@@ -10185,23 +10289,6 @@ class MetalCodeGen(
             return None
         return int(mapped_type[-1])
 
-    def cast_binary_operand_to_expected_vector(self, code, operand_type, expected_type):
-        if operand_type is None:
-            return code
-        expected_mapped = self.map_type(expected_type)
-        expected_width = self.vector_value_width(expected_mapped)
-        if expected_width is None:
-            return code
-
-        operand_mapped = self.map_type(operand_type)
-        if operand_mapped == expected_mapped:
-            return code
-        if self.is_scalar_value_type(operand_mapped):
-            return f"{expected_mapped}({code})"
-        if self.vector_value_width(operand_mapped) == expected_width:
-            return f"{expected_mapped}({code})"
-        return code
-
     def infer_metal_global_value_type(self, node):
         """The type of a shader-scope declaration with no written type (#2444).
 
@@ -10310,6 +10397,26 @@ class MetalCodeGen(
                     )
                     if common is not None:
                         return f"{common}{self.vector_value_width(left_mapped)}"
+            if self.is_vector_value_type(left_type) != self.is_vector_value_type(
+                right_type
+            ):
+                # metal_hlsl_values.py: vector op scalar has the common component type.
+                vector_type, scalar = (
+                    (left_type, expr.right)
+                    if self.is_vector_value_type(left_type)
+                    else (right_type, expr.left)
+                )
+                vector_mapped = self.map_type(vector_type)
+                component = self.vector_component_type(vector_mapped)
+                common = (
+                    self.metal_vector_scalar_common_component(
+                        operator, component, scalar
+                    )
+                    if component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+                    else None
+                )
+                if common is not None and common != component:
+                    return f"{common}{self.vector_value_width(vector_mapped)}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -11007,6 +11114,18 @@ class MetalCodeGen(
             target = node.left
             value = node.right
         op = getattr(node, "operator", "=")
+        # MSL has no *= for two matrices; v *= m keeps its MSL row-vector meaning.
+        matrix_product = matrix_product_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            is_matrix=self.is_matrix_value_type,
+            is_vector=lambda _vtype: False,
+            backend="metal",
+        )
+        if matrix_product is not None:
+            return self.generate_assignment(matrix_product)
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )
@@ -11678,6 +11797,12 @@ class MetalCodeGen(
             return ""
         if isinstance(init, str):
             return init
+        if isinstance(init, list):
+            return join_for_initializer(
+                [self.generate_for_initializer(item) for item in init],
+                [isinstance(item, VariableNode) for item in init],
+                "metal",
+            )
         if isinstance(init, VariableNode) or (
             hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
         ):
@@ -11832,11 +11957,9 @@ class MetalCodeGen(
                     left,
                     right,
                 )
-            unconverted_operands = (left, right)
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
-            mixed_operands_converted = (left, right) != unconverted_operands
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
             matrix_arithmetic = self.metal_matrix_builtins.componentwise(
@@ -11844,30 +11967,10 @@ class MetalCodeGen(
             )
             if matrix_arithmetic is not None:
                 return matrix_arithmetic
-            if operator in {"+", "-", "*", "/", "%"}:
-                expected_type = self.current_expression_expected_type
-                expression_width = self.vector_value_width(
-                    self.expression_result_type(expr)
-                )
-                # Once mixed operands share a common component type, casting
-                # each one to an integer declared type would mix them again,
-                # as in int4(uint4(a) + int4(b)) (#3089). The declaration
-                # converts the result instead.
-                if (
-                    expression_width is not None
-                    and expression_width == self.vector_value_width(expected_type)
-                    and not (
-                        mixed_operands_converted
-                        and self.vector_component_type(self.map_type(expected_type))
-                        in {"int", "uint", "short", "ushort", "long", "ulong"}
-                    )
-                ):
-                    left = self.cast_binary_operand_to_expected_vector(
-                        left, self.expression_result_type(expr.left), expected_type
-                    )
-                    right = self.cast_binary_operand_to_expected_vector(
-                        right, self.expression_result_type(expr.right), expected_type
-                    )
+            # The operands keep their own (common) type and the declaration
+            # converts the result: converting each operand to the declared
+            # type would turn an integer division into a floating one, or a
+            # signed one into an unsigned one (#3166).
             return self.metal_narrow_vector_wrap(
                 expr, operator, f"{left} {operator} {right}"
             )
@@ -12285,6 +12388,11 @@ class MetalCodeGen(
                 func_name = specialized_func_name
             else:
                 reject_unresolved_generic_function_call(self, func_name, "Metal")
+            scalar_geometric_call = self.metal_scalar_geometric_call(
+                func_name, expr.args
+            )
+            if scalar_geometric_call is not None:
+                return scalar_geometric_call
             if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
@@ -18393,6 +18501,7 @@ class MetalCodeGen(
             "const-qualified",
             "const-qualified local alias",
             "constant address space",
+            "constant address-space local alias",
         }:
             return False
         if not isinstance(target, IdentifierNode):
@@ -24914,6 +25023,26 @@ class MetalCodeGen(
 
     def is_scalar_integer_type(self, vtype):
         return is_integer_scalar_type_name(self.type_name_string(vtype), self.map_type)
+
+    def metal_scalar_geometric_call(self, func_name, args):
+        """Lower scalar ``length``, ``dot``, ``distance`` and ``normalize``, which Metal declares only for vectors."""
+        arity = {"length": 1, "normalize": 1, "dot": 2, "distance": 2}.get(func_name)
+        if arity != len(args) or func_name in self.user_function_names:
+            return None
+        if not all(
+            self.is_scalar_numeric_type(self.expression_result_type(arg))
+            for arg in args
+        ):
+            return None
+        operands = [self.generate_expression(arg) for arg in args]
+        if func_name == "dot":
+            return f"(({operands[0]}) * ({operands[1]}))"
+        call_name = "sign" if func_name == "normalize" else "abs"
+        if self.metal_function_name_is_shadowed(call_name):
+            call_name = f"metal::{call_name}"
+        if func_name == "distance":
+            return f"{call_name}(({operands[0]}) - ({operands[1]}))"
+        return f"{call_name}({operands[0]})"
 
     def texture_argument_diagnostic_type(self, arg):
         sampler_names = {
