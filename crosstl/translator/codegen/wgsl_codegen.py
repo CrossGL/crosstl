@@ -2711,6 +2711,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return "\n".join(
                 self.generate_statement(statement, indent) for statement in lowered
             )
+        lowered = self.lower_composite_ternary(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         if isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
@@ -2778,6 +2783,65 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         raise ValueError(
             f"WGSL target does not support statement {type(stmt).__name__}"
         )
+
+    def is_select_operand_type(self, vtype):
+        """Whether WGSL ``select`` takes values of ``vtype`` (WGSL section 17.3).
+
+        ``select`` takes scalars and vectors only. An unknown type counts as one,
+        so a ternary whose type cannot be inferred keeps its ``select``.
+        """
+        if vtype is None:
+            return True
+        try:
+            type_name = self.type_name_string(vtype)
+        except ValueError:
+            return True
+        if type_name is None:
+            return True
+        if type_name in {"bool", "i32", "u32", "f32", "f16"}:
+            return True
+        return self.vector_component_count(vtype) is not None
+
+    def lower_composite_ternary(self, stmt):
+        """Lower ``T x = c ? a : b`` and ``x = c ? a : b`` for a struct, array or matrix.
+
+        WGSL ``select`` takes scalars and vectors only, so a ternary on any other
+        type becomes ``var x: T;`` followed by ``if (c) { x = a; } else { x = b; }``.
+        Only the chosen branch is evaluated, as in the C-family source.
+        """
+        if (
+            isinstance(stmt, ExpressionStatementNode)
+            and isinstance(stmt.expression, AssignmentNode)
+            and not isinstance(stmt.expression.target, SwizzleNode)
+        ):
+            stmt = stmt.expression
+        if isinstance(stmt, VariableNode):
+            value = stmt.initial_value
+            if not isinstance(value, TernaryOpNode):
+                return None
+            var_type = self.local_variable_declaration_type(stmt)
+            if self.is_select_operand_type(var_type):
+                return None
+            declaration = copy.copy(stmt)
+            declaration.var_type = var_type
+            declaration.vtype = var_type
+            declaration.initial_value = None
+            declaration.is_mutable = True
+            return [declaration, AssignmentNode(IdentifierNode(stmt.name), value)]
+        if isinstance(stmt, AssignmentNode):
+            value = stmt.value
+            if stmt.operator != "=" or not isinstance(value, TernaryOpNode):
+                return None
+            if self.is_select_operand_type(self.expression_type(stmt.target)):
+                return None
+            return [
+                IfNode(
+                    value.condition,
+                    BlockNode([AssignmentNode(stmt.target, value.true_expr)]),
+                    BlockNode([AssignmentNode(stmt.target, value.false_expr)]),
+                )
+            ]
+        return None
 
     def generate_block(self, block, indent=0):
         statements = self.block_statements(block)
@@ -3224,6 +3288,25 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return f"({operand} * -1.0)"
             return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
+            result_type = next(
+                (
+                    branch_type
+                    for branch_type in (
+                        self.expression_type(expr.true_expr),
+                        self.expression_type(expr.false_expr),
+                    )
+                    if not self.is_select_operand_type(branch_type)
+                ),
+                None,
+            )
+            if result_type is not None:
+                raise ValueError(
+                    "WGSL target cannot lower a conditional expression of type "
+                    f"{self.type_name_string(result_type)} here: WGSL select takes "
+                    "scalars and vectors only, and a struct, array or matrix "
+                    "conditional is lowered only as a whole initializer or "
+                    "assignment value"
+                )
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
                 f"{self.generate_expression(expr.true_expr)}, "
