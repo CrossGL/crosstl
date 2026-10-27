@@ -17579,7 +17579,8 @@ class TestHipCodeGen:
 
         assert "var mask: u32 = 0xffu;" in result
         assert "var bits: u32 = 0b1010u;" in result
-        assert "var oct: u32 = 0777u;" in result
+        # 0777u is octal in C++; CrossGL spells octal 0o777u.
+        assert "var oct: u32 = 0o777u;" in result
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
         assert "var hex: f32 = 0x1.0p-14f;" in result

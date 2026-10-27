@@ -3,6 +3,7 @@
 import re
 from decimal import Decimal, InvalidOperation
 
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
@@ -2150,8 +2151,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
         if not float_like and integer_suffix:
-            return self.normalize_integer_suffix(body, integer_suffix)
-        if not float_like or integer_suffix:
+            return crossgl_legacy_octal(
+                self.normalize_integer_suffix(body, integer_suffix)
+            )
+        if not float_like:
+            return crossgl_legacy_octal(value)
+        if integer_suffix:
             return value
 
         try:

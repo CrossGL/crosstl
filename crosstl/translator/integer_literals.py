@@ -9,6 +9,25 @@ class IntegerLiteralError(ValueError):
     project_diagnostic_code = "project.translate.integer-literal-unsupported"
 
 
+_LEGACY_OCTAL = re.compile(r"0(?P<digits>[0-9]+)(?P<suffix>[uUlL]*)")
+
+
+def crossgl_legacy_octal(text):
+    """``text`` with a C-family octal integer literal, ``017`` or ``017u``, in CrossGL's ``0o17`` spelling.
+
+    C11 6.4.4.1, C++17 [lex.icon], GLSL 4.60 section 4.1.3, HLSL and Slang read an integer literal with a leading
+    zero as octal, while CrossGL reads ``017`` as decimal. Other spellings are returned unchanged. A leading-zero
+    integer with an 8 or a 9 is not an integer literal in those languages and raises :class:`IntegerLiteralError`.
+    """
+    match = _LEGACY_OCTAL.fullmatch(str(text))
+    if match is None:
+        return text
+    digits = match.group("digits")
+    if not set(digits) <= set("01234567"):
+        raise IntegerLiteralError(f"Invalid octal integer literal '{text}'")
+    return f"0o{digits}{match.group('suffix')}"
+
+
 def integer_literal_parts(value, *, legacy_octal=False):
     """Return digits and the first representable 32/64-bit C++ integer type."""
     spelling = str(value)
