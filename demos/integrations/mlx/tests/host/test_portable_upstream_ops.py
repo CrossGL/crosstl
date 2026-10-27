@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -831,3 +832,100 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "col_reduce_looped_1_32_32_reduce_sumfloat16",
     ):
         assert not entry.startswith(retained), entry
+
+
+def _audited_host(audit, tmp_path):
+    host = SimpleNamespace(trace=tmp_path / "compact.jsonl", trace_values=True)
+    # The native worker's output directory holds its retained modules.
+    host.trace_audit = ops.trace_audit(
+        None,
+        audit.args,
+        "metal",
+        audit.indexes,
+        audit.args.output_dir / "native/native-modules",
+    )
+    return host
+
+
+def test_upstream_op_worker_audit_writes_only_compact_records(audit, tmp_path):
+    long_values = list(range(trace_records.COMPACT_TRACE_LIMIT + 1))
+    events = [
+        event("gatherint32int32_2_1_int"),
+        {**event("vv_Equalint32"), "inputs": {"a": {"values": long_values}}},
+        event("contig_scan_inclusive_sum_int32_int32"),
+    ]
+    host = _audited_host(audit, tmp_path)
+    for item in events:
+        trace_records.write_trace(host, dict(item))
+    lines = "".join(json.dumps(item) + "\n" for item in events).encode()
+    summary = host.trace_audit.summary()
+    assert {key: summary[key] for key in ("records", "bytes", "sha256")} == {
+        "records": 3,
+        "bytes": len(lines),
+        "sha256": hashlib.sha256(lines).hexdigest(),
+    }
+    compact = trace_records.TraceStream(host.trace)
+    assert list(compact) == [trace_records.compact_trace_values(e) for e in events]
+    assert compact.bytes < len(lines)
+    # The scan's own check covered its native identity.
+    assert audit.seen["lazy"] == ["contig_scan_inclusive_sum_int32_int32"]
+    assert summary["owners"] == [1, 0, 1]
+    assert summary["identities"] == [False, True, False]
+    assert summary["indexing"] == 1 and summary["error"] is None
+    count = ops.audit_compact_trace(
+        audit.args,
+        trace_records.TraceStream(host.trace),
+        "metal",
+        audit.indexes,
+        audit.reductions,
+        json.loads(json.dumps(summary)),
+    )
+    assert count == 1
+    assert audit.seen["packages"] == ["vv_Equalint32"]
+    assert audit.seen["native"] == ["vv_Equalint32"]
+
+
+def test_upstream_op_worker_audit_failure_refuses_later_records(
+    audit, monkeypatch, tmp_path
+):
+    def fail(np, event):
+        raise ValueError("gather result differs")
+
+    monkeypatch.setattr(ops.gather_evidence, "audit_event", fail)
+    host = _audited_host(audit, tmp_path)
+    with pytest.raises(ValueError, match="gather result differs"):
+        trace_records.write_trace(host, event("gatherint32int32_2_1_int"))
+    # An upstream test may expect an exception; the audit stays failed.
+    with pytest.raises(RuntimeError, match="trace audit failed"):
+        trace_records.write_trace(host, event("vv_Equalint32"))
+    assert not host.trace.exists()
+    summary = host.trace_audit.summary()
+    assert summary["error"] == "gatherint32int32_2_1_int: gather result differs"
+    with pytest.raises(ValueError, match="trace audit failed"):
+        ops.audit_compact_trace(
+            audit.args, [], "metal", audit.indexes, audit.reductions, summary
+        )
+
+
+@pytest.mark.parametrize("fault", ["record", "owner", "indexing"])
+def test_upstream_op_compact_trace_must_match_its_audit(audit, tmp_path, fault):
+    host = _audited_host(audit, tmp_path)
+    for entry in ("gatherint32int32_2_1_int", "vv_Equalint32"):
+        trace_records.write_trace(host, event(entry))
+    summary = host.trace_audit.summary()
+    events = list(trace_records.TraceStream(host.trace))
+    if fault == "record":
+        events.pop()
+    elif fault == "owner":
+        summary["owners"][1] = 1
+    else:
+        summary["indexing"] = 0
+    message = {
+        "record": "differs from its audit",
+        "owner": "unknown or ambiguous package",
+        "indexing": "did not reach gather or scatter",
+    }[fault]
+    with pytest.raises(ValueError, match=message):
+        ops.audit_compact_trace(
+            audit.args, events, "metal", audit.indexes, audit.reductions, summary
+        )

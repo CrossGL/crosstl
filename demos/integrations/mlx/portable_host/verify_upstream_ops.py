@@ -157,13 +157,11 @@ from demos.integrations.mlx.portable_host.sort_packages import (
     CACHE_DIRECTORY as SORT_CACHE,
 )
 from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
-from demos.integrations.mlx.portable_host.trace_records import (
-    TraceStream,
-    compact_trace_values,
-)
+from demos.integrations.mlx.portable_host.trace_records import TraceStream
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     GROUPS as MODULE_GROUPS,
 )
+from demos.integrations.mlx.portable_host.upstream_trace_audit import TraceAudit
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
@@ -824,9 +822,11 @@ GROUPS = {
 # The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
 # native run also translates its lazy vectors and kernels.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
-# A passing run keeps the native trace only in this compact form, beside the
-# raw trace's record count, size and SHA-256 in evidence.json.
+# The native worker checks each dispatch record whole as it is written and
+# keeps it only in this compact form; its per-record audit (TraceAudit) and
+# the full records' count, size and SHA-256 go to TRACE_AUDIT.
 COMPACT_TRACE = "native/dispatch.compact.jsonl"
+TRACE_AUDIT = "native/trace-audit.json"
 
 
 def upstream_tests(target, group=None):
@@ -862,9 +862,10 @@ def write_json(path, value):
 
 
 def install(args, output):
+    trace = Path(COMPACT_TRACE).name if args.worker == "native" else "dispatch.jsonl"
     host = HostRuntime(
         args.packages,
-        output / "dispatch.jsonl",
+        output / trace,
         random=args.random,
         bitwise=args.bitwise,
         selection=args.selection,
@@ -921,6 +922,7 @@ def reject(mx, host, output, check):
 
 def worker(args):
     import mlx.core as mx
+    import numpy as np
 
     output = args.output_dir
     output.mkdir(parents=True)
@@ -933,6 +935,13 @@ def worker(args):
         host = install(args, output)
     if args.worker in NEGATIVE_CHECKS:
         return reject(mx, host, output, args.worker)
+    audit = None
+    if host is not None:
+        # Every record is checked whole as the host writes it, and only its
+        # compact form reaches the disk.
+        target, indexes, _ = load_indexes(args)
+        audit = trace_audit(np, args, target, indexes, output / "native-modules")
+        host.trace_audit = audit
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
@@ -954,7 +963,13 @@ def worker(args):
             }
         )
         write_json(output / "upstream.json", {"tests": records})
+    if audit is not None:
+        (output / Path(TRACE_AUDIT).name).write_text(
+            json.dumps(audit.summary(), allow_nan=False), encoding="utf-8"
+        )
     validate_upstream({"tests": records}, native=host is not None, inventory=tests)
+    if audit is not None and audit.error is not None:
+        raise RuntimeError(f"The native trace audit failed: {audit.error}")
 
 
 def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
@@ -1012,7 +1027,7 @@ def indexing_auditor(entry):
     return auditors.get(prefix)
 
 
-def event_audits(np, args, target, installed):
+def event_audits(np, args, target, installed, modules=None):
     """The per-dispatch evidence checks of a native trace, in audit order.
 
     Each check is ``(selects, family, audit, role)``. ``selects(entry, event)``
@@ -1023,9 +1038,12 @@ def event_audits(np, args, target, installed):
     settles: a ``random`` record's package is tied to it later, ``indexing``
     and ``owned`` checks tie the record to its package and native modules, and
     a ``scan`` check covers the native modules only where it reports so.
+    ``modules`` is the native worker's retained module directory, by default
+    under the verifier's output directory.
     """
     root, packages = args.mlx_root, args.packages
-    modules = Path(args.output_dir) / "native/native-modules"
+    if modules is None:
+        modules = Path(args.output_dir) / "native/native-modules"
 
     def lazy(entries, family, check, cache):
         def selects(entry, event):
@@ -1183,6 +1201,12 @@ def event_audits(np, args, target, installed):
     )
 
 
+def trace_audit(np, args, target, indexes, modules=None):
+    """A ``TraceAudit`` of every per-dispatch check for these packages."""
+    installed = set().union(*(index["descriptors"] for index in indexes.values()))
+    return TraceAudit(event_audits(np, args, target, installed, modules), target)
+
+
 def audit_trace(
     np, args, trace, target, indexes, reductions, *, require_indexing=True, record=None
 ):
@@ -1195,31 +1219,43 @@ def audit_trace(
     requires the trace to reach a gather or scatter. Returns the number of
     indexing dispatches.
     """
-    installed = set().union(*(index["descriptors"] for index in indexes.values()))
-    audits = event_audits(np, args, target, installed)
-    events, owners, identities = [], [], []
-    indexing = 0
+    audit = trace_audit(np, args, target, indexes)
+    events = []
     for event in trace:
-        entry, owned, identity = event["entry"], 0, True
-        for selects, family, check, role in audits:
-            if not selects(entry, event):
-                continue
-            if family is not None and event["target"] != target:
-                raise ValueError(f"Upstream op {family} targets another backend")
-            covered = check(event)
-            identity = identity and role == "scan" and not covered
-            owned += role != "random"
-            indexing += role == "indexing"
-        compact = compact_trace_values(event)
+        compact = audit.check(event)
         if record is not None:
             record(compact)
         events.append(compact)
-        owners.append(owned)
-        identities.append(identity)
+    return audit_compact_trace(
+        args,
+        events,
+        target,
+        indexes,
+        reductions,
+        audit.summary(),
+        require_indexing=require_indexing,
+    )
+
+
+def audit_compact_trace(
+    args, trace, target, indexes, reductions, audit, *, require_indexing=True
+):
+    """Tie compact records, checked one by one by ``audit``, to their packages.
+
+    ``audit`` is a ``TraceAudit.summary()``: the native worker checks each
+    record whole as it is written and keeps only the compact ``trace``.
+    Returns the number of indexing dispatches.
+    """
+    if audit.get("error") is not None:
+        raise ValueError(f"The native trace audit failed: {audit['error']}")
+    events = list(trace)
+    owners, identities = list(audit["owners"]), audit["identities"]
+    if not len(events) == len(owners) == len(identities):
+        raise ValueError("The upstream op trace differs from its audit")
     _audit_packages(args, target, indexes, reductions, events, owners, identities)
-    if require_indexing and not indexing:
+    if require_indexing and not audit["indexing"]:
         raise ValueError("Upstream indexing tests did not reach gather or scatter")
-    return indexing
+    return audit["indexing"]
 
 
 def _audit_packages(args, target, indexes, reductions, events, owners, identities):
@@ -1307,8 +1343,6 @@ def run_worker(args, output, mode):
 
 
 def verify(args):
-    import numpy as np
-
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
     before = verify_prepared(args.mlx_root)
@@ -1341,24 +1375,21 @@ def verify(args):
         for mode in ("cpu", "native"):
             upstream[mode] = json.loads((output / mode / "upstream.json").read_text())
             validate_upstream(upstream[mode], native=mode == "native", inventory=tests)
-        # The audit streams the trace, which long groups write by the
-        # gigabyte, and keeps a compact copy (COMPACT_TRACE).
-        trace = TraceStream(output / "native/dispatch.jsonl")
-        with (output / COMPACT_TRACE).open("w", encoding="utf-8") as compact:
-            indexing = audit_trace(
-                np,
-                args,
-                trace,
-                target,
-                indexes,
-                reductions,
-                require_indexing=requires_indexing(args.group),
-                record=lambda event: compact.write(json.dumps(event) + "\n"),
-            )
-        if (
-            sum(item["dispatchCount"] for item in upstream["native"]["tests"])
-            != trace.records
-        ):
+        # The native worker checked each record as it wrote the compact
+        # trace; long groups' full records run to tens of gigabytes.
+        audit = json.loads((output / TRACE_AUDIT).read_text(encoding="utf-8"))
+        trace = TraceStream(output / COMPACT_TRACE)
+        indexing = audit_compact_trace(
+            args,
+            trace,
+            target,
+            indexes,
+            reductions,
+            audit,
+            require_indexing=requires_indexing(args.group),
+        )
+        dispatches = sum(item["dispatchCount"] for item in upstream["native"]["tests"])
+        if not dispatches == trace.records == audit["records"]:
             raise ValueError("Upstream op trace count differs")
         rejections = {}
         for mode, error in checks.items():
@@ -1377,12 +1408,12 @@ def verify(args):
         evidence.update(
             passed=True,
             dispatchCount=trace.records,
-            trace=trace.summary(),
+            trace={key: audit[key] for key in ("records", "bytes", "sha256")},
+            compactTrace=trace.summary(),
             indexingDispatchCount=indexing,
             upstream=upstream,
             negativeChecks=rejections,
         )
-        (output / "native/dispatch.jsonl").unlink()
     except Exception as error:
         evidence["error"] = str(error)
         raise

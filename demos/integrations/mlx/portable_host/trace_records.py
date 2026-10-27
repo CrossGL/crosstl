@@ -182,11 +182,18 @@ def write_trace(host, event, *, prepared=False):
 
     A ``prepared`` event already replaced the values its audit recomputes by
     their digests and keeps the ones the audit reads, so it is written as is.
+    A host's ``trace_audit``, when set, receives the record and its line and
+    returns the line to write instead, so a record can be checked whole and
+    kept compact.
     """
     if not prepared and not retains_values(host, event.get("entry")):
         event = compact_trace_values(event)
+    line = json.dumps(event) + "\n"
+    audit = getattr(host, "trace_audit", None)
+    if audit is not None:
+        line = audit(event, line)
     with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+        handle.write(line)
 
 
 def read_trace_summary(path, keys=SUMMARY_KEYS):
@@ -203,7 +210,29 @@ def read_trace_summary(path, keys=SUMMARY_KEYS):
     return summary
 
 
-class TraceStream:
+class TraceDigest:
+    """Count and hash trace lines; ``summary()`` describes those added."""
+
+    def __init__(self):
+        self.records = 0
+        self.bytes = 0
+        self._digest = hashlib.sha256()
+
+    def add(self, line):
+        """Add one encoded trace line, newline included."""
+        self._digest.update(line)
+        self.bytes += len(line)
+        self.records += 1
+
+    def summary(self):
+        return {
+            "records": self.records,
+            "bytes": self.bytes,
+            "sha256": self._digest.hexdigest(),
+        }
+
+
+class TraceStream(TraceDigest):
     """Iterate a dispatch trace record by record, counting and hashing it.
 
     A long native run writes gigabytes of records, which would not fit a
@@ -212,22 +241,11 @@ class TraceStream:
     """
 
     def __init__(self, path):
+        super().__init__()
         self.path = Path(path)
-        self.records = 0
-        self.bytes = 0
-        self._digest = hashlib.sha256()
 
     def __iter__(self):
         with self.path.open("rb") as handle:
             for line in handle:
-                self._digest.update(line)
-                self.bytes += len(line)
-                self.records += 1
+                self.add(line)
                 yield json.loads(line)
-
-    def summary(self):
-        return {
-            "records": self.records,
-            "bytes": self.bytes,
-            "sha256": self._digest.hexdigest(),
-        }

@@ -491,6 +491,9 @@ class HostRuntime:
         # False keeps each long scalar array as its length and SHA-256 only;
         # a tuple keeps the values of the entries that start with its prefixes.
         self.trace_values = trace_values
+        # A callable ``(record, line) -> line`` that checks each dispatch
+        # record whole before its returned line is written (write_trace).
+        self.trace_audit = None
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
