@@ -54,6 +54,10 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -4307,7 +4311,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
-        mapped_name = self.function_map.get(func_name, func_name)
+        mapped_name = wide_integer_vector_constructor(
+            func_name
+        ) or self.function_map.get(func_name, func_name)
 
         if func_name == "abs":
             if len(args) == 1:
@@ -9345,6 +9351,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     return f"int{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
                     return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
+                    return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
         else:
@@ -9398,6 +9406,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         byte_address_buffer_type = self.hip_byte_address_buffer_type(type_str)
         if byte_address_buffer_type is not None:
             return byte_address_buffer_type
+
+        wide_vector_type = wide_integer_vector_type(type_str)
+        if wide_vector_type is not None:
+            return wide_vector_type
+        indirect_info = self.hip_pointer_or_reference_type_info(type_str)
+        if indirect_info is not None:
+            pointee_type = wide_integer_vector_type(indirect_info["pointee_type"])
+            if pointee_type is not None:
+                prefix = "const " if indirect_info["readonly"] else ""
+                suffix = "*" if indirect_info["kind"] == "pointer" else "&"
+                return f"{prefix}{pointee_type}{suffix}"
 
         canonical_type = self.canonical_resource_type(type_str)
         mapped_type = self.type_map.get(canonical_type or type_str, type_str)

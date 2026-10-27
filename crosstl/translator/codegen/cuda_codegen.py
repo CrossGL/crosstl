@@ -46,6 +46,10 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
 from .cuda_refusals import CudaLoweringRefused
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
@@ -6943,6 +6947,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
+        wide_vector_type = wide_integer_vector_type(crossgl_type)
+        if wide_vector_type is not None:
+            return wide_vector_type
+
         return self.cuda_mapped_type_result(
             type_mapping.get(crossgl_type, crossgl_type)
         )
@@ -10002,6 +10010,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
+        wide_vector_constructor = wide_integer_vector_constructor(func_name)
+        if wide_vector_constructor is not None:
+            return wide_vector_constructor
         function_mapping = {
             # Math functions
             "sqrt": "sqrtf",
@@ -13252,6 +13263,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 elif element_type == "uint":
                     return f"uvec{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
