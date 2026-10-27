@@ -2197,6 +2197,68 @@ class TestHipCodeGen:
         assert "cgl_make_half4(d.x, d.y, a.x, a.y)" in hip_code
         assert "cgl_make_half3(a.x, a.y, h)" in hip_code
 
+    def test_native_half2_swizzle_assignment_writes_each_component(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 assign(f16vec2 a, f16vec2 b) {
+                    f16vec2 t = a;
+                    t.yx = b;
+                    t.xy += b;
+                    return t;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "half2 __crossgl_swizzle_value_0 = b;" in hip_code
+        assert "t.y = __crossgl_swizzle_value_0.x;" in hip_code
+        assert "t.x = __crossgl_swizzle_value_0.y;" in hip_code
+        assert "half2 __crossgl_swizzle_value_1 = b;" in hip_code
+        assert "t.x = (t.x + __crossgl_swizzle_value_1.x);" in hip_code
+        assert "t.y = (t.y + __crossgl_swizzle_value_1.y);" in hip_code
+        assert "__floats2half2_rn(t." not in hip_code
+        assert "t.yx" not in hip_code
+
+    def test_native_half2_constructor_operands_are_evaluated_once(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 pick(f16vec2 a) { return a; }
+                f16vec4 widen(f16vec4 d) { return d; }
+                f16vec4 f(f16vec2 a, f16vec2 b, f16vec4 d, half h) {
+                    f16vec4 c = f16vec4(pick(a), b);
+                    f16vec4 e = f16vec4(widen(d).xy, a);
+                    f16vec3 g = f16vec3(pick(b).yx, h);
+                    return c + e + f16vec4(g, h);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "cgl_half4 c = cgl_cgl_half4_construct_half2_xy_half2_xy(pick(a), b);"
+            in hip_code
+        )
+        assert (
+            "cgl_half4 e = cgl_cgl_half4_construct_cgl_half4_xy_half2_xy(widen(d), a);"
+            in hip_code
+        )
+        assert (
+            "cgl_half3 g = cgl_cgl_half3_construct_half2_yx_half(pick(b), h);"
+            in hip_code
+        )
+        assert "return cgl_make_half4(arg0.x, arg0.y, arg1.x, arg1.y);" in hip_code
+        assert "return cgl_make_half3(arg0.y, arg0.x, arg1);" in hip_code
+        assert "pick(a).x" not in hip_code
+        assert "pick(b).y" not in hip_code
+
     @pytest.mark.parametrize(
         "vector_type",
         [

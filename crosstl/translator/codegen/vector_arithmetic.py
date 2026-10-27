@@ -477,7 +477,7 @@ class VectorArithmeticMixin:
                     "object_expr",
                     getattr(raw_arg, "object", None),
                 )
-                object_info = self.vector_type_info(
+                object_info = self.swizzle_result_vector_info(
                     self.expression_result_type(object_node)
                 )
                 if object_info is not None:
@@ -496,7 +496,9 @@ class VectorArithmeticMixin:
                     emitted_lanes += len(components)
                     continue
 
-            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            arg_info = self.swizzle_result_vector_info(
+                self.expression_result_type(raw_arg)
+            )
             if arg_info is not None:
                 components = arg_info["components"][: target_size - emitted_lanes]
                 pieces.append(

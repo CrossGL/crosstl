@@ -3065,7 +3065,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if object_node is None or components is None or len(components) <= 1:
             return None
 
-        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        object_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if object_info is None:
             return None
         result_type = self.vector_type_for_components(
