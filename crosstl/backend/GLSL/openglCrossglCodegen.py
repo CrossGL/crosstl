@@ -9,7 +9,11 @@ from crosstl.translator.codegen.texture_lod_clamp import (
 
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_equality import lower_aggregate_equality
-from .block_member_names import instance_block_member_names, rename_shadowing_locals
+from .block_member_names import (
+    function_variable_names,
+    instance_block_member_names,
+    rename_shadowing_locals,
+)
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1405,6 +1409,8 @@ class GLSLToCrossGLConverter:
                 name = getattr(item, "name", None)
                 if name:
                     names.add(name)
+        # A local or parameter of the same name would shadow the instance inside its function.
+        names.update(function_variable_names(node))
         return names
 
     def is_anonymous_ssbo_struct(self, struct):
