@@ -323,11 +323,13 @@ def test_runtime_routes_masked_scatters_through_their_cache():
     source = (HOST / "runtime.py").read_text()
     assert "masked_scatter_packages.MaskedScatterPackageCache(" in source
     assert "if entry in masked_scatter_packages.ENTRIES:" in source
+    # The streaming audit checks owned families against their package caches.
+    audit = (HOST / "verify_upstream_ops.py").read_text()
     assert (
-        "masked_scatter_evidence.audit_event(event, masked)" in (
-            HOST / "verify_upstream_ops.py"
-        ).read_text()
-    )
+        "            masked_scatter_evidence.audit_event,\n"
+        "            masked_scatter_packages.MaskedScatterPackageCache(\n"
+    ) in audit
+    assert "lambda event: check(event, cache)" in audit
 
 
 def test_backend_ports_masked_scatter_through_a_scan_and_masked_assign():

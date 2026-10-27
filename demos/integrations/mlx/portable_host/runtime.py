@@ -47,6 +47,7 @@ from demos.integrations.mlx.portable_host import (
     dot_layout,
     dynamic_offset_dispatch,
     dynamic_offset_packages,
+    element_storage,
     elementwise_dispatch,
     fft_dispatch,
     fft_packages,
@@ -358,6 +359,20 @@ INT_TYPES = frozenset({int})
 BOOL_TYPES = frozenset({bool})
 INTEGRAL_TYPES = frozenset({bool, int})
 FLOAT_TYPES = frozenset({float})
+_FLOAT_CTYPES = frozenset({ctypes.c_float, ctypes.c_double})
+_INTEGRAL_CTYPES = frozenset(
+    {
+        ctypes.c_bool,
+        ctypes.c_int8,
+        ctypes.c_uint8,
+        ctypes.c_int16,
+        ctypes.c_uint16,
+        ctypes.c_int32,
+        ctypes.c_uint32,
+        ctypes.c_int64,
+        ctypes.c_uint64,
+    }
+)
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
 ALL_CAST_ENTRIES = {
@@ -424,6 +439,16 @@ def wire_value(value):
 
 def wire_values(values):
     """``[wire_value(value) for value in values]``, in bulk for exact scalars."""
+    if isinstance(values, ctypes.Array) and values._type_ in _FLOAT_CTYPES:
+        values = element_storage.array_values(values)
+        # A finite sum has no NaN or infinite term; an overflowing one only
+        # takes the element-wise path, which leaves finite values unchanged.
+        if math.isfinite(sum(values)):
+            return values
+        return [wire_value(value) for value in values]
+    if isinstance(values, ctypes.Array) and values._type_ in _INTEGRAL_CTYPES:
+        # Integral storage reads as exact ints (or bools), already wire values.
+        return element_storage.array_values(values)
     values = list(values)
     if exact_types_within(values, INTEGRAL_TYPES) or (
         exact_types_within(values, FLOAT_TYPES) and all(map(math.isfinite, values))
@@ -1656,7 +1681,7 @@ class HostRuntime:
                         f"{self.target}; see CrossGL/crosstl#2000"
                     )
             if bit_storage and dtype == "float32":
-                values = list(
+                values = element_storage.array_values(
                     ctypes.cast(
                         buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
                     ).contents
@@ -1804,7 +1829,10 @@ class HostRuntime:
                     )
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
-            if copy or slice_update:
+            # A validated copy writes distinct in-bounds destinations, as many
+            # as its shape has elements, so one that size writes every element.
+            copy_fills = copy and math.prod(copy_metadata["shape"]) == buffer.count
+            if (copy or slice_update) and not copy_fills:
                 written = set(
                     copy_layout.destination_indices(
                         copy_metadata if copy else slice_metadata
@@ -1840,12 +1868,12 @@ class HostRuntime:
                 result_values = half_storage.unpack(result_values, self.target)
             if dtype == "bfloat16":
                 result_values = bfloat_storage.unpack(result_values, self.target)
-            values = (storage_type * buffer.count)(
-                *(
-                    map(float, result_values)
-                    if storage_type is ctypes.c_float
-                    else result_values
-                )
+            values = (storage_type * buffer.count)()
+            # Slice assignment stores each item as the constructor would, in C.
+            values[:] = (
+                list(map(float, result_values))
+                if storage_type is ctypes.c_float
+                else result_values
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
         write_trace(

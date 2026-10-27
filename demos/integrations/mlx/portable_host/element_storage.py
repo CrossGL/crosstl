@@ -21,6 +21,18 @@ from crosstl.project.runtime_value_encoding import (
 )
 from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
 
+
+def array_values(array):
+    """``list(array)`` for a ctypes array of scalars, read through its buffer.
+
+    Indexing a ctypes array builds each item through ctypes, which costs about
+    six times a ``memoryview`` conversion of the same storage on buffers of
+    tens of thousands of elements. The items are the same: ``float`` for the
+    floating ctypes, ``bool`` for ``c_bool`` and ``int`` otherwise.
+    """
+    return memoryview(array).cast("B").cast(array._type_._type_).tolist()
+
+
 DTYPES = (
     "bool_",
     "uint8",

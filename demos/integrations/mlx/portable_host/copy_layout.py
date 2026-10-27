@@ -50,6 +50,26 @@ def destination_indices(metadata):
             yield from itertools.repeat(base, length)
 
 
+def distinct_by_strides(shape, strides):
+    """Whether the strides prove coordinates of ``shape`` reach distinct indices.
+
+    Ordered by stride magnitude over the axes longer than one, a stride that
+    exceeds the furthest reach of all smaller axes, ``sum((size - 1) * |s|)``,
+    cannot be cancelled by them, so two coordinates that differ map to
+    different indices. ``False`` decides nothing: such layouts may still be
+    one-to-one and need an enumeration.
+    """
+    reach = 0
+    for size, stride in sorted(
+        ((size, abs(stride)) for size, stride in zip(shape, strides) if size > 1),
+        key=lambda axis: axis[1],
+    ):
+        if stride <= reach:
+            return False
+        reach += (size - 1) * stride
+    return True
+
+
 def launch_regions(shape, source_strides, destination_strides, destination_offset):
     """Mirror the host's split of one copy into portable exact launches.
 
@@ -174,6 +194,8 @@ def validate(buffers, logical_size, *, dtype="uint32"):
     }
     if any(not 1 <= count <= 65535 for count in metadata["workgroupCount"]):
         raise ValueError("Native copy launch exceeds 65535 groups per axis")
-    if len(set(destination_indices(metadata))) != logical_size:
+    if not distinct_by_strides(shape, destination_strides) and (
+        len(set(destination_indices(metadata))) != logical_size
+    ):
         raise ValueError("Native copy destination elements overlap")
     return metadata

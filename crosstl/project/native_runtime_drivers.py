@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
 from .runtime_value_encoding import validate_value_encoding
-from .runtime_values import exact_types_within, flatten_values, scalars_fit
+from .runtime_values import flatten_scalars, flatten_values, pack_scalars
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -5119,7 +5119,7 @@ def _pack_values(
     target: str = "Vulkan",
     encoding: str | None = None,
 ) -> bytes:
-    values = _flatten_values(value)
+    values, types = flatten_scalars(value)
     try:
         validate_value_encoding(encoding, dtype, values)
     except ValueError as exc:
@@ -5133,7 +5133,11 @@ def _pack_values(
             "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
             *values,
         )
-    if dtype == "bool" and not exact_types_within(values, _BOOL_TYPES):
+    payload = pack_scalars(values, dtype, types=types)
+    if payload is not None:
+        # Exact scalars that fit pack as the checks and code below would.
+        return payload
+    if dtype == "bool" and not types <= _BOOL_TYPES:
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
         )
@@ -5144,15 +5148,13 @@ def _pack_values(
             if dtype.startswith("int")
             else (0, (1 << width) - 1)
         )
-        if not exact_types_within(values, _INT_TYPES) or (
+        if not types <= _INT_TYPES or (
             values and not (low <= min(values) and max(values) <= high)
         ):
             raise RuntimeExecutorUnavailable(
                 f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
             )
     if dtype in {"float16", "float32"}:
-        if scalars_fit(values, dtype):
-            return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
         special_bits = (
             {
                 "nan": 0x7E00,
