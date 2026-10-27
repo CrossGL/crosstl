@@ -10186,23 +10186,6 @@ class MetalCodeGen(
             return None
         return int(mapped_type[-1])
 
-    def cast_binary_operand_to_expected_vector(self, code, operand_type, expected_type):
-        if operand_type is None:
-            return code
-        expected_mapped = self.map_type(expected_type)
-        expected_width = self.vector_value_width(expected_mapped)
-        if expected_width is None:
-            return code
-
-        operand_mapped = self.map_type(operand_type)
-        if operand_mapped == expected_mapped:
-            return code
-        if self.is_scalar_value_type(operand_mapped):
-            return f"{expected_mapped}({code})"
-        if self.vector_value_width(operand_mapped) == expected_width:
-            return f"{expected_mapped}({code})"
-        return code
-
     def infer_metal_global_value_type(self, node):
         """The type of a shader-scope declaration with no written type (#2444).
 
@@ -11845,11 +11828,9 @@ class MetalCodeGen(
                     left,
                     right,
                 )
-            unconverted_operands = (left, right)
             left, right, common = self.metal_mixed_vector_binary_operands(
                 expr, operator, left, right
             )
-            mixed_operands_converted = (left, right) != unconverted_operands
             if operator == "%" and common in {"float", "half"}:
                 return f"fmod({left}, {right})"
             matrix_arithmetic = self.metal_matrix_builtins.componentwise(
@@ -11857,30 +11838,10 @@ class MetalCodeGen(
             )
             if matrix_arithmetic is not None:
                 return matrix_arithmetic
-            if operator in {"+", "-", "*", "/", "%"}:
-                expected_type = self.current_expression_expected_type
-                expression_width = self.vector_value_width(
-                    self.expression_result_type(expr)
-                )
-                # Once mixed operands share a common component type, casting
-                # each one to an integer declared type would mix them again,
-                # as in int4(uint4(a) + int4(b)) (#3089). The declaration
-                # converts the result instead.
-                if (
-                    expression_width is not None
-                    and expression_width == self.vector_value_width(expected_type)
-                    and not (
-                        mixed_operands_converted
-                        and self.vector_component_type(self.map_type(expected_type))
-                        in {"int", "uint", "short", "ushort", "long", "ulong"}
-                    )
-                ):
-                    left = self.cast_binary_operand_to_expected_vector(
-                        left, self.expression_result_type(expr.left), expected_type
-                    )
-                    right = self.cast_binary_operand_to_expected_vector(
-                        right, self.expression_result_type(expr.right), expected_type
-                    )
+            # The operands keep their own (common) type and the declaration
+            # converts the result: converting each operand to the declared
+            # type would turn an integer division into a floating one, or a
+            # signed one into an unsigned one (#3166).
             return self.metal_narrow_vector_wrap(
                 expr, operator, f"{left} {operator} {right}"
             )

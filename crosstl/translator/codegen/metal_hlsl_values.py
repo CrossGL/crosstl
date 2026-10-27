@@ -189,6 +189,28 @@ class MetalHlslValueMixin:
             info = left_info or right_info
             other = expr.right if left_info is not None else expr.left
             other_type = self.map_type(self.expression_result_type(other))
+            other_component = (
+                self.vector_component_type(other_type)
+                if self.is_scalar_value_type(other_type)
+                else None
+            )
+            if (
+                operator in self.METAL_COMMON_TYPE_OPERATORS
+                and other_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
+            ):
+                # MSL converts the scalar to the vector's component type
+                # (MSL 2.12), while HLSL and GLSL convert both operands to
+                # their common type: int4 * 0.5 is float4(a) * 0.5.
+                common = self.metal_binary_common_component(
+                    operator, info[1], other_component
+                )
+                if common is not None and common != info[1]:
+                    converted_type = f"{common}{info[2]}"
+                    if left_info is not None:
+                        left = f"{converted_type}({left})"
+                    else:
+                        right = f"{converted_type}({right})"
+                    info = (converted_type, common, info[2])
             if operator == "%" and info[1] in {"float", "half"}:
                 # fmod has no vector-scalar overloads.
                 if left_info is None and self.is_scalar_value_type(other_type):
