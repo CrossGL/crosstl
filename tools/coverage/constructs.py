@@ -476,6 +476,27 @@ def _curated() -> list[Construct]:
             "OpTypeMatrix",
             "Decoration.ColMajor",
         ),
+        c(
+            "compute",
+            "shared-vector-array",
+            "StorageClass.Workgroup",
+            "OpTypeVector",
+            "OpControlBarrier",
+        ),
+        c(
+            "compute",
+            "shared-struct-array",
+            "StorageClass.Workgroup",
+            "OpTypeStruct",
+            "OpControlBarrier",
+        ),
+        c(
+            "compute",
+            "shared-2d-array",
+            "StorageClass.Workgroup",
+            "OpTypeArray",
+            "OpControlBarrier",
+        ),
     ]
 
 

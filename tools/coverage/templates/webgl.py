@@ -34,6 +34,7 @@ from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
+from .workgroups import WEBGL as _WORKGROUPS
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -89,6 +90,7 @@ WEBGL = {
     **_LAYOUTS,
     **_ELEMENTS,
     **_BLOCKS,
+    **_WORKGROUPS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

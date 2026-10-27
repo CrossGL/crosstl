@@ -72,6 +72,7 @@ from .templates.portability import (
 )
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
+from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -601,6 +602,7 @@ CONSTRUCTS: dict[str, Template] = {
     **LAYOUTS_CROSSGL,
     **ELEMENTS_CROSSGL,
     **BLOCKS_CROSSGL,
+    **WORKGROUPS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
