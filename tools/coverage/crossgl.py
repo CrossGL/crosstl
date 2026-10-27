@@ -41,6 +41,7 @@ from .templates.base import (
     SPREAD,
 )
 from .templates.edges import FAMILY as EDGES
+from .templates.forms import FAMILY as FORMS
 from .templates.lexical import CROSSGL_NAMES, FILL, SPREAD4
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import reserved
@@ -536,6 +537,15 @@ CONSTRUCTS: dict[str, Template] = {
         prelude=f"{PAIR}\n{BINS}",
     ),
     "reserved-identifier": reserved(CROSSGL_NAMES),
+    **FORMS,
+    # CrossGL has no ^^; it compares two bool values with !=.
+    "logical-xor": Template(
+        "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\nbool r = (p != q) != (iin[i] == 3);\n"
+        "outp[i] = (p != q ? 1.0 : 0.0) + (r ? 2.0 : 0.0) + (!(p != true) ? 4.0 : 0.0);"
+    ),
+    "constant-array-size": Template(
+        FORMS["constant-array-size"].body, prelude="const int N = 4;"
+    ),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

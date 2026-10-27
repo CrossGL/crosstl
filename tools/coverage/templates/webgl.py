@@ -15,6 +15,8 @@ from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .edges import FAMILY as _EDGES
 from .evaluation import WEBGL as _EVALUATION
+from .forms import FAMILY as _FORMS
+from .forms import GLSL as _FORMS_GLSL
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
 from .scopes import WEBGL as _SCOPES
@@ -59,6 +61,8 @@ WEBGL = {
     **_EDGES,
     **_LEXICAL,
     **_LEXICAL_WEBGL,
+    **_FORMS,
+    **_FORMS_GLSL,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
