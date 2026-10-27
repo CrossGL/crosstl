@@ -233,7 +233,7 @@ def test_metal_row_major_matrix_products_compile(tmp_path):
     assert "float2 rotated = Rotate(0.5) * v;" in metal
     # A matrix-scalar product stays a matrix rather than a converted vector,
     # and is evaluated before the vector-matrix product as in the source.
-    assert "float2 applied = (v + float2(1.0)) * (Rotate(0.5) * 2.0);" in metal
+    assert "float2 applied = (v + 1.0) * (Rotate(0.5) * 2.0);" in metal
     compile_metal_if_available(metal, tmp_path)
 
 
