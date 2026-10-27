@@ -4671,7 +4671,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return f"{clz_intrinsic}({value})"
         if operation == "findLSB":
             if bit_width == 64:
-                return f"(__ffsll({ffs64_argument(value, None)}) - 1)"
+                scalar_type = self.map_type(source_type) if source_type else None
+                return f"(__ffsll({ffs64_argument(value, scalar_type)}) - 1)"
             return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
             clz_value = (
