@@ -41,6 +41,9 @@ from .templates.base import (
     SPREAD,
 )
 from .templates.edges import FAMILY as EDGES
+from .templates.lexical import CROSSGL_NAMES, FILL, SPREAD4
+from .templates.lexical import FAMILY as LEXICAL
+from .templates.lexical import reserved
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 
@@ -519,6 +522,20 @@ CONSTRUCTS: dict[str, Template] = {
     "struct-conditional": Template(VALUES["struct-conditional"].body, prelude=PAIR),
     **EDGES,
     "struct-array-copy": Template(EDGES["struct-array-copy"].body, prelude=PAIR),
+    **LEXICAL,
+    "octal-literal": Template(
+        LEXICAL["octal-literal"]
+        .body.replace("017 + 00", "0o17 + 0o0")
+        .replace("010u", "0o10u")
+        .replace("& 07", "& 0o7")
+        .replace("* 011", "* 0o11")
+    ),
+    "call-result-access": Template(
+        LEXICAL["call-result-access"].body,
+        f"{MAKE_PAIR}\n\n{FILL}\n\n{SPREAD4}",
+        prelude=f"{PAIR}\n{BINS}",
+    ),
+    "reserved-identifier": reserved(CROSSGL_NAMES),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

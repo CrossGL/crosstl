@@ -11,6 +11,7 @@ from . import (
     constructors,
     declarations,
     edges,
+    lexical,
     evaluation,
     functions,
     lvalues,
@@ -72,6 +73,7 @@ CUDA = {
     **aggregates.CUDA,
     **values.CUDA,
     **edges.CUDA,
+    **lexical.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -183,6 +185,7 @@ OPENCL = {
     **aggregates.OPENCL,
     **values.OPENCL,
     **edges.OPENCL,
+    **lexical.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -313,6 +316,7 @@ MOJO = {
     **aggregates.MOJO,
     **values.MOJO,
     **edges.MOJO,
+    **lexical.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -510,6 +514,7 @@ RUST = {
     **aggregates.RUST,
     **values.RUST,
     **edges.RUST,
+    **lexical.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),
