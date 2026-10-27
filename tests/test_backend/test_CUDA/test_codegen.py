@@ -155,7 +155,8 @@ class TestCudaCodeGen:
         assert "f32 y;" in result
         assert "f32 z;" in result
         assert "f32 w;" in result
-        assert "typedef struct float4 float4;" in result
+        # The self-alias declares nothing CrossGL has not already got.
+        assert "float4 float4" not in result
         assert "__device_builtin__" not in result
         assert "__builtin_align__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
