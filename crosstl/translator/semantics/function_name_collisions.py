@@ -19,7 +19,7 @@ from __future__ import annotations
 from .. import ast as A
 from .hub_types import call_name
 
-__all__ = ["rename_colliding_functions"]
+__all__ = ["rename_colliding_functions", "rename_functions", "user_function_names"]
 
 
 def _stages(program):
@@ -124,10 +124,33 @@ def rename_colliding_functions(program) -> dict:
             and function.name not in entry_names
         }
     )
-    if not colliding:
+    return rename_functions(program, colliding)
+
+
+def user_function_names(program):
+    """The names of the user functions of ``program`` other than entry points."""
+    functions = list(_functions(program))
+    entry_names = {
+        getattr(function, "name", None) for function, entry in functions if entry
+    }
+    return {
+        function.name
+        for function, entry in functions
+        if not entry and function.name not in entry_names
+    }
+
+
+def rename_functions(program, names) -> dict:
+    """Rename the user functions in ``names``, each overload and every call to it, in place; returns old -> new.
+
+    A new name appends ``_fn`` (then a number) to the old one and collides with no declared name.
+    """
+    names = sorted(set(names) & user_function_names(program))
+    if not names:
         return {}
+    functions = list(_functions(program))
     taken = _declared_names(program)
-    renamed = {name: _fresh(name, taken) for name in colliding}
+    renamed = {name: _fresh(name, taken) for name in names}
     for function, entry in functions:
         if not entry and function.name in renamed:
             function.name = renamed[function.name]
