@@ -237,6 +237,7 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
+from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
 from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_bfloat16_vectors import (
     HLSLBfloat16Vectors,
@@ -468,6 +469,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .operator_spellings import map_c_family_operator
 from .pack_builtins import PACK_FUNCTIONS, emit_hlsl_pack_helpers, hlsl_pack_call
 from .pointer_reinterpret import (
@@ -714,6 +716,14 @@ class DirectXMeshStageProfileError(ValueError):
         self.target_profile = target_profile
         self.shader_type = shader_type
         self.shader_attribute = shader_attribute
+
+
+class DirectXMeshOutputCountsError(ValueError):
+    """Raised when a mesh stage does not call SetMeshOutputCounts exactly once, outside loops and outside
+    thread-varying control flow."""
+
+    project_diagnostic_code = "project.translate.directx-mesh-output-counts-unsupported"
+    missing_capabilities = ("directx.mesh-output-counts",)
 
 
 class DirectXWorkgroupSizeError(ValueError):
@@ -16077,6 +16087,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return component_type, suffix[0], suffix[2]
         return None
 
+    def hlsl_numeric_matrix_type(self, vtype):
+        # Boolean matrices have no product; their compound assignments are refused elsewhere.
+        shape = self.hlsl_matrix_shape(vtype)
+        return shape is not None and shape[0] != "bool"
+
     def hlsl_matrix_dimensions(self, vtype):
         matrix_shape = self.hlsl_matrix_shape(vtype)
         if matrix_shape is None:
@@ -16418,7 +16433,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{lhs} {operator} {rhs}"
         if self.hlsl_expression_has_observable_side_effects(
-            value, allow_integer_constructors=True
+            value, allow_integer_constructors=True, allow_buffer_loads=True
         ):
             raise DirectXContextualConversionError(
                 "DirectX cannot preserve mixed-width compound assignment when "
@@ -18354,8 +18369,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if array_metadata is not None:
                 return array_metadata["base_type"]
             if array_type and "[" in array_type and "]" in array_type:
-                base_type, _ = split_array_type_suffix(array_type)
-                return base_type
+                # Indexing removes the outermost extent only: g[i] of int[3][2] is int[2].
+                base_type, array_suffix = split_array_type_suffix(array_type)
+                inner = re.fullmatch(r"\[[^\]]*\](.*)", array_suffix or "")
+                return f"{base_type}{inner.group(1)}" if inner else base_type
             buffer_element_type = self.hlsl_typed_buffer_element_type(
                 array_type,
                 {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
@@ -19890,8 +19907,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not rendered_type:
             return None
         type_name = str(rendered_type).strip()
-        array_depth = 0
-        element_name = type_name
+        element_name, array_suffix = split_array_type_suffix(type_name)
+        array_depth = array_suffix.count("[")
+        element_name = element_name.strip()
         while element_name:
             base_name, generic_args = generic_type_parts(element_name)
             if base_name.rsplit("::", 1)[-1] != "array" or not generic_args:
@@ -19951,6 +19969,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array_types.append(element_type)
             element_type = getattr(element_type, "element_type", None)
         if not isinstance(element_type, PointerType):
+            self.hlsl_reject_unresolved_generic_pointer_array(
+                parameter_type,
+                array_name=getattr(parameter, "name", None),
+                function_name=self.current_function_name,
+                source_location=getattr(parameter, "source_location", None),
+            )
             return None
         pointer_type = element_type
         address_space = str(pointer_type.address_space or "").strip().lower()
@@ -22063,6 +22087,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array_types.append(element_type)
             element_type = getattr(element_type, "element_type", None)
         if not isinstance(element_type, PointerType):
+            self.hlsl_reject_unresolved_generic_pointer_array(
+                vtype,
+                array_name=getattr(node, "name", None),
+                function_name=self.current_function_name,
+                source_location=getattr(node, "source_location", None),
+            )
             return None
         pointer_type = element_type
         address_space = str(pointer_type.address_space or "").strip().lower()
@@ -24724,6 +24754,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
+        # HLSL *= on matrices is component-wise; CrossGL's is the product.
+        matrix_product = matrix_product_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            target_type_of=self.hlsl_assignment_target_type,
+            is_matrix=self.hlsl_numeric_matrix_type,
+            is_vector=self.is_vector_value_type,
+            backend="directx",
+        )
+        if matrix_product is not None:
+            return self.generate_assignment(
+                matrix_product, statement_context=statement_context
+            )
+
         private_rebase = self.generate_hlsl_private_pointer_rebase_assignment(
             node, target, value, op, statement_context=statement_context
         )
@@ -24799,6 +24845,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "without changing evaluation order"
                     ),
                 )
+            list_assignment = generate_hlsl_array_list_assignment(
+                self, target, value, target_type
+            )
+            if list_assignment is not None:
+                return list_assignment
             return "\n".join(
                 self.hlsl_aggregate_assignment_statements(
                     self.generate_expression(target),
@@ -36414,7 +36465,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.hlsl_statement_contains_set_mesh_output_counts(stmt)
                 )
                 if contains_output_count and in_loop:
-                    raise ValueError(
+                    raise DirectXMeshOutputCountsError(
                         "DirectX mesh SetMeshOutputCounts must not be called from "
                         "loop control flow"
                     )
@@ -36427,7 +36478,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                 )
                 if contains_output_count and branch_is_thread_varying:
-                    raise ValueError(
+                    raise DirectXMeshOutputCountsError(
                         "DirectX mesh SetMeshOutputCounts must not be called from "
                         "thread-varying control flow"
                     )
@@ -36445,12 +36496,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 stmt
             )
             if contains_output_count and in_loop:
-                raise ValueError(
+                raise DirectXMeshOutputCountsError(
                     "DirectX mesh SetMeshOutputCounts must not be called from "
                     "loop control flow"
                 )
             if contains_output_count and in_thread_varying_branch:
-                raise ValueError(
+                raise DirectXMeshOutputCountsError(
                     "DirectX mesh SetMeshOutputCounts must not be called from "
                     "thread-varying control flow"
                 )
@@ -37275,7 +37326,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         output_count_calls = self.hlsl_mesh_output_call_count(func)
         if output_count_calls != 1:
-            raise ValueError(
+            raise DirectXMeshOutputCountsError(
                 "DirectX mesh stage output signature must call "
                 "SetMeshOutputCounts exactly once"
             )
@@ -49694,6 +49745,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         allow_integer_constructors=False,
         allow_bfloat_constructors=False,
         allow_numeric_constructors=False,
+        allow_buffer_loads=False,
     ):
         for node in self.walk_ast(expr):
             if isinstance(node, AssignmentNode):
@@ -49726,6 +49778,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if getattr(definition, "resource_aggregate_nonmutating", False):
                     # Lowering proves handle reads and private-value helpers.
                     # The walk still checks all argument evaluation below them.
+                    continue
+                if (
+                    allow_buffer_loads
+                    and name == "buffer_load"
+                    and len(arguments) == 2
+                    and not self.hlsl_function_name_is_shadowed(name)
+                ):
+                    # A buffer load reads one element and writes nothing. The
+                    # walk still checks the buffer and index expressions.
                     continue
                 if (
                     isinstance(name, str)
@@ -49839,6 +49900,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if self.hlsl_outer_array_type(expected_type) is not None:
             if isinstance(expr, ArrayLiteralNode):
+                list_assignment = generate_hlsl_array_list_assignment(
+                    self, target, expr, expected_type
+                )
+                if list_assignment is not None:
+                    return self.generate_statement_code(list_assignment, indent)
                 statements = self.hlsl_aggregate_assignment_statements(
                     target,
                     expr,

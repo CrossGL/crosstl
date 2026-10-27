@@ -38,7 +38,10 @@ from crosstl.backend.Metal.function_specialization import (
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
 )
-from crosstl.backend.Metal.text_scanners import mask_comments_and_literals
+from crosstl.backend.Metal.text_scanners import (
+    brace_block_spans,
+    mask_comments_and_literals,
+)
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -79,6 +82,11 @@ from crosstl.project.translation_checkpoint import (
     ProjectTranslationCheckpointRecorder,
     load_project_translation_checkpoint,
     project_translation_implementation_identity,
+)
+from crosstl.project.workgroup_linearization import (
+    linearize_compute_workgroups,
+    linearized_workgroup_size,
+    record_workgroup_linearization,
 )
 from crosstl.translator.artifact_contracts import with_artifact_contract_header
 from crosstl.translator.ast import (
@@ -1887,6 +1895,7 @@ REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
     (
         "workgroupSize",
+        "targetWorkgroupSize",
         "sourceEntryPoints",
         "entryPoints",
         "provenance",
@@ -1904,6 +1913,7 @@ REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
         "materializedEntryPoint",
         "targetEntryPoint",
         "workgroupSize",
+        "targetWorkgroupSize",
         "subgroupWidth",
         "rule",
         "subgroupWidthRule",
@@ -11921,6 +11931,7 @@ def _workgroup_execution_identity(
     variant: str | None,
     source_entry_points: Sequence[str],
     workgroup_size: Sequence[int],
+    target_workgroup_size: Sequence[int] | None = None,
 ) -> dict[str, str]:
     payload = {
         "source": source,
@@ -11929,6 +11940,8 @@ def _workgroup_execution_identity(
         "sourceEntryPoints": sorted(source_entry_points),
         "workgroupSize": list(workgroup_size),
     }
+    if target_workgroup_size is not None:
+        payload["targetWorkgroupSize"] = list(target_workgroup_size)
     encoded = json.dumps(
         payload,
         ensure_ascii=True,
@@ -15705,6 +15718,17 @@ def _metal_generic_type_parts(
     )
 
 
+def _metal_canonical_generic_base(base: str) -> str:
+    """Spell a generic type name without its global or Metal-library qualifier.
+
+    ``metal::vec<T, 2>``, ``::metal::vec<T, 2>`` and ``vec<T, 2>`` name the same
+    Metal standard-library template, so deduction must not treat a qualified
+    parameter spelling as a different type from an unqualified argument type.
+    Other namespaces stay significant.
+    """
+    return re.sub(r"^(?:::)?(?:metal::)?", "", base.strip())
+
+
 def _metal_merge_template_binding(
     bindings: dict[str, str],
     parameter: str,
@@ -15877,7 +15901,9 @@ def _collect_metal_template_type_bindings(
     actual_base, actual_args = _metal_generic_type_parts(preprocessor, actual)
     if not expected_args:
         return _metal_concrete_parameter_type_compatible(expected, actual)
-    if expected_base != actual_base:
+    if _metal_canonical_generic_base(expected_base) != _metal_canonical_generic_base(
+        actual_base
+    ):
         return not actual_args
     if len(expected_args) > len(actual_args):
         return False
@@ -19078,32 +19104,7 @@ def _metal_diagnostic_template_call_noop_replacements(
 
 
 def _metal_block_spans(preprocessor: Any, source: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    stack: list[int] = []
-    i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
-            end = source.find("\n", i)
-            if end == -1:
-                break
-            i = end + 1
-            continue
-        if source.startswith("/*", i):
-            end = source.find("*/", i + 2)
-            if end == -1:
-                break
-            i = end + 2
-            continue
-        if source[i] == "{":
-            stack.append(i)
-        elif source[i] == "}" and stack:
-            spans.append((stack.pop(), i + 1))
-        i += 1
-    return spans
+    return brace_block_spans(source, preprocessor._read_string)
 
 
 def _metal_enclosing_block_span(
@@ -19745,6 +19746,14 @@ def _metal_matching_angle_end(expression: str, start: int) -> int | None:
     return None
 
 
+_METAL_USING_SCAN_STOPS = re.compile(r"[\"']|//|/\*|using")
+_METAL_USING_NAMESPACE_DIRECTIVE = re.compile(
+    r"using\s+namespace\s+"
+    r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;"
+)
+
+
 def _metal_using_namespace_directives(
     preprocessor: Any,
     source: str,
@@ -19753,35 +19762,34 @@ def _metal_using_namespace_directives(
     known_namespaces: set[str],
 ) -> list[tuple[int, tuple[int, int] | None, str]]:
     directives: list[tuple[int, tuple[int, int] | None, str]] = []
+    search = _METAL_USING_SCAN_STOPS.search
     i = 0
-    while i < len(source):
-        if source[i] in "\"'":
-            _literal, consumed = preprocessor._read_string(source, i)
-            i += consumed
-            continue
-        if source.startswith("//", i):
+    while True:
+        stop = search(source, i)
+        if stop is None:
+            break
+        i = stop.start()
+        token = stop.group()
+        if token == "//":
             end = source.find("\n", i + 2)
             if end == -1:
                 break
             i = end + 1
             continue
-        if source.startswith("/*", i):
+        if token == "/*":
             end = source.find("*/", i + 2)
             if end == -1:
                 break
             i = end + 2
             continue
-        if not source.startswith("using", i) or (
-            i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_")
-        ):
+        if token != "using":
+            _literal, consumed = preprocessor._read_string(source, i)
+            i += consumed
+            continue
+        if i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_"):
             i += 1
             continue
-        match = re.match(
-            r"using\s+namespace\s+"
-            r"(?P<name>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
-            r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*;",
-            source[i:],
-        )
+        match = _METAL_USING_NAMESPACE_DIRECTIVE.match(source, i)
         if match is None:
             i += len("using")
             continue
@@ -19803,7 +19811,7 @@ def _metal_using_namespace_directives(
             candidates[-1],
         )
         directives.append((i, directive_scope, resolved))
-        i += match.end()
+        i = match.end()
     return directives
 
 
@@ -27261,6 +27269,99 @@ def _crossgl_ast_for_project_target(
     return ast
 
 
+def _apply_project_workgroup_linearization(
+    execution: Mapping[str, Any],
+    ast: Any,
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    selected_entry_point: str | None,
+) -> Mapping[str, Any]:
+    """Linearize workgroups ``target`` cannot declare and record the declared size.
+
+    Subgroup-width and host-dispatch executions keep their contracts unchanged, so their target generators still
+    reject such a shape.
+    """
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    provenance = execution.get("provenance")
+    if (
+        "subgroupWidthProvenance" in execution
+        or any("subgroupWidth" in entry for entry in entries)
+        or (
+            isinstance(provenance, Mapping)
+            and provenance.get("kind") == "host-dispatch-contract"
+        )
+    ):
+        return execution
+    records = linearize_compute_workgroups(
+        ast, target=target, entry_point=selected_entry_point
+    )
+    if not records:
+        return execution
+    updated = record_workgroup_linearization(execution, records)
+    if entries:
+        refreshed = []
+        for entry in updated["entryPoints"]:
+            if isinstance(entry, Mapping) and "targetWorkgroupSize" in entry:
+                entry = dict(entry)
+                entry["identity"] = _workgroup_rule_entry_identity(
+                    source=unit.relative_path,
+                    source_hash=unit.source_hash,
+                    target=target,
+                    variant=variant,
+                    entry=entry,
+                )
+            refreshed.append(entry)
+        updated["entryPoints"] = refreshed
+        updated["identity"] = _workgroup_rule_execution_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            source_entry_points=updated.get("sourceEntryPoints", ()),
+            entry_points=refreshed,
+            provenance=updated.get("provenance", {}),
+        )
+    elif "targetWorkgroupSize" in updated:
+        updated["identity"] = _workgroup_execution_identity(
+            source=unit.relative_path,
+            target=target,
+            variant=variant,
+            source_entry_points=updated.get("sourceEntryPoints", ()),
+            workgroup_size=updated["workgroupSize"],
+            target_workgroup_size=updated["targetWorkgroupSize"],
+        )
+    return updated
+
+
+def _target_workgroup_size_contract_reasons(
+    prefix: str, container: Mapping[str, Any], target: Any
+) -> list[str]:
+    if "targetWorkgroupSize" not in container:
+        return []
+    field_name = f"{prefix}.targetWorkgroupSize"
+    value = container.get("targetWorkgroupSize")
+    reasons = _workgroup_size_contract_reasons(field_name, value)
+    if reasons:
+        return reasons
+    size = container.get("workgroupSize")
+    if not isinstance(size, list) or _workgroup_size_contract_reasons(
+        "workgroupSize", size
+    ):
+        return [f"{field_name} requires a concrete workgroupSize"]
+    expected = linearized_workgroup_size(str(target), size)
+    if expected is None or list(expected) != list(value):
+        return [
+            f"{field_name} must be the linearized workgroupSize the target " "declares"
+        ]
+    return []
+
+
 def _project_workgroup_execution_metadata(
     *,
     ast: Any,
@@ -28021,7 +28122,9 @@ def _validate_project_workgroup_target_output(
     ]
     if execution_entries:
         expected_by_target = {
-            str(entry.get("targetEntryPoint")): tuple(entry.get("workgroupSize", ()))
+            str(entry.get("targetEntryPoint")): tuple(
+                entry.get("targetWorkgroupSize", entry.get("workgroupSize", ()))
+            )
             for entry in execution_entries
             if _is_non_empty_string(entry.get("targetEntryPoint"))
         }
@@ -28088,7 +28191,9 @@ def _validate_project_workgroup_target_output(
 
     if "workgroupSize" not in execution:
         return
-    expected = tuple(execution.get("workgroupSize", ()))
+    expected = tuple(
+        execution.get("targetWorkgroupSize", execution.get("workgroupSize", ()))
+    )
     reflected = reflect_target_host_interface(output_path, target=target)
     reflected_sizes = []
     for entry_point in _record_sequence(reflected.get("entryPoints")):
@@ -29591,6 +29696,15 @@ def _translate_project_impl(
                                     target=target,
                                     variant=variant,
                                 )
+                            )
+                        if execution is not None and dispatch_region is None:
+                            execution = _apply_project_workgroup_linearization(
+                                execution,
+                                crossgl_ast,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                                selected_entry_point=selected_entry_point,
                             )
                         if execution is not None:
                             if dispatch_region is not None:
@@ -33109,7 +33223,9 @@ def _runtime_manifest_execution_host_interface(
         if not isinstance(execution_entry, Mapping):
             continue
         name = execution_entry.get("targetEntryPoint")
-        size = execution_entry.get("workgroupSize")
+        size = execution_entry.get(
+            "targetWorkgroupSize", execution_entry.get("workgroupSize")
+        )
         subgroup_width = execution_entry.get("subgroupWidth")
         if not _is_non_empty_string(name) or (
             not isinstance(size, list) and subgroup_width is None
@@ -49724,6 +49840,20 @@ def _artifact_execution_contract_reasons(
         execution,
         REPORT_ARTIFACT_EXECUTION_FIELDS,
     )
+    reasons.extend(
+        _target_workgroup_size_contract_reasons(
+            execution_prefix, execution, record.get("target")
+        )
+    )
+    for entry_index, entry in enumerate(_record_sequence(execution.get("entryPoints"))):
+        if isinstance(entry, Mapping):
+            reasons.extend(
+                _target_workgroup_size_contract_reasons(
+                    f"{execution_prefix}.entryPoints[{entry_index}]",
+                    entry,
+                    record.get("target"),
+                )
+            )
     if "entryPoints" in execution:
         provenance = execution.get("provenance")
         if isinstance(provenance, Mapping) and provenance.get("kind") == (
@@ -49954,6 +50084,7 @@ def _artifact_execution_contract_reasons(
             ),
             source_entry_points=source_entry_points,
             workgroup_size=workgroup_size,
+            target_workgroup_size=execution.get("targetWorkgroupSize"),
         )
         if identity != expected_identity:
             reasons.append(

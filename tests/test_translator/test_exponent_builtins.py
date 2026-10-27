@@ -179,7 +179,9 @@ def test_a_user_function_named_frexp_is_called_unchanged():
         1,
     ).replace("vec3 m3 = frexp(vec3(values[i], 2.0, 3.0), e3);", "vec3 m3 = vec3(1.0);")
     source = source.replace("frexp(values[i + 1u], exponents[i]);", "")
-    for codegen in (GLSLCodeGen, MetalCodeGen):
+    # MSL's frexp(float, thread int&) and the user's frexp(float, int) make the call ambiguous, so Metal output
+    # renames the user function (#3156); either way the call reaches the user function, not the built-in.
+    for codegen, name in ((GLSLCodeGen, "frexp"), (MetalCodeGen, "frexp_fn")):
         code = codegen().generate(parse(source))
         assert "crosstl_frexp" not in code
-        assert re.search(r"float m = frexp\(values\[i\], e\);", code)
+        assert re.search(rf"float m = {name}\(values\[i\], e\);", code)
