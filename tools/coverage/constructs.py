@@ -420,6 +420,41 @@ def _curated() -> list[Construct]:
             "StorageClass.Uniform",
             "Decoration.Offset",
         ),
+        c(
+            "resource",
+            "matrix-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "struct-buffer-packing",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "struct-array-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeArray",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "nested-struct-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c("resource", "integer-buffer", "StorageClass.StorageBuffer", "OpIMul"),
+        c(
+            "resource",
+            "unsigned-buffer",
+            "StorageClass.StorageBuffer",
+            "OpShiftRightLogical",
+        ),
     ]
 
 

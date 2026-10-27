@@ -16,6 +16,7 @@ from .calls import WEBGL as _CALLS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .edges import FAMILY as _EDGES
+from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
@@ -85,6 +86,7 @@ WEBGL = {
     **_INITIALIZERS_GLSL,
     **_HELPERS,
     **_LAYOUTS,
+    **_ELEMENTS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
