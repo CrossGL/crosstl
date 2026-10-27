@@ -143,6 +143,60 @@ def test_write_trace_follows_the_host_retention_flag(tmp_path, retain):
     assert second == {"entry": "f"}
 
 
+def test_prepared_trace_records_are_written_as_given(tmp_path):
+    host = SimpleNamespace(trace=tmp_path / "trace.jsonl", trace_values=False)
+    event = {"entry": "e", "keys": list(range(300))}
+    trace_records.write_trace(host, event, prepared=True)
+    assert json.loads(host.trace.read_text()) == event
+
+
+@pytest.mark.parametrize(
+    "dtype", ("int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64")
+)
+def test_integer_array_digests_equal_their_list_digests(dtype):
+    np = pytest.importorskip("numpy")
+    info = np.iinfo(dtype)
+    high = min(int(info.max), 2**63 - 1)
+    values = np.array(
+        [info.min, 0, 1, high, *(n % 100 for n in range(400))], dtype=dtype
+    )
+    expected = trace_records.value_digest(values.tolist())
+    assert trace_records.integer_digest(np, values) == expected
+    assert trace_records.integer_digest(np, values, chunk=7) == expected
+    assert trace_records.integer_digest(np, values.reshape(2, -1)) == expected
+    compact = trace_records.compact_trace_values(values.tolist())
+    assert trace_records.matches_integers(np, compact, values)
+    assert trace_records.matches_integers(np, values.tolist(), values)
+    assert trace_records.recorded_length(compact) == values.size
+
+
+def test_integer_matches_reject_other_values_and_shapes():
+    np = pytest.importorskip("numpy")
+    values = np.arange(300, dtype=np.int32)
+    compact = trace_records.compact_trace_values(values.tolist())
+    changed = values.copy()
+    changed[5] += 1
+    assert not trace_records.matches_integers(np, compact, changed)
+    assert not trace_records.matches_integers(np, compact, values[:-1])
+    assert not trace_records.matches_integers(np, {**compact, "x": 1}, values)
+    # Equal JSON is not enough: Booleans and floats are not integers.
+    assert not trace_records.matches_integers(np, [True, False], np.array([1, 0]))
+    assert not trace_records.matches_integers(np, [1.0, 0], np.array([1, 0]))
+    assert not trace_records.matches_integers(np, None, np.array([1]))
+    short = {"compactedValues": {"length": 2, "sha256": "0" * 64}}
+    short["compactedValues"]["sha256"] = trace_records.integer_digest(
+        np, np.array([1, 0])
+    )
+    # Lists no longer than the compact limit are never digested.
+    assert not trace_records.matches_integers(np, short, np.array([1, 0]))
+    with pytest.raises(ValueError):
+        trace_records.integer_digest(np, np.array([2**63], dtype=np.uint64))
+    with pytest.raises(ValueError):
+        trace_records.integer_digest(np, np.array([1.0]))
+    with pytest.raises(ValueError):
+        trace_records.recorded_length({"values": [1]})
+
+
 @pytest.mark.parametrize("value", (0, 1, "false", None))
 def test_host_runtime_requires_a_boolean_trace_retention_flag(tmp_path, value):
     with pytest.raises(ValueError, match="Trace value retention"):

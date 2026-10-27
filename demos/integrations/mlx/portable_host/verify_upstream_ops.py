@@ -704,9 +704,10 @@ FAMILIES = (
 INDEXED_FAMILIES = FAMILIES[2:]
 REQUIRED_REDUCTIONS = frozenset(("w32/all_reduce_andbool_", "w256/all_reduce_andbool_"))
 NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
-# Dispatches whose trace records keep their long values for the audits.
+# Dispatches whose trace records keep their long values for the audits. Random
+# records keep their keys and digest the storage the audit recomputes from them
+# (``random_dispatch.dispatch``).
 RETAINED_VALUES = (
-    *ENTRIES,
     *arg_reduce_layout.OPERATIONS,
     *softmax_layout.PREFIXES,
     *sort_dispatch.PREFIXES,

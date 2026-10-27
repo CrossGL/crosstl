@@ -805,7 +805,6 @@ def test_upstream_op_indexes_require_checked_reductions_and_one_target(
 def test_upstream_op_traces_keep_only_the_recomputed_values():
     retained = ops.RETAINED_VALUES
     for entry in (
-        ops.ENTRIES[0],
         "gatherint32int32_2_1_int",
         "scatter_axisint32int64_none_intcc",
         "vv_DivModint32",
@@ -821,7 +820,9 @@ def test_upstream_op_traces_keep_only_the_recomputed_values():
         "vjp_layer_normbfloat16_now",
     ):
         assert entry.startswith(retained), entry
+    # Random records keep their keys and digest only the recomputed storage.
     for entry in (
+        *ops.ENTRIES,
         "ggn2_dynamic_copyint64int64",
         "vv_Addint64",
         "contig_scan_inclusive_sum_int32_int32",

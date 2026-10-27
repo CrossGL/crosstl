@@ -81,6 +81,57 @@ def value_digest(values):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def integer_digest(np, values, chunk=1 << 22):
+    """``value_digest(values.tolist())`` of a NumPy integer array, in chunks.
+
+    Every element of an integer array of at most 64 bits converts to an exact
+    ``int`` that fits int64, so the list's digest covers its int64 words.
+    """
+    values = np.asarray(values).reshape(-1)
+    if values.dtype.kind not in "iu" or values.dtype.itemsize > 8 or not values.size:
+        raise ValueError("Integer digests need a non-empty integer array")
+    if values.dtype == np.uint64 and values.max() > np.iinfo(np.int64).max:
+        raise ValueError("Integer digests need values that fit int64")
+    digest = hashlib.sha256(b"int64\0")
+    for start in range(0, values.size, chunk):
+        digest.update(values[start : start + chunk].astype("<i8").tobytes())
+    return digest.hexdigest()
+
+
+def recorded_length(values):
+    """The element count of a retained list or of its compact digest."""
+    if type(values) is list:
+        return len(values)
+    compact = values.get("compactedValues") if type(values) is dict else None
+    if type(compact) is not dict or type(compact.get("length")) is not int:
+        raise ValueError("Trace values are neither a list nor a compact digest")
+    return compact["length"]
+
+
+def matches_integers(np, recorded, expected):
+    """Whether a trace field holds exactly the integers of ``expected``.
+
+    ``recorded`` is the retained list of exact ``int`` values, or the
+    ``compact_trace_values`` digest a list longer than ``COMPACT_TRACE_LIMIT``
+    becomes.
+    """
+    expected = np.asarray(expected).reshape(-1)
+    if type(recorded) is list:
+        return (
+            len(recorded) == expected.size
+            and exact_types_within(recorded, frozenset({int}))
+            and recorded == expected.tolist()
+        )
+    compact = recorded.get("compactedValues") if type(recorded) is dict else None
+    return (
+        type(compact) is dict
+        and set(recorded) == {"compactedValues"}
+        and set(compact) == {"length", "sha256"}
+        and compact["length"] == expected.size > COMPACT_TRACE_LIMIT
+        and compact["sha256"] == integer_digest(np, expected)
+    )
+
+
 def compact_trace_values(value):
     """Replace long scalar arrays and long strings with their length and digest.
 
@@ -126,9 +177,13 @@ def retains_values(host, entry):
     return bool(retained)
 
 
-def write_trace(host, event):
-    """Append ``event``; compact it when the host does not retain its values."""
-    if not retains_values(host, event.get("entry")):
+def write_trace(host, event, *, prepared=False):
+    """Append ``event``; compact it when the host does not retain its values.
+
+    A ``prepared`` event already replaced the values its audit recomputes by
+    their digests and keeps the ones the audit reads, so it is written as is.
+    """
+    if not prepared and not retains_values(host, event.get("entry")):
         event = compact_trace_values(event)
     with host.trace.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event) + "\n")
