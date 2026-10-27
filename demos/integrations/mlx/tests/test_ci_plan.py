@@ -30,7 +30,10 @@ WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
         ("tools/ensure_metal_toolchain.py", False, True),
         (".github/actions/setup-dxc/action.yml", False, True),
         ("pyproject.toml", False, True),
-        ("requirements-dev.txt", False, True),
+        ("requirements-dev.txt", False, False),
+        ("requirements.txt", False, False),
+        ("setup.cfg", False, False),
+        ("support/features.json", False, False),
         ("demos/integrations/mlx/tests/kernels/test_current_arange.py", True, True),
         ("demos/integrations/mlx/portable_host/runtime.py", True, True),
         (

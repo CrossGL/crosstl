@@ -33,10 +33,20 @@ class ASTNode:
         return self.annotations.get(key, default)
 
     def child_nodes(self):
-        """Yield direct structural AST children, excluding metadata backlinks."""
+        """Yield direct structural AST children, excluding metadata backlinks.
+
+        Several nodes keep one child under two field names (``ArrayAccessNode.array`` and ``array_expr``,
+        ``AssignmentNode.target`` and ``left``). Such a child is yielded once, so a visitor that acts on every child
+        does not evaluate it twice: ``vals[k++]`` increments ``k`` once.
+        """
+        yielded_fields = []
         for field_name, value in vars(self).items():
             if field_name in AST_CHILD_FIELD_EXCLUSIONS:
                 continue
+            if isinstance(value, (ASTNode, list, tuple, dict, set)):
+                if any(value is earlier for earlier in yielded_fields):
+                    continue
+                yielded_fields.append(value)
             yield from iter_ast_child_nodes(value)
 
     def walk(self):

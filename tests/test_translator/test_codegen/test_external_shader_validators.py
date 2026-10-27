@@ -868,6 +868,23 @@ shader SlangBitQueryValidator {
 """
 
 
+SLANG_ROUND_EVEN_VALIDATOR_SHADER = """
+shader SlangRoundEvenValidator {
+    RWStructuredBuffer<float> fin @binding(0);
+    RWStructuredBuffer<vec4> outp @binding(1);
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint i = tid.x;
+            float s = roundEven(fin[i]);
+            vec3 v = roundEven(vec3(fin[i], fin[i + 1u], fin[i + 2u]));
+            outp[i] = vec4(v, s);
+        }
+    }
+}
+"""
+
+
 SLANG_MATRIX_GROUP_VALIDATOR_SHADER = """
 shader SlangMatrixGroupValidator {
     compute {
@@ -3195,6 +3212,49 @@ def test_generated_slang_bit_queries_compile_with_slangc(tmp_path):
         ]
     )
     _run_validator([spirv_val, str(spirv_path)])
+
+
+def test_generated_slang_round_even_compiles_to_spirv_round_even(tmp_path):
+    """roundEven is Slang ``rint``, which slangc lowers to SPIR-V RoundEven; Slang ``round`` is Round (#2260)."""
+    shader_path = tmp_path / "slang_round_even.slang"
+    spirv_path = tmp_path / "slang_round_even.spv"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_ROUND_EVEN_VALIDATOR_SHADER)
+    )
+    assert "float s = rint(fin[i]);" in code
+    assert "float3 v = rint(float3(fin[i], fin[(i + 1u)], fin[(i + 2u)]));" in code
+    assert "round(" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    spirv_val = _require_tool("spirv-val")
+    spirv_dis = _require_tool("spirv-dis")
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "spirv",
+            "-entry",
+            "main",
+            "-stage",
+            "compute",
+            "-o",
+            str(spirv_path),
+            str(shader_path),
+        ]
+    )
+    _run_validator([spirv_val, str(spirv_path)])
+    assembly = subprocess.run(
+        [spirv_dis, str(spirv_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    ).stdout
+    extended = [line for line in assembly.splitlines() if "OpExtInst" in line]
+    assert any(" RoundEven " in line for line in extended), assembly
+    assert not any(" Round " in line for line in extended), assembly
 
 
 def test_generated_slang_matrix_group_compiles_with_slangc(tmp_path):

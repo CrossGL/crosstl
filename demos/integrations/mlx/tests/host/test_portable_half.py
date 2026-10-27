@@ -491,16 +491,19 @@ def workload_evidence():
                 }
             )
         if entries:
-            dtype = expected.dtype.name
+            stored = half_workloads.written(np, case, source, expected)
+            dtype = stored.dtype.name
+            words = half_workloads.words(np, stored)
+            trace[-1]["threads"] = stored.size
             trace[-1]["halfStorage"] = {
                 "logicalType": dtype,
                 "physicalType": dtype,
                 "encoding": (
                     "ieee754-binary16" if dtype == "float16" else "ieee754-binary32"
                 ),
-                "values": bits,
+                "values": words,
                 "guardValues": [0x3555 if dtype == "float16" else 0x6A15BEEF] * 32,
-                "logicalWords": bits,
+                "logicalWords": words,
             }
     return records, trace
 
@@ -598,14 +601,16 @@ def test_half_ci_requires_every_target_and_retained_evidence():
         1800,
         1800,
         1800,
-        1200,
-        1200,
+        600,
+        600,
         1800,
         600,
-        2100,
+        1200,
         900,
         1200,
         900,
+        1800,
+        600,
         1800,
         900,
         2100,
