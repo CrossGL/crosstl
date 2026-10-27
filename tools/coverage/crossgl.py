@@ -70,6 +70,7 @@ from .templates.portability import (
     constants,
     intrinsic_names,
 )
+from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
@@ -603,6 +604,7 @@ CONSTRUCTS: dict[str, Template] = {
     **ELEMENTS_CROSSGL,
     **BLOCKS_CROSSGL,
     **WORKGROUPS_CROSSGL,
+    **RECORDS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

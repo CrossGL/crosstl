@@ -32,6 +32,7 @@ from .lexical import WEBGL as _LEXICAL_WEBGL
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
+from .records import WEBGL as _RECORDS
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
 from .workgroups import WEBGL as _WORKGROUPS
@@ -91,6 +92,7 @@ WEBGL = {
     **_ELEMENTS,
     **_BLOCKS,
     **_WORKGROUPS,
+    **_RECORDS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

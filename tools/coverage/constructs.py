@@ -497,6 +497,27 @@ def _curated() -> list[Construct]:
             "OpTypeArray",
             "OpControlBarrier",
         ),
+        c(
+            "resource",
+            "uniform-struct",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-struct-array",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "uniform-struct-copy",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "OpCompositeExtract",
+        ),
     ]
 
 

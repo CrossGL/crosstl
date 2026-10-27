@@ -391,6 +391,25 @@ def test_a_uniform_float_array_reads_one_word_per_row_in_every_language():
         assert declaration in source and "w[k].x" in source
 
 
+def test_a_uniform_struct_is_declared_before_its_block_and_copied_into_a_mutable_local():
+    glsl = probes.build(_feature("glsl", "uniform-struct"), "glsl").source
+    assert glsl.index("struct Light {") < glsl.index("uniform Params {")
+    assert "    Light light;\n    vec4 tint;" in glsl
+    for language, copy in (
+        ("wgsl", "var l = params.light;"),
+        ("rust", "let mut l = params.light;"),
+        ("mojo", "var l = params.light\n"),
+        ("hlsl", "Light l = light;"),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-struct-copy"), language
+        ).source
+        assert copy in source
+    # Mojo reads a vector's lanes by index.
+    mojo = probes.build(_feature("mojo", "uniform-struct-array"), "mojo").source
+    assert "params.lights[k].color[0]" in mojo and "var lights: Array[Light, 2]" in mojo
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {
