@@ -79,6 +79,7 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .codegen.array_utils import evaluate_literal_int_expression
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
@@ -2106,6 +2107,26 @@ class Parser:
 
         return self.parse_type()
 
+    def parse_array_template_type(self):
+        """Parse ``array<T, N>`` as the ``ArrayType`` that ``T name[N]`` declares, wherever a type is written.
+
+        Parameters, locals, struct members, globals and return types all take this spelling, and a plain
+        ``NamedType`` left every generator without array semantics for it. Two forms keep the ``array`` template
+        type: an extent of zero, the zero-extent standard array that C-style ``T name[0]`` cannot declare
+        (MSL 2.3.4 ``array<T, 0>``), and ``array<T>`` with no extent, whose meaning depends on where it is declared.
+        """
+        self.eat("IDENTIFIER")
+        generic_args = self.parse_generic_arguments()
+        if len(generic_args) == 2:
+            element_type, extent = generic_args
+            if isinstance(element_type, IdentifierNode):
+                element_type = NamedType(element_type.name, [])
+            if isinstance(element_type, TypeNode) and (
+                evaluate_literal_int_expression(extent) != 0
+            ):
+                return ArrayType(element_type, extent)
+        return NamedType("array", generic_args)
+
     def current_token_starts_var_address_space_declaration(self):
         """Return whether the current token starts ``var<address-space>`` syntax."""
         return self.current_token[0] == "VAR" and self.peek()[0] == "LESS_THAN"
@@ -2781,6 +2802,13 @@ class Parser:
 
         elif self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "def":
             base_type = self.parse_callable_type()
+
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "array"
+            and self.peek()[0] == "LESS_THAN"
+        ):
+            base_type = self.parse_array_template_type()
 
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
@@ -4151,6 +4179,11 @@ class Parser:
         """Parse any statement form supported by CrossGL."""
         if self.current_token_starts_statement_attribute():
             return self.parse_attributed_statement()
+        if self.current_token[0] == "SEMICOLON":
+            # A null statement does nothing (GLSL 4.60 section 6.1, C++ [stmt.expr]/1): it adds no node, and a
+            # braceless body made of one becomes an empty block through parse_substatement.
+            self.eat("SEMICOLON")
+            return []
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -6552,6 +6585,10 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if cases and not cases[-1].statements:
+            # GLSL ES 3.00 section 6.2 and C++ [stmt.label] (before C++23), which MSL and HLSL follow, need a
+            # statement after the last label. Leaving the switch from there is what that label already does.
+            cases[-1].statements.append(BreakNode())
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):

@@ -48,6 +48,11 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
+from .c_reference_parameters import (
+    is_output_parameter,
+    overlapping_output_arguments,
+    reference_declarator,
+)
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -74,6 +79,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
 )
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -2105,7 +2111,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     )
                 )
             else:
-                param_declarations.append(self.visit_parameter(param))
+                declaration = self.visit_parameter(param)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declaration = reference_declarator(declaration, param_name)
+                param_declarations.append(declaration)
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
@@ -3618,15 +3628,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def hip_for_clause(self, node):
+        """One for-loop initializer or update clause; a list is one declaration or one comma expression."""
+        if not node:
+            return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.hip_for_clause(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "hip",
+            )
+        if isinstance(node, VariableNode):
+            return self.format_variable_declaration(node)
+        if hasattr(node, "expression"):
+            return self.visit_discarded_expression(node.expression)
+        return self.visit_discarded_expression(node)
+
     def visit_ForNode(self, node) -> str:
-        if isinstance(node.init, VariableNode):
-            init = self.format_variable_declaration(node.init)
-        elif hasattr(node.init, "expression"):
-            init = self.visit_discarded_expression(node.init.expression)
-        else:
-            init = self.visit_discarded_expression(node.init) if node.init else ""
+        init = self.hip_for_clause(node.init)
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit_discarded_expression(node.update) if node.update else ""
+        update = self.hip_for_clause(node.update)
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
@@ -8684,6 +8705,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return args + self.hip_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise HipLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; HIP references would not copy out separately"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):
@@ -9179,8 +9209,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_BlockNode(self, node) -> str:
-        if hasattr(node, "statements"):
-            self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.add_line("{")
+        self.indent_level += 1
+        try:
+            if hasattr(node, "statements"):
+                self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.add_line("}")
         return ""
 
     def visit_BreakNode(self, node) -> str:
