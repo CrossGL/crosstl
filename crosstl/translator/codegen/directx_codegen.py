@@ -263,6 +263,7 @@ from .hlsl_ray_queries import (
 )
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
+from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
@@ -1691,6 +1692,7 @@ class _DirectXResourceRegisterAllocator(dict):
 class HLSLCodeGen(
     HlslGlslBlockRegisters,
     HLSLNarrowIntegerMixin,
+    HLSLResourceAccessVariantsMixin,
     LoweringRefusalMixin,
     HLSLBfloat16Vectors,
 ):
@@ -3503,7 +3505,9 @@ class HLSLCodeGen(
             getattr(ast, "structs", ()),
         )
         fixed_samplers = fixed_sampler_records(ast)
-        code = self.generate_hlsl_program_with_narrow_pointer_layouts(ast, target_stage)
+        code = self.generate_hlsl_program_with_resource_access_variants(
+            ast, target_stage
+        )
         code = with_hlsl_fixed_samplers(code, fixed_samplers, ast)
         if records:
             code = with_metadata_precondition_header(code, records)
@@ -13223,6 +13227,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_node=None,
         _private_pointer_variant=None,
         _workgroup_pointer_variant=None,
+        _resource_access_variant=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         function_name = getattr(func, "name", None)
@@ -13288,6 +13293,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             finally:
                 self.current_hlsl_workgroup_pointer_variant = previous_variant
                 self.current_hlsl_workgroup_pointer_base_names = previous_base_names
+            return code
+
+        access_variants = self.hlsl_resource_access_function_variants(func)
+        if _resource_access_variant is None and access_variants:
+            previous_promotions = self.current_hlsl_resource_access_promotions
+            code = ""
+            try:
+                for variant in (frozenset(), *access_variants):
+                    self.current_hlsl_resource_access_promotions = (
+                        self.hlsl_resource_access_promotions_for(func, variant)
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_output_lowering=stage_output_lowering,
+                        stage_node=stage_node,
+                        _private_pointer_variant=_private_pointer_variant,
+                        _workgroup_pointer_variant=_workgroup_pointer_variant,
+                        _resource_access_variant=variant,
+                    )
+            finally:
+                self.current_hlsl_resource_access_promotions = previous_promotions
             return code
 
         code = ""
@@ -20205,6 +20235,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 "",
             )
+            # CrossGL spells a storage-buffer pointer parameter `buffer T* p`.
+            if not address_space and "buffer" in qualifiers:
+                address_space = "storage"
         return address_space or None
 
     def hlsl_resource_pointer_parameter(self, parameter):
@@ -20216,6 +20249,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def hlsl_resource_pointer_parameter_access(self, parameter):
+        if self.hlsl_resource_access_promoted(parameter):
+            return "read_write"
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
         access_mode = str(getattr(pointer_type, "access_mode", None) or "").lower()
         access_aliases = {
@@ -46396,6 +46431,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if resource_binding is not None:
                 resource_bindings[index] = resource_binding
+        self.record_hlsl_resource_access_call(
+            workgroup_pointer_func_name, resource_bindings
+        )
         self.hlsl_validate_resource_pointer_call_aliases(
             workgroup_pointer_func_name,
             args,
