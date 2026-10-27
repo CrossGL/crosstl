@@ -692,8 +692,9 @@ def test_the_host_routes_and_audits_stockham_and_rader_ffts():
     assert '"bluestein_fft_mem_"' in port and "fft_bluestein_tables(" in port
     assert 'fft_unported("four-step plans")' not in port
     assert '"four_step_mem_"' in port and "FFTFourStepParams" in port
-    for route in ("Bluestein twiddle-table plans", "multi-upload Bluestein plans"):
-        assert f'fft_unported("{route}")' in port
+    assert 'fft_unported("multi-upload Bluestein plans")' not in port
+    assert "void fft_multi_upload_bluestein(" in port
+    assert 'fft_unported("Bluestein twiddle-table plans")' in port
     assert "void FFT::eval_gpu" in port
     prepare = (HOST / "prepare.py").read_text()
     assert '"crosstl_fft.inc": (HERE / "fft.inc").read_bytes()' in prepare

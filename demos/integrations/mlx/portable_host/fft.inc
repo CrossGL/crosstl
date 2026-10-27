@@ -9,9 +9,10 @@
 // translated bluestein_fft kernel with the tables compute_bluestein_constants
 // builds. Four-step plans of powers of two run fft.cpp's four_step_fft
 // passes, n1 columns into a complex64 temporary and n2 rows out of it, with
-// the translated four_step_fft kernel. Multi-upload Bluestein plans and
-// Bluestein's twiddle-table plans are refused by name before any allocation
-// or launch.
+// the translated four_step_fft kernel, and multi-upload Bluestein plans
+// compose two of those transforms with the copy, unary, binary, padding and
+// concatenation primitives as fft.cpp does. Bluestein's twiddle-table plans
+// are refused by name before any allocation or launch.
 // fft_layout checks each launch against the same plan; the host names each
 // pipeline by fft.cpp's hash name, whose translated entry has the function
 // constants that name implies frozen. crosstl_backend.cpp includes this file
@@ -383,10 +384,127 @@ void fft_op(
     bool inverse,
     bool real,
     const FFTFourStepParams& four_step_params,
-    bool inplace);
+    bool inplace,
+    const Stream& s);
 
-// fft.cpp four_step_fft for powers of two: the n1 pass writes a complex64
-// temporary that the n2 pass reads. Multi-upload Bluestein plans are refused.
+// A view of a one-dimensional table along ``axis`` of ``shape``: fft.cpp's
+// copy_shared_buffer broadcasts of w_k and w_q.
+array fft_axis_broadcast(const array& table, const Shape& shape, size_t axis) {
+  Strides strides(shape.size(), 0);
+  strides[axis] = 1;
+  array view(shape, table.dtype(), nullptr, {});
+  view.copy_shared_buffer(table, strides, {}, table.data_size());
+  return view;
+}
+
+// ``x * scale`` for one scale element: binary_op_gpu's vector-scalar
+// multiply, with the scale broadcast to the output's shape as the portable
+// binary kernels take matching shapes.
+void fft_scale(const array& x, const array& scale, array& out, const Stream& s) {
+  array view(out.shape(), scale.dtype(), nullptr, {});
+  view.copy_shared_buffer(
+      scale, Strides(out.ndim(), 0), {true, out.size() <= 1, out.size() <= 1}, 1);
+  Multiply(s).eval_gpu({x, view}, out);
+}
+
+// fft.cpp multi_upload_bluestein_fft: Bluestein's algorithm past one
+// threadgroup, as fft.cpp composes it from copy, unary, binary, slicing,
+// padding and concatenation primitives around two bluestein_n-point FFTs.
+void fft_multi_upload_bluestein(
+    const array& in,
+    array& out,
+    size_t axis,
+    bool inverse,
+    bool real,
+    const HostFFTPlan& plan,
+    const Stream& s) {
+  const int n = inverse ? out.shape(axis) : in.shape(axis);
+  const auto tables = fft_bluestein_tables(n, plan.bluestein_n);
+  // compute_bluestein_constants' arrays.
+  array w_k({n}, complex64, nullptr, {});
+  w_k.set_data(allocator::malloc(w_k.nbytes()));
+  std::copy(tables.w_k.begin(), tables.w_k.end(), w_k.data<complex64_t>());
+  array w_q({plan.bluestein_n}, complex64, nullptr, {});
+  w_q.set_data(allocator::malloc(w_q.nbytes()));
+  std::copy(tables.w_q.begin(), tables.w_q.end(), w_q.data<complex64_t>());
+
+  auto temp_shape = inverse ? out.shape() : in.shape();
+  array temp(temp_shape, complex64, nullptr, {});
+  array temp1(temp_shape, complex64, nullptr, {});
+  if (real && !inverse) {
+    // float32 -> complex64.
+    AsType(s, complex64).eval_gpu({in}, temp);
+  } else if (real && inverse) {
+    // Rebuild the full Hermitian spectrum: conj(x) followed by x[n/2-1 .. 1]
+    // reversed.
+    const int back_offset = n % 2 == 0 ? 2 : 1;
+    auto slice_shape = in.shape();
+    slice_shape[axis] -= back_offset;
+    array slice_temp(slice_shape, complex64, nullptr, {});
+    array conj_temp(in.shape(), complex64, nullptr, {});
+    Shape rstarts(in.ndim(), 0);
+    Shape rstrides(in.ndim(), 1);
+    rstarts[axis] = in.shape(axis) - back_offset;
+    rstrides[axis] = -1;
+    Conjugate(s).eval_gpu({in}, conj_temp);
+    slice(in, slice_temp, rstarts, rstrides);
+    Concatenate(s, int(axis)).eval_gpu({conj_temp, slice_temp}, temp);
+  } else if (inverse) {
+    Conjugate(s).eval_gpu({in}, temp);
+  } else {
+    temp.copy_shared_buffer(in);
+  }
+
+  const array w_k_broadcast = fft_axis_broadcast(w_k, temp.shape(), axis);
+  Multiply(s).eval_gpu({temp, w_k_broadcast}, temp1);
+
+  auto padded_shape = out.shape();
+  padded_shape[axis] = plan.bluestein_n;
+  array pad_temp(padded_shape, complex64, nullptr, {});
+  const array zero(complex64_t{0.0f, 0.0f});
+  Pad(s, {int(axis)}, {0}, {plan.bluestein_n - n}).eval_gpu({temp1, zero}, pad_temp);
+
+  array pad_temp1(padded_shape, complex64, nullptr, {});
+  fft_op(
+      pad_temp, pad_temp1, axis, /*inverse=*/false, /*real=*/false,
+      FFTFourStepParams(), /*inplace=*/false, s);
+
+  const array w_q_broadcast = fft_axis_broadcast(w_q, pad_temp1.shape(), axis);
+  Multiply(s).eval_gpu({pad_temp1, w_q_broadcast}, pad_temp);
+
+  fft_op(
+      pad_temp, pad_temp1, axis, /*inverse=*/true, /*real=*/false,
+      FFTFourStepParams(), /*inplace=*/true, s);
+
+  const int offset = plan.bluestein_n - (2 * n - 1);
+  Shape starts(in.ndim(), 0);
+  Shape strides(in.ndim(), 1);
+  starts[axis] = plan.bluestein_n - offset - n;
+  array temp2(temp_shape, complex64, nullptr, {});
+  slice(pad_temp1, temp2, starts, strides);
+
+  Multiply(s).eval_gpu({temp2, w_k_broadcast}, temp1);
+
+  if (real && !inverse) {
+    slice(temp1, out, Shape(in.ndim(), 0), strides);
+  } else if (real && inverse) {
+    const array inv_n({1.0f / n}, {1}, float32);
+    array temp_float(out.shape(), out.dtype(), nullptr, {});
+    AsType(s, float32).eval_gpu({temp1}, temp_float);
+    fft_scale(temp_float, inv_n, out, s);
+  } else if (inverse) {
+    const array inv_n({1.0f / n}, {1}, complex64);
+    array temp3(temp_shape, complex64, nullptr, {});
+    Conjugate(s).eval_gpu({temp1}, temp3);
+    fft_scale(temp3, inv_n, out, s);
+  } else {
+    out.copy_shared_buffer(temp1);
+  }
+}
+
+// fft.cpp four_step_fft: for powers of two the n1 pass writes a complex64
+// temporary that the n2 pass reads; any other size runs multi-upload
+// Bluestein.
 void four_step_fft(
     const array& in,
     array& out,
@@ -394,16 +512,18 @@ void four_step_fft(
     bool inverse,
     bool real,
     const HostFFTPlan& plan,
-    bool inplace) {
+    bool inplace,
+    const Stream& s) {
   if (plan.bluestein_n > 0) {
-    fft_unported("multi-upload Bluestein plans");
+    fft_multi_upload_bluestein(in, out, axis, inverse, real, plan, s);
+    return;
   }
   FFTFourStepParams four_step_params{true, true, plan.n1, plan.n2};
   auto temp_shape = (real && inverse) ? out.shape() : in.shape();
   array temp(temp_shape, complex64, nullptr, {});
-  fft_op(in, temp, axis, inverse, real, four_step_params, /*inplace=*/false);
+  fft_op(in, temp, axis, inverse, real, four_step_params, /*inplace=*/false, s);
   four_step_params.first_step = false;
-  fft_op(temp, out, axis, inverse, real, four_step_params, inplace);
+  fft_op(temp, out, axis, inverse, real, four_step_params, inplace, s);
 }
 
 // fft.cpp fft_op.
@@ -414,7 +534,8 @@ void fft_op(
     bool inverse,
     bool real,
     const FFTFourStepParams& four_step_params,
-    bool inplace) {
+    bool inplace,
+    const Stream& s) {
   require_runtime();
   size_t n = out.dtype() == float32 ? out.shape(axis) : in.shape(axis);
   if (n == 1) {
@@ -443,7 +564,7 @@ void fft_op(
   }
   const auto plan = fft_plan(int(n));
   if (plan.four_step) {
-    four_step_fft(in, out, axis, inverse, real, plan, inplace);
+    four_step_fft(in, out, axis, inverse, real, plan, inplace, s);
     return;
   }
   const bool four_step = four_step_params.required;
@@ -576,7 +697,8 @@ void nd_fft_op(
     array& out,
     const std::vector<size_t>& axes,
     bool inverse,
-    bool real) {
+    bool real,
+    const Stream& s) {
   auto temp_shape = inverse ? in.shape() : out.shape();
   std::vector<array> temp_arrs;
   temp_arrs.emplace_back(temp_shape, complex64, nullptr, std::vector<array>{});
@@ -594,7 +716,7 @@ void nd_fft_op(
     const bool step_real = real && index == int(axes.size()) - 1;
     const array& in_arr = i == int(axes.size()) - 1 ? in : temp_arrs[i % 2];
     array& out_arr = i == 0 ? out : temp_arrs[1 - i % 2];
-    fft_op(in_arr, out_arr, axis, inverse, step_real, FFTFourStepParams(), inplace);
+    fft_op(in_arr, out_arr, axis, inverse, step_real, FFTFourStepParams(), inplace, s);
   }
 }
 
@@ -603,9 +725,11 @@ void nd_fft_op(
 void FFT::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto& in = inputs[0];
   if (axes_.size() > 1) {
-    nd_fft_op(in, out, axes_, inverse_, real_);
+    nd_fft_op(in, out, axes_, inverse_, real_, stream());
   } else {
-    fft_op(in, out, axes_[0], inverse_, real_, FFTFourStepParams(), /*inplace=*/false);
+    fft_op(
+        in, out, axes_[0], inverse_, real_, FFTFourStepParams(), /*inplace=*/false,
+        stream());
   }
 }
 
