@@ -244,12 +244,27 @@ ROPE_TESTS = _tests(
 
 # test_fft: 1-D and N-D transforms, zero-padded through complex64 slice
 # updates, norms, strided and transposed inputs, and the vmap and jvp
-# transforms, every size of them a single-threadgroup Stockham plan. The
-# frequency and shift tests run with the operations.
+# transforms; every Stockham, Rader and fused Bluestein size up to 4,096
+# points in batches of 1, 3 and 32; four-step powers of two up to 2**24
+# points; and multi-upload Bluestein sizes up to 18,247 points. The
+# frequency and shift tests run with the operations; test_fft_grads compares
+# against PyTorch, which the host environment does not install.
 FFT_TESTS = _tests(
     "test_fft",
     "TestFFT",
-    ("fft", "fftn", "fft_norm", "fft_contiguity", "fft_vmap", "fft_jvp"),
+    (
+        "fft",
+        "fftn",
+        "fft_norm",
+        "fft_contiguity",
+        "fft_vmap",
+        "fft_jvp",
+        "fft_throws",
+        "fft_shared_mem",
+        "fft_big_powers_of_two",
+        "fft_large_numbers",
+        "fft_into_ifft",
+    ),
 )
 
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.

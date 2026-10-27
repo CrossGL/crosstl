@@ -820,3 +820,13 @@ def test_bluestein_tables_travel_and_are_checked(monkeypatch, tmp_path, entry):
             run(monkeypatch, tmp_path, entry, 2, source, fault)
     with pytest.raises(ValueError, match="length"):
         run(monkeypatch, tmp_path, entry, 2, source, length=46)
+
+
+def test_the_metal_host_binds_the_largest_four_step_pass():
+    # A 2**24-point pass binds 128 MiB of complex64 input and output, each
+    # with its guard tail, past the Metal runtime's 256 MiB default.
+    entry = "four_step_mem_4096_float2_float2_0_false_n4096_inv_0"
+    info = fft_layout.signature(entry)
+    spans = fft_layout.four_step_extents(info, 4096, 4096, 4096)
+    bound = sum(spans.values()) + 2 * fft_dispatch.GUARD_COUNT
+    assert 256 * 1024 * 1024 < bound * 8 <= runtime.METAL_BUFFER_BYTES

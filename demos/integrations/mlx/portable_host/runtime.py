@@ -293,6 +293,9 @@ class Buffer(ctypes.Structure):
 
 
 DISPATCH_VERSION = 3
+# The bytes one Metal dispatch may bind: two 128 MiB passes of MLX's largest
+# four-step FFT, with their guards, fit.
+METAL_BUFFER_BYTES = 1 << 30
 
 
 class Launch(ctypes.Structure):
@@ -816,9 +819,15 @@ class HostRuntime:
         elif self.target == "metal":
             # An explicit resolver gives this session its own helper, built
             # once, instead of re-keying the shared helper on the toolchain
-            # with three xcrun lookups before every dispatch.
+            # with three xcrun lookups before every dispatch. The largest
+            # launches MLX makes, the two passes of a 2**24-point four-step
+            # FFT, bind 128 MiB inputs and outputs, past the runtime's
+            # default 256 MiB limit; MLX's own Metal allocations are bounded
+            # by the device instead.
             adapter = MetalRuntimeParityAdapter(
-                runtime=MetalComputeRuntime(tool_resolver=shutil.which),
+                runtime=MetalComputeRuntime(
+                    tool_resolver=shutil.which, max_buffer_bytes=METAL_BUFFER_BYTES
+                ),
                 reuse_validated_modules=True,
             )
         else:

@@ -2320,9 +2320,28 @@ with a reference gradient composed from axis scatters of (4, 7, 4096) outputs,
 which the host splits into launches. The linear-algebra factorizations run on
 the MLX CPU stream, as upstream directs; their operands, products and checks
 run through the host. The other tests of these modules are not part of the
-group: the FFT tests need an FFT port, `test_init`'s identity and sparse
-initializers need scatters of more element types, and the einsum test sweep
-needs long-column reductions.
+group: `test_fft`'s transform tests run in the `fft` group, `test_init`'s
+identity and sparse initializers need scatters of more element types, and the
+einsum test sweep needs long-column reductions.
+The `fft` group runs `test_fft`'s transform tests through `fft.inc`, a port of
+`fft.cpp`: `FFT::eval_gpu` plans every 1-D transform as `plan_fft` does and
+names each launch by fft.cpp's pipeline hash name, whose translated entry has
+the function constants that name implies frozen (`fft_layout`). Stockham,
+Rader and fused Bluestein plans up to 4,096 points run one threadgroup per
+batch of transforms through the translated `fft`, `rader_fft` and
+`bluestein_fft` kernels, with the Rader and Bluestein tables
+`compute_raders_constants` and `compute_bluestein_constants` build on the CPU;
+the host checks each table against its double-precision value. Powers of two
+past 4,096 points run fft.cpp's two `four_step_fft` passes through a complex64
+temporary, and other sizes past one threadgroup run `multi_upload_bluestein_fft`
+from those transforms and the copy, unary, binary, padding and concatenation
+primitives. Threadgroups with more than 64 threads per transform launch at the
+linearized workgroup size the translated entry declares on Direct3D and OpenGL.
+Bluestein's twiddle-table plans (batches of 1,024 or more complex Bluestein
+transforms of 1,025 to 2,048 points) are refused by name; `test_fft_grads`
+compares against PyTorch, which the host environment does not install. The
+Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
+2**24-point pass.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
 `test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
 `cross_entropy.metal`:
