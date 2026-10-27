@@ -7,7 +7,7 @@ The source AST is retained.
 """
 
 from copy import copy, deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..arithmetic_conversions import (
     ArithmeticScalarKind,
@@ -58,6 +58,12 @@ from ..ast import (
 )
 from .array_utils import evaluate_literal_int_expression
 from .resource_origins import ResourceOriginAnalysis
+from .resource_storage_views import (
+    combined_load,
+    restorable_view,
+    storage_view,
+    view_load,
+)
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -80,6 +86,12 @@ class _Pointer:
     space: str
     writable: bool
     readable: bool
+
+
+# CrossGL spellings of the 16-bit floating storage types.
+_NARROW_FLOAT_ELEMENTS = frozenset({"float16", "bfloat16"})
+# Other spellings of binary16 that type aliases may name.
+_BINARY16_SPELLINGS = frozenset({"f16", "half"})
 
 
 @dataclass(frozen=True)
@@ -214,7 +226,9 @@ def _call(name, args):
 
 
 def _integer(value):
-    return LiteralNode(value, "int")
+    # A typed literal lets target range proofs compare it with the typed identity
+    # member, so a view's proven identity decides the accessor branch it takes.
+    return LiteralNode(value, PrimitiveType("int"))
 
 
 def _member(value, name):
@@ -448,6 +462,7 @@ class _Lowering:
         self.workgroup_roots = {}
         self.workgroup_declarations = []
         self.resource_origins = {}
+        self.storage_origins = {}
         self.structs = {}
         for node in ast.walk():
             if isinstance(node, StructNode):
@@ -519,6 +534,13 @@ class _Lowering:
                 raise ResourceAggregateError("aggregate-buffer-abi", buffer)
         self.handles = {}
         self.helpers = {}
+        # (view element, space) -> storage elements some view reads. The
+        # origin analysis infers every reachable expression, and so registers
+        # every view, before any helper is built.
+        self.storage_views = {}
+        # (element, space) -> elements some view of its handles yields.
+        self.view_targets = {}
+        self.viewed_loads = set()
         self.generated = []
         self.entry_handles = {
             param.name: self.fresh(f"crosstl_reference_{param.name}")
@@ -600,13 +622,19 @@ class _Lowering:
             if isinstance(element, PointerType):
                 continue
             numeric = _numeric(element)
+            # Binary16 and bfloat16 scalars keep their own element type; the
+            # target backends already lay out and convert shared 16-bit arrays.
+            narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
             if (
                 extent is None
                 or extent <= 0
-                or numeric is None
-                or numeric.bits != 32
-                or numeric.lanes not in {1, 2, 4}
-                or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                or not narrow_float
+                and (
+                    numeric is None
+                    or numeric.bits != 32
+                    or numeric.lanes not in {1, 2, 4}
+                    or numeric.kind == ArithmeticScalarKind.BOOLEAN
+                )
             ):
                 raise ResourceAggregateError(
                     (
@@ -731,6 +759,34 @@ class _Lowering:
                 *([] if pointer.readable else ["writeonly"]),
             ],
         }
+
+    def storage_read(self, pointer, owner, call):
+        """Record the bindings a storage load can read when origins are proven.
+
+        A load helper selects its binding by the handle's identity, so a handle
+        whose origins are proven reads only those bindings. Uniformity proofs
+        then need only those bindings to be immutable, not every binding of
+        the element type. ``call.storage_reads`` names them in the call's
+        argument spelling; the helper body itself is unchanged.
+        """
+        origins = self.storage_origins.get(id(owner))
+        if pointer.space == "threadgroup" or not origins:
+            return call
+        names = []
+        for identity in sorted(origins):
+            if not 0 <= identity < len(self.resources):
+                return call
+            _param, resource, name = self.resources[identity]
+            if (
+                resource.space == "threadgroup"
+                or resource.element != pointer.element
+                or resource.space != pointer.space
+                or not resource.readable
+            ):
+                return call
+            names.append(name)
+        call.storage_reads = tuple(names)
+        return call
 
     def resource_arguments(self):
         return [
@@ -1051,6 +1107,8 @@ class _Lowering:
             return node.literal_type
         if isinstance(node, CastNode):
             return self.source_type(node.target_type)
+        if isinstance(node, PointerReinterpretNode):
+            return self.pointer_view(node, env)
         if isinstance(node, IdentifierNode):
             return env.get(node.name)
         if isinstance(node, MemberAccessNode):
@@ -1123,6 +1181,138 @@ class _Lowering:
                 return left
             return self.arithmetic_result(left, right, "?:")
         return None
+
+    def pointer_view(self, node, env):
+        """The pointer a reinterpretation in one address space yields.
+
+        A view keeps the source's allocation and grants at most the access
+        both pointers grant, so an access the source lacks fails where it is
+        made. A view of the same element changes no byte and is the source
+        pointer itself. A view of another element is a narrowing integer view
+        of device or constant storage (see ``resource_storage_views``), or a
+        widening view whose elements every storage the source names holds
+        whole or in adjacent narrower elements; both are read-only. Any other
+        reinterpretation stays unknown.
+        """
+        source = self.infer(node.expression, env)
+        if not isinstance(source, _Pointer):
+            return None
+        try:
+            target = _pointer_type(node.target_type)
+        except ResourceAggregateError:
+            return None
+        if not isinstance(target, _Pointer) or target.space != source.space:
+            return None
+        readable = source.readable and target.readable
+        if target.element == source.element:
+            return replace(
+                source, writable=source.writable and target.writable, readable=readable
+            )
+        if source.space == "threadgroup":
+            return None
+        space = source.space
+        storages = self.storage_views.get((source.element, space), set())
+        if storage_view(source.element, target.element) is None:
+            if not self.widening_view(source, target, storages):
+                return None
+            if self.binds_element(source.element, space):
+                # Handles of the narrow element may name its own bindings.
+                storages = {source.element, *storages}
+        else:
+            # A narrowing view reads the source's own bindings too.
+            storages = {source.element, *storages}
+        self.view_targets.setdefault((source.element, space), set()).add(target.element)
+        for storage in sorted(storages):
+            self.register_view(storage, target.element, space, node)
+        return _Pointer(target.element, space, False, readable)
+
+    def register_view(self, storage, element, space, node):
+        """Record that ``element`` handles in ``space`` may name ``storage``.
+
+        Handles viewed from ``element`` handles carry the same identities, so
+        the storage reaches every element viewed from it as well.
+        """
+        if storage == element:
+            # The handle's own element: load helpers read it directly.
+            return
+        if not restorable_view(storage, element):
+            # Neither whole nor adjacent storage elements form the element.
+            raise ResourceAggregateError("widened-narrow-storage", node)
+        key = element, space
+        viewed = self.storage_views.setdefault(key, set())
+        if storage in viewed:
+            return
+        if key in self.viewed_loads:
+            # A load helper of this element no longer covers every view.
+            raise ResourceAggregateError("late-storage-view", node)
+        viewed.add(storage)
+        for target in sorted(self.view_targets.get(key, ())):
+            self.register_view(storage, target, space, node)
+
+    def widening_view(self, source, target, storages):
+        """Whether ``target`` handles can restore what ``source`` handles view.
+
+        A ``source`` handle names a binding of its own element or a storage a
+        narrowing view of it reads (``storages``). The handle's offset divides
+        into ``target`` elements, which each such storage holds whole or as
+        adjacent unsigned narrower elements that a load combines. An offset
+        that does not divide is a misaligned ``target`` pointer, whose use
+        C++, and so MSL, leaves undefined.
+        """
+        if storage_view(target.element, source.element) is None:
+            return False
+        if self.binds_element(source.element, source.space):
+            storages = {source.element, *storages}
+        return bool(storages) and all(
+            restorable_view(storage, target.element) for storage in storages
+        )
+
+    def binds_element(self, element, space):
+        return any(
+            resource.element == element and resource.space == space
+            for _param, resource, _name in self.resources
+        )
+
+    def view_helper(self, source, target):
+        """A helper turning a ``source`` handle into a ``target`` view handle.
+
+        A narrowing view counts ``ratio`` view elements per source element; a
+        widening view divides the offset back into its wider elements.
+        """
+        view = storage_view(source.element, target.element)
+        if view is None:
+            view = storage_view(target.element, source.element)
+            operator = "/"
+        else:
+            operator = "*"
+        key = (source.element, target.element), "view", None
+        if key in self.helpers:
+            return self.helpers[key]
+        name = self.fresh(f"crosstl_resource_view_{source.element}_as_{target.element}")
+        self.helpers[key] = name
+        handle = self.target_type(target)
+        reference = _member(_id("reference"), "identity")
+        offset = _member(_id("reference"), "offset")
+        body = [
+            VariableNode("view", handle),
+            AssignmentNode(_member(_id("view"), "identity"), reference),
+            AssignmentNode(
+                _member(_id("view"), "offset"),
+                BinaryOpNode(
+                    offset, operator, _call("int64_t", [_integer(view.ratio)])
+                ),
+            ),
+            ReturnNode(_id("view")),
+        ]
+        function = FunctionNode(
+            name,
+            handle,
+            [ParameterNode("reference", self.target_type(source))],
+            BlockNode(body),
+        )
+        function.resource_aggregate_nonmutating = True
+        self.generated.append(function)
+        return name
 
     def arithmetic_result(self, left, right, operator):
         left, right = _numeric(left), _numeric(right)
@@ -1218,12 +1408,17 @@ class _Lowering:
                     raise ResourceAggregateError("write-through-readonly-pointer")
                 params.append(ParameterNode("value", PrimitiveType(pointer.element)))
             params.extend(self.resource_parameters())
+            # Read-only loads also read the storage views of this element.
+            viewed = set()
+            if operation == "load" and not pointer.writable:
+                self.viewed_loads.add((pointer.element, pointer.space))
+                viewed = self.storage_views.get((pointer.element, pointer.space), set())
             candidates = [
-                (index, resource_name)
+                (index, resource_name, resource.element)
                 for index, (_param, resource, resource_name) in enumerate(
                     self.resources
                 )
-                if resource.element == pointer.element
+                if (resource.element == pointer.element or resource.element in viewed)
                 and resource.space == pointer.space
                 and (operation != "store" or resource.writable)
                 and (operation != "load" or resource.readable)
@@ -1232,13 +1427,25 @@ class _Lowering:
             if not candidates:
                 raise ResourceAggregateError("missing-compatible-resource")
             body = []
-            for index, resource_name in candidates:
-                access = ArrayAccessNode(
-                    _id(resource_name),
-                    BinaryOpNode(
-                        _member(_id("reference"), "offset"), "+", _id("index")
-                    ),
+            for index, resource_name, element in candidates:
+                position = BinaryOpNode(
+                    _member(_id("reference"), "offset"), "+", _id("index")
                 )
+                if element == pointer.element:
+                    access = ArrayAccessNode(_id(resource_name), position)
+                elif storage_view(element, pointer.element) is not None:
+                    access = view_load(
+                        storage_view(element, pointer.element),
+                        _id(resource_name),
+                        position,
+                    )
+                else:
+                    # Only read-only loads reach the storage of a widening view.
+                    access = combined_load(
+                        storage_view(pointer.element, element),
+                        _id(resource_name),
+                        position,
+                    )
                 statements = (
                     [ReturnNode(access)]
                     if operation == "load"
@@ -1517,14 +1724,24 @@ class _Lowering:
         ):
             raise ResourceAggregateError("record-copy-layout", node)
         backing = _numeric(src.element)
+        # Copies move whole backing elements: 16-bit floating or 32-bit scalars.
+        element_bytes = (
+            2
+            if src.element in _NARROW_FLOAT_ELEMENTS
+            else (
+                4
+                if backing is not None
+                and backing.bits == 32
+                and backing.lanes == 1
+                and backing.kind != ArithmeticScalarKind.BOOLEAN
+                else None
+            )
+        )
         if (
             src.element != dst.element
-            or backing is None
-            or backing.bits != 32
-            or backing.lanes != 1
-            or backing.kind == ArithmeticScalarKind.BOOLEAN
-            or alignment > 4
-            or extent % 4
+            or element_bytes is None
+            or alignment > element_bytes
+            or extent % element_bytes
         ):
             raise ResourceAggregateError("record-copy-backing-layout", node)
         if any(
@@ -1567,7 +1784,7 @@ class _Lowering:
             )
         minimum = max(assertion.minimum for assertion in matches)
         maximum = min(assertion.maximum for assertion in matches)
-        words = extent // 4
+        words = extent // element_bytes
         if minimum > maximum or maximum - minimum + 1 < words:
             raise ResourceAggregateError(
                 "record-copy-conflicting-access-assertions", node
@@ -1825,13 +2042,17 @@ class _Lowering:
         access = self.access(node, env)
         if access is not None:
             pointer, owner, index = access
-            return _call(
-                self.helper(pointer, "load", self.resource_origins.get(id(owner))),
-                [
-                    self.expression(owner, env),
-                    _call("int64_t", [self.expression(index, env)]),
-                    *self.resource_arguments(),
-                ],
+            return self.storage_read(
+                pointer,
+                owner,
+                _call(
+                    self.helper(pointer, "load", self.resource_origins.get(id(owner))),
+                    [
+                        self.expression(owner, env),
+                        _call("int64_t", [self.expression(index, env)]),
+                        *self.resource_arguments(),
+                    ],
+                ),
             )
         if isinstance(node, BinaryOpNode):
             left_type, right_type = self.infer(node.left, env), self.infer(
@@ -2027,6 +2248,12 @@ class _Lowering:
                 self.expression(node.false_expr, env, expected),
                 source_location=location,
             )
+        if isinstance(node, PointerReinterpretNode) and isinstance(actual, _Pointer):
+            source = self.infer(node.expression, env)
+            value = self.expression(node.expression, env)
+            if source.element == actual.element:
+                return value
+            return _call(self.view_helper(source, actual), [value])
         if isinstance(node, (CastNode, PointerReinterpretNode)) and (
             self.contains_reference(self.infer(node.expression, env))
             or self.contains_reference(self.source_type(node.target_type))
@@ -2063,6 +2290,9 @@ class _Lowering:
             return ExpressionStatementNode(
                 record_copy, source_location=node.source_location
             )
+        step = self.pointer_step(expression, env)
+        if step is not None:
+            return ExpressionStatementNode(step, source_location=node.source_location)
         if isinstance(node, BlockNode):
             scoped = dict(env)
             return BlockNode(
@@ -2139,7 +2369,8 @@ class _Lowering:
             return ForNode(
                 self.statement(node.init, scoped),
                 self.expression(node.condition, scoped),
-                self.expression(node.update, scoped),
+                self.pointer_step(node.update, scoped)
+                or self.expression(node.update, scoped),
                 self.statement(node.body, scoped),
                 source_location=node.source_location,
             )
@@ -2163,6 +2394,25 @@ class _Lowering:
             result.default_case = self.statement(node.default_case, scoped)
             return result
         return self.expression(node, env)
+
+    def pointer_step(self, node, env):
+        """A pointer increment or decrement whose value is discarded.
+
+        It advances the handle's offset by one element. An increment whose
+        value is used still fails closed in ``expression``.
+        """
+        if not (
+            isinstance(node, UnaryOpNode)
+            and node.operator in {"++", "--"}
+            and isinstance(self.infer(node.operand, env), _Pointer)
+        ):
+            return None
+        return AssignmentNode(
+            _member(self.expression(node.operand, env), "offset"),
+            _call("int64_t", [_integer(1)]),
+            "+=" if node.operator == "++" else "-=",
+            source_location=getattr(node, "source_location", None),
+        )
 
     def default_state(self, type_, valid=False):
         if isinstance(type_, _Pointer):
@@ -2696,8 +2946,12 @@ class _Lowering:
             for node in self.ast.walk()
         ):
             self.verify_definite_assignment()
+        origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+        # Device helpers keep every compatible binding; proven origins only
+        # annotate their reads (see ``storage_read``).
+        self.storage_origins = origins
         if any(isinstance(node, PointerReinterpretNode) for node in self.ast.walk()):
-            self.resource_origins = ResourceOriginAnalysis(self, _Pointer).analyze()
+            self.resource_origins = origins
         # Bind calls to distinct symbols before pointer handles erase access and
         # address-space differences between source overloads.
         for name, overloads in self.functions.items():
@@ -2936,6 +3190,56 @@ class _Lowering:
                 del candidates[name]
 
 
+def _resolve_narrow_float_aliases(ast):
+    """Spell aliases of 16-bit floating scalars by their CrossGL type.
+
+    Resource identity compares pointee names, so ``bfloat16_t*`` members must
+    match ``bfloat16`` entry buffers, and ``float16_t*`` members, whose alias
+    may name binary16 as ``half`` or ``f16``, ``float16`` ones. Other aliases
+    keep their spelling.
+    """
+    declared = {
+        variable.name: variable.var_type
+        for variable in getattr(ast, "global_variables", ())
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    aliases = {}
+    for name in sorted(declared):
+        target, seen = declared[name], {name}
+        while (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and target.name in declared
+            and target.name not in seen
+        ):
+            seen.add(target.name)
+            target = declared[target.name]
+        if (
+            isinstance(target, (PrimitiveType, NamedType))
+            and not getattr(target, "generic_args", None)
+            and getattr(target, "size_bits", None) is None
+        ):
+            if target.name in _NARROW_FLOAT_ELEMENTS:
+                aliases[name] = target.name
+            elif target.name in _BINARY16_SPELLINGS:
+                aliases[name] = "float16"
+    if not aliases:
+        return
+    declarations = {
+        id(variable.var_type)
+        for variable in ast.global_variables
+        if isinstance(variable, VariableNode) and variable.is_type_alias
+    }
+    for node in ast.walk():
+        if (
+            isinstance(node, (PrimitiveType, NamedType))
+            and id(node) not in declarations
+            and not getattr(node, "generic_args", None)
+            and node.name in aliases
+        ):
+            node.name = aliases[node.name]
+
+
 def lower_resource_aggregates(
     ast, *, storage_pointer_parameters=False, workgroup_access_assertions=()
 ):
@@ -2952,6 +3256,7 @@ def lower_resource_aggregates(
     if len(stages) != 1 or _name(stages[0].stage).lower() != "compute":
         return ast
     result = deepcopy(ast)
+    _resolve_narrow_float_aliases(result)
     entry = list(result.stages.values())[0].entry_point
     return _Lowering(
         result, entry, storage_pointer_parameters, workgroup_access_assertions

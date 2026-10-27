@@ -286,10 +286,18 @@ def test_helper_provenance_does_not_inherit_entry_bounds(tmp_path, target):
     }
     """
     start = SOURCE.index("    uint result = 0;")
+    # The helper receives an unbounded input, so only the copied provenance,
+    # never its call, could name the entry's bounded one.
     source = (
         SOURCE[:start]
-        + "    output[group.x * 64 + lane + 4] = collect(axis_size, lane);\n}\n"
+        + "    output[group.x * 64 + lane + 4] = collect(other, lane);\n}\n"
     )
+    source = source.replace(
+        "constant size_t& axis_size [[buffer(1)]],",
+        "constant size_t& axis_size [[buffer(1)]],\n"
+        "                      constant size_t& other [[buffer(2)]],",
+    )
+    assert "other [[buffer(2)]]" in source
     source = source.replace("kernel void", helper + "kernel void")
     generator, ast, records = _generator_with_metadata(tmp_path, target, source)
     entries = (

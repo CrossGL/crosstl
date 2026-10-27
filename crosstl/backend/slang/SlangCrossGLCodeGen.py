@@ -3,9 +3,11 @@
 import re
 from decimal import Decimal, InvalidOperation
 
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
+from .slang_matrix_import import SlangMatrixImportMixin
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -31,7 +33,7 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter:
+class SlangToCrossGLConverter(SlangMatrixImportMixin):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -718,6 +720,9 @@ class SlangToCrossGLConverter:
         self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
+        self.reset_matrix_import_state(
+            ast, [*ast.structs, *local_structs, *exported_structs]
+        )
         self.sampleable_resource_scopes = [set(resource_types)]
         self.sampleable_resource_type_scopes = [resource_types]
         self.storage_image_resource_scopes = [set(storage_image_types)]
@@ -751,9 +756,13 @@ class SlangToCrossGLConverter:
         for node in [*ast.structs, *local_structs]:
             if self.is_forward_struct_declaration(node):
                 continue
+            if getattr(node, "is_block_declaration", False):
+                # Written in its block by generate_function_body.
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
+                    code += self.matrix_layout_attributes(member, 2)
                     code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
@@ -786,21 +795,18 @@ class SlangToCrossGLConverter:
                 code += self.generate_function(func)
 
         code += "}\n"
+        setters = self.generate_matrix_row_setters()
+        if setters:
+            head = "shader main {\n"
+            start = code.index(head) + len(head)
+            code = code[:start] + setters + code[start:]
         return code
 
     def generate_typedef(self, node):
+        # CrossGL reads only the C spelling as an alias; ``typealias A = B;``
+        # would declare nothing and leave every use of ``A`` undeclared (#3309).
         original_type = self.map_type(node.original_type)
-        new_type = node.new_type
-        if self.requires_typealias_spelling(original_type):
-            return f"typealias {new_type} = {original_type};"
-        return f"typedef {original_type} {new_type};"
-
-    def requires_typealias_spelling(self, type_name):
-        type_name = str(type_name)
-        return (
-            type_name not in self.CROSSGL_BUILTIN_TYPE_NAMES
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name) is not None
-        )
+        return f"typedef {original_type} {node.new_type};"
 
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
@@ -1156,6 +1162,7 @@ class SlangToCrossGLConverter:
                 code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
                     member_name = self.format_struct_member_name(node, member.name)
+                    code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
                         f"{self.format_array_suffixes(member)};\n"
@@ -1169,6 +1176,7 @@ class SlangToCrossGLConverter:
     def generate_glsl_storage_block(self, node):
         code = f"    struct {self.format_struct_declaration_name(node)} {{\n"
         for member in node.members:
+            code += self.matrix_layout_attributes(member, 2)
             code += f"        {self.generate_struct_member(node, member)};\n"
         code += "    }\n"
         for instance in getattr(node, "instances", []) or []:
@@ -1177,7 +1185,8 @@ class SlangToCrossGLConverter:
 
     def generate_function(self, func, indent=1):
         """Render one Slang function node as a CrossGL function."""
-        code = " "
+        code = self.generate_function_attributes(func)
+        code += " "
         code += "  " * indent
         self.push_identifier_scope()
         self.push_variable_type_scope(func.params)
@@ -1211,6 +1220,26 @@ class SlangToCrossGLConverter:
         self.pop_sampleable_resource_scope()
         self.pop_variable_type_scope()
         self.pop_identifier_scope()
+        return code
+
+    def generate_function_attributes(self, func):
+        """Carry the function attributes CrossGL keeps on an entry point.
+
+        ``[WaveSize(...)]`` (the single and the range forms) is written as ``@ WaveSize(...)``, as the HLSL import
+        writes it, so each target generator writes or refuses it instead of the lane count being dropped.
+        """
+        code = ""
+        for attribute in getattr(func, "attributes", []) or []:
+            if str(attribute.get("name", "")).lower() != "wavesize":
+                continue
+            arguments = [
+                str(argument).strip()
+                for argument in attribute.get("arguments", []) or []
+            ]
+            if arguments:
+                code += f"    @ WaveSize({', '.join(arguments)})\n"
+            else:
+                code += "    @ WaveSize\n"
         return code
 
     def collect_unnamed_parameter_names(self, params):
@@ -1277,9 +1306,24 @@ class SlangToCrossGLConverter:
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        }
+        if names & {"ref", "__ref"}:
+            # A Slang ref parameter names the caller's storage (Slang language reference, "ref" parameters);
+            # CrossGL inout copies in and copies out, which differs whenever the argument aliases other storage.
+            raise SlangImportRefused(
+                [
+                    f"ref parameter {param.name} binds the caller's storage; CrossGL "
+                    "has only copy-in/copy-out inout parameters"
+                ]
+            )
         if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+            # out and inout carry the parameter's direction for every function, not only for entry points.
+            allowed_qualifiers = {"out", "inout"}
+        else:
+            allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
@@ -1308,6 +1352,11 @@ class SlangToCrossGLConverter:
         for stmt in body:
             if isinstance(stmt, DeferNode):
                 deferred_statements.append(stmt.body)
+                continue
+            if isinstance(stmt, StructNode) and getattr(
+                stmt, "is_block_declaration", False
+            ):
+                code += self.generate_block_struct(stmt, indent)
                 continue
             if isinstance(stmt, StructNode) and getattr(
                 stmt, "is_local_declaration", False
@@ -1393,8 +1442,40 @@ class SlangToCrossGLConverter:
                 code += self.generate_jump_statement("continue", stmt) + "\n"
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
+            elif isinstance(stmt, TypedefNode):
+                code += f"{self.generate_typedef(stmt)}\n"
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
+
+    def generate_block_struct(self, node, indent):
+        """Write a structure declared in a function body as a CrossGL block-scoped structure."""
+        unsupported = [
+            label
+            for label, field in (
+                ("member functions", "methods"),
+                ("nested type aliases", "typedefs"),
+                ("nested enumerations", "enums"),
+                ("nested structures", "structs"),
+                ("generic parameters", "generic_parameters"),
+                ("interface conformances", "conformances"),
+            )
+            if getattr(node, field, None)
+        ]
+        if unsupported:
+            raise SlangImportRefused(
+                [
+                    f"Slang structure '{node.name}' declared in a function body has "
+                    f"{' and '.join(unsupported)}, which a CrossGL block-scoped "
+                    "structure does not carry"
+                ]
+            )
+        pad = "    " * indent
+        code = f"{pad}struct {self.format_struct_declaration_name(node)} {{\n"
+        for member in node.members:
+            code += self.matrix_layout_attributes(member, indent + 1)
+            code += f"{pad}    {self.generate_struct_member(node, member)};\n"
+        # The semicolon keeps a following statement from reading as a declarator.
+        return code + f"{pad}}};\n"
 
     def generate_statement_label(self, stmt, indent=0):
         label = getattr(stmt, "label", None)
@@ -1566,19 +1647,32 @@ class SlangToCrossGLConverter:
     def generate_assignment(self, node, is_main):
         if isinstance(node.left, VariableNode) and node.left.vtype:
             self.register_identifier_declaration(node.left)
+        self.record_inferred_matrix_type(node)
+        lowered = self.matrix_assignment_expression(node, is_main)
+        if lowered is not None:
+            return lowered
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_global_variable(self, node):
+        declaration = node.left if isinstance(node, AssignmentNode) else node
+        layout = self.matrix_layout_attributes(declaration, 1)
         if isinstance(node, AssignmentNode):
             left = self.generate_variable_declaration(
                 node.left, has_initializer=True, initializer=node.right
             )
-            right = self.generate_expression(node.right, False)
-            return f"    {left} {node.operator} {right};\n"
-        return f"    {self.generate_variable_declaration(node)};\n"
+            right = self.matrix_initializer_expression(
+                node.left.vtype,
+                len(getattr(node.left, "array_sizes", None) or []),
+                node.right,
+                False,
+            )
+            if right is None:
+                right = self.generate_expression(node.right, False)
+            return f"{layout}    {left} {node.operator} {right};\n"
+        return f"{layout}    {self.generate_variable_declaration(node)};\n"
 
     def generate_variable_declaration(
         self, node, has_initializer=False, initializer=None
@@ -1825,6 +1919,9 @@ class SlangToCrossGLConverter:
             left = f"({left})"
         if self.binary_child_needs_parentheses(expr.op, expr.right, True):
             right = f"({right})"
+        product = self.matrix_product_expression(expr, left, right)
+        if product is not None:
+            return product
         return f"{left} {expr.op} {right}"
 
     def maybe_parenthesize_expression(self, expr, rendered):
@@ -1879,13 +1976,20 @@ class SlangToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
+            lowered = self.matrix_assignment_expression(expr, is_main)
+            if lowered is not None:
+                return lowered
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, CastNode):
+            matrix_cast = self.matrix_cast_expression(expr, is_main)
+            if matrix_cast is not None:
+                return matrix_cast
             value = self.generate_expression(expr.expression, is_main)
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
+            self.refuse_matrix_row_update(expr)
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
                 operand = f"({operand})"
@@ -1902,6 +2006,11 @@ class SlangToCrossGLConverter:
             function_name, is_hlsl_namespace_builtin = (
                 self.canonical_function_call_name(expr.name)
             )
+            matrix_value = self.matrix_constructor_expression(
+                function_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
             mul_call = self.generate_hlsl_mul_call(expr, is_main, function_name)
             if mul_call is not None:
                 return mul_call
@@ -1985,6 +2094,9 @@ class SlangToCrossGLConverter:
             qualified_name = self.member_access_qualified_name(expr)
             if qualified_name and self.lookup_variable_type(qualified_name):
                 return self.format_identifier(qualified_name)
+            matrix_member = self.matrix_member_expression(expr, is_main)
+            if matrix_member is not None:
+                return matrix_member
             obj = self.generate_expression(expr.object, is_main)
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
@@ -1992,6 +2104,9 @@ class SlangToCrossGLConverter:
                 obj = f"({obj})"
             return f"{obj}.{self.format_member_access_name(expr)}"
         elif isinstance(expr, ArrayAccessNode):
+            matrix_index = self.matrix_index_expression(expr, is_main)
+            if matrix_index is not None:
+                return matrix_index
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_subscript_index(expr.index, is_main)
             return f"{array}[{index}]"
@@ -2012,6 +2127,11 @@ class SlangToCrossGLConverter:
             )
             return f"{{{elements}}}"
         elif isinstance(expr, VectorConstructorNode):
+            matrix_value = self.matrix_constructor_expression(
+                expr.type_name, expr.args, is_main
+            )
+            if matrix_value is not None:
+                return matrix_value
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -2063,8 +2183,12 @@ class SlangToCrossGLConverter:
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
         if not float_like and integer_suffix:
-            return self.normalize_integer_suffix(body, integer_suffix)
-        if not float_like or integer_suffix:
+            return crossgl_legacy_octal(
+                self.normalize_integer_suffix(body, integer_suffix)
+            )
+        if not float_like:
+            return crossgl_legacy_octal(value)
+        if integer_suffix:
             return value
 
         try:
@@ -2101,6 +2225,9 @@ class SlangToCrossGLConverter:
             differential_type = self.map_associated_differential_type(slang_type)
             if differential_type:
                 return f"{differential_type}{pointer_suffix}"
+            matrix_type = self.map_slang_matrix_type(slang_type)
+            if matrix_type:
+                return f"{matrix_type}{pointer_suffix}"
             generic_vector_or_matrix = self.map_generic_vector_or_matrix_type(
                 slang_type
             )
@@ -2248,6 +2375,9 @@ class SlangToCrossGLConverter:
         return f"{prefix}{vector_size}"
 
     def map_generic_matrix_type(self, slang_type):
+        matrix_type = self.map_slang_matrix_type(slang_type)
+        if matrix_type:
+            return matrix_type
         args = self.generic_type_arguments(slang_type)
         if len(args) != 3:
             return None
@@ -2431,7 +2561,9 @@ class SlangToCrossGLConverter:
 
         def visit_statement(statement):
             if isinstance(statement, StructNode):
-                if getattr(statement, "is_local_declaration", False):
+                if getattr(statement, "is_local_declaration", False) or getattr(
+                    statement, "is_block_declaration", False
+                ):
                     marker = id(statement)
                     if marker not in seen:
                         seen.add(marker)
@@ -2473,16 +2605,19 @@ class SlangToCrossGLConverter:
             if name is not None and vtype:
                 scope[name] = vtype
         self.variable_type_scopes.append(scope)
+        self.push_matrix_rank_scope(params)
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+        self.pop_matrix_rank_scope()
 
     def register_variable_type(self, node):
         name = getattr(node, "name", None)
         vtype = getattr(node, "vtype", None)
         if name is not None and vtype:
             self.variable_type_scopes[-1][name] = vtype
+            self.record_matrix_rank(node)
 
     def push_sampleable_resource_scope(self, params):
         scope = set()

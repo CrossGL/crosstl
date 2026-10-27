@@ -50,10 +50,58 @@ CASES = {
     ),
     "zero-trip": ("++i, ++position", "result += position;", 0, 0, 0),
 }
+# Initializers that declare several loop variables:
+# (init, update, body, limit, result, position, outer i).
+INIT_CASES = {
+    "declarators": (
+        "int i = 0, step = 2",
+        "++i, position += step",
+        "result += position;",
+        4,
+        12,
+        8,
+        91,
+    ),
+    "narrow-declarators": (
+        "short i = 0, step = 3",
+        "++i, position += step",
+        "result += i * step;",
+        4,
+        18,
+        12,
+        91,
+    ),
+    "dependent-declarators": (
+        "int i = 1, j = i * 2",
+        "++i, j += i",
+        "result += j;",
+        4,
+        13,
+        0,
+        91,
+    ),
+    "zero-trip-declarators": (
+        "int i = 0, step = 2",
+        "++i, position += step",
+        "result += position;",
+        0,
+        0,
+        0,
+        91,
+    ),
+}
+ALL_CASES = [*CASES, *INIT_CASES]
+
+
+def _case(case):
+    if case in INIT_CASES:
+        return INIT_CASES[case]
+    update, body, limit, result, position = CASES[case]
+    return ("int i = 0", update, body, limit, result, position, 91)
 
 
 def _source(case):
-    update, body, _, _, _ = CASES[case]
+    init, update, body, *_ = _case(case)
     return f"""#include <metal_stdlib>
 using namespace metal;
 kernel void loop_updates(const device int* limits [[buffer(0)]],
@@ -62,7 +110,7 @@ kernel void loop_updates(const device int* limits [[buffer(0)]],
     int i = 91;
     int position = 0;
     int result = 0;
-    for (int i = 0; i < limits[tid]; {update}) {{
+    for ({init}; i < limits[tid]; {update}) {{
         {body}
     }}
     results[3 * tid + 4] = result;
@@ -73,8 +121,8 @@ kernel void loop_updates(const device int* limits [[buffer(0)]],
 
 
 def _values(case):
-    _, _, limit, result, position = CASES[case]
-    expected = [-123456] * 4 + [result, position, 91] * 3 + [-123456] * 4
+    _, _, _, limit, result, position, outer = _case(case)
+    expected = [-123456] * 4 + [result, position, outer] * 3 + [-123456] * 4
     return (
         {
             "limits": {"dtype": "int32", "shape": [3], "values": [limit] * 3},
@@ -106,15 +154,20 @@ def _request(root, target, case):
 
 
 @pytest.mark.parametrize("target", ["metal", "opengl", "directx"])
-@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("case", ALL_CASES)
 def test_ordered_loop_updates_translate_and_compile(tmp_path, target, case):
     _, request, _ = _request(tmp_path, target, case)
     generated = request.artifact_path.read_text()
     assert "UnaryOpNode(" not in generated and "AssignmentNode(" not in generated
-    assert "is_postfix=" not in generated
-    if "," in CASES[case][0]:
-        header = next(line for line in generated.splitlines() if "for (" in line)
+    assert "VariableNode(" not in generated and "is_postfix=" not in generated
+    init, update, *_ = _case(case)
+    header = next(line for line in generated.splitlines() if "for (" in line)
+    if "," in update:
         assert "," in header.split(";")[2]
+    if "," in init:
+        # Every item stays in the loop's own initializer, so declarations
+        # keep loop scope and assignments keep their order.
+        assert "," in header.split(";")[0]
     _compile(generated, target, tmp_path)
 
 
@@ -250,7 +303,7 @@ def _execute(
             close()
 
 
-@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("case", ALL_CASES)
 def test_ordered_loop_updates_execute_natively(tmp_path, case):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required loop-update execution")

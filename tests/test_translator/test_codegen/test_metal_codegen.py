@@ -1098,7 +1098,7 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
     assert (
         "__attribute__((unused)) float3 pos = nearPoint + "
-        "float3(t) * (farPoint - nearPoint);"
+        "t * (farPoint - nearPoint);"
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
@@ -1389,8 +1389,8 @@ def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     )
 
     assert (
-        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
-        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+        "float2 tile = ((uv * 4.0 - float2(2.0)) - "
+        "((1.0) * floor((uv * 4.0 - float2(2.0)) / (1.0))));"
     ) in generated_code
     assert (
         "float2 wrapped = ((tile) - "
@@ -1731,7 +1731,9 @@ def test_metal_saturate_builtin_qualifies_when_local_name_shadows_it():
     )
 
 
-def test_metal_user_defined_stdlib_function_names_are_preserved():
+def test_metal_user_defined_stdlib_function_names_are_renamed():
+    # using namespace metal makes min and normalize ambiguous with the user's
+    # functions of the same signature (#3156), so the user functions are renamed.
     shader = """
     shader MetalUserStdlibNames {
         compute {
@@ -1755,15 +1757,14 @@ def test_metal_user_defined_stdlib_function_names_are_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float min(float left, float right)" in generated_code
-    assert "float3 normalize(float3 value)" in generated_code
-    assert "__attribute__((unused)) float total = min(1.0, 2.0);" in generated_code
+    assert "float min_fn(float left, float right)" in generated_code
+    assert "float3 normalize_fn(float3 value)" in generated_code
+    assert "__attribute__((unused)) float total = min_fn(1.0, 2.0);" in generated_code
     assert (
         "__attribute__((unused)) float3 shifted = "
-        "normalize(float3(float(tid.x), 0.0, 0.0));" in generated_code
+        "normalize_fn(float3(float(tid.x), 0.0, 0.0));" in generated_code
     )
-    assert "metal::min(" not in generated_code
-    assert "metal::normalize(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
@@ -1846,7 +1847,7 @@ def test_metal_two_argument_atan_qualifies_atan2_when_local_name_shadows_it():
     assert "float angle = atan2(float(tid.y), float(tid.x));" not in generated_code
 
 
-def test_metal_user_defined_two_argument_atan_is_preserved():
+def test_metal_user_defined_two_argument_atan_is_renamed():
     shader = """
     shader MetalUserAtan {
         compute {
@@ -1865,12 +1866,13 @@ def test_metal_user_defined_two_argument_atan_is_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float atan(float y, float x)" in generated_code
+    assert "float atan_fn(float y, float x)" in generated_code
     assert (
         "__attribute__((unused)) float angle = "
-        "atan(float(tid.y), float(tid.x));" in generated_code
+        "atan_fn(float(tid.y), float(tid.x));" in generated_code
     )
     assert "atan2(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_glsl_bitcast_builtins_lower_to_as_type():
@@ -2154,12 +2156,12 @@ def test_metal_integer_bit_intrinsics_use_namespace_when_shadowed():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "uint popcount(uint value)" in generated_code
-    assert "uint reverse_bits(uint value)" in generated_code
-    assert "uint count = metal::popcount(tid.x);" in generated_code
-    assert "uint reversed = metal::reverse_bits(tid.y);" in generated_code
-    assert "uint count = popcount(tid.x);" not in generated_code
-    assert "uint reversed = reverse_bits(tid.y);" not in generated_code
+    # The user functions are renamed (#3156), so the library calls reach the library.
+    assert "uint popcount_fn(uint value)" in generated_code
+    assert "uint reverse_bits_fn(uint value)" in generated_code
+    assert "uint count = popcount(tid.x);" in generated_code
+    assert "uint reversed = reverse_bits(tid.y);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_bitcast_function_names_are_preserved():
@@ -2408,7 +2410,7 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     assert "float fy = dfdy(uv.x);" in generated_code
     assert "float cy = dfdy(uv.y);" in generated_code
     assert "float2 fw = fwidth(uv);" in generated_code
-    assert "float2 cw = fwidth(uv * float2(2.0));" in generated_code
+    assert "float2 cw = fwidth(uv * 2.0);" in generated_code
     for name in (
         "dFdxFine(",
         "dFdxCoarse(",
@@ -2419,6 +2421,182 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     ):
         assert name not in generated_code
     compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "dFdx(values[i])",
+        "dFdy(values[i])",
+        "fwidth(values[i])",
+        "ddx(values[i])",
+        "ddy_fine(values[i])",
+        "dFdxCoarse(values[i])",
+        "fwidthFine(values[i])",
+    ],
+)
+def test_metal_kernel_refuses_derivatives(call):
+    derivative = call.split("(", 1)[0]
+    shader = f"""
+    shader ComputeDerivative {{
+        buffer float values[];
+
+        compute {{
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == derivative
+    assert error.operation == derivative
+    assert error.missing_capabilities == ("metal.kernel-derivatives",)
+    assert f"Metal compute entry point 'main' calls {derivative};" in str(error)
+    assert "only in fragment functions" in str(error)
+
+
+def test_metal_kernel_refuses_derivatives_reached_through_a_helper():
+    shader = """
+    shader ComputeDerivativeHelper {
+        buffer float values[];
+
+        float slope(float x) {
+            return dFdx(x);
+        }
+
+        float twice(float x) {
+            return slope(x) * 2.0;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = twice(values[i]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    assert "calls dFdx through 'slope'" in str(excinfo.value)
+
+
+def test_metal_kernel_allows_user_functions_named_like_derivatives():
+    shader = """
+    shader ComputeUserDerivativeName {
+        buffer float values[];
+
+        float fwidth(float x) {
+            return x * 0.5;
+        }
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = fwidth(values[i]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+
+
+def test_metal_fragment_derivatives_still_lower_beside_a_kernel():
+    shader = """
+    shader MixedStages {
+        buffer float values[];
+
+        compute {
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                values[i] = values[i] * 2.0;
+            }
+        }
+
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(dFdx(uv.x), dFdy(uv.y), fwidth(uv.x), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(crosstl.translator.parse(shader))
+
+    assert "kernel void" in generated_code
+    assert "dfdx(uv.x)" in generated_code
+    assert "dfdy(uv.y)" in generated_code
+    assert "fwidth(uv.x)" in generated_code
+
+
+@pytest.mark.parametrize(
+    "stage, function_kind",
+    [
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "object"),
+        ("amplification", "object"),
+    ],
+)
+def test_metal_mesh_and_object_functions_refuse_derivatives(stage, function_kind):
+    shader = f"""
+    shader MeshDerivative {{
+        buffer float values[];
+
+        float slope(float x) {{
+            return dFdx(x);
+        }}
+
+        {stage} {{
+            void main() {{
+                values[0] = slope(values[0]);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        generate_code(crosstl.translator.parse(shader))
+
+    error = excinfo.value
+    assert error.feature == "dFdx"
+    assert error.missing_capabilities == (f"metal.{function_kind}-derivatives",)
+    assert f"Metal {stage} entry point 'main' calls dFdx through 'slope';" in str(error)
+    article = "an" if function_kind == "object" else "a"
+    assert f"so {article} {function_kind} function cannot call dfdx" in str(error)
+
+
+def test_metal_hlsl_mesh_shader_refuses_ddx(tmp_path):
+    source = tmp_path / "m.hlsl"
+    source.write_text(
+        """
+struct V { float4 pos : SV_Position; };
+[outputtopology("triangle")]
+[numthreads(1, 1, 1)]
+void main(uint3 tid : SV_GroupThreadID, out vertices V verts[3], out indices uint3 tris[1]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(ddx((float)tid.x), 0, 0, 1);
+    tris[0] = uint3(0, 1, 2);
+}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as excinfo:
+        crosstl.translate(str(source), backend="metal", format_output=False)
+
+    assert excinfo.value.missing_capabilities == ("metal.mesh-derivatives",)
 
 
 def test_glsl_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives(tmp_path):
@@ -3138,7 +3316,8 @@ def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "as_type<uint64_t>(metal::simd_shuffle_down(" in generated_code
+    assert "uint64_t simd_shuffle_down_fn(uint64_t data" in generated_code
+    assert "as_type<uint64_t>(simd_shuffle_down(" in generated_code
     assert "as_type<uint2>(data)" in generated_code
     assert "WaveShuffleDown" not in generated_code
     compile_with_metal_if_available(generated_code)
@@ -4773,6 +4952,34 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0].value = values[0];" in generated_code
     assert "float value = payloads[0].value;" in generated_code
     assert "payloads[0]->value" not in generated_code
+
+
+def test_metal_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code
 
 
 def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
