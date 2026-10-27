@@ -3244,13 +3244,14 @@ def test_codegen_glslang_int16_short_literal_suffix_fixture_snippet():
     assert "(-2s)" not in crossgl
     assert "(-2)" in crossgl
     assert "0400s" not in crossgl
-    assert "0400" in crossgl
+    # GLSL 0400s is the octal int16_t 256; CrossGL spells octal 0o400.
+    assert "0o400" in crossgl
     assert "0xFFFFus" not in crossgl
     assert "0xFFFFu" in crossgl
     assert "65535US" not in crossgl
     assert "65535u" in crossgl
     assert "0177777us" not in crossgl
-    assert "0177777u" in crossgl
+    assert "0o177777u" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

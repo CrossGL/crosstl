@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ConstructorNode,
@@ -90,6 +91,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -125,6 +127,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .matrix_compound_assignment import matrix_product_assignment
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
@@ -4341,6 +4344,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         stage_name = self.get_stage_name(stage_type)
         result = f"// {stage_name.title()} Shader\n"
 
+        # Structures declared in the stage block, before the variables and functions that use them.
+        for struct in getattr(stage, "local_structs", None) or []:
+            if isinstance(struct, EnumNode):
+                continue
+            struct_code = self.generate_struct(struct)
+            if struct_code:
+                result += struct_code + "\n\n"
+
         local_variables = getattr(stage, "local_variables", [])
         for local_var in self.slang_stage_global_local_variables(
             stage_name, local_variables
@@ -4836,6 +4847,32 @@ class SlangCodeGen(LoweringRefusalMixin):
         if not qualifiers:
             return ""
         return " ".join(qualifiers) + " "
+
+    def slang_static_storage_prefix(self, node, mapped_type=None):
+        """``static`` for a module-scope value with one copy per invocation.
+
+        As in HLSL, a Slang global without ``static`` is a uniform, so CrossGL's module-scope ``static`` values
+        (SPIR-V ``Private`` storage) keep the keyword. Groupshared, uniform and resource declarations do not.
+        """
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "static" not in qualifiers or qualifiers & {
+            "const",
+            "uniform",
+            "groupshared",
+            "shared",
+            "threadgroup",
+            "workgroup",
+        }:
+            return ""
+        if (
+            mapped_type is not None
+            and self.slang_register_prefix_for_type(mapped_type, node, None) is not None
+        ):
+            return ""
+        return "static "
 
     def slang_parameter_qualifier_prefix(self, node):
         qualifiers = []
@@ -5836,7 +5873,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             if self.skip_duplicate_slang_global_variable(node, declaration_type):
                 return ""
-            prefix = self.slang_declaration_qualifier_prefix(node)
+            prefix = self.slang_static_storage_prefix(
+                node
+            ) + self.slang_declaration_qualifier_prefix(node)
             if size is None:
                 return f"{prefix}{element_type} {node.name}[];\n"
             return f"{prefix}{element_type} {node.name}[{size}];\n"
@@ -5849,7 +5888,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         declaration = self.format_declaration(vtype, node.name, node)
         declaration = (
-            self.slang_declaration_qualifier_prefix(node)
+            self.slang_static_storage_prefix(node, mapped_type)
+            + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
         )
@@ -8338,6 +8378,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.generate_match(node)
         elif isinstance(node, SwitchNode):
             return self.generate_switch(node)
+        elif isinstance(node, BlockNode):
+            return self.generate_block_statement(node)
         elif isinstance(node, BreakNode):
             return "break;"
         elif isinstance(node, ContinueNode):
@@ -8353,6 +8395,23 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
+
+    def generate_block_statement(self, node):
+        """A nested ``{ ... }`` block; a declaration in it ends with the block, as in HLSL and C."""
+        saved_types = (dict(self.variable_types), dict(self.local_variable_types))
+        result = "{\n"
+        self.indent_level += 1
+        try:
+            for stmt in self.get_statements(node):
+                result += self.emit_statement(stmt) + "\n"
+        finally:
+            self.indent_level -= 1
+            for table, saved in zip(
+                (self.variable_types, self.local_variable_types), saved_types
+            ):
+                table.clear()
+                table.update(saved)
+        return result + self.indent() + "}"
 
     def generate_variable_statement(self, node):
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
@@ -8375,7 +8434,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
         return f"{declaration};"
 
+    def slang_matrix_product_assignment(self, node):
+        # Slang *= on matrices is component-wise; CrossGL's is the product.
+        return matrix_product_assignment(
+            node.left,
+            node.right,
+            node.operator,
+            type_of=self.expression_result_type,
+            is_matrix=self.is_matrix_value_type,
+            is_vector=self.is_vector_value_type,
+            backend="slang",
+        )
+
     def generate_assignment(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
@@ -8399,6 +8473,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
+        matrix_product = self.slang_matrix_product_assignment(node)
+        if matrix_product is not None:
+            return self.generate_assignment_statement(matrix_product)
         block_store = self.generate_glsl_buffer_block_store(
             node.left, node.right, node.operator
         )
@@ -8449,6 +8526,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             finally:
                 self.atomic_value_context_stack.pop()
 
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.generate_for_header_statement(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "slang",
+            )
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         if isinstance(node, VariableNode):

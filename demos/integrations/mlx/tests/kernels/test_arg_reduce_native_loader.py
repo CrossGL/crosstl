@@ -371,7 +371,7 @@ def _translate_artifact(
     assert materialization["specializationCount"] == 5
     assert materialization["accounting"] == {
         "reachableSpecializationCount": 10,
-        "dependencyDiscoveryWorkCount": 75,
+        "dependencyDiscoveryWorkCount": 76,
         "prunedCandidateCount": 274,
     }
     assert [

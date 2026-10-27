@@ -95,7 +95,8 @@ def _generate(source, backend):
 
 
 def _signature(code, name):
-    match = re.search(rf"__device__ \w+ {name}\(([^)]*)\)", code)
+    # Up to the parenthesis that closes the parameter list: ``float (&w)[2]`` has its own.
+    match = re.search(rf"__device__ \w+ {name}\((.*?)\)\s*[{{;]", code)
     assert match, name
     return match.group(1)
 
@@ -137,8 +138,9 @@ def test_other_array_parameters_keep_their_declaration(backend):
     assert _signature(code, "unwritten") == "float u[2]"
     # The callee copies its own in array, so passing one along is not a write.
     assert _signature(code, "through_in") == "float k[2]"
-    assert "w[2]" in _signature(code, "fill")
-    assert "o[2]" in _signature(code, "reset")
+    # out and inout arrays bind the caller's array (C++ reference to array).
+    assert _signature(code, "fill").endswith("(&w)[2]")
+    assert _signature(code, "reset").endswith("(&o)[2]")
     assert _signature(code, "unqualified") == "float p[2]"
     assert "crosstl_input" not in "".join(
         _signature(code, name)

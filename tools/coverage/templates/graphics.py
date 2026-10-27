@@ -5,7 +5,27 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from . import composites, constructors, functions, operators
+from . import (
+    aggregates,
+    assignments,
+    branches,
+    calls,
+    composites,
+    constructors,
+    declarations,
+    edges,
+    evaluation,
+    forms,
+    functions,
+    idioms,
+    lexical,
+    lvalues,
+    operators,
+    scopes,
+    shapes,
+    statements,
+    values,
+)
 from .base import ABSENT, C_FAMILY, Template, scalar
 
 
@@ -47,6 +67,14 @@ _GLSL_RAYTRACING_STAGES = {
 
 GLSL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
+    **values.FAMILY,
+    **edges.FAMILY,
+    **lexical.FAMILY,
+    **forms.FAMILY,
+    **forms.GLSL,
+    **idioms.FAMILY,
+    **idioms.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -139,6 +167,7 @@ _HLSL_PATCH = (
 
 HLSL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "static const float SCALE = 2.0;"
     ),
@@ -154,6 +183,16 @@ HLSL = {
     **operators.HLSL,
     **composites.HLSL,
     **constructors.HLSL,
+    **scopes.HLSL,
+    **calls.HLSL,
+    **shapes.HLSL,
+    **evaluation.HLSL,
+    **values.FAMILY,
+    **values.HLSL,
+    **edges.FAMILY,
+    **lexical.FAMILY,
+    **forms.FAMILY,
+    **idioms.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -294,8 +333,26 @@ _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 
 METAL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     **functions.METAL,
     **constructors.METAL,
+    **scopes.METAL,
+    **calls.METAL,
+    **evaluation.METAL,
+    **assignments.METAL,
+    **statements.METAL,
+    **lvalues.METAL,
+    **aggregates.METAL,
+    **values.FAMILY,
+    **values.METAL,
+    **edges.FAMILY,
+    **edges.METAL,
+    **lexical.FAMILY,
+    **forms.FAMILY,
+    **lexical.METAL,
+    **forms.METAL,
+    **idioms.FAMILY,
+    **idioms.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -482,6 +539,21 @@ WGSL = {
     **composites.WGSL,
     **functions.WGSL,
     **constructors.WGSL,
+    **scopes.WGSL,
+    **declarations.WGSL,
+    **calls.WGSL,
+    **branches.WGSL,
+    **shapes.WGSL,
+    **evaluation.WGSL,
+    **assignments.WGSL,
+    **statements.WGSL,
+    **lvalues.WGSL,
+    **aggregates.WGSL,
+    **values.WGSL,
+    **edges.WGSL,
+    **lexical.WGSL,
+    **forms.WGSL,
+    **idioms.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -556,6 +628,8 @@ WGSL = {
 
 def _slang(template: Template, stage: str = "") -> Template:
     """An HLSL template as Slang: slangc assigns bindings itself, and a stage program names its stage."""
+    if template is ABSENT:
+        return template
     declarations = re.sub(r"\s*:\s*register\(\w+\)", "", template.declarations)
     program = f'[shader("{stage}")]\n{template.program}' if stage else template.program
     return replace(template, declarations=declarations, program=program)
