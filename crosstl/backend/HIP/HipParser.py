@@ -9,6 +9,7 @@ from .HipAst import (
     ASTNode,
     AtomicOperationNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CastNode,
@@ -3236,8 +3237,16 @@ class HipParser:
             self.skip_newlines()
 
             param_name = ""
-            function_pointer_name = self.parse_function_pointer_parameter_declarator()
-            if function_pointer_name is not None:
+            reference_array_name = self.parse_reference_array_parameter_declarator()
+            function_pointer_name = (
+                None
+                if reference_array_name is not None
+                else self.parse_function_pointer_parameter_declarator()
+            )
+            if reference_array_name is not None:
+                param_type += " & "
+                param_name = reference_array_name
+            elif function_pointer_name is not None:
                 param_type += " (*)"
                 param_name = function_pointer_name
             elif self.is_declarator_name_token():
@@ -3276,6 +3285,28 @@ class HipParser:
             and self.peek()
             and self.peek().type in {"ASTERISK", "STAR"}
         )
+
+    def parse_reference_array_parameter_declarator(self):
+        """Consume the ``(&name)`` of a reference-to-array parameter ``T (&name)[N]`` and return the name."""
+        name_token = self.peek(2)
+        if not (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type == "AMPERSAND"
+            and name_token
+            and name_token.type in self.DECLARATOR_NAME_TOKENS
+            and self.peek(3)
+            and self.peek(3).type == "RPAREN"
+            and self.peek(4)
+            and self.peek(4).type == "LBRACKET"
+        ):
+            return None
+        self.consume("LPAREN")
+        self.advance()
+        name = self.current_token.value
+        self.advance()
+        self.consume("RPAREN")
+        return name
 
     def parse_function_pointer_parameter_declarator(self):
         if not (
@@ -3565,7 +3596,7 @@ class HipParser:
                 while self.current_token and not self.match(
                     "CASE", "DEFAULT", "RBRACE"
                 ):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         body.append(stmt)
                 case = CaseNode(value, body)
@@ -3579,7 +3610,7 @@ class HipParser:
                 self.consume("COLON")
                 default_case = []
                 while self.current_token and not self.match("CASE", "RBRACE"):
-                    stmt = self.parse_statement()
+                    stmt = self.parse_scoped_statement()
                     if stmt:
                         default_case.append(stmt)
                 ordered_cases.append(CaseNode(None, default_case))
@@ -3713,6 +3744,12 @@ class HipParser:
 
         return clobbers
 
+    def parse_scoped_statement(self):
+        """A statement of a block or a ``case``; a nested ``{ ... }`` keeps its own scope as a ``BlockNode``."""
+        if self.match("LBRACE"):
+            return BlockNode(self.parse_block())
+        return self.parse_statement()
+
     def parse_block(self):
         self.consume("LBRACE")
         statements = []
@@ -3720,7 +3757,7 @@ class HipParser:
         self.block_depth += 1
         try:
             while self.current_token and not self.match("RBRACE"):
-                stmt = self.parse_statement()
+                stmt = self.parse_scoped_statement()
                 if stmt:
                     if isinstance(stmt, list):
                         statements.extend(stmt)

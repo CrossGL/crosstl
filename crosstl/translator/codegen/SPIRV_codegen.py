@@ -566,6 +566,8 @@ class VulkanSPIRVCodeGen(
         self.named_constant_debug_ids = set()
         self.resource_alias_variables = set()
         self.variable_value_types = {}
+        # Results of OpAccessChain: pointers that are not memory object declarations.
+        self.access_chain_ids = set()
         self.value_types = {}
         self.constants = {}
         self.constant_values_by_id = {}
@@ -2617,6 +2619,7 @@ class VulkanSPIRVCodeGen(
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
+        self.access_chain_ids.add(id_value)
         if pointee_type is not None:
             self.variable_value_types[id_value] = pointee_type
         if self.is_non_uniform_value(base_id) or any(
@@ -4916,10 +4919,15 @@ class VulkanSPIRVCodeGen(
         self.merge_function_interface_variables_from_callee(
             function_name, function_id.id
         )
+        value_array_indices = self.function_value_array_parameter_indices_by_id.get(
+            function_id.id, set()
+        )
         prepared_args = []
         for index, arg in enumerate(args):
             if index < len(param_types):
                 arg = self.prepare_function_call_argument(arg, param_types[index])
+                if index in value_array_indices:
+                    arg = self.value_array_argument_object(arg, param_types[index])
             prepared_args.append(arg)
         args = prepared_args
 
@@ -7775,6 +7783,30 @@ class VulkanSPIRVCodeGen(
             return self.process_array_literal(arg, target_type)
 
         return self.process_expression(arg)
+
+    def value_array_argument_object(self, value, expected_type):
+        """Pass a by-value array held in a member or element through its own Function variable.
+
+        Logical addressing accepts only memory object declarations as pointer operands of ``OpFunctionCall`` (SPIR-V
+        1.6, section 2.16.1, "Universal Validation Rules"), so an ``OpAccessChain`` result cannot be the argument.
+        The callee copies a by-value array parameter on entry, so a copy taken here keeps the same meaning.
+        """
+        if (
+            value is None
+            or expected_type is None
+            or value.id not in self.access_chain_ids
+            or value.type.storage_class != "Function"
+            or expected_type.type.storage_class != "Function"
+        ):
+            return value
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if (
+            expected_pointee is None
+            or self.array_type_info_from_type(expected_pointee) is None
+        ):
+            return value
+        copied = self.copy_array_pointer_to_function_storage(value, expected_pointee)
+        return value if copied is None else copied
 
     def contains_lambda_expression(self, expr) -> bool:
         if isinstance(expr, FunctionCallNode):
@@ -28660,8 +28692,10 @@ class VulkanSPIRVCodeGen(
 
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
-        if node.init:
-            self.process_statement(node.init)
+        # ``for (int a = 0, b = n; ...)`` keeps its declarations as a list, run in order.
+        for init in node.init if isinstance(node.init, list) else [node.init]:
+            if init:
+                self.process_statement(init)
 
         header_label = SpirvId(self.get_id(), SpirvType("label"))
         body_label = SpirvId(self.get_id(), SpirvType("label"))

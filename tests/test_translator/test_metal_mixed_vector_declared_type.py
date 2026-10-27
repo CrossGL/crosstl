@@ -48,10 +48,11 @@ def test_integer_declared_type_keeps_the_common_operand_type(tmp_path):
     assert "int4(g)" not in code
 
 
-def test_float_declared_type_and_matching_operands_are_unchanged(tmp_path):
+def test_float_declared_type_converts_the_unsigned_sum(tmp_path):
     code = translate(tmp_path)
 
-    assert "float4 f = float4(float4(uint4(a)) + float4(b));" in code
+    # int4 + uint4 is a uint4 sum, which wraps, converted to float4 (#3166).
+    assert "float4 f = float4(uint4(a) + b);" in code
     assert "int4 h = as_type<int4>(as_type<uint4>(a) + as_type<uint4>(a));" in code
 
 
