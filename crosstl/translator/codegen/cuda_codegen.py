@@ -43,6 +43,7 @@ from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
 from .c_reference_parameters import (
     is_output_parameter,
+    multi_component_swizzle_arguments,
     overlapping_output_arguments,
     reference_declarator,
 )
@@ -7413,6 +7414,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     f"overlapping out/inout arguments: {func_name} receives "
                     f"{', '.join(overlapping)} through more than one parameter that "
                     "reaches the caller; CUDA references would not copy out separately"
+                ]
+            )
+        swizzles = multi_component_swizzle_arguments(
+            params, raw_args, self.member_swizzle_components
+        )
+        if swizzles:
+            raise CudaLoweringRefused(
+                [
+                    f"swizzle passed to an out/inout parameter: {func_name} receives "
+                    + ", ".join(
+                        f"'.{swizzle}' as argument {position}"
+                        for position, swizzle in swizzles
+                    )
+                    + "; CUDA builds a swizzle of several components as a new vector, "
+                    "which a reference cannot bind to; copy it into a local, pass that "
+                    "and assign it back"
                 ]
             )
         query_params = self.query_metadata_function_params.get(func_name, set())

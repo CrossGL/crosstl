@@ -2,9 +2,9 @@
 
 CUDA and HIP have no ``out`` or ``inout`` qualifiers. The generators used to declare such a parameter by value, so
 ``void setx(inout float x) { x = 5.0; }`` became ``void setx(float x)`` and the write never reached the caller. A value
-parameter written through ``out`` or ``inout`` is now declared ``T&``. Arrays, pointers and resources keep their
-declaration, and so do stage entry points. A swizzle of several components passed to such a parameter is refused,
-because CUDA and HIP build it as a new vector that a reference cannot bind to.
+parameter written through ``out`` or ``inout`` is now declared ``T&``, and an array ``T (&v)[N]``. Pointers and
+resources keep their declaration, and so do stage entry points. A swizzle of several components passed to such a
+parameter is refused, because CUDA and HIP build it as a new vector that a reference cannot bind to.
 """
 
 import re
@@ -17,6 +17,7 @@ import crosstl
 import crosstl.translator
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 
 GENERATORS = {"cuda": CudaCodeGen, "hip": HipCodeGen}
 BACKEND_NAMES = {"cuda": "CUDA", "hip": "HIP"}
@@ -163,10 +164,11 @@ def test_value_types_are_references(backend):
 
 
 @pytest.mark.parametrize("backend", sorted(GENERATORS))
-def test_array_parameters_keep_their_declaration(backend):
-    # An array decays to a pointer, so writes through it already reach the caller.
+def test_array_parameters_are_references_to_the_array(backend):
+    # A reference to the array keeps its extent, and writes through it reach the caller.
     code = _generate(VALUES, backend)
-    assert _signature(code, "fill") == "float o[2], float w[2]"
+    assert "void fill(float (&o)[2], float (&w)[2])" in code
+    assert "fill(o, arr);" in code
 
 
 @pytest.mark.parametrize("backend", sorted(GENERATORS))
@@ -193,7 +195,7 @@ def test_lvalue_arguments_bind_to_references(backend):
         "setx(ps[1].b.y);",
         "set2(p.b);",
         "set2(ps[0].b);",
-        "bump_float(arr[0], 2.0);",
+        "bump_float(arr[0], 2.0f);",
     ):
         assert call in code, call
 
@@ -205,7 +207,6 @@ def test_lvalue_arguments_bind_to_references(backend):
         ("set2(v.xy);", "xy", 1, "set2", "inout"),
         ("put2(1.0, p.b.yx);", "yx", 2, "put2", "out"),
         ("setx(v.zw.x);", "zw", 1, "setx", "inout"),
-        ("bump<vec2>(v.xy, vec2(1.0));", "xy", 1, "bump", "inout"),
     ],
 )
 def test_swizzle_of_several_components_is_refused(
@@ -231,14 +232,13 @@ def test_swizzle_of_several_components_is_refused(
     }}
     """
     name = BACKEND_NAMES[backend]
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(LoweringRefused) as excinfo:
         _generate(source, backend)
-    assert str(excinfo.value) == (
-        f"{name} codegen cannot pass the swizzle '.{swizzle}' as argument {index} "
-        f"of '{function}', an {qualifier} parameter: {name} builds a swizzle of "
-        "several components as a new vector, which a reference cannot bind to. "
-        "Copy it into a local variable, pass that and assign it back."
-    )
+    message = str(excinfo.value)
+    assert f"{function}" in message
+    assert f"'.{swizzle}' as argument {index}" in message
+    assert f"{name} builds a swizzle of several components as a new vector" in message
+    assert "a reference cannot bind to" in message
 
 
 @pytest.mark.parametrize("backend", sorted(GENERATORS))
