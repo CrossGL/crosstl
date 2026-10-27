@@ -1098,7 +1098,7 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
     assert (
         "__attribute__((unused)) float3 pos = nearPoint + "
-        "float3(t) * (farPoint - nearPoint);"
+        "t * (farPoint - nearPoint);"
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
@@ -1389,8 +1389,8 @@ def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     )
 
     assert (
-        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
-        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+        "float2 tile = ((uv * 4.0 - float2(2.0)) - "
+        "((1.0) * floor((uv * 4.0 - float2(2.0)) / (1.0))));"
     ) in generated_code
     assert (
         "float2 wrapped = ((tile) - "
@@ -2410,7 +2410,7 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     assert "float fy = dfdy(uv.x);" in generated_code
     assert "float cy = dfdy(uv.y);" in generated_code
     assert "float2 fw = fwidth(uv);" in generated_code
-    assert "float2 cw = fwidth(uv * float2(2.0));" in generated_code
+    assert "float2 cw = fwidth(uv * 2.0);" in generated_code
     for name in (
         "dFdxFine(",
         "dFdxCoarse(",
