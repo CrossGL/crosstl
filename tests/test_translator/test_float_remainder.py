@@ -57,11 +57,11 @@ EXPECTED = {
     ],
     "slang": ["d %= 4.0;", "float2(a, -a) % float2(4.0, -2.0)"],
     "cuda": [
-        "d = fmodf(d, 4.0);",
+        "d = fmodf(d, 4.0f);",
         "make_float2(fmodf(lhs.x, rhs.x), fmodf(lhs.y, rhs.y))",
     ],
     "hip": [
-        "d = fmodf(d, 4.0);",
+        "d = fmodf(d, 4.0f);",
         "make_float2(fmodf(lhs.x, rhs.x), fmodf(lhs.y, rhs.y))",
     ],
     "directx": ["d %= 4.0;"],
@@ -72,8 +72,8 @@ FLOORED_MOD = {
     "metal": "((a) - ((2.0) * floor((a) / (2.0))))",
     "opengl": "mod(a, 2.0)",
     "slang": "((a) - (floor((a) / (2.0)) * (2.0)))",
-    "cuda": "cgl_mod_float(a, 2.0)",
-    "hip": "cgl_mod_float(a, 2.0)",
+    "cuda": "cgl_mod_float(a, 2.0f)",
+    "hip": "cgl_mod_float(a, 2.0f)",
 }
 
 
