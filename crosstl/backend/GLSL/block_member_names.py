@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from .OpenglAst import MemberAccessNode, VariableNode
 
-__all__ = ["instance_block_member_names", "rename_shadowing_locals"]
+__all__ = [
+    "function_variable_names",
+    "instance_block_member_names",
+    "rename_shadowing_locals",
+]
 
 
 def instance_block_member_names(shader) -> frozenset:
@@ -52,6 +56,18 @@ def _variables(value, found, seen):
         ):
             continue
         _variables(child, found, seen)
+
+
+def function_variable_names(shader) -> set:
+    """Names of the parameters, locals and other variables that ``shader``'s functions declare or read."""
+    nodes = []
+    for function in getattr(shader, "functions", None) or []:
+        _variables(
+            [getattr(function, "params", None), getattr(function, "body", None)],
+            nodes,
+            set(),
+        )
+    return {node.name.split("[", 1)[0] for node in nodes}
 
 
 def _declares(node) -> bool:

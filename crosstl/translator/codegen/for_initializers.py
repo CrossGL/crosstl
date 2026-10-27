@@ -1,70 +1,70 @@
-"""Render ``for`` initializers that declare or evaluate several items.
+"""For-loop initializers that declare several variables: ``for (int a = 0, b = n; a < b; a++, b--)``.
 
-``for (short i = 0, j = 0; ...)`` reaches the code generators as a list of
-``VariableNode`` declarations, and ``for (i = 0, j = 0; ...)`` as a list of
-expressions. C-family targets accept one declaration whose declarators share
-a type, or a comma expression. These helpers join per-item renderings into
-that form and raise :class:`ForInitializerError` when the declarations do not
-share one type spelling, so a generator never emits a partial initializer.
+The CrossGL parser keeps such an initializer as a list of declarations, or of expressions for
+``for (a = 0, b = n; ...)``. GLSL 4.60 section 6.3 takes one declaration there, whose init-declarator-list names
+several variables of one type; C++17 [stmt.for] and [dcl.dcl], which MSL and Slang follow, take one
+simple-declaration the same way. An emitter generates each item as it would alone and :func:`join_for_initializer`
+writes them as that one declaration, or as one comma expression.
 """
 
+from __future__ import annotations
+
 import re
-from typing import Callable, Sequence
+
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 __all__ = ["ForInitializerError", "join_for_initializer"]
 
-# A declarator after the shared type: a name, optional array extents, then an
-# initializer or nothing.
-_DECLARATOR_RE = re.compile(r"[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)*(?:=|$)")
+_DECLARATOR = re.compile(
+    r"^(?P<prefix>.*?)(?P<name>[A-Za-z_]\w*)(?P<suffix>(\s*\[[^\]]*\])*)\s*$"
+)
 
 
-class ForInitializerError(ValueError):
-    """A ``for`` initializer list cannot be written as one declaration."""
+class ForInitializerError(TranslationDiagnostic):
+    """A for-loop initializer list that one declaration or one comma expression cannot write."""
 
-    def __init__(self, reason: str):
-        super().__init__(
-            f"Cannot emit a for-loop initializer with several items: {reason}"
+    code = f"{CODE_PREFIX}for-initializer-unsupported"
+
+
+def _split_declaration(text):
+    """``("int ", "a = 0")`` for ``int a = 0``: the declaration's type and qualifiers, and its declarator."""
+    head, equals, initializer = text.partition("=")
+    match = _DECLARATOR.match(head.rstrip())
+    if match is None or not match.group("prefix").strip():
+        return None
+    declarator = match.group("name") + match.group("suffix")
+    if equals:
+        declarator = f"{declarator} ={initializer}"
+    return match.group("prefix"), declarator
+
+
+def join_for_initializer(parts, declarations, target):
+    """One initializer for the generated ``parts``; ``declarations[i]`` says whether part ``i`` declares a variable.
+
+    Raises :class:`ForInitializerError` when the items mix declarations with expressions, declare variables of
+    different types, or one of them needs more than one statement.
+    """
+    parts = [str(part).strip().rstrip(";").strip() for part in parts]
+    if any(";" in part for part in parts):
+        raise ForInitializerError(
+            "a for-loop initializer item needs more than one statement", target=target
         )
-        self.reason = reason
-
-
-def _shared_type_prefix(declarations: Sequence[str]) -> str:
-    prefix = declarations[0]
-    for declaration in declarations[1:]:
-        length = 0
-        limit = min(len(prefix), len(declaration))
-        while length < limit and prefix[length] == declaration[length]:
-            length += 1
-        prefix = prefix[:length]
-    # The type ends at the last space before the first declarator name.
-    cut = max(prefix.rfind(" "), prefix.rfind("*"), prefix.rfind("&"))
-    return prefix[: cut + 1] if cut >= 0 else ""
-
-
-def join_for_initializer(
-    items: Sequence[object],
-    is_declaration: Callable[[object], bool],
-    render_declaration: Callable[[object], str],
-    render_expression: Callable[[object], str],
-) -> str:
-    """Join a list initializer into one declaration or comma expression."""
-    if not items:
-        return ""
-    declarations = [is_declaration(item) for item in items]
-    if any(declarations) and not all(declarations):
-        raise ForInitializerError("declarations mixed with expressions")
+    if not any(declarations):
+        return ", ".join(parts)
     if not all(declarations):
-        return ", ".join(render_expression(item).strip().rstrip(";") for item in items)
-    rendered = [render_declaration(item).strip().rstrip(";").strip() for item in items]
-    if any(not text or "\n" in text or ";" in text for text in rendered):
-        raise ForInitializerError("a declaration needs more than one statement")
-    if len(rendered) == 1:
-        return rendered[0]
-    prefix = _shared_type_prefix(rendered)
-    if not prefix.strip() or not all(
-        _DECLARATOR_RE.match(text[len(prefix) :].lstrip()) for text in rendered
-    ):
-        raise ForInitializerError("the declarations do not share one type")
-    return ", ".join(
-        [rendered[0], *(text[len(prefix) :].lstrip() for text in rendered[1:])]
-    )
+        raise ForInitializerError(
+            "a for-loop initializer mixes declarations and expressions", target=target
+        )
+    split = [_split_declaration(part) for part in parts]
+    if any(item is None for item in split):
+        raise ForInitializerError(
+            "a for-loop initializer declaration has no type to share", target=target
+        )
+    prefixes = {prefix.strip() for prefix, _ in split}
+    if len(prefixes) != 1:
+        raise ForInitializerError(
+            "a for-loop initializer declares variables of different types "
+            f"({', '.join(sorted(prefixes))}); one declaration has one type",
+            target=target,
+        )
+    return split[0][0] + ", ".join(declarator for _, declarator in split)

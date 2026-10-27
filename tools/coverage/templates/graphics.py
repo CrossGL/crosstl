@@ -6,17 +6,22 @@ import re
 from dataclasses import replace
 
 from . import (
+    aggregates,
     assignments,
     branches,
     calls,
     composites,
     constructors,
     declarations,
+    edges,
     evaluation,
     functions,
+    lvalues,
     operators,
     scopes,
     shapes,
+    statements,
+    values,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
 
@@ -59,6 +64,9 @@ _GLSL_RAYTRACING_STAGES = {
 
 GLSL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
+    **values.FAMILY,
+    **edges.FAMILY,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -151,6 +159,7 @@ _HLSL_PATCH = (
 
 HLSL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "static const float SCALE = 2.0;"
     ),
@@ -170,6 +179,9 @@ HLSL = {
     **calls.HLSL,
     **shapes.HLSL,
     **evaluation.HLSL,
+    **values.FAMILY,
+    **values.HLSL,
+    **edges.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -310,12 +322,20 @@ _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 
 METAL = {
     **C_FAMILY,
+    **aggregates.FAMILY,
     **functions.METAL,
     **constructors.METAL,
     **scopes.METAL,
     **calls.METAL,
     **evaluation.METAL,
     **assignments.METAL,
+    **statements.METAL,
+    **lvalues.METAL,
+    **aggregates.METAL,
+    **values.FAMILY,
+    **values.METAL,
+    **edges.FAMILY,
+    **edges.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -509,6 +529,11 @@ WGSL = {
     **shapes.WGSL,
     **evaluation.WGSL,
     **assignments.WGSL,
+    **statements.WGSL,
+    **lvalues.WGSL,
+    **aggregates.WGSL,
+    **values.WGSL,
+    **edges.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

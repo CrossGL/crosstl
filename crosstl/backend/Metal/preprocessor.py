@@ -3901,6 +3901,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             seen[duplicate_key] = specialization
             by_owner.setdefault(owner_key, []).append(specialization)
 
+        structs_by_name = {struct.name: struct for struct in structs}
         for struct in structs:
             materialized_owner = self._materialized_struct_specializations.get(
                 struct.name
@@ -3924,9 +3925,35 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 candidates = [
                     (index, method)
                     for index, method in enumerate(methods)
-                    if self._explicit_member_method_contract(method)
+                    if self._explicit_member_method_contract(
+                        method, struct=struct, structs_by_name=structs_by_name
+                    )
                     == specialization_contract
                 ]
+                if not candidates and any(
+                    method.name == specialization.method.name for method in methods
+                ):
+                    # A same-named member whose signature no spelling matches; one
+                    # already lowered to a free function leaves no member here.
+                    requested = self._explicit_member_specialization_signature(
+                        specialization
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal explicit member specialization "
+                        f"'{requested}' matches no member of its owner.",
+                        requested_signature=requested,
+                        suggested_action=(
+                            "declare the specialized member with the parameter and "
+                            "return types of a member of the primary template"
+                        ),
+                        source_location=self._source_location_for_offsets(
+                            code,
+                            specialization.span[0],
+                            specialization.span[1],
+                        ),
+                        owner_struct_name=specialization.owner_qualified_name,
+                        requested_arguments=specialization.owner_arguments,
+                    )
                 if len(candidates) != 1:
                     continue
                 index, generic_method = candidates[0]
@@ -4087,11 +4114,32 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _explicit_member_method_contract(
         self,
         method: _MetalStructMethod,
+        *,
+        struct: Optional[_MetalStructDefinition] = None,
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
     ) -> Tuple[object, ...]:
+        """The signature an explicit member specialization must repeat.
+
+        A member of a materialized owner (``struct``) spells its types with the
+        owner's member aliases, which resolve first, as do the member aliases of
+        other concrete structs they name (``Traits_float::scalar_T``). Metal
+        vectors compare by type, so ``vec<float, 2>``, ``metal::vec<float, 2>``
+        and ``float2`` agree.
+        """
+
+        def canonical(type_text: str) -> str:
+            text = self._normalize_template_argument_text(type_text)
+            if struct is not None:
+                text = self._canonicalize_struct_scoped_type(
+                    text, struct, structs_by_name
+                )
+                text = self._resolve_concrete_member_type_aliases(
+                    text, structs_by_name or {struct.name: struct}
+                )
+            return self._canonical_metal_vector_spelling(text)
+
         parameters = tuple(
-            self._normalize_template_argument_text(
-                self._normalize_function_parameter_type_text(parameter)
-            )
+            canonical(self._normalize_function_parameter_type_text(parameter))
             for parameter in self._split_top_level_commas(method.parameters)
             if parameter.strip() and parameter.strip() != "void"
         )
@@ -4100,9 +4148,73 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             method.is_static,
             method.is_operator_call,
             method.is_conversion_operator,
-            self._normalize_template_argument_text(method.return_type),
+            canonical(method.return_type),
             parameters,
             self._method_receiver_contract_key(method),
+        )
+
+    _QUALIFIED_MEMBER_TYPE_RE = re.compile(
+        r"(?<![A-Za-z0-9_:])(?:typename\s+)?(?P<owner>[A-Za-z_]\w*)\s*::\s*"
+        r"(?P<alias>[A-Za-z_]\w*)"
+    )
+
+    def _resolve_concrete_member_type_aliases(
+        self,
+        text: str,
+        structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> str:
+        """Replace ``Owner::alias`` with the alias's type for concrete owners."""
+
+        def target(match: re.Match) -> str:
+            owner = structs_by_name.get(match.group("owner"))
+            aliased = owner.type_aliases.get(match.group("alias")) if owner else None
+            if aliased is None:
+                return match.group(0)
+            aliased = re.sub(r"^typename\s+", "", aliased).strip()
+            return self._canonicalize_struct_scoped_type(
+                aliased, owner, structs_by_name
+            )
+
+        # Each pass resolves one level of aliases naming other structs' aliases.
+        for _ in range(8):
+            resolved = self._QUALIFIED_MEMBER_TYPE_RE.sub(target, text)
+            if resolved == text:
+                break
+            text = self._normalize_template_argument_text(resolved)
+        return text
+
+    # Scalar types whose Metal vectors are also spelled ``<scalar><N>`` (MSL 2.2).
+    _METAL_NAMED_VECTOR_SCALARS = frozenset(
+        (
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "half",
+            "float",
+            "bfloat",
+        )
+    )
+
+    def _canonical_metal_vector_spelling(self, text: str) -> str:
+        """Spell each concrete ``[metal::]vec<scalar, N>`` as ``<scalar><N>``."""
+
+        def named(match: re.Match) -> str:
+            scalar = match.group("scalar")
+            if scalar not in self._METAL_NAMED_VECTOR_SCALARS:
+                return match.group(0)
+            return f"{scalar}{match.group('width')}"
+
+        return re.sub(
+            r"(?<![A-Za-z0-9_:])(?:::)?(?:metal::)?vec<\s*(?P<scalar>[A-Za-z_]\w*)"
+            r"\s*,\s*(?P<width>[234])\s*>",
+            named,
+            text,
         )
 
     @staticmethod
