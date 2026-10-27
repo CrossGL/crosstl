@@ -4362,7 +4362,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     if result_type is not None:
                         node.expression_type = result_type
                     return fma_call
-        elif func_name in {"dot", "cross", "length", "normalize"}:
+        elif func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,

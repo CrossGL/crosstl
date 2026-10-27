@@ -4282,7 +4282,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"{sample_function}({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}"
+                f"{level_argument})"
             )
         if len(args) == 3:
             texture, sampler, coords = args
@@ -4295,7 +4296,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"{sample_function}({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}"
+                f"{level_argument})"
             )
         raise ValueError(
             "WGSL target supports texture() calls with texture/coords or "
@@ -4326,7 +4328,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}, "
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
                 f"{self.generate_expression(level)})"
             )
         if len(args) == 4:
@@ -4334,7 +4336,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}, "
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
                 f"{self.generate_expression(level)})"
             )
         raise ValueError(
@@ -4531,6 +4533,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"arguments; got {len(args)} for {function_name}"
             )
         texture, coords, level = args
+        split = self.split_array_texture_coordinates(texture, coords, function_name)
+        if split is not None:
+            texel, layer = split
+            return (
+                f"textureLoad({self.generate_expression(texture)}, {texel}, "
+                f"{layer}, {self.generate_expression(level)})"
+            )
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
@@ -4545,6 +4554,14 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"arguments; got {len(args)} for {function_name}"
             )
         texture, coords, level, offset = args
+        split = self.split_array_texture_coordinates(texture, coords, function_name)
+        if split is not None:
+            texel, layer = split
+            return (
+                f"textureLoad({self.generate_expression(texture)}, "
+                f"({texel} + {self.generate_expression(offset)}), {layer}, "
+                f"{self.generate_expression(level)})"
+            )
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"({self.generate_expression(coords)} + {self.generate_expression(offset)}), "
@@ -4579,6 +4596,60 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             f"{', '.join(call_args)}, "
             f"{self.generate_expression(value)})"
         )
+
+    # Array textures whose GLSL coordinate carries the layer in its last
+    # component. WGSL passes the layer as a separate array_index argument.
+    ARRAY_TEXTURE_COORDINATE_SIZES = {
+        "texture_2d_array": 2,
+        "texture_cube_array": 3,
+    }
+
+    def array_texture_coordinate_size(self, texture_expr):
+        texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
+        if texture_type is None:
+            return None
+        return self.ARRAY_TEXTURE_COORDINATE_SIZES.get(
+            re.sub(r"<[^>]*>$", "", texture_type)
+        )
+
+    def split_array_texture_coordinates(self, texture_expr, coords_expr, function_name):
+        """``(coordinate, layer)`` for a lookup on an array texture, else None.
+
+        GLSL and HLSL put the layer in the last coordinate component, WGSL
+        takes it as its own ``array_index`` argument.
+        """
+        size = self.array_texture_coordinate_size(texture_expr)
+        if size is None:
+            return None
+        if not self.is_repeatable_matrix_operand(coords_expr):
+            raise ValueError(
+                f"WGSL target splits the layer out of the {function_name}() "
+                "coordinate of an array texture, which reads the coordinate twice; "
+                "assign the coordinate to a local variable first"
+            )
+        rendered = self.generate_expression(coords_expr)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", rendered):
+            rendered = f"({rendered})"
+        components = "xyzw"
+        return (
+            f"{rendered}.{components[:size]}",
+            f"{rendered}.{components[size]}",
+        )
+
+    def sampled_texture_coordinates(self, texture_expr, coords_expr, function_name):
+        """The coordinate arguments of a ``textureSample*`` call.
+
+        For an array texture this is ``coordinate, layer``. GLSL selects the
+        layer of a filtered lookup as ``floor(layer + 0.5)`` (GLSL 4.60
+        section 8.9), so the float layer is rounded before the conversion.
+        """
+        split = self.split_array_texture_coordinates(
+            texture_expr, coords_expr, function_name
+        )
+        if split is None:
+            return self.generate_expression(coords_expr)
+        coordinate, layer = split
+        return f"{coordinate}, i32(floor({layer} + 0.5))"
 
     def texture_sampler_expression(self, texture_expr):
         array_binding = self.sampled_texture_array_element_binding(texture_expr)

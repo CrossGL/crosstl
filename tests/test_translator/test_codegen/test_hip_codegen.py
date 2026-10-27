@@ -2043,6 +2043,51 @@ class TestHipCodeGen:
         )
         assert "f16vec3" not in hip_code
 
+    def test_half_vector_geometric_builtins_use_float_helpers(self):
+        source_code = """
+        shader G {
+            half f(f16vec3 s, f16vec3 r, f16vec4 q) {
+                half b = length(s);
+                f16vec3 n = normalize(s);
+                half d = distance(s, r);
+                f16vec3 c = cross(s, r);
+                half e = length(q);
+                f16vec3 m = r * distance(s, r);
+                return b + n.x + d + c.x + e + m.x;
+            }
+            float g(vec3 a, vec3 b) {
+                return distance(a, b);
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "half b = cgl_cgl_half3_length(s);" in hip_code
+        assert "cgl_half3 n = cgl_cgl_half3_normalize(s);" in hip_code
+        assert "half d = cgl_cgl_half3_distance(s, r);" in hip_code
+        assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in hip_code
+        assert "half e = cgl_cgl_half4_length(q);" in hip_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
+            in hip_code
+        )
+        assert "return cgl_float3_distance(a, b);" in hip_code
+        assert (
+            "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in hip_code
+        )
+        assert "__float2half(sqrtf((__half2float(value.x) *" in hip_code
+        assert "float inv_length = 1.0f / sqrtf(" in hip_code
+        assert "float dx = __half2float(lhs.x) - __half2float(rhs.x);" in hip_code
+        assert "float dx = lhs.x - rhs.x;" in hip_code
+        assert (
+            "(__half2float(lhs.y) * __half2float(rhs.z) - "
+            "__half2float(lhs.z) * __half2float(rhs.y))" in hip_code
+        )
+        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
+            assert f" = {bare};" not in hip_code
+        assert "return distance(a, b);" not in hip_code
+
     def test_half_vector_modulo_uses_float_mod_helper(self):
         source_code = """
         shader Mod {
