@@ -119,6 +119,10 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
+from .stage_constant_blocks import (
+    StageConstantBlockConflictError,
+    hoist_stage_constant_blocks,
+)
 from .stage_interface_structs import (
     StageInterfaceUnsupportedError,
     gather_stage_interface_variables,
@@ -201,6 +205,7 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -331,6 +336,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    hoist_stage_constant_blocks(program, report.target)
     refuse_undeclared_types(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
