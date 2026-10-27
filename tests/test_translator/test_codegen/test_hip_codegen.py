@@ -8499,11 +8499,11 @@ class TestHipCodeGen:
             "(dynImages_metadata[layer][slot]);" in hip_code
         )
         assert (
-            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
+            "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "cgl_surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
-            "cgl_imageSize_image2D(dynImages_metadata[layer][slot]));" in hip_code
+            "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in hip_code
         )
         assert (
             "SampleResult assigned = buildAssigned(dynTex, dynTex_metadata, "
