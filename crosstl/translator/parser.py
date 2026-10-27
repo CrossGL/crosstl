@@ -344,6 +344,8 @@ class Parser:
         self.anonymous_buffer_blocks = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
+        # Declared values with their own parameters, which `name[...]` specializes.
+        self.parameterized_value_names = set()
         self.current_function_return_type = None
         self.declared_type_names = {
             str(tokens[index + 1][1])
@@ -3449,6 +3451,8 @@ class Parser:
                 variable.initial_value
             )
         self.register_value_type(variable.name, effective_type)
+        if getattr(variable, "generic_params", None):
+            self.parameterized_value_names.add(str(variable.name))
         return variable
 
     def parse_callable_type(self):
@@ -5132,6 +5136,7 @@ class Parser:
             elif (
                 self.current_token[0] == "LBRACKET"
                 and isinstance(left, (IdentifierNode, MemberAccessNode))
+                and not self.brackets_subscript_a_declared_value(left)
                 and self.square_brackets_form_expression_type_arguments()
             ):
                 generic_args = self.parse_square_expression_generic_arguments()
@@ -5278,6 +5283,49 @@ class Parser:
 
         self.eat("RBRACKET")
         return args
+
+    def brackets_subscript_a_declared_value(self, left):
+        """Whether ``left[...]`` indexes a declared variable rather than specializing a name.
+
+        ``t[j = k + 1]`` and ``t[i, j]`` look like specialization arguments (``name = value``, a comma) to
+        :meth:`square_brackets_form_expression_type_arguments`, but a declared variable cannot be specialized:
+        its brackets are a subscript whose index is an assignment or a comma expression. A call after the
+        brackets keeps the specialization reading.
+        """
+        root = left
+        while isinstance(root, MemberAccessNode):
+            root = root.object
+        if not isinstance(root, IdentifierNode):
+            return False
+        name = root.name
+        if (
+            name in self.declared_type_names
+            or name in self.active_generic_parameter_names
+            or name in self.parameterized_value_names
+        ):
+            return False
+        if not any(name in scope for scope in self.value_type_scopes):
+            return False
+        return self.token_after_matching_bracket() != "LPAREN"
+
+    def token_after_matching_bracket(self):
+        """Type of the token after the ``]`` that closes the current ``[``."""
+        depth = 0
+        index = self.pos
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return (
+                        self.tokens[index + 1][0]
+                        if index + 1 < len(self.tokens)
+                        else "EOF"
+                    )
+            index += 1
+        return "EOF"
 
     def square_brackets_form_expression_type_arguments(self):
         """Return whether expression ``[...]`` is a specialization suffix."""
