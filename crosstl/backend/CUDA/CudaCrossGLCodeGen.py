@@ -3,6 +3,7 @@
 import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -4039,7 +4040,11 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
-                self.visit(var)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(var)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
 
         self.reference_parameters = ReferenceParameters(node)
@@ -4372,10 +4377,23 @@ class CudaToCrossGLConverter:
 
             value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
+            if self.is_namespace_scope_constant(node):
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return getattr(
+            self, "namespace_scope_variable", False
+        ) and is_c_family_namespace_constant(node)
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})

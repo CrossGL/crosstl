@@ -57,6 +57,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- The CUDA and HIP importers write a namespace-scope `constexpr` or `const` variable with an initializer, such as `constexpr int N = 3;`, as a CrossGL constant (`const i32 N = 3;`). It used to import as a mutable global, `var N: i32 = 3;`, so CUDA and HIP output wrote a host variable that the kernel cannot read and nvcc refused the kernel. Pointers, arrays, `__constant__`, `__device__` and `__shared__` declarations and function locals keep their lowering.
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.

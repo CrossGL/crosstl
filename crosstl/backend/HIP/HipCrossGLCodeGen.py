@@ -6,6 +6,7 @@ import re
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -5079,7 +5080,11 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, VariableNode):
-                self.visit(stmt)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
             elif isinstance(stmt, TypeAliasNode):
                 self.visit(stmt)
@@ -5998,9 +6003,22 @@ class HipToCrossGLConverter:
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            if self.is_namespace_scope_constant(node):
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return getattr(
+            self, "namespace_scope_variable", False
+        ) and is_c_family_namespace_constant(node)
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)
