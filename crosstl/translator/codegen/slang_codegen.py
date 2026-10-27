@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ConstructorNode,
@@ -90,6 +91,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     sanitize_type_name,
 )
+from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -8368,6 +8370,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.generate_match(node)
         elif isinstance(node, SwitchNode):
             return self.generate_switch(node)
+        elif isinstance(node, BlockNode):
+            return self.generate_block_statement(node)
         elif isinstance(node, BreakNode):
             return "break;"
         elif isinstance(node, ContinueNode):
@@ -8383,6 +8387,23 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
+
+    def generate_block_statement(self, node):
+        """A nested ``{ ... }`` block; a declaration in it ends with the block, as in HLSL and C."""
+        saved_types = (dict(self.variable_types), dict(self.local_variable_types))
+        result = "{\n"
+        self.indent_level += 1
+        try:
+            for stmt in self.get_statements(node):
+                result += self.emit_statement(stmt) + "\n"
+        finally:
+            self.indent_level -= 1
+            for table, saved in zip(
+                (self.variable_types, self.local_variable_types), saved_types
+            ):
+                table.clear()
+                table.update(saved)
+        return result + self.indent() + "}"
 
     def generate_variable_statement(self, node):
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
@@ -8497,6 +8518,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             finally:
                 self.atomic_value_context_stack.pop()
 
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.generate_for_header_statement(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "slang",
+            )
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         if isinstance(node, VariableNode):
