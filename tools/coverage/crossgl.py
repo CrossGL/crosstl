@@ -45,6 +45,7 @@ from .templates.base import (
 )
 from .templates.edges import FAMILY as EDGES
 from .templates.forms import FAMILY as FORMS
+from .templates.helpers import CROSSGL as HELPERS_CROSSGL
 from .templates.idioms import (
     ALIAS_HELPER,
     ALIASES,
@@ -593,6 +594,7 @@ CONSTRUCTS: dict[str, Template] = {
     "array-return": Template(GLSL_ARRAY, GLSL_SPREAD),
     **INITIALIZERS,
     **INITIALIZERS_CROSSGL,
+    **HELPERS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

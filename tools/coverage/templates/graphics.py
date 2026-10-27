@@ -18,6 +18,7 @@ from . import (
     evaluation,
     forms,
     functions,
+    helpers,
     idioms,
     initializers,
     lexical,
@@ -84,6 +85,7 @@ GLSL = {
     **portability.GLSL,
     **initializers.FAMILY,
     **initializers.GLSL,
+    **helpers.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -205,6 +207,7 @@ HLSL = {
     **abstractions.FAMILY,
     **portability.FAMILY,
     **initializers.FAMILY,
+    **helpers.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -370,6 +373,8 @@ METAL = {
     **portability.METAL,
     **initializers.FAMILY,
     **initializers.METAL,
+    **helpers.FAMILY,
+    **helpers.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -574,6 +579,7 @@ WGSL = {
     **abstractions.WGSL,
     **portability.WGSL,
     **initializers.WGSL,
+    **helpers.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

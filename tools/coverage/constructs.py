@@ -349,6 +349,20 @@ def _curated() -> list[Construct]:
         c("compute", "workgroup-id", "BuiltIn.WorkgroupId"),
         c("compute", "local-invocation-index", "BuiltIn.LocalInvocationIndex"),
         c("compute", "num-workgroups", "BuiltIn.NumWorkgroups"),
+        c(
+            "compute",
+            "invocation-id-in-helper",
+            "OpFunctionCall",
+            "BuiltIn.GlobalInvocationId",
+        ),
+        c(
+            "compute",
+            "shared-memory-in-helper",
+            "OpFunctionCall",
+            "StorageClass.Workgroup",
+            "OpControlBarrier",
+        ),
+        c("compute", "barrier-in-loop", "OpLoopMerge", "OpControlBarrier"),
         c("resource", "uniform-buffer", "StorageClass.Uniform"),
         c(
             "resource",
@@ -363,6 +377,20 @@ def _curated() -> list[Construct]:
             "OpImageSampleExplicitLod",
         ),
         c("resource", "storage-image", "OpTypeImage", "OpImageWrite"),
+        c(
+            "resource",
+            "buffer-in-helper",
+            "OpFunctionCall",
+            "StorageClass.StorageBuffer",
+        ),
+        c(
+            "resource",
+            "buffer-element-argument",
+            "OpFunctionCall",
+            "OpAccessChain",
+            "StorageClass.StorageBuffer",
+        ),
+        c("resource", "uniform-in-helper", "OpFunctionCall", "StorageClass.Uniform"),
     ]
 
 

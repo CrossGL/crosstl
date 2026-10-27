@@ -19,6 +19,7 @@ from .edges import FAMILY as _EDGES
 from .evaluation import WEBGL as _EVALUATION
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
+from .helpers import WEBGL as _HELPERS
 from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
 from .initializers import FAMILY as _INITIALIZERS
@@ -81,6 +82,7 @@ WEBGL = {
     **_PORTABILITY_WEBGL,
     **_INITIALIZERS,
     **_INITIALIZERS_GLSL,
+    **_HELPERS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
