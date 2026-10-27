@@ -9179,8 +9179,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_BlockNode(self, node) -> str:
-        if hasattr(node, "statements"):
-            self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.add_line("{")
+        self.indent_level += 1
+        try:
+            if hasattr(node, "statements"):
+                self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.add_line("}")
         return ""
 
     def visit_BreakNode(self, node) -> str:
