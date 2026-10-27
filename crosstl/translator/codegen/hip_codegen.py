@@ -49,6 +49,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
+from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
     overlapping_output_arguments,
@@ -4298,6 +4299,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
+
+        pointer_math_call = generate_pointer_math_call(
+            self, HipLoweringRefused, func_name, raw_args, args
+        )
+        if pointer_math_call is not None:
+            return pointer_math_call
 
         if func_name in self.synchronization_builtins and raw_args:
             raise ValueError(
