@@ -7020,6 +7020,11 @@ class MetalCodeGen(
             )
 
     def metal_reachable_functions(self, root_func):
+        """``root_func`` and every user function a call reaches from it, in breadth-first order.
+
+        A call reaches the overloads of its name that accept its argument count; among several, the one whose
+        parameter types match the known argument types, or all of them when the types do not decide (#3168).
+        """
         reachable = []
         pending = [root_func]
         visited = set()
@@ -7029,11 +7034,70 @@ class MetalCodeGen(
                 continue
             visited.add(id(func))
             reachable.append(func)
-            for called_name in sorted(self.called_user_function_names(func)):
-                called_func = (self.functions_by_name or {}).get(called_name)
-                if called_func is not None and id(called_func) not in visited:
+            for called_func in self.metal_called_user_function_overloads(func):
+                if id(called_func) not in visited:
                     pending.append(called_func)
         return reachable
+
+    def metal_called_user_function_overloads(self, func):
+        """The user overloads that the calls in ``func`` can select, in a deterministic order."""
+        selected = []
+        seen = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name not in self.user_function_names or name == getattr(
+                func, "name", None
+            ):
+                continue
+            arguments = list(
+                getattr(node, "args", getattr(node, "arguments", [])) or []
+            )
+            for candidate in self.metal_call_overload_candidates(name, arguments):
+                if id(candidate) not in seen:
+                    seen.add(id(candidate))
+                    selected.append(candidate)
+        return selected
+
+    def metal_call_overload_candidates(self, name, arguments):
+        overloads = list(self.function_overloads_by_name.get(name, []))
+        if not overloads:
+            single = (self.functions_by_name or {}).get(name)
+            return [single] if single is not None else []
+        by_arity = [
+            overload
+            for overload in overloads
+            if self.metal_user_function_accepts_argument_count(overload, len(arguments))
+        ] or overloads
+        if len(by_arity) == 1:
+            return by_arity
+        argument_types = [
+            self.map_type(argument_type) if argument_type is not None else None
+            for argument_type in (
+                self.expression_result_type(argument) for argument in arguments
+            )
+        ]
+        by_type = [
+            overload
+            for overload in by_arity
+            if self.metal_overload_matches_argument_types(overload, argument_types)
+        ]
+        return by_type if len(by_type) == 1 else by_arity
+
+    def metal_overload_matches_argument_types(self, overload, argument_types):
+        parameters = list(
+            getattr(overload, "parameters", getattr(overload, "params", [])) or []
+        )
+        for parameter, argument_type in zip(parameters, argument_types):
+            if argument_type is None:
+                return False
+            parameter_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if parameter_type is None or self.map_type(parameter_type) != argument_type:
+                return False
+        return True
 
     def function_uses_metal_fragment_invocation_density(self, func):
         for node in self.iter_ast_nodes(getattr(func, "body", []) or []):
