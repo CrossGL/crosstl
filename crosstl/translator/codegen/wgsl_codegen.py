@@ -69,6 +69,7 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -3350,6 +3351,14 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_function_call(self, node, expected_type=None):
         node = self.specialize_generic_function_call(node)
         function_name = self.expression_name(node.function)
+        if isinstance(node.function, IdentifierNode):
+            declared = self.resolve_function_overload(
+                function_name, node.arguments, expected_type=expected_type
+            )
+            if declared is not None:
+                # A call resolves to a function the shader declares before any built-in or
+                # built-in alias of the same name, such as HLSL lerp for WGSL mix.
+                return self.generate_declared_function_call(node, declared)
         normalized_name = self.semantic_key(function_name)
         option_call = self.generate_builtin_option_call(node, function_name)
         if option_call is not None:
@@ -3547,6 +3556,19 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             self.generate_expression(argument) for argument in node.arguments
         )
         return f"({accumulator} + {mapped_name}({left}, {right}))"
+
+    def generate_declared_function_call(self, node, function):
+        """A call of ``function``, one of the functions the shader declares."""
+        dispatch_call = self.generate_sampled_texture_array_dispatch_call(
+            node, function
+        )
+        if dispatch_call is not None:
+            return dispatch_call
+        function_name = self.expression_name(node.function)
+        args = self.generate_call_arguments(
+            function_name, node.arguments, function=function
+        )
+        return f"{self.function_declaration_identifier_name(function)}({args})"
 
     def is_user_function_name(self, name):
         return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
@@ -6721,7 +6743,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def unique_function_module_name(self, base_name, used_names):
         candidate = self.safe_wgsl_identifier(base_name)
-        if candidate in used_names or self.requires_wgsl_identifier_escape(candidate):
+        if (
+            candidate in used_names
+            or self.requires_wgsl_identifier_escape(candidate)
+            or candidate in WGSL_BUILTIN_FUNCTIONS
+        ):
             candidate = self.unique_wgsl_identifier(
                 self.escaped_wgsl_identifier_base(candidate), used_names
             )
