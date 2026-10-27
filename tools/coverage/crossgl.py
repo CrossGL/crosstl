@@ -28,7 +28,25 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
-from .templates.base import NESTED_STRUCTS
+from .templates.aggregates import ABSORB
+from .templates.aggregates import FAMILY as AGGREGATES
+from .templates.base import (
+    BAG,
+    BINS,
+    GROW,
+    MAKE_PAIR,
+    NESTED_STRUCTS,
+    PAIR,
+    POSE,
+    SPREAD,
+)
+from .templates.edges import FAMILY as EDGES
+from .templates.forms import FAMILY as FORMS
+from .templates.lexical import CROSSGL_NAMES, FILL, SPREAD4
+from .templates.lexical import FAMILY as LEXICAL
+from .templates.lexical import reserved
+from .templates.values import BASIS
+from .templates.values import FAMILY as VALUES
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -389,7 +407,6 @@ def _scalar(spelling: str, source: str = "iin") -> Template:
     return Template(f"{spelling} v = {spelling}({source}[i]);\noutp[i] = float(v * v);")
 
 
-_PAIR = "struct Pair {\n    float a;\n    float b;\n};"
 _FRAGMENT = (
     "shader Probe {\n    struct FragmentInput {\n        vec2 uv;\n    }\n    struct FragmentOutput {\n"
     "        vec4 color;\n    }\n    fragment {\n        FragmentOutput main(FragmentInput input) {\n"
@@ -498,9 +515,62 @@ _MESH_STAGES = {
 # shader-level declarations, ``declarations`` go inside the compute block.
 CONSTRUCTS: dict[str, Template] = {
     **C_FAMILY,
-    "struct": Template(C_FAMILY["struct"].body, prelude=_PAIR),
-    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=_PAIR),
+    **AGGREGATES,
+    **VALUES,
+    "struct-matrix-member": Template(
+        VALUES["struct-matrix-member"].body, prelude=BASIS
+    ),
+    "struct-conditional": Template(VALUES["struct-conditional"].body, prelude=PAIR),
+    **EDGES,
+    "struct-array-copy": Template(EDGES["struct-array-copy"].body, prelude=PAIR),
+    **LEXICAL,
+    "octal-literal": Template(
+        LEXICAL["octal-literal"]
+        .body.replace("017 + 00", "0o17 + 0o0")
+        .replace("010u", "0o10u")
+        .replace("& 07", "& 0o7")
+        .replace("* 011", "* 0o11")
+    ),
+    "call-result-access": Template(
+        LEXICAL["call-result-access"].body,
+        f"{MAKE_PAIR}\n\n{FILL}\n\n{SPREAD4}",
+        prelude=f"{PAIR}\n{BINS}",
+    ),
+    "reserved-identifier": reserved(CROSSGL_NAMES),
+    **FORMS,
+    # CrossGL has no ^^; it compares two bool values with !=.
+    "logical-xor": Template(
+        "bool p = iin[i] > 7;\nbool q = (iin[i] & 1) == 1;\nbool r = (p != q) != (iin[i] == 3);\n"
+        "outp[i] = (p != q ? 1.0 : 0.0) + (r ? 2.0 : 0.0) + (!(p != true) ? 4.0 : 0.0);"
+    ),
+    "constant-array-size": Template(
+        FORMS["constant-array-size"].body, prelude="const int N = 4;"
+    ),
+    "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
+    "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
+    "struct-return": Template(C_FAMILY["struct-return"].body, MAKE_PAIR, prelude=PAIR),
+    "struct-constructor": Template(C_FAMILY["struct-constructor"].body, prelude=PAIR),
+    "struct-copy": Template(C_FAMILY["struct-copy"].body, prelude=PAIR),
+    "struct-array-member": Template(C_FAMILY["struct-array-member"].body, prelude=BINS),
+    "struct-vector-member": Template(
+        C_FAMILY["struct-vector-member"].body, prelude=POSE
+    ),
+    "nested-member-assignment": Template(
+        C_FAMILY["nested-member-assignment"].body, prelude=BAG
+    ),
+    "struct-parameter": Template(
+        C_FAMILY["struct-parameter"].body, SPREAD, prelude=PAIR
+    ),
+    "inout-argument-lvalues": Template(
+        C_FAMILY["inout-argument-lvalues"].body, GROW, prelude=PAIR
+    ),
+    "aggregate-inout-parameter": Template(
+        AGGREGATES["aggregate-inout-parameter"].body, ABSORB, prelude=PAIR
+    ),
+    "constant-array": Template(
+        C_FAMILY["constant-array"].body, prelude=C_FAMILY["constant-array"].declarations
+    ),
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", prelude="const float SCALE = 2.0;"
     ),

@@ -11,11 +11,19 @@ from __future__ import annotations
 import re
 
 _CROSSGL_MATRIX = re.compile(r"(d?)mat([234])(?:x([234]))?")
+# Square ``floatNxN`` and ``doubleNxN`` are aliases of ``matN`` and ``dmatN``; the non-square ones have no single shape
+# and are refused (:mod:`.semantics.matrix_spellings`).
+_SQUARE_ALIAS = re.compile(r"(float|double)([234])x\2")
 
 
 def crossgl_matrix_shape(spelling):
     """Return ``(scalar, columns, rows)`` for a CrossGL matrix spelling, or ``None``."""
-    match = _CROSSGL_MATRIX.fullmatch(str(spelling or "").strip())
+    text = str(spelling or "").strip()
+    alias = _SQUARE_ALIAS.fullmatch(text)
+    if alias is not None:
+        size = int(alias.group(2))
+        return alias.group(1), size, size
+    match = _CROSSGL_MATRIX.fullmatch(text)
     if match is None:
         return None
     columns = int(match.group(2))

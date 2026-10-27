@@ -184,15 +184,21 @@ def check_hlsl(path, scratch, stages):
     return _verdict(results, entries=[name for name, _, _ in jobs])
 
 
+# Stages the GLSL generator writes with an extension defined only for SPIR-V generation.
+VULKAN_ONLY_STAGES = RAY_TRACING | {"mesh", "task"}
+
+
 def glsl_environment(stages):
     """glslang options for the API a GLSL artifact's stages exist in.
 
     Ray tracing stages exist only in Vulkan: GL_EXT_ray_tracing is defined for SPIR-V generation, and glslang
-    rejects the extension under OpenGL rules. They are checked with Vulkan 1.2 rules, the first Vulkan whose SPIR-V
-    (1.5) includes SPV_KHR_ray_tracing's 1.4 requirement. Every other stage is checked with the OpenGL or OpenGL ES
-    rules the artifact's ``#version`` selects.
+    rejects the extension under OpenGL rules. So do the mesh and task stages the GLSL generator writes with
+    GL_EXT_mesh_shader, which glslang accepts only when it generates SPIR-V 1.4 or later ("not supported for current
+    targeted SPIR-V version" under OpenGL rules); OpenGL has only GL_NV_mesh_shader. They are checked with Vulkan
+    1.2 rules, the first Vulkan whose SPIR-V (1.5) includes the 1.4 that SPV_KHR_ray_tracing and SPV_EXT_mesh_shader
+    require. Every other stage is checked with the OpenGL or OpenGL ES rules the artifact's ``#version`` selects.
     """
-    if stages and set(stages) <= RAY_TRACING:
+    if stages and set(stages) <= VULKAN_ONLY_STAGES:
         return ["--target-env", "vulkan1.2"]
     return []
 

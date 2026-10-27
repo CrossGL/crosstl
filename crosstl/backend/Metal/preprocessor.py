@@ -36,6 +36,7 @@ from .function_specialization import (
 )
 from .template_constants import unresolved_constant_references
 from .text_scanners import (
+    find_named_type_declarations,
     function_parameter_start,
     split_top_level_assignment,
     split_top_level_commas,
@@ -975,6 +976,12 @@ class _PromotedFunctionDefinition:
     promoted_parameters: Tuple[_PromotedFunctionParameter, ...]
 
 
+# Characters `_find_static_constexpr_calls` acts on: quotes, a slash that may
+# open a comment, and every word character that is not a decimal digit (a
+# superset of the identifier starts it reads).
+_CONSTEXPR_CALL_SCAN_STOPS = re.compile(r"[\"'/]|[^\W\d]")
+
+
 class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
@@ -1561,6 +1568,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs = self._find_concrete_struct_definitions(code)
         template_structs = self._find_template_structs(code)
         context = self._reachability_type_context(code, template_spans, structs)
+        # Bodies are only ever appended, and every context view is resolved at a
+        # call position. A context of a shorter prefix therefore answers queries
+        # before its end; it is rebuilt only when a call in a newer body needs it.
+        context_end = len(code)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
         explicit_specializations = (
@@ -1639,6 +1650,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ):
                 continue
 
+            if call.argument_open >= context_end:
+                context = self._reachability_type_context(code, template_spans, structs)
+                context_end = len(code)
             buffer_view = self._flatten_types_at(
                 context.buffer_element_types, call.argument_open
             )
@@ -1918,7 +1932,6 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 materialized_names[key] = specialized_name
                 materialization_start = len(code) + 2
                 code += "\n\n" + materialized
-                context = self._reachability_type_context(code, template_spans, structs)
                 body_start = self._find_next_top_level_char(materialized, 0, "{")
                 owner_position = (
                     specialization["span"][0]
@@ -3801,6 +3814,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             seen[duplicate_key] = specialization
             by_owner.setdefault(owner_key, []).append(specialization)
 
+        structs_by_name = {struct.name: struct for struct in structs}
         for struct in structs:
             materialized_owner = self._materialized_struct_specializations.get(
                 struct.name
@@ -3824,9 +3838,35 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 candidates = [
                     (index, method)
                     for index, method in enumerate(methods)
-                    if self._explicit_member_method_contract(method)
+                    if self._explicit_member_method_contract(
+                        method, struct=struct, structs_by_name=structs_by_name
+                    )
                     == specialization_contract
                 ]
+                if not candidates and any(
+                    method.name == specialization.method.name for method in methods
+                ):
+                    # A same-named member whose signature no spelling matches; one
+                    # already lowered to a free function leaves no member here.
+                    requested = self._explicit_member_specialization_signature(
+                        specialization
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal explicit member specialization "
+                        f"'{requested}' matches no member of its owner.",
+                        requested_signature=requested,
+                        suggested_action=(
+                            "declare the specialized member with the parameter and "
+                            "return types of a member of the primary template"
+                        ),
+                        source_location=self._source_location_for_offsets(
+                            code,
+                            specialization.span[0],
+                            specialization.span[1],
+                        ),
+                        owner_struct_name=specialization.owner_qualified_name,
+                        requested_arguments=specialization.owner_arguments,
+                    )
                 if len(candidates) != 1:
                     continue
                 index, generic_method = candidates[0]
@@ -3987,11 +4027,32 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _explicit_member_method_contract(
         self,
         method: _MetalStructMethod,
+        *,
+        struct: Optional[_MetalStructDefinition] = None,
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
     ) -> Tuple[object, ...]:
+        """The signature an explicit member specialization must repeat.
+
+        A member of a materialized owner (``struct``) spells its types with the
+        owner's member aliases, which resolve first, as do the member aliases of
+        other concrete structs they name (``Traits_float::scalar_T``). Metal
+        vectors compare by type, so ``vec<float, 2>``, ``metal::vec<float, 2>``
+        and ``float2`` agree.
+        """
+
+        def canonical(type_text: str) -> str:
+            text = self._normalize_template_argument_text(type_text)
+            if struct is not None:
+                text = self._canonicalize_struct_scoped_type(
+                    text, struct, structs_by_name
+                )
+                text = self._resolve_concrete_member_type_aliases(
+                    text, structs_by_name or {struct.name: struct}
+                )
+            return self._canonical_metal_vector_spelling(text)
+
         parameters = tuple(
-            self._normalize_template_argument_text(
-                self._normalize_function_parameter_type_text(parameter)
-            )
+            canonical(self._normalize_function_parameter_type_text(parameter))
             for parameter in self._split_top_level_commas(method.parameters)
             if parameter.strip() and parameter.strip() != "void"
         )
@@ -4000,9 +4061,73 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             method.is_static,
             method.is_operator_call,
             method.is_conversion_operator,
-            self._normalize_template_argument_text(method.return_type),
+            canonical(method.return_type),
             parameters,
             self._method_receiver_contract_key(method),
+        )
+
+    _QUALIFIED_MEMBER_TYPE_RE = re.compile(
+        r"(?<![A-Za-z0-9_:])(?:typename\s+)?(?P<owner>[A-Za-z_]\w*)\s*::\s*"
+        r"(?P<alias>[A-Za-z_]\w*)"
+    )
+
+    def _resolve_concrete_member_type_aliases(
+        self,
+        text: str,
+        structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> str:
+        """Replace ``Owner::alias`` with the alias's type for concrete owners."""
+
+        def target(match: re.Match) -> str:
+            owner = structs_by_name.get(match.group("owner"))
+            aliased = owner.type_aliases.get(match.group("alias")) if owner else None
+            if aliased is None:
+                return match.group(0)
+            aliased = re.sub(r"^typename\s+", "", aliased).strip()
+            return self._canonicalize_struct_scoped_type(
+                aliased, owner, structs_by_name
+            )
+
+        # Each pass resolves one level of aliases naming other structs' aliases.
+        for _ in range(8):
+            resolved = self._QUALIFIED_MEMBER_TYPE_RE.sub(target, text)
+            if resolved == text:
+                break
+            text = self._normalize_template_argument_text(resolved)
+        return text
+
+    # Scalar types whose Metal vectors are also spelled ``<scalar><N>`` (MSL 2.2).
+    _METAL_NAMED_VECTOR_SCALARS = frozenset(
+        (
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "half",
+            "float",
+            "bfloat",
+        )
+    )
+
+    def _canonical_metal_vector_spelling(self, text: str) -> str:
+        """Spell each concrete ``[metal::]vec<scalar, N>`` as ``<scalar><N>``."""
+
+        def named(match: re.Match) -> str:
+            scalar = match.group("scalar")
+            if scalar not in self._METAL_NAMED_VECTOR_SCALARS:
+                return match.group(0)
+            return f"{scalar}{match.group('width')}"
+
+        return re.sub(
+            r"(?<![A-Za-z0-9_:])(?:::)?(?:metal::)?vec<\s*(?P<scalar>[A-Za-z_]\w*)"
+            r"\s*,\s*(?P<width>[234])\s*>",
+            named,
+            text,
         )
 
     @staticmethod
@@ -11039,21 +11164,33 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         function_names: Set[str],
     ) -> List[_MetalConstexprCall]:
         calls: List[_MetalConstexprCall] = []
+        if not any(name in expression for name in function_names):
+            return calls
+        search = _CONSTEXPR_CALL_SCAN_STOPS.search
         i = 0
-        while i < len(expression):
-            if expression[i] in "\"'":
+        while True:
+            # Jump to the next character the scan acts on: a quote, a slash
+            # that may open a comment, or a possible identifier start.
+            stop = search(expression, i)
+            if stop is None:
+                break
+            i = stop.start()
+            character = expression[i]
+            if character in "\"'":
                 _literal, consumed = self._read_string(expression, i)
                 i += consumed
                 continue
-            if expression.startswith("//", i):
-                end = expression.find("\n", i)
-                i = len(expression) if end == -1 else end + 1
+            if character == "/":
+                if expression.startswith("//", i):
+                    end = expression.find("\n", i)
+                    i = len(expression) if end == -1 else end + 1
+                elif expression.startswith("/*", i):
+                    end = expression.find("*/", i + 2)
+                    i = len(expression) if end == -1 else end + 2
+                else:
+                    i += 1
                 continue
-            if expression.startswith("/*", i):
-                end = expression.find("*/", i + 2)
-                i = len(expression) if end == -1 else end + 2
-                continue
-            if not (expression[i].isalpha() or expression[i] == "_"):
+            if not (character.isalpha() or character == "_"):
                 i += 1
                 continue
 
@@ -20704,35 +20841,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # declaration with its source offset makes call-site resolution
         # deterministic and selects the nearest preceding declaration.
         declarations: Dict[str, List[Tuple[int, str]]] = {}
-        # Iterate struct names in a STABLE (sorted) order so the per-name lists,
-        # before sorting, do not depend on set iteration order; the final sort by
-        # position is what callers rely on, but a stable scan keeps ties stable.
-        for struct_name in sorted(struct_names):
-            pattern = re.compile(
-                rf"\b{re.escape(struct_name)}\b"
-                r"(?:\s+(?:const|volatile)\b)*\s*"
-                r"(?P<indirection>[*&]+)?\s*"
-                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
-                r"(?=[;,)=\[{(])"
+        # One position-ordered scan for every struct name keeps each per-name
+        # list sorted by offset without depending on set iteration order.
+        for struct_name, match in find_named_type_declarations(code, struct_names):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            # Skip a match that is itself a member access (`x.S var` cannot
+            # happen, but guard scoped `Ns::S` by checking the preceding char).
+            preceding = match.start() - 1
+            while preceding >= 0 and code[preceding].isspace():
+                preceding -= 1
+            if preceding >= 0 and code[preceding] in ".>":
+                continue
+            indirection = match.group("indirection") or ""
+            if indirection and not include_indirect:
+                continue
+            declarations.setdefault(match.group("name"), []).append(
+                (match.start(), f"{struct_name}{indirection}")
             )
-            for match in pattern.finditer(code):
-                if self._containing_span(match.start(), struct_spans) is not None:
-                    continue
-                # Skip a match that is itself a member access (`x.S var` cannot
-                # happen, but guard scoped `Ns::S` by checking the preceding char).
-                preceding = match.start() - 1
-                while preceding >= 0 and code[preceding].isspace():
-                    preceding -= 1
-                if preceding >= 0 and code[preceding] in ".>":
-                    continue
-                indirection = match.group("indirection") or ""
-                if indirection and not include_indirect:
-                    continue
-                declarations.setdefault(match.group("name"), []).append(
-                    (match.start(), f"{struct_name}{indirection}")
-                )
-        for entries in declarations.values():
-            entries.sort(key=lambda item: item[0])
         return declarations
 
     def _collect_aliased_struct_variable_types(
@@ -20742,28 +20868,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         struct_spans: List[Tuple[int, int]],
     ) -> Dict[str, List[Tuple[int, str]]]:
         declarations: Dict[str, List[Tuple[int, str]]] = {}
-        for alias in sorted(type_aliases):
-            pattern = re.compile(
-                rf"\b{re.escape(alias)}\b"
-                r"(?:\s+(?:const|volatile)\b)*\s*"
-                r"(?P<indirection>[*&]+)?\s*"
-                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
-                r"(?=[;,)=\[{(])"
+        for alias, match in find_named_type_declarations(code, type_aliases):
+            if self._containing_span(match.start(), struct_spans) is not None:
+                continue
+            resolved = self._resolve_struct_type_alias_at(
+                type_aliases, alias, match.start()
             )
-            for match in pattern.finditer(code):
-                if self._containing_span(match.start(), struct_spans) is not None:
-                    continue
-                resolved = self._resolve_struct_type_alias_at(
-                    type_aliases, alias, match.start()
-                )
-                if resolved is None:
-                    continue
-                indirection = match.group("indirection") or ""
-                declarations.setdefault(match.group("name"), []).append(
-                    (match.start(), f"{resolved}{indirection}")
-                )
-        for entries in declarations.values():
-            entries.sort(key=lambda item: item[0])
+            if resolved is None:
+                continue
+            indirection = match.group("indirection") or ""
+            declarations.setdefault(match.group("name"), []).append(
+                (match.start(), f"{resolved}{indirection}")
+            )
         return declarations
 
     def _resolve_declared_type_at(

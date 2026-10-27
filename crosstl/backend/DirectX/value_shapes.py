@@ -567,6 +567,18 @@ class HLSLValueShapeMixin:
                 return precise_product
         return f"({left} * {right})"
 
+    def oversized_template_vector_or_matrix(self, base, generic_type):
+        """Describe the dimension of ``vector<T, N>``/``matrix<T, R, C>`` above 4, if any."""
+        if base not in {"vector", "matrix"}:
+            return None
+        args = self.split_generic_arguments(generic_type)
+        labels = ("components",) if base == "vector" else ("rows", "columns")
+        for label, arg in zip(labels, args[1:]):
+            size = self.parse_template_dimension(arg)
+            if size is not None and size > 4:
+                return f"{size} {label}"
+        return None
+
     def map_type_preserving_matrix_shape(self, hlsl_type):
         """Map an HLSL type name to CrossGL keeping matrix rows and columns."""
         if not hlsl_type:
@@ -588,6 +600,15 @@ class HLSLValueShapeMixin:
             )
             if vector_or_matrix_type:
                 return vector_or_matrix_type
+            oversized = self.oversized_template_vector_or_matrix(base, generic_type)
+            if oversized is not None:
+                # A long vector (SM 6.9) or a matrix wider than 4 has no CrossGL
+                # type; the generic ``vec4``/``mat4`` fallback would drop lanes.
+                return self.refuse_import(
+                    f"DirectX type {type_name} has {oversized}; CrossGL vectors "
+                    "and matrices hold 1 to 4 components per dimension",
+                    placeholder=self.sanitize_type_name(base),
+                )
             texel_buffer_type = self.map_texel_buffer_type(base, generic_type)
             if texel_buffer_type:
                 return texel_buffer_type
