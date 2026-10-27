@@ -131,3 +131,49 @@ def test_an_output_and_a_value_copy_of_one_variable_translate(tmp_path, backend)
     code = _translate(tmp_path, source, backend)
     assert "void mix2(float& x, float y)" in code
     assert "mix2(a, a);" in code
+
+
+GENERIC_CALLS = """
+shader main {{
+    buffer float* results;
+    void bump<T>(inout T value, T step) {{ value = value + step; }}
+    void both<T>(inout T x, inout T y) {{ x = x + y; }}
+    compute {{
+    @ numthreads(1, 1, 1)
+    void main() {{
+        vec4 v = vec4(1.0);
+        vec2 w = vec2(1.0);
+        float a = 1.0;
+        {call}
+        results[0] = v.x + w.x + a;
+    }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        ("bump<vec2>(v.xy, vec2(1.0));", "swizzle passed to an out/inout parameter"),
+        ("both<float>(a, a);", "overlapping out/inout arguments"),
+    ],
+)
+def test_generic_callees_get_the_reference_argument_checks(
+    tmp_path, backend, call, message
+):
+    with pytest.raises(REFUSED[backend]) as error:
+        _translate(tmp_path, GENERIC_CALLS.format(call=call), backend)
+    assert message in str(error.value)
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_generic_callees_with_bindable_arguments_translate(tmp_path, backend):
+    code = _translate(
+        tmp_path,
+        GENERIC_CALLS.format(call="bump<vec2>(w, vec2(1.0)); bump<float>(v.x, a);"),
+        backend,
+    )
+    assert "bump_vec2(w, " in code
+    assert "bump_float(v.x, a);" in code

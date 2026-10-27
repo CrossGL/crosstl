@@ -56,6 +56,7 @@ from .generic_function_utils import (
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
+    generic_function_specialization_named,
     iter_function_nodes,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
@@ -7470,13 +7471,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
         return self.structured_buffer_counter_name(name)
 
-    def cuda_user_function_call_arguments(self, func_name, raw_args, args):
-        """Expand user calls with CUDA sidecar resource arguments."""
-        callee = self.query_functions_by_name.get(func_name)
-        if callee is None:
-            return args + self.cuda_captured_function_call_args(func_name)
-
-        params = getattr(callee, "parameters", getattr(callee, "params", []))
+    def cuda_reject_unbindable_reference_arguments(self, func_name, params, raw_args):
+        """Refuse calls whose out/inout arguments cannot bind to references."""
         overlapping = overlapping_output_arguments(params, raw_args)
         if overlapping:
             raise CudaLoweringRefused(
@@ -7502,6 +7498,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     "and assign it back"
                 ]
             )
+
+    def cuda_user_function_call_arguments(self, func_name, raw_args, args):
+        """Expand user calls with CUDA sidecar resource arguments."""
+        callee = self.query_functions_by_name.get(func_name)
+        if callee is None:
+            specialized = generic_function_specialization_named(self, func_name)
+            if specialized is not None:
+                self.cuda_reject_unbindable_reference_arguments(
+                    func_name,
+                    getattr(
+                        specialized, "parameters", getattr(specialized, "params", [])
+                    ),
+                    raw_args,
+                )
+            return args + self.cuda_captured_function_call_args(func_name)
+
+        params = getattr(callee, "parameters", getattr(callee, "params", []))
+        self.cuda_reject_unbindable_reference_arguments(func_name, params, raw_args)
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):

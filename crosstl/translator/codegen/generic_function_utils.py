@@ -403,6 +403,16 @@ def generic_function_call_name(generator, func_name, args):
     return _compatible_existing_specialized_call_name(generator, func_name, args)
 
 
+def generic_function_specialization_named(generator, specialized_name):
+    """Return the specialized clone emitted as ``specialized_name``, if any."""
+    for func in (
+        getattr(generator, "generic_function_specializations", {}) or {}
+    ).values():
+        if getattr(func, "name", None) == specialized_name:
+            return func
+    return None
+
+
 def raise_unresolved_generic_function_call(generator, func_name, target_name):
     """Raise when a target cannot infer a concrete generic helper call."""
     candidates = (getattr(generator, "generic_function_definitions", {}) or {}).get(
