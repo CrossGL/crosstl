@@ -19907,8 +19907,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not rendered_type:
             return None
         type_name = str(rendered_type).strip()
-        array_depth = 0
-        element_name = type_name
+        element_name, array_suffix = split_array_type_suffix(type_name)
+        array_depth = array_suffix.count("[")
+        element_name = element_name.strip()
         while element_name:
             base_name, generic_args = generic_type_parts(element_name)
             if base_name.rsplit("::", 1)[-1] != "array" or not generic_args:
@@ -19968,6 +19969,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array_types.append(element_type)
             element_type = getattr(element_type, "element_type", None)
         if not isinstance(element_type, PointerType):
+            self.hlsl_reject_unresolved_generic_pointer_array(
+                parameter_type,
+                array_name=getattr(parameter, "name", None),
+                function_name=self.current_function_name,
+                source_location=getattr(parameter, "source_location", None),
+            )
             return None
         pointer_type = element_type
         address_space = str(pointer_type.address_space or "").strip().lower()
@@ -22080,6 +22087,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array_types.append(element_type)
             element_type = getattr(element_type, "element_type", None)
         if not isinstance(element_type, PointerType):
+            self.hlsl_reject_unresolved_generic_pointer_array(
+                vtype,
+                array_name=getattr(node, "name", None),
+                function_name=self.current_function_name,
+                source_location=getattr(node, "source_location", None),
+            )
             return None
         pointer_type = element_type
         address_space = str(pointer_type.address_space or "").strip().lower()
