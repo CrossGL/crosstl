@@ -41,7 +41,13 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
+from .c_reference_parameters import (
+    is_output_parameter,
+    overlapping_output_arguments,
+    reference_declarator,
+)
 from .cuda_refusals import CudaLoweringRefused
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -1477,9 +1483,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
             else:
                 self.register_variable_type(param_name, declaration_type, param)
-                params.append(
-                    self.format_typed_declarator(declaration_type, param_name)
-                )
+                declarator = self.format_typed_declarator(declaration_type, param_name)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declarator = reference_declarator(declarator, param_name)
+                params.append(declarator)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
@@ -2894,6 +2902,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return a for-clause expression, preserving CUDA metadata sidecars."""
         if node is None:
             return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.format_for_clause_expression(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "cuda",
+            )
         if isinstance(node, VariableNode):
             return self.format_variable_declaration(node)
 
@@ -6670,8 +6684,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("continue;")
 
     def visit_BlockNode(self, node):
-        """Visit block statement"""
-        self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.emit("{")
+        self.indent_level += 1
+        try:
+            self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.emit("}")
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
@@ -7383,6 +7406,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return args + self.cuda_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise CudaLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; CUDA references would not copy out separately"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):

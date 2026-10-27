@@ -3,6 +3,7 @@
 import re
 from decimal import Decimal, InvalidOperation
 
+from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
@@ -1310,9 +1311,24 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(param, "qualifiers", []) or []
+        }
+        if names & {"ref", "__ref"}:
+            # A Slang ref parameter names the caller's storage (Slang language reference, "ref" parameters);
+            # CrossGL inout copies in and copies out, which differs whenever the argument aliases other storage.
+            raise SlangImportRefused(
+                [
+                    f"ref parameter {param.name} binds the caller's storage; CrossGL "
+                    "has only copy-in/copy-out inout parameters"
+                ]
+            )
         if not preserve_qualifiers:
-            return ""
-        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+            # out and inout carry the parameter's direction for every function, not only for entry points.
+            allowed_qualifiers = {"out", "inout"}
+        else:
+            allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
@@ -2135,8 +2151,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
         if not float_like and integer_suffix:
-            return self.normalize_integer_suffix(body, integer_suffix)
-        if not float_like or integer_suffix:
+            return crossgl_legacy_octal(
+                self.normalize_integer_suffix(body, integer_suffix)
+            )
+        if not float_like:
+            return crossgl_legacy_octal(value)
+        if integer_suffix:
             return value
 
         try:
