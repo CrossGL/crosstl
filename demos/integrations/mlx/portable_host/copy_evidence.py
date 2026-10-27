@@ -84,6 +84,86 @@ def is_nan(word, dtype):
     return float_value(word, dtype)[0] == NAN
 
 
+def _float_parts(np, words, dtype):
+    """Integer ``(negative, significand, exponent, nan, infinite, subnormal)``.
+
+    A finite word's value is ``significand * 2**exponent``, exactly.
+    """
+    width, exponent_bits, fraction_bits = FLOATS[dtype]
+    bias = (1 << (exponent_bits - 1)) - 1
+    negative = (words >> (width - 1)) & 1
+    exponent = (words >> fraction_bits) & ((1 << exponent_bits) - 1)
+    fraction = words & ((1 << fraction_bits) - 1)
+    special = exponent == (1 << exponent_bits) - 1
+    normal = exponent != 0
+    significand = np.where(normal, fraction | (1 << fraction_bits), fraction)
+    scale = np.where(normal, exponent, 1) - bias - fraction_bits
+    subnormal = ~normal & (fraction != 0)
+    return (
+        negative,
+        significand,
+        scale,
+        special & (fraction != 0),
+        special & (fraction == 0),
+        subnormal,
+    )
+
+
+def _float_words(np, negative, significand, scale, dtype):
+    """``float_word`` of each ``significand * 2**scale``, for nonnegative
+    significands below ``2**53``: nearest even, gradual underflow, overflow to
+    infinity.
+    """
+    width, exponent_bits, fraction_bits = FLOATS[dtype]
+    bias = (1 << (exponent_bits - 1)) - 1
+    # floor(log2(significand)) is exact through float64 for these widths.
+    top = np.frexp(significand.astype(np.float64))[1].astype(np.int64) - 1
+    exponent = np.maximum(top + scale, 1 - bias)
+    drop = np.clip(exponent - fraction_bits - scale, -62, 62)
+    left = np.where(drop < 0, significand << np.maximum(-drop, 0), significand)
+    shift = np.maximum(drop, 0)
+    kept = left >> shift
+    rest = left - (kept << shift)
+    half = np.where(shift > 0, np.int64(1) << np.maximum(shift - 1, 0), 0)
+    up = (shift > 0) & ((rest > half) | ((rest == half) & ((kept & 1) == 1)))
+    kept = kept + up
+    carry = kept == (1 << (fraction_bits + 1))
+    kept = np.where(carry, kept >> 1, kept)
+    exponent = exponent + carry
+    biased = np.where(kept >> fraction_bits, exponent + bias, 0)
+    fraction = kept & ((1 << fraction_bits) - 1)
+    infinite = (biased >= (1 << exponent_bits) - 1) & (significand != 0)
+    biased = np.where(infinite, (1 << exponent_bits) - 1, biased)
+    fraction = np.where(infinite | (significand == 0), 0, fraction)
+    biased = np.where(significand == 0, 0, biased)
+    return (negative << (width - 1)) | (biased << fraction_bits) | fraction
+
+
+def float_casts(np, words, source, destination):
+    """``cast_word`` of each floating ``words`` to a floating ``destination``.
+
+    Returns ``(words, nan)``: the destination words as an int64 array and the
+    mask of results that ``cast_word`` gives as ``NAN``.
+    """
+    words = np.asarray(words, dtype=np.int64)
+    negative, significand, scale, nan, infinite, subnormal = _float_parts(
+        np, words, source
+    )
+    require(
+        not ({source, destination} == {"float32", "bfloat16"} and subnormal.any()),
+        "Cast evidence does not model binary32 subnormals in bfloat16 casts",
+    )
+    width, exponent_bits, fraction_bits = FLOATS[destination]
+    finite = np.where(nan | infinite, 0, significand)
+    result = _float_words(np, negative, finite, scale, destination)
+    result = np.where(
+        infinite,
+        (negative << (width - 1)) | (((1 << exponent_bits) - 1) << fraction_bits),
+        result,
+    )
+    return np.where(nan, 0, result), nan
+
+
 def integer_bounds(dtype):
     bits = 8 * ctypes.sizeof(CTYPES[dtype])
     return (
@@ -177,6 +257,31 @@ def matches(actual, expected, dtype):
     return is_nan(actual, dtype)
 
 
+def _require_float_casts(entry, values, outputs, source, destination):
+    """Check a cast between floating types whole; return its output bytes.
+
+    Each result must be ``cast_word`` of its source word, or any NaN of the
+    destination type where that is ``NAN``.
+    """
+    import numpy as np
+
+    wanted, nan = float_casts(np, values, source, destination)
+    actual = np.asarray(outputs, dtype=np.int64)
+    width = FLOATS[destination][0]
+    nan_result = _float_parts(np, actual, destination)[3]
+    wrong = (
+        ((actual >> width) != 0)
+        | (actual < 0)
+        | np.where(nan, ~nan_result, actual != wanted)
+    )
+    if wrong.any():
+        index = int(np.argmax(wrong))
+        require(
+            False, f"Copy result {index} of {entry} differs from its retained values"
+        )
+    return actual.astype(f"=u{width // 8}").tobytes()
+
+
 def audit_event(event, cache=None, *, native=True):
     """Check one cast or copy dispatch against its retained values.
 
@@ -201,12 +306,17 @@ def audit_event(event, cache=None, *, native=True):
     ):
         require(value in uploads, "Copy upload differs from its retained values")
     threads = event["threads"]
+    payload = None
     if kernel == VECTOR:
         require(
             len(values) == len(initial) == len(outputs) == threads,
             "Cast readback extent differs",
         )
-        expected = [cast_word(word, source, destination) for word in values]
+        if source in FLOATS and destination in FLOATS:
+            payload = _require_float_casts(entry, values, outputs, source, destination)
+            expected = ()
+        else:
+            expected = [cast_word(word, source, destination) for word in values]
     else:
         require(
             metadata["sourceCount"] == len(values)
@@ -219,7 +329,8 @@ def audit_event(event, cache=None, *, native=True):
             matches(actual, wanted, destination),
             f"Copy result {index} of {entry} differs from its retained values",
         )
-    payload = bytes((CTYPES[destination] * len(outputs))(*outputs))
+    if payload is None:
+        payload = bytes((CTYPES[destination] * len(outputs))(*outputs))
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Copy host output hash changed",

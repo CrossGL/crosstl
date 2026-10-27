@@ -157,6 +157,87 @@ def test_casts_between_floats_round_to_nearest_even_with_gradual_underflow():
     assert copy_evidence.cast_word(0x80000001, "float32", "float16") == 0x8000
 
 
+def _float_cast_words(source):
+    """Every exponent with edge and tie fractions, and random words."""
+    width, exponent_bits, fraction_bits = copy_evidence.FLOATS[source]
+    rng = np.random.default_rng(11)
+    fractions = {0, 1, 2, 3, (1 << fraction_bits) - 1, (1 << fraction_bits) - 2}
+    for low in (7, 13, 16):
+        if low < fraction_bits:
+            # Ties, and the words beside them, at the 16-bit fraction widths.
+            fractions |= {1 << (low - 1), (1 << (low - 1)) - 1, (1 << (low - 1)) + 1}
+            fractions |= {3 << (low - 1), 1 << low}
+    words = [
+        (sign << (width - 1)) | (exponent << fraction_bits) | fraction
+        for sign in (0, 1)
+        for exponent in range(1 << exponent_bits)
+        for fraction in sorted(fractions)
+    ]
+    words += rng.integers(0, 1 << width, 2048, dtype=np.uint64).tolist()
+    return words
+
+
+def _subnormal(word, dtype):
+    _, exponent_bits, fraction_bits = copy_evidence.FLOATS[dtype]
+    return not (word >> fraction_bits) & ((1 << exponent_bits) - 1) and word & (
+        (1 << fraction_bits) - 1
+    )
+
+
+@pytest.mark.parametrize("source", ("float16", "bfloat16", "float32"))
+@pytest.mark.parametrize("destination", ("float16", "bfloat16", "float32"))
+def test_vectorized_float_casts_equal_each_cast_word(source, destination):
+    words = _float_cast_words(source)
+    refused = {source, destination} == {"float32", "bfloat16"}
+    if refused:
+        subnormal = [word for word in words if _subnormal(word, source)]
+        with pytest.raises(ValueError, match="binary32 subnormals"):
+            copy_evidence.float_casts(
+                np, subnormal[:1] + words[:4], source, destination
+            )
+        words = [word for word in words if not _subnormal(word, source)]
+    result, nan = copy_evidence.float_casts(np, words, source, destination)
+    for word, actual, is_nan in zip(words, result.tolist(), nan.tolist()):
+        expected = copy_evidence.cast_word(word, source, destination)
+        assert (copy_evidence.NAN if is_nan else actual) == expected, hex(word)
+
+
+def _cast_event(monkeypatch, tmp_path, entry, values):
+    """Dispatch a float32 to float16 cast whose kernel returns quiet NaNs."""
+    cast = copy_evidence.cast_word
+
+    def kernel_cast(word, source, destination):
+        result = cast(word, source, destination)
+        return 0x7E00 if result == copy_evidence.NAN else result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(copy_evidence, "cast_word", kernel_cast)
+        words, event, _ = run(patch, tmp_path, "metal", entry, values)
+    return words, event
+
+
+def test_float_cast_audit_checks_every_result_whole(monkeypatch, tmp_path):
+    values = [0x3F800000, 0x7FC00001, 0xFF800000, 0x33000001, 0x80000000, 0x477FF000]
+    words, event = _cast_event(monkeypatch, tmp_path, "v_copyfloat32float16", values)
+    assert words == [0x3C00, 0x7E00, 0xFC00, 0x0001, 0x8000, 0x7C00]
+    assert copy_evidence.audit_event(event, native=False) == len(values)
+    # Any NaN stands for a NaN result; any other change is refused at its index.
+    outputs = event["outputValues"]
+    payload = hashlib.sha256(
+        bytes((ctypes.c_uint16 * len(outputs))(*outputs))
+    ).hexdigest()
+    assert event["outputHash"] == payload
+    for index, word in ((1, 0x7C00), (3, 0x0002), (4, 0x0000), (0, 0x13C00)):
+        changed = list(outputs)
+        changed[index] = word
+        with pytest.raises(ValueError, match=f"Copy result {index} of"):
+            copy_evidence.audit_event(dict(event, outputValues=changed), native=False)
+    other_nan = list(outputs)
+    other_nan[1] = 0xFE01
+    with pytest.raises(ValueError, match="output hash changed"):
+        copy_evidence.audit_event(dict(event, outputValues=other_nan), native=False)
+
+
 @pytest.mark.parametrize("source", ("float16", "float32"))
 @pytest.mark.parametrize(
     "destination", ("int8", "uint8", "int16", "uint16", "int32", "uint32", "int64")
