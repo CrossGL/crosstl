@@ -2065,8 +2065,8 @@ def test_codegen_parenthesized_comma_assignment_expression():
 
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
-    assert "int b = ((a = 1), (a + 2));" in crossgl
-    assert "float(((a = 3), b))" in crossgl
+    assert "int b = (a = 1, (a + 2));" in crossgl
+    assert "float((a = 3, b))" in crossgl
 
 
 def test_codegen_parenthesized_assignment_array_access_from_glslang_coopmat():
