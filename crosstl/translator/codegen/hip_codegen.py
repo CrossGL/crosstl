@@ -104,6 +104,11 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
+)
 from .hip_refusals import HipLoweringRefused
 from .match_utils import (
     generate_match_expression_assignment,
@@ -3426,20 +3431,21 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         metadata_comment = self.hip_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.add_line(metadata_comment)
-        self.add_line(f"{self.format_variable_declaration(node)};")
+        place = file_scope_placement(self, node, metadata_comment)
+        self.add_line(f"{place(self.format_variable_declaration(node))};")
         metadata_declaration = self.query_metadata_declaration(node.name, var_type)
         if metadata_declaration:
-            self.add_line(f"{metadata_declaration};")
+            self.add_line(f"{place(metadata_declaration)};")
         length_declaration = self.structured_buffer_length_declaration(
             node.name, var_type
         )
         if length_declaration:
-            self.add_line(f"{length_declaration};")
+            self.add_line(f"{place(length_declaration)};")
         counter_declaration = self.structured_buffer_counter_declaration(
             node.name, var_type
         )
         if counter_declaration:
-            self.add_line(f"{counter_declaration};")
+            self.add_line(f"{place(counter_declaration)};")
         return ""
 
     def visit_ConstantNode(self, node: ConstantNode) -> str:
@@ -3450,7 +3456,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.add_line(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.add_line(f"{declaration};")
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
@@ -3472,6 +3481,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         declaration = self.apply_resource_memory_qualifiers_to_declaration(
             declaration, node.name, node
         )
+        if (
+            initial_value is not None
+            and "const" in self.declaration_qualifier_names(node)
+            and "*" not in declaration
+            and not declaration.startswith("const ")
+        ):
+            # A CrossGL constant stays one: file-scope device code can read a const scalar with a constant
+            # initializer, but not a mutable host variable.
+            declaration = f"const {declaration}"
 
         qualifiers = self.variable_memory_qualifiers(node)
         if qualifiers:
