@@ -4349,7 +4349,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     if result_type is not None:
                         node.expression_type = result_type
                     return fma_call
-        elif func_name in {"dot", "cross", "length", "normalize"}:
+        elif func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
@@ -9460,6 +9460,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         byte_address_buffer_type = self.hip_byte_address_buffer_type(type_str)
         if byte_address_buffer_type is not None:
             return byte_address_buffer_type
+
+        if type_str.startswith("ptr<") and type_str.endswith(">"):
+            return f"{self.map_type(type_str[4:-1])}*"
 
         canonical_type = self.canonical_resource_type(type_str)
         mapped_type = self.type_map.get(canonical_type or type_str, type_str)

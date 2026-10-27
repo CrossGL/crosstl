@@ -48,6 +48,11 @@ The initial WGSL target surface covers common portable shader output:
 * typed diagnostics (``project.translate.wgsl-numeric-type-unsupported``) for
   64-bit floating-point, 64-bit integer and bfloat16 types, which WGSL cannot
   represent; they are never narrowed to ``f32`` or ``i32``
+* typed diagnostics (``project.translate.wgsl-integer-texture-sample-unsupported``)
+  for ``texture``, ``textureLod``, ``textureGrad``, ``textureOffset`` and their
+  offset forms on ``isampler*`` and ``usampler*`` textures, which WGSL cannot
+  sample; ``texelFetch`` and ``textureSize`` on them become ``textureLoad`` and
+  ``textureDimensions``
 
 Implementation Notes
 --------------------
