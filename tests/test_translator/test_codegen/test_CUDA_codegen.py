@@ -28,6 +28,7 @@ from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.lowering_refusal_helpers import cuda_partial_output
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
@@ -1392,7 +1393,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "float bitwiseFloat = /* unsupported CUDA wave intrinsic "
@@ -5847,7 +5850,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "float4 biased = /* unsupported CUDA sampled resource call: "
@@ -6520,7 +6525,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "__device__ inline int cgl_lod_extent" in cuda_code
@@ -6801,7 +6806,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const int* input;" in cuda_code
         assert "int* values;" in cuda_code
@@ -6903,7 +6908,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct ReadBlock" in cuda_code
         assert "uint values[4];" in cuda_code
@@ -6991,7 +6996,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "return /* unsupported CUDA GLSL buffer block atomicAdd: resource "
@@ -7395,7 +7400,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "__device__ Particle* chooseAppend(bool useGlobal)" in cuda_code
         assert "__device__ const Particle* chooseConsume(bool useGlobal)" in cuda_code
@@ -7460,7 +7465,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "__shared__ uint sharedCounters[32];" in cuda_code
         assert "__shared__ uint2 vectorCounters[32];" in cuda_code
@@ -7553,7 +7558,7 @@ class TestCudaCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint a = atomicInc_block(&outp[i], 7u);" in cuda_code
         assert "uint b = atomicDec_system(&outp[i], 7u);" in cuda_code
@@ -7689,7 +7694,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "PointerType(" not in cuda_code
         assert "ReferenceType(" not in cuda_code
@@ -7995,7 +8000,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const uint* readonlyCounts;" in cuda_code
         assert "uint* counters;" in cuda_code
@@ -8140,7 +8145,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint* counters;" in cuda_code
         assert "uint* counterArrays[2];" in cuda_code
@@ -8199,7 +8204,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float* values;" in cuda_code
         assert "float oldAdd = atomicAdd(&values[index], value);" in cuda_code
@@ -8242,7 +8247,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint* counters;" in cuda_code
         assert "int* signedCounters;" in cuda_code
@@ -8307,7 +8312,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in cuda_code
         assert "unsigned char* writeBytes;" in cuda_code
@@ -8485,7 +8490,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in cuda_code
         assert "unsigned char* writeBytes;" in cuda_code
@@ -8607,7 +8612,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "unsigned char* output;" in cuda_code
         assert "unsigned char* outputs[2];" in cuda_code
@@ -9004,7 +9009,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float paramValue = /* unsupported CUDA shadow resource call: "
@@ -9195,7 +9200,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float4 gathered = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
@@ -9329,7 +9334,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 valid = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
         assert (
@@ -9439,7 +9444,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         for name, func_name, texture_type in (
             ("badLineVec", "textureOffset", "sampler1D"),
@@ -9525,7 +9530,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert "float4 line = tex1D<float4>(lineTex, (uq.x / uq.y));" in cuda_code
         assert (
@@ -9665,7 +9672,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t colorMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
@@ -9981,7 +9988,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaSurfaceObject_t colorImage;" in cuda_code
         assert "cudaSurfaceObject_t lineImage;" in cuda_code
@@ -10148,7 +10155,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 line = surf1Dread<float4>(lineImage, x * sizeof(float4));"
@@ -10304,7 +10311,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedParamRead = /* unsupported CUDA image access: "
@@ -10418,7 +10425,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const int* readOnlyValues;" in cuda_code
         assert "int* writeOnlyValues;" in cuda_code
@@ -10537,7 +10544,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedAliasRead = /* unsupported CUDA image access: "
@@ -10601,7 +10608,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedMemberRead = /* unsupported CUDA image access: "
@@ -10675,7 +10682,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 2
         assert cuda_code.count("imageStore requires writable image resource") == 2
@@ -10809,7 +10816,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedRead = /* unsupported CUDA image access: imageLoad "
@@ -10947,7 +10954,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 2
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11067,7 +11074,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11175,7 +11182,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11294,7 +11301,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11424,7 +11431,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11568,7 +11575,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11651,7 +11658,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo writeOnlyImage_metadata = {};" in cuda_code
         assert (
@@ -11742,7 +11749,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedChainRead = /* unsupported CUDA image access: "
@@ -11853,7 +11860,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo writeImages_metadata[4] = {};" in cuda_code
         assert (
@@ -12008,7 +12015,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint writeMember = /* unsupported CUDA image atomic resource call: "
@@ -12147,7 +12154,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint returnedParamAdd = /* unsupported CUDA image atomic resource "
@@ -12217,7 +12224,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 sampled = tex2D<float4>(bundle.tex, uv.x, uv.y);" in cuda_code
         assert (
@@ -12322,7 +12329,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 line = tex1D<float4>(lineTex, u);" in cuda_code
         assert "float4 lineLod = tex1DLod<float4>(lineTex, u, 1.0f);" in cuda_code
@@ -12518,7 +12525,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 validLine = tex1DGrad<float4>(lineTex, u, du, du);" in cuda_code
         assert (
@@ -12654,7 +12661,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t lineTex;" in cuda_code
         assert "cudaTextureObject_t lineLayers;" in cuda_code
@@ -12776,7 +12783,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaTextureObject_t textureGrid[2][3];" in cuda_code
         assert "cudaTextureObject_t layerGrid[2][2];" in cuda_code
@@ -15850,7 +15857,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int added = /* unsupported CUDA image atomic resource call: "
@@ -15943,7 +15950,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint validLine = /* unsupported CUDA image atomic resource call: "
@@ -16206,7 +16213,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float2 paramLod = /* unsupported CUDA resource query: "
@@ -16253,7 +16260,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int badTextureSamples = /* unsupported CUDA resource query: "
@@ -16307,7 +16314,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int2 validTextureSize = cgl_textureSize_sampler2D"
@@ -16509,7 +16516,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo textures_metadata[2] = {};" in cuda_code
@@ -16646,7 +16653,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
         assert "CglResourceQueryInfo imageGrid_metadata[4][4] = {};" in cuda_code
@@ -16774,7 +16781,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -16886,7 +16893,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -17245,7 +17252,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -17466,7 +17473,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t selected = chooseWithLocalWork();" in cuda_code
         assert (
@@ -17532,7 +17539,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "__device__ void consume(cudaTextureObject_t tex, "
@@ -18301,7 +18308,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textures_metadata[8] = {};" in cuda_code
         assert (
@@ -18364,7 +18371,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
         assert (
@@ -18660,7 +18667,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "cudaTextureObject_t msTex;" in cuda_code
@@ -18860,7 +18867,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaTextureObject_t msTex;" in cuda_code
         assert "cudaTextureObject_t msLayers;" in cuda_code
@@ -19583,7 +19590,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "fallback = /* unsupported CUDA match expression: "

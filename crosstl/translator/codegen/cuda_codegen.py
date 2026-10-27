@@ -60,6 +60,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -212,8 +213,15 @@ def _refuse_buffer_counter(reason):
     raise ValueError(f"CUDA buffer counter: {reason}")
 
 
-class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+class CudaCodeGen(
+    LoweringRefusalMixin,
+    VectorArithmeticMixin,
+    ResourceQueryMixin,
+    ResourceDiagnosticMixin,
+):
     """Emit CUDA source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = CudaLoweringRefused
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
@@ -365,7 +373,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
 
     def generate(self, ast_node):
-        """Generate complete CUDA source for a CrossGL AST."""
+        """Generate complete CUDA source for a CrossGL AST, or raise :class:`CudaLoweringRefused`.
+
+        A construct with no faithful CUDA lowering is refused; no program is returned while a refusal is
+        pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
+        """
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
+        """Render complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
