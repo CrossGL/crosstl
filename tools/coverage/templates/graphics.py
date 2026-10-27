@@ -14,6 +14,7 @@ from . import (
     constructors,
     declarations,
     edges,
+    lexical,
     evaluation,
     functions,
     lvalues,
@@ -67,6 +68,7 @@ GLSL = {
     **aggregates.FAMILY,
     **values.FAMILY,
     **edges.FAMILY,
+    **lexical.FAMILY,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -182,6 +184,7 @@ HLSL = {
     **values.FAMILY,
     **values.HLSL,
     **edges.FAMILY,
+    **lexical.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -336,6 +339,8 @@ METAL = {
     **values.METAL,
     **edges.FAMILY,
     **edges.METAL,
+    **lexical.FAMILY,
+    **lexical.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -534,6 +539,7 @@ WGSL = {
     **aggregates.WGSL,
     **values.WGSL,
     **edges.WGSL,
+    **lexical.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
