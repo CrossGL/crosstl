@@ -56800,7 +56800,7 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     cuda = outputs["cuda"]
     assert "__device__ float4 main_fs()" in cuda
     assert "float4 output;" in cuda
-    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in cuda
+    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in cuda
     assert "return output;" in cuda
     assert "main_fs(float4 output" not in cuda
     assert "CrossGL parameter semantic: output" not in cuda
@@ -56808,7 +56808,7 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     hip = outputs["hip"]
     assert "__device__ float4 main_fs()" in hip
     assert "float4 output;" in hip
-    assert "output = make_float4(1.0, 0.0, 0.0, 1.0);" in hip
+    assert "output = make_float4(1.0f, 0.0f, 0.0f, 1.0f);" in hip
     assert "return output;" in hip
     assert "main_fs(float4 output" not in hip
     assert "CrossGL parameter semantic: output" not in hip

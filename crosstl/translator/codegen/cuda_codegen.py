@@ -40,6 +40,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
+from .c_float_literals import c_float_literal_text
 from .cuda_refusals import CudaLoweringRefused
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -2960,6 +2961,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and not isinstance(value, bool)
         ):
             return f"{value}u"
+        if literal_type == "float":
+            float_text = c_float_literal_text(value)
+            if float_text is not None:
+                return float_text
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
