@@ -157,6 +157,10 @@ from demos.integrations.mlx.portable_host.sort_packages import (
     CACHE_DIRECTORY as SORT_CACHE,
 )
 from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
+from demos.integrations.mlx.portable_host.trace_records import (
+    TraceStream,
+    compact_trace_values,
+)
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     GROUPS as MODULE_GROUPS,
 )
@@ -819,6 +823,9 @@ GROUPS = {
 # The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
 # native run also translates its lazy vectors and kernels.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}
+# A passing run keeps the native trace only in this compact form, beside the
+# raw trace's record count, size and SHA-256 in evidence.json.
+COMPACT_TRACE = "native/dispatch.compact.jsonl"
 
 
 def upstream_tests(target, group=None):
@@ -1004,275 +1011,242 @@ def indexing_auditor(entry):
     return auditors.get(prefix)
 
 
-def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexing=True):
+def event_audits(np, args, target, installed):
+    """The per-dispatch evidence checks of a native trace, in audit order.
+
+    Each check is ``(selects, family, audit, role)``. ``selects(entry, event)``
+    picks the records the check owns. ``family`` names the dispatches in the
+    error for a record that targets another backend; ``None`` leaves the
+    target to the check itself. ``audit(event)`` recomputes or derives the
+    record's result, package or native modules. ``role`` says what the check
+    settles: a ``random`` record's package is tied to it later, ``indexing``
+    and ``owned`` checks tie the record to its package and native modules, and
+    a ``scan`` check covers the native modules only where it reports so.
+    """
+    root, packages = args.mlx_root, args.packages
+    modules = Path(args.output_dir) / "native/native-modules"
+
+    def lazy(entries, family, check, cache):
+        def selects(entry, event):
+            return entry in entries and entry not in installed
+
+        return selects, family, lambda event: check(event, cache), "owned"
+
+    def owned(entries, family, check, cache):
+        def selects(entry, event):
+            return entry in entries
+
+        return selects, family, lambda event: check(event, cache), "owned"
+
+    scans = lazy_package_evidence.LazyPackages(root, packages, target)
+    compiled = compiled_evidence.cache(root, packages, target)
+    quantizations = quantization_evidence.cache(root, packages, target)
+
+    return (
+        (
+            lambda entry, event: entry in ENTRIES,
+            None,
+            lambda event: random_evidence.audit_event(np, event),
+            "random",
+        ),
+        (
+            lambda entry, event: indexing_auditor(entry) is not None,
+            "indexing dispatch",
+            # Recomputes the result from the retained inputs and native modules.
+            lambda event: indexing_auditor(event["entry"])(np, event),
+            "indexing",
+        ),
+        (
+            lambda entry, event: entry.startswith(DIVMOD_PREFIXES),
+            "DivMod dispatch",
+            # Recomputes both outputs and checks the retained native modules.
+            lambda event: divmod_evidence.audit_event(event),
+            "owned",
+        ),
+        # Each check below derives its cached package again and checks the
+        # native modules. Copies, integer and Boolean vectors and integer
+        # aranges, offsets, masked scatters, reductions, arg reductions, sorts
+        # and searches are also recomputed from their retained inputs; the
+        # upstream tests compare the other values.
+        lazy(
+            LAZY_COPY_ENTRIES,
+            "copy dispatch",
+            copy_evidence.audit_event,
+            CopyPackageCache(root, packages / COPY_CACHE, target),
+        ),
+        lazy(
+            LAZY_ELEMENTWISE_ENTRIES,
+            "vector dispatch",
+            elementwise_evidence.audit_event,
+            ElementwisePackageCache(root, packages / ELEMENTWISE_CACHE, target),
+        ),
+        lazy(
+            arange_packages.ENTRIES,
+            "arange dispatch",
+            arange_evidence.audit_event,
+            arange_packages.cache(root, packages / arange_packages.CACHE, target),
+        ),
+        owned(
+            dynamic_offset_packages.ENTRIES,
+            "dynamic offset",
+            dynamic_offset_evidence.audit_event,
+            dynamic_offset_packages.DynamicOffsetPackageCache(
+                root, packages / dynamic_offset_packages.CACHE, target
+            ),
+        ),
+        owned(
+            masked_scatter_packages.ENTRIES,
+            "masked scatter",
+            masked_scatter_evidence.audit_event,
+            masked_scatter_packages.MaskedScatterPackageCache(
+                root, packages / masked_scatter_packages.CACHE, target
+            ),
+        ),
+        owned(
+            wide_reduction_packages.ENTRIES,
+            "wide reduction",
+            wide_reduction_evidence.audit_event,
+            wide_reduction_packages.cache(
+                root, packages / wide_reduction_packages.CACHE, target
+            ),
+        ),
+        owned(
+            wide_row_dispatch.ENTRIES,
+            "wide row reduction",
+            lambda event, cache: wide_row_evidence.audit_event(event, cache, modules),
+            SmallRowPackageCache(root, packages / "small-rows", target),
+        ),
+        owned(
+            wide_column_dispatch.ENTRIES,
+            "wide column reduction",
+            wide_column_evidence.audit_event,
+            SmallColumnPackageCache(root, packages / SMALL_COLUMN_CACHE, target),
+        ),
+        owned(
+            arg_reduce_layout.ENTRIES,
+            "arg reduction",
+            arg_reduce_evidence.audit_event,
+            ArgReducePackageCache(root, packages / ARG_REDUCE_CACHE, target),
+        ),
+        owned(
+            softmax_layout.ENTRIES,
+            "softmax or logsumexp",
+            softmax_evidence.audit_event,
+            SoftmaxPackageCache(root, packages / SOFTMAX_CACHE, target),
+        ),
+        owned(
+            sort_layout.ENTRIES,
+            "sort",
+            sort_evidence.audit_event,
+            SortPackageCache(root, packages / SORT_CACHE, target),
+        ),
+        owned(
+            searchsorted_layout.ENTRIES,
+            "searchsorted",
+            searchsorted_evidence.audit_event,
+            SearchSortedPackageCache(root, packages / SEARCHSORTED_CACHE, target),
+        ),
+        owned(
+            norm_layout.ENTRIES,
+            "normalization",
+            norm_evidence.audit_event,
+            NormPackageCache(root, packages / NORM_CACHE, target),
+        ),
+        owned(
+            cross_entropy_layout.ENTRIES,
+            "cross-entropy",
+            cross_entropy_evidence.audit_event,
+            CrossEntropyPackageCache(root, packages / CROSS_ENTROPY_CACHE, target),
+        ),
+        (
+            lambda entry, event: lazy_package_evidence.family(entry) is not None,
+            None,
+            # Derives the package again and checks scans' native modules.
+            lambda event: lazy_package_evidence.audit_event(event, scans, modules),
+            "scan",
+        ),
+        (
+            lambda entry, event: compiled_evidence.is_compiled(event),
+            None,
+            # Finds the package of the traced source again.
+            lambda event: compiled_evidence.audit_event(event, compiled),
+            "owned",
+        ),
+        (
+            lambda entry, event: quantization_evidence.is_quantization(entry),
+            None,
+            # Checks the complete groups, output guards and native modules.
+            lambda event: quantization_evidence.audit_event(event, quantizations),
+            "owned",
+        ),
+    )
+
+
+def audit_trace(
+    np, args, trace, target, indexes, reductions, *, require_indexing=True, record=None
+):
     """Tie every dispatch to exactly one translated package.
 
-    ``require_indexing`` requires the trace to reach a gather or scatter.
+    ``trace`` is any iterable of dispatch records; each is checked once and
+    kept only in compact form (``trace_records.compact_trace_values``), so a
+    trace of many gigabytes is audited in the memory of its largest record.
+    ``record`` receives each compact record in order. ``require_indexing``
+    requires the trace to reach a gather or scatter. Returns the number of
+    indexing dispatches.
     """
-    random_events = [event for event in trace if event["entry"] in ENTRIES]
-    for event in random_events:
-        random_evidence.audit_event(np, event)
+    installed = set().union(*(index["descriptors"] for index in indexes.values()))
+    audits = event_audits(np, args, target, installed)
+    events, owners, identities = [], [], []
+    indexing = 0
+    for event in trace:
+        entry, owned, identity = event["entry"], 0, True
+        for selects, family, check, role in audits:
+            if not selects(entry, event):
+                continue
+            if family is not None and event["target"] != target:
+                raise ValueError(f"Upstream op {family} targets another backend")
+            covered = check(event)
+            identity = identity and role == "scan" and not covered
+            owned += role != "random"
+            indexing += role == "indexing"
+        compact = compact_trace_values(event)
+        if record is not None:
+            record(compact)
+        events.append(compact)
+        owners.append(owned)
+        identities.append(identity)
+    _audit_packages(args, target, indexes, reductions, events, owners, identities)
+    if require_indexing and not indexing:
+        raise ValueError("Upstream indexing tests did not reach gather or scatter")
+    return indexing
+
+
+def _audit_packages(args, target, indexes, reductions, events, owners, identities):
+    """Tie compact records to their packages once every record is checked.
+
+    ``owners`` counts the checks that already own each record and
+    ``identities`` marks the records whose native identity no check covered.
+    """
+    random_events = [event for event in events if event["entry"] in ENTRIES]
     if random_events:
         random_evidence.verify_packages(
             random_events, args.mlx_root, args.random, target
         )
-    owners = [0] * len(trace)
-    indexing = 0
-    for i, event in enumerate(trace):
-        auditor = indexing_auditor(event["entry"])
-        if auditor is None:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op indexing dispatch targets another backend")
-        # Recomputes the result from the retained inputs and native modules.
-        auditor(np, event)
-        owners[i] += 1
-        indexing += 1
-    for i, event in enumerate(trace):
-        if not event["entry"].startswith(DIVMOD_PREFIXES):
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op DivMod dispatch targets another backend")
-        # Recomputes both outputs and checks the retained native modules.
-        divmod_evidence.audit_event(event)
-        owners[i] += 1
-    installed = set().union(*(index["descriptors"] for index in indexes.values()))
-    copies = CopyPackageCache(args.mlx_root, args.packages / COPY_CACHE, target)
-    lazy_checked = set()
-    for i, event in enumerate(trace):
-        if event["entry"] not in LAZY_COPY_ENTRIES or event["entry"] in installed:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op copy dispatch targets another backend")
-        # Recomputes the destination and derives the cached package again.
-        copy_evidence.audit_event(event, copies)
-        lazy_checked.add(i)
-        owners[i] += 1
-    elementwise = ElementwisePackageCache(
-        args.mlx_root, args.packages / ELEMENTWISE_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if (
-            event["entry"] not in LAZY_ELEMENTWISE_ENTRIES
-            or event["entry"] in installed
-        ):
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op vector dispatch targets another backend")
-        # Derives the cached package again and checks the native modules;
-        # integer and Boolean results are recomputed from their operands.
-        elementwise_evidence.audit_event(event, elementwise)
-        lazy_checked.add(i)
-        owners[i] += 1
-    aranges = arange_packages.cache(
-        args.mlx_root, args.packages / arange_packages.CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in arange_packages.ENTRIES or event["entry"] in installed:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op arange dispatch targets another backend")
-        # Derives the cached package again and checks the native modules;
-        # integer results are recomputed from their scalars.
-        arange_evidence.audit_event(event, aranges)
-        lazy_checked.add(i)
-        owners[i] += 1
-    offsets = dynamic_offset_packages.DynamicOffsetPackageCache(
-        args.mlx_root, args.packages / dynamic_offset_packages.CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in dynamic_offset_packages.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op dynamic offset targets another backend")
-        # Derives the package again from the pinned template, checks the
-        # native modules and recomputes the offset from the start indices.
-        dynamic_offset_evidence.audit_event(event, offsets)
-        lazy_checked.add(i)
-        owners[i] += 1
-    masked = masked_scatter_packages.MaskedScatterPackageCache(
-        args.mlx_root, args.packages / masked_scatter_packages.CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in masked_scatter_packages.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op masked scatter targets another backend")
-        # Derives the package again from the pinned template, checks the
-        # native modules and recomputes the output from the mask and source.
-        masked_scatter_evidence.audit_event(event, masked)
-        lazy_checked.add(i)
-        owners[i] += 1
-    wide = wide_reduction_packages.cache(
-        args.mlx_root, args.packages / wide_reduction_packages.CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in wide_reduction_packages.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op wide reduction targets another backend")
-        # Derives the cached package again and checks the native modules;
-        # integer passes are recomputed from their inputs.
-        wide_reduction_evidence.audit_event(event, wide)
-        lazy_checked.add(i)
-        owners[i] += 1
-    wide_rows = SmallRowPackageCache(
-        args.mlx_root, args.packages / "small-rows", target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in wide_row_dispatch.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op wide row reduction targets another backend")
-        # Derives the cached packages again and checks the native modules or
-        # regions; integer rows are recomputed from their inputs.
-        wide_row_evidence.audit_event(
-            event, wide_rows, Path(args.output_dir) / "native/native-modules"
-        )
-        lazy_checked.add(i)
-        owners[i] += 1
-    wide_columns = SmallColumnPackageCache(
-        args.mlx_root, args.packages / SMALL_COLUMN_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in wide_column_dispatch.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError(
-                "Upstream op wide column reduction targets another backend"
-            )
-        # Derives the cached package again and checks the native modules;
-        # integer columns are recomputed from their inputs.
-        wide_column_evidence.audit_event(event, wide_columns)
-        lazy_checked.add(i)
-        owners[i] += 1
-    arg_reductions = ArgReducePackageCache(
-        args.mlx_root, args.packages / ARG_REDUCE_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in arg_reduce_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op arg reduction targets another backend")
-        # Derives the cached package again, checks the native modules and
-        # recomputes every index from the retained input.
-        arg_reduce_evidence.audit_event(event, arg_reductions)
-        lazy_checked.add(i)
-        owners[i] += 1
-    softmaxes = SoftmaxPackageCache(
-        args.mlx_root, args.packages / SOFTMAX_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in softmax_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op softmax or logsumexp targets another backend")
-        # Derives the cached package again and checks the uploads, guards and
-        # native modules; the upstream tests compare the values.
-        softmax_evidence.audit_event(event, softmaxes)
-        lazy_checked.add(i)
-        owners[i] += 1
-    sorts = SortPackageCache(args.mlx_root, args.packages / SORT_CACHE, target)
-    for i, event in enumerate(trace):
-        if event["entry"] not in sort_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op sort targets another backend")
-        # Derives the cached package again, checks the uploads, guards and
-        # native modules, and recomputes every retained stage's outputs.
-        sort_evidence.audit_event(event, sorts)
-        lazy_checked.add(i)
-        owners[i] += 1
-    searches = SearchSortedPackageCache(
-        args.mlx_root, args.packages / SEARCHSORTED_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in searchsorted_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op searchsorted targets another backend")
-        # Derives the cached package again, checks the uploads, guards and
-        # native modules, and recomputes every retained pass's binary searches.
-        searchsorted_evidence.audit_event(event, searches)
-        lazy_checked.add(i)
-        owners[i] += 1
-    norms = NormPackageCache(args.mlx_root, args.packages / NORM_CACHE, target)
-    for i, event in enumerate(trace):
-        if event["entry"] not in norm_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op normalization targets another backend")
-        # Derives the cached package again and checks the uploads, guards,
-        # weight placeholders and native modules; the upstream tests compare
-        # the values with MLX's composed normalization.
-        norm_evidence.audit_event(event, norms)
-        lazy_checked.add(i)
-        owners[i] += 1
-    cross_entropies = CrossEntropyPackageCache(
-        args.mlx_root, args.packages / CROSS_ENTROPY_CACHE, target
-    )
-    for i, event in enumerate(trace):
-        if event["entry"] not in cross_entropy_layout.ENTRIES:
-            continue
-        if event["target"] != target:
-            raise ValueError("Upstream op cross-entropy targets another backend")
-        # Derives the cached package again and checks the uploads, class
-        # indices, guards and native modules; the upstream tests compare the
-        # values with MLX's composed reference.
-        cross_entropy_evidence.audit_event(event, cross_entropies)
-        lazy_checked.add(i)
-        owners[i] += 1
-    lazy = lazy_package_evidence.LazyPackages(args.mlx_root, args.packages, target)
-    modules = Path(args.output_dir) / "native/native-modules"
-    executed = set()
-    for i, event in enumerate(trace):
-        if lazy_package_evidence.family(event["entry"]) is None:
-            continue
-        # Derives the package again and checks scans' retained native modules.
-        if lazy_package_evidence.audit_event(event, lazy, modules):
-            executed.add(i)
-        owners[i] += 1
-    compiled = compiled_evidence.cache(args.mlx_root, args.packages, target)
-    for i, event in enumerate(trace):
-        if not compiled_evidence.is_compiled(event):
-            continue
-        # Finds the package of the traced source again and checks the
-        # retained native modules; the upstream tests compare the values.
-        compiled_evidence.audit_event(event, compiled)
-        executed.add(i)
-        owners[i] += 1
-    quantizations = quantization_evidence.cache(args.mlx_root, args.packages, target)
-    for i, event in enumerate(trace):
-        if not quantization_evidence.is_quantization(event["entry"]):
-            continue
-        # Derives the cached package again and checks the complete groups,
-        # output guards and native modules; the upstream tests compare the
-        # values with MLX's CPU quantization.
-        quantization_evidence.audit_event(event, quantizations)
-        executed.add(i)
-        owners[i] += 1
     verify_native_identity(
-        [
-            event
-            for i, event in enumerate(trace)
-            if event["entry"] not in ENTRIES
-            and indexing_auditor(event["entry"]) is None
-            and not event["entry"].startswith(DIVMOD_PREFIXES)
-            and i not in executed
-            and i not in lazy_checked
-        ],
-        target,
+        [event for event, unchecked in zip(events, identities) if unchecked], target
     )
     for name in FAMILIES:
         if name == "random":
-            selected = [i for i, event in enumerate(trace) if event["entry"] in ENTRIES]
+            selected = [
+                i for i, event in enumerate(events) if event["entry"] in ENTRIES
+            ]
         else:
             descriptors = indexes[name]["descriptors"]
             selected = [
-                i for i, event in enumerate(trace) if event["entry"] in descriptors
+                i for i, event in enumerate(events) if event["entry"] in descriptors
             ]
             verify_artifacts(
-                [trace[i] for i in selected],
+                [events[i] for i in selected],
                 getattr(args, name),
                 indexes[name],
                 variants=False,
@@ -1283,11 +1257,11 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
         keys = variant_keys(index)
         selected = [
             i
-            for i, event in enumerate(trace)
+            for i, event in enumerate(events)
             if f'w{event["workgroupSize"][0]}/{event["entry"]}' in keys
         ]
         verify_artifacts(
-            [trace[i] for i in selected],
+            [events[i] for i in selected],
             path,
             index,
             variants=True,
@@ -1297,9 +1271,6 @@ def audit_trace(np, args, trace, target, indexes, reductions, *, require_indexin
             owners[i] += 1
     if any(count != 1 for count in owners):
         raise ValueError("Upstream op trace contains an unknown or ambiguous package")
-    if require_indexing and not indexing:
-        raise ValueError("Upstream indexing tests did not reach gather or scatter")
-    return indexing
 
 
 def run_worker(args, output, mode):
@@ -1369,23 +1340,25 @@ def verify(args):
         for mode in ("cpu", "native"):
             upstream[mode] = json.loads((output / mode / "upstream.json").read_text())
             validate_upstream(upstream[mode], native=mode == "native", inventory=tests)
-        trace = [
-            json.loads(line)
-            for line in (output / "native/dispatch.jsonl").read_text().splitlines()
-        ]
-        if sum(item["dispatchCount"] for item in upstream["native"]["tests"]) != len(
-            trace
+        # The audit streams the trace, which long groups write by the
+        # gigabyte, and keeps a compact copy (COMPACT_TRACE).
+        trace = TraceStream(output / "native/dispatch.jsonl")
+        with (output / COMPACT_TRACE).open("w", encoding="utf-8") as compact:
+            indexing = audit_trace(
+                np,
+                args,
+                trace,
+                target,
+                indexes,
+                reductions,
+                require_indexing=requires_indexing(args.group),
+                record=lambda event: compact.write(json.dumps(event) + "\n"),
+            )
+        if (
+            sum(item["dispatchCount"] for item in upstream["native"]["tests"])
+            != trace.records
         ):
             raise ValueError("Upstream op trace count differs")
-        indexing = audit_trace(
-            np,
-            args,
-            trace,
-            target,
-            indexes,
-            reductions,
-            require_indexing=requires_indexing(args.group),
-        )
         rejections = {}
         for mode, error in checks.items():
             item = json.loads((output / mode / "rejection.json").read_text())
@@ -1402,11 +1375,13 @@ def verify(args):
             raise ValueError("MLX source changed during upstream op verification")
         evidence.update(
             passed=True,
-            dispatchCount=len(trace),
+            dispatchCount=trace.records,
+            trace=trace.summary(),
             indexingDispatchCount=indexing,
             upstream=upstream,
             negativeChecks=rejections,
         )
+        (output / "native/dispatch.jsonl").unlink()
     except Exception as error:
         evidence["error"] = str(error)
         raise

@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from demos.integrations.mlx.portable_host import (
+    trace_records,
     upstream_module_groups,
     verify,
     verify_random,
@@ -504,6 +505,32 @@ def test_upstream_op_trace_ties_every_dispatch_to_one_package(audit):
         "col_reduce_small_1_reduce_sumint32",
         "vv_Addint64",
     } <= set(audit.seen["native"])
+
+
+def test_upstream_op_trace_audit_streams_and_records_compact_events(audit):
+    long_values = list(range(trace_records.COMPACT_TRACE_LIMIT + 1))
+    events = [
+        event("gatherint32int32_2_1_int"),
+        {**event("vv_Equalint32"), "inputs": {"a": {"values": long_values}}},
+    ]
+    seen = []
+    # A generator can be read only once: every check sees each event then.
+    count = ops.audit_trace(
+        None,
+        audit.args,
+        (dict(item) for item in events),
+        "metal",
+        audit.indexes,
+        audit.reductions,
+        record=seen.append,
+    )
+    assert count == 1
+    assert seen == [trace_records.compact_trace_values(item) for item in events]
+    assert seen[1]["inputs"]["a"]["values"]["compactedValues"]["length"] == len(
+        long_values
+    )
+    assert audit.seen["packages"] == ["vv_Equalint32"]
+    assert audit.seen["gather_evidence"] == ["gatherint32int32_2_1_int"]
 
 
 GATHERED_MATRIX_ENTRIES = (

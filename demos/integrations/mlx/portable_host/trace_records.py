@@ -2,6 +2,10 @@
 
 import hashlib
 import json
+import math
+import sys
+from array import array
+from pathlib import Path
 
 from crosstl.project.runtime_values import exact_types_within
 
@@ -11,6 +15,70 @@ COMPACT_STRING_LIMIT = 4096
 # The record fields the upstream runners check after a native run.
 SUMMARY_KEYS = ("entry", "target", "threads")
 _SCALAR_TYPES = frozenset({type(None), bool, int, float, str})
+# Bool cannot be subclassed; these return exact built-in values for the rest.
+_BASE_CONVERSIONS = ((int, int.__int__), (float, float.__float__), (str, str.__str__))
+
+
+def _little_endian(values):
+    if sys.byteorder != "little":
+        values.byteswap()
+    return values.tobytes()
+
+
+def _typed_encoding(values):
+    """Tagged machine words of a list of one exact type, or ``None``.
+
+    Booleans, int64 integers and finite floats encode as bytes, int64 words
+    and float64 words. Each such list has exactly one JSON encoding and one
+    word encoding, so two lists share either encoding exactly when they share
+    the other; NaN, infinities and wider integers keep their JSON encoding.
+    """
+    kind = type(values[0])
+    if not exact_types_within(values, frozenset({kind})):
+        return None
+    if kind is bool:
+        return b"bool\0" + bytes(values)
+    if kind is int:
+        try:
+            return b"int64\0" + _little_endian(array("q", values))
+        except OverflowError:
+            return None
+    # A finite sum excludes NaN and infinities.
+    if kind is float and math.isfinite(sum(values)):
+        return b"float64\0" + _little_endian(array("d", values))
+    return None
+
+
+def _plain(item):
+    """``item`` as the exact built-in scalar ``json.dumps`` writes for it.
+
+    ``json`` writes an instance of a subclass of ``int``, ``float`` or
+    ``str`` through the base type's own conversion, as these do.
+    """
+    if item is None or type(item) in _SCALAR_TYPES:
+        return item
+    for kind, convert in _BASE_CONVERSIONS:
+        if isinstance(item, kind):
+            return convert(item)
+    raise TypeError("Trace values must be JSON scalars")
+
+
+def value_digest(values):
+    """SHA-256 of a long scalar array, equal exactly when its JSON is.
+
+    Arrays of one exact type hash their tagged words (``_typed_encoding``),
+    which is several times faster than encoding them; others hash their
+    compact JSON encoding, which no word encoding can equal.
+    """
+    if type(values) is not list:
+        values = list(values)
+    encoded = _typed_encoding(values) if values else None
+    if encoded is None and not exact_types_within(values, _SCALAR_TYPES):
+        values = [_plain(item) for item in values]
+        encoded = _typed_encoding(values)
+    if encoded is None:
+        encoded = json.dumps(values, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def compact_trace_values(value):
@@ -18,7 +86,7 @@ def compact_trace_values(value):
 
     Dictionaries and short or nested arrays keep their structure, so a compact
     record still names every entry, launch, artifact and diagnostic. An array's
-    digest covers its compact JSON encoding, a string's its UTF-8 bytes.
+    digest is ``value_digest``, a string's covers its UTF-8 bytes.
     """
     if isinstance(value, str):
         if len(value) <= COMPACT_STRING_LIMIT:
@@ -39,12 +107,8 @@ def compact_trace_values(value):
                 for item in value
             )
         ):
-            encoded = json.dumps(list(value), separators=(",", ":")).encode()
             return {
-                "compactedValues": {
-                    "length": len(value),
-                    "sha256": hashlib.sha256(encoded).hexdigest(),
-                }
+                "compactedValues": {"length": len(value), "sha256": value_digest(value)}
             }
         return [compact_trace_values(item) for item in value]
     return value
@@ -82,3 +146,33 @@ def read_trace_summary(path, keys=SUMMARY_KEYS):
             record = json.loads(line)
             summary.append({key: record[key] for key in keys if key in record})
     return summary
+
+
+class TraceStream:
+    """Iterate a dispatch trace record by record, counting and hashing it.
+
+    A long native run writes gigabytes of records, which would not fit a
+    runner's memory once decoded. ``records``, ``bytes`` and ``summary()``
+    describe the lines read so far.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.records = 0
+        self.bytes = 0
+        self._digest = hashlib.sha256()
+
+    def __iter__(self):
+        with self.path.open("rb") as handle:
+            for line in handle:
+                self._digest.update(line)
+                self.bytes += len(line)
+                self.records += 1
+                yield json.loads(line)
+
+    def summary(self):
+        return {
+            "records": self.records,
+            "bytes": self.bytes,
+            "sha256": self._digest.hexdigest(),
+        }
