@@ -8,6 +8,8 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 
 from __future__ import annotations
 
+from .abstractions import FAMILY as _ABSTRACTIONS
+from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
 from .calls import WEBGL as _CALLS
@@ -67,6 +69,8 @@ WEBGL = {
     **_FORMS_GLSL,
     **_IDIOMS,
     **_IDIOMS_GLSL,
+    **_ABSTRACTIONS,
+    **_ABSTRACTIONS_GLSL,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

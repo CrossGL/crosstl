@@ -28,6 +28,9 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.abstractions import ENUM
+from .templates.abstractions import FAMILY as ABSTRACTIONS
+from .templates.abstractions import GENERIC, SPAN, TWICE, WEIGH, scoped_enum
 from .templates.aggregates import ABSORB
 from .templates.aggregates import FAMILY as AGGREGATES
 from .templates.base import (
@@ -564,6 +567,13 @@ CONSTRUCTS: dict[str, Template] = {
     ),
     "type-alias": Template(
         IDIOMS["type-alias"].body, ALIAS_HELPER, prelude=f"{PAIR}\n{ALIASES}"
+    ),
+    **ABSTRACTIONS,
+    "enum-constant": Template(scoped_enum("::"), prelude=ENUM),
+    "struct-method": Template(ABSTRACTIONS["struct-method"].body, prelude=SPAN),
+    "generic-function": Template(GENERIC, prelude=f"generic<T> {TWICE}"),
+    "const-parameter": Template(
+        ABSTRACTIONS["const-parameter"].body, WEIGH, prelude=PAIR
     ),
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),

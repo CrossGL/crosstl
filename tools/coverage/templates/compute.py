@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import (
+    abstractions,
     aggregates,
     assignments,
     branches,
@@ -78,6 +79,7 @@ CUDA = {
     **lexical.CUDA,
     **forms.CUDA,
     **idioms.CUDA,
+    **abstractions.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -192,6 +194,7 @@ OPENCL = {
     **lexical.OPENCL,
     **forms.OPENCL,
     **idioms.OPENCL,
+    **abstractions.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -325,6 +328,7 @@ MOJO = {
     **lexical.MOJO,
     **forms.MOJO,
     **idioms.MOJO,
+    **abstractions.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -525,6 +529,7 @@ RUST = {
     **lexical.RUST,
     **forms.RUST,
     **idioms.RUST,
+    **abstractions.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

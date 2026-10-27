@@ -6,6 +6,7 @@ import re
 from dataclasses import replace
 
 from . import (
+    abstractions,
     aggregates,
     assignments,
     branches,
@@ -75,6 +76,8 @@ GLSL = {
     **forms.GLSL,
     **idioms.FAMILY,
     **idioms.GLSL,
+    **abstractions.FAMILY,
+    **abstractions.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -193,6 +196,7 @@ HLSL = {
     **lexical.FAMILY,
     **forms.FAMILY,
     **idioms.FAMILY,
+    **abstractions.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -353,6 +357,7 @@ METAL = {
     **forms.METAL,
     **idioms.FAMILY,
     **idioms.METAL,
+    **abstractions.FAMILY,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -554,6 +559,7 @@ WGSL = {
     **lexical.WGSL,
     **forms.WGSL,
     **idioms.WGSL,
+    **abstractions.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -641,6 +647,7 @@ SLANG = {
     "int8": scalar("int8_t"),
     "uint8": scalar("uint8_t"),
     "num-workgroups": Template("outp[i] = float(WorkgroupCount().x);"),
+    **abstractions.SLANG,
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
     # The stage attribute goes on the entry point, after the output struct.

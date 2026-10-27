@@ -434,9 +434,15 @@ def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
 
 # glslang folds the swizzle probe's v.wzyx.x to one OpCompositeExtract.
 _UNANCHORED_TYPES = {"swizzle"}
-# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef;
-# DXC lowers the HLSL probes of both.
-_HLSL_ANCHORED = {"float-remainder", "type-alias"}
+# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef,
+# enumeration, member function or boolean bitwise operator; DXC lowers the HLSL probes of all five.
+_HLSL_ANCHORED = {
+    "float-remainder",
+    "type-alias",
+    "enum-constant",
+    "struct-method",
+    "bool-bitwise",
+}
 
 
 def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
