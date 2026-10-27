@@ -205,8 +205,8 @@ def test_cuda_and_hip_build_structures_by_aggregate_initialization(tmp_path, tar
     assert re.search(r"\b(Pair|Outer)\(", output) is None
     assert "return Pair{x, float(k)};" in output
     assert "Pair p = Pair{x, float(k)};" in output
-    assert "Outer{Pair{1.0, x}, make_float3(1.0, 1.0, 1.0), 3}" in output
-    assert "Pair{4.0, 5.0}.a" in output
+    assert "Outer{Pair{1.0f, x}, make_float3(1.0f, 1.0f, 1.0f), 3}" in output
+    assert "Pair{4.0f, 5.0f}.a" in output
     assert "makePair(x, k)" in output
 
 
