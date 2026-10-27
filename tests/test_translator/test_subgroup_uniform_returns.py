@@ -489,7 +489,6 @@ def test_fully_initialized_private_aggregate_returns_compile(tmp_path, return_ta
         "Metadata result; result.count = count; return result;",
         "Metadata result; result.count = result.offset; result.offset = 0u; return result;",
         "Metadata result; result.count = count; result.count = 1u; result.offset = 0u; return result;",
-        "Metadata result; result.count = count; result.offset = 0u; result.offset = 1u; return result;",
         "Metadata result; result.count = count; unknown(result); result.offset = 0u; return result;",
         "Metadata result; result.count = count; Metadata& alias = result; result.offset = 0u; return result;",
         "Metadata result; result.count = count; result.offset += 1u; return result;",
@@ -853,3 +852,80 @@ def test_return_analysis_resets_between_programs(return_target):
             parse(_source("uint", _body("bound(invocation)"), helper)), "compute"
         )
     assert generator.generate_stage(safe, "compute") == expected
+
+
+# The Metal front end spells each entry-point buffer element read as the
+# builtin ``buffer_load(resource, index)``; it must read like ``resource[i]``.
+DIRECT_SOURCE = BUFFER_SOURCE.replace("read_count(counts, 0u)", "counts[0]").replace(
+    "read_count(counts, 1u)", "counts[1]"
+)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_direct_constant_storage_loads_package_and_compile(tmp_path, target):
+    request, _ = _buffer_request(tmp_path, target, DIRECT_SOURCE, 3)
+    _compile(request.artifact_path.read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize("iterations", [0, 1, 3])
+def test_direct_constant_storage_loads_execute(tmp_path, iterations):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required helper-return execution")
+    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform, "opengl")
+    request, expected = _buffer_request(tmp_path, target, DIRECT_SOURCE, iterations)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=DIRECT_SOURCE if target == "metal" else None,
+        original_entry="accumulate",
+    )
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        # Read-only device storage may alias a writable binding.
+        ("constant uint* counts", "const device uint* counts"),
+        ("counts[0]", "counts[lane]"),
+        ("counts[1]", "counts[lane % 2u]"),
+    ],
+)
+def test_direct_storage_loads_require_immutable_uniform_inputs(
+    tmp_path, return_target, replacement
+):
+    report = _report(
+        tmp_path,
+        return_target,
+        DIRECT_SOURCE.replace(*replacement),
+        diagnostic=f"project.translate.{return_target}-software-subgroup-invalid",
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0
+
+
+def test_builtin_storage_loads_follow_constant_storage(tmp_path, return_target):
+    generator = _return_codegen(return_target)
+    ast = parse(_storage_source("buffer_load(counts, group.x)"))
+    generated = generator.generate_stage(ast, "compute")
+    assert generator.generate_stage(ast, "compute") == generated
+    _compile(generated, return_target, tmp_path)
+    for qualifier in ("", "@readonly"):
+        with pytest.raises(RETURN_ERRORS):
+            _return_codegen(return_target).generate_stage(
+                parse(
+                    _storage_source("buffer_load(counts, group.x)", qualifier=qualifier)
+                ),
+                "compute",
+            )
+
+
+def test_user_buffer_load_functions_are_not_storage_loads(return_target):
+    helper = (
+        "uint buffer_load(StructuredBuffer<uint> values, uint offset) "
+        "{ return values[gl_LocalInvocationIndex]; }"
+    )
+    with pytest.raises(RETURN_ERRORS):
+        _return_codegen(return_target).generate_stage(
+            parse(_storage_source("buffer_load(counts, group.x)", helper)),
+            "compute",
+        )

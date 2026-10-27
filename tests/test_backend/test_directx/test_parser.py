@@ -20,6 +20,7 @@ from crosstl.backend.DirectX.DirectxAst import (
     PragmaNode,
     ScopedBlockNode,
     StructNode,
+    TypeAliasNode,
     VariableNode,
     WhileNode,
 )
@@ -1223,9 +1224,12 @@ def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     ast = parse_code(code)
 
     assert ast.typedefs == []
-    assert len(ast.functions[0].body) == 1
-    assert ast.functions[0].body[0].vtype == "half16"
-    assert ast.functions[0].body[0].name == "srcF16"
+    assert len(ast.functions[0].body) == 2
+    alias, variable = ast.functions[0].body
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "half16"
+    assert variable.vtype == "half16"
+    assert variable.name == "srcF16"
 
 
 def test_parse_block_scope_class_declarations_from_dxc_spec():

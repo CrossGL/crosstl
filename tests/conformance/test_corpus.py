@@ -257,15 +257,18 @@ def test_hlsl_entry_discovery():
     )
 
 
-def test_glsl_environment_checks_ray_stages_with_vulkan_rules():
-    # GL_EXT_ray_tracing exists only for SPIR-V generation; every other stage keeps the OpenGL rules.
+def test_glsl_environment_checks_ray_and_mesh_stages_with_vulkan_rules():
+    # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V generation; every other stage keeps the
+    # OpenGL rules.
     assert checks.glsl_environment(["ray_generation"]) == ["--target-env", "vulkan1.2"]
     assert checks.glsl_environment(["ray_closest_hit", "ray_any_hit"]) == [
         "--target-env",
         "vulkan1.2",
     ]
+    assert checks.glsl_environment(["mesh"]) == ["--target-env", "vulkan1.2"]
+    assert checks.glsl_environment(["task"]) == ["--target-env", "vulkan1.2"]
     assert checks.glsl_environment(["fragment"]) == []
-    assert checks.glsl_environment(["mesh"]) == []
+    assert checks.glsl_environment(["mesh", "fragment"]) == []
 
 
 def test_glsl_specialization_macros_are_defined_after_version(tmp_path):
@@ -402,6 +405,18 @@ def test_committed_budgets_and_scoreboards_match_the_manifest():
         board = json.loads(path.read_text())
         assert board["manifestSHA256"] == manifest.manifest_digest(), path.name
         run.decode(board["cells"], data)
+
+
+def test_every_corpus_workflow_leg_has_a_committed_scoreboard():
+    # corpus.yml names each leg's scoreboard ci-<system>-<machine>: its Linux leg runs on an x86_64 Ubuntu runner and
+    # its Metal leg on an arm64 macOS runner. A leg without a committed scoreboard fails before it compares any cell.
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "corpus.yml"
+    ).read_text()
+    assert "ci-{platform.system()}-{platform.machine()}" in workflow
+    assert '"os": "ubuntu-24.04"' in workflow and '"os": "xcode-27"' in workflow
+    for profile in ("ci-linux-x86_64", "ci-darwin-arm64"):
+        assert (run.SCOREBOARDS / f"{profile}.json").is_file(), profile
 
 
 def test_worker_translates_and_times_one_unit(tmp_path):

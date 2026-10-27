@@ -54,7 +54,7 @@ def test_hlsl_and_metal_rename_a_local_that_its_initializer_reads(tmp_path):
         output = translate(tmp_path, backend)
         assert "float scale_1 = " in output and "scale * 3.0" in output
         assert "float scale = (scale * 3.0)" not in output
-        assert "scale_1)" in output
+        assert "* scale_1" in output
     hlsl = translate(tmp_path, "directx")
     if shutil.which("dxc"):
         (tmp_path / "out.hlsl").write_text(hlsl)

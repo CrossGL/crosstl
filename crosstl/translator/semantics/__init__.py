@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .aggregate_equality import (
+    AggregateEqualityOperandError,
+    AggregateEqualityUnsupportedError,
+    lower_aggregate_equality,
+)
 from .annotate import Annotator
 from .array_length import fold_array_lengths
 from .array_parameters import copy_written_array_parameters
@@ -80,7 +85,12 @@ from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
 )
+from .local_structs import LocalStructUnsupportedError, hoist_local_structs
 from .lower import Lowerer, RuleInexpressibleError
+from .matrix_spellings import (
+    AmbiguousMatrixSpellingError,
+    refuse_ambiguous_matrix_spellings,
+)
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -95,6 +105,7 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_swizzles import expand_scalar_swizzles
@@ -113,6 +124,7 @@ from .stage_interface_structs import (
     gather_stage_interface_variables,
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
+from .stage_private_variables import hoist_stage_private_variables
 from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -133,6 +145,7 @@ from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
+from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
@@ -143,6 +156,9 @@ from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsi
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
+    "AggregateEqualityOperandError",
+    "AggregateEqualityUnsupportedError",
+    "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
     "BindingIndexUnresolvedError",
     "BuiltinValueUnsupportedError",
@@ -171,12 +187,14 @@ __all__ = [
     "ImplicitLodStageUnsupportedError",
     "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
+    "LocalStructUnsupportedError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
     "RuleInexpressibleError",
+    "RowMajorMemberError",
     "RuleReport",
     "SOURCE_RULES",
     "ShaderExecutionReorderingUnsupportedError",
@@ -189,6 +207,7 @@ __all__ = [
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "TypeAliasUnsupportedError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "apply_rule_carrying",
@@ -223,6 +242,9 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
+    Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
+    :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
@@ -230,10 +252,13 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
-    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
+    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
+    type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
+    (:mod:`.type_aliases`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
-    scalars become vector constructors (:mod:`.scalar_swizzles`). ``&&``/``||`` on boolean vectors become ``and``/``or``
-    for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
+    scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
+    structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
+    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
     and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
@@ -280,6 +305,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
+    whose structs cannot carry a matrix layout (:mod:`.row_major_members`).
+    Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
+    storage at module scope (:mod:`.stage_private_variables`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
     texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
@@ -305,7 +334,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    hoist_local_structs(program, report.target)
     refuse_undeclared_types(program, report.target)
+    refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
@@ -314,15 +345,19 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
+    store_row_major_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
+    resolve_type_aliases(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
     expand_scalar_swizzles(program)
+    lower_aggregate_equality(program, report.target)
     lower_vector_logic(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)

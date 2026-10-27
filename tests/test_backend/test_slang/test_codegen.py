@@ -3506,7 +3506,11 @@ def test_local_matrix_constructor_declaration_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "mat4 model = mat4(1.0);" in generated_code
+    # Slang's one-scalar matrix constructor fills every element, as HLSL's does.
+    assert (
+        "mat4 model = mat4(vec4(1.0), vec4(1.0), vec4(1.0), vec4(1.0));"
+        in generated_code
+    )
 
 
 def test_generic_vector_and_matrix_type_codegen_from_language_reference():
@@ -3530,7 +3534,11 @@ def test_generic_vector_and_matrix_type_codegen_from_language_reference():
 
     assert "vec3 normal;" in generated_code
     assert "mat4 transform;" in generated_code
-    assert "mat4 model = mat4(1.0);" in generated_code
+    # Slang's one-scalar matrix constructor fills every element, as HLSL's does.
+    assert (
+        "mat4 model = mat4(vec4(1.0), vec4(1.0), vec4(1.0), vec4(1.0));"
+        in generated_code
+    )
     assert "ivec4 indices = ivec4(1, 2, 3, 4);" in generated_code
     assert "uvec2 packed = uvec2(0, 1);" in generated_code
     assert "bvec3 mask = bvec3(true, false, true);" in generated_code

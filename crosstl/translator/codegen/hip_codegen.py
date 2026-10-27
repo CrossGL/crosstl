@@ -47,6 +47,13 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
+from .c_family_operands import postfix_operand
+from .c_float_literals import c_float_literal_text
+from .c_reference_parameters import (
+    is_output_parameter,
+    overlapping_output_arguments,
+    reference_declarator,
+)
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -73,6 +80,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
 )
+from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -103,12 +111,6 @@ from .match_utils import (
     generate_switch_match,
     infer_match_expression_result_type,
     is_switch_lowerable_match,
-)
-from .reference_parameters import (
-    is_reference_value_type,
-    parameter_is_writable,
-    reference_declarator,
-    refuse_swizzle_reference_arguments,
 )
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
@@ -350,7 +352,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.assignment_lhs_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
-        self.current_function_stage_name = None
         self.current_function_is_kernel_entry = False
         self.current_expression_expected_type = None
         self.structs_by_name = {}
@@ -1951,7 +1952,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         saved_stage_builtin_aliases = self.stage_builtin_aliases
         saved_stage_builtin_alias_types = self.stage_builtin_alias_types
         saved_current_function_is_kernel_entry = self.current_function_is_kernel_entry
-        saved_current_function_stage_name = self.current_function_stage_name
         saved_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -2010,7 +2010,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             qualifiers.append("__device__")
 
         stage_name = self.function_stage_name(node)
-        self.current_function_stage_name = stage_name
         is_kernel_entry = "__global__" in qualifiers
         self.current_function_is_kernel_entry = is_kernel_entry
 
@@ -2113,7 +2112,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     )
                 )
             else:
-                param_declarations.append(self.visit_parameter(param))
+                declaration = self.visit_parameter(param)
+                if stage_name is None and is_output_parameter(param):
+                    # out and inout copy back to the caller; a C++ reference binds it.
+                    declaration = reference_declarator(declaration, param_name)
+                param_declarations.append(declaration)
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
@@ -2233,7 +2236,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.stage_builtin_aliases = saved_stage_builtin_aliases
         self.stage_builtin_alias_types = saved_stage_builtin_alias_types
         self.current_function_is_kernel_entry = saved_current_function_is_kernel_entry
-        self.current_function_stage_name = saved_current_function_stage_name
         self.current_generic_function_substitutions = (
             saved_generic_function_substitutions
         )
@@ -2271,20 +2273,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         self.register_variable_type(param_name, param_type, param)
         declaration = self.format_typed_declarator(param_type, param_name)
-        declaration = self.apply_resource_memory_qualifiers_to_declaration(
+        return self.apply_resource_memory_qualifiers_to_declaration(
             declaration, param_name, param
         )
-        if (
-            self.current_function_stage_name is None
-            and parameter_is_writable(param)
-            and is_reference_value_type(
-                self.parameter_raw_type(param),
-                self.type_name_string(param_type),
-                self.structs_by_name,
-            )
-        ):
-            declaration = reference_declarator(declaration, param_name)
-        return declaration
 
     def semantic_from_node(self, node):
         semantic = getattr(node, "semantic", None)
@@ -3638,15 +3629,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return ""
 
+    def hip_for_clause(self, node):
+        """One for-loop initializer or update clause; a list is one declaration or one comma expression."""
+        if not node:
+            return ""
+        if isinstance(node, list):
+            return join_for_initializer(
+                [self.hip_for_clause(item) for item in node],
+                [isinstance(item, VariableNode) for item in node],
+                "hip",
+            )
+        if isinstance(node, VariableNode):
+            return self.format_variable_declaration(node)
+        if hasattr(node, "expression"):
+            return self.visit_discarded_expression(node.expression)
+        return self.visit_discarded_expression(node)
+
     def visit_ForNode(self, node) -> str:
-        if isinstance(node.init, VariableNode):
-            init = self.format_variable_declaration(node.init)
-        elif hasattr(node.init, "expression"):
-            init = self.visit_discarded_expression(node.init.expression)
-        else:
-            init = self.visit_discarded_expression(node.init) if node.init else ""
+        init = self.hip_for_clause(node.init)
         condition = self.visit(node.condition) if node.condition else ""
-        update = self.visit_discarded_expression(node.update) if node.update else ""
+        update = self.hip_for_clause(node.update)
 
         self.add_line(f"for ({init}; {condition}; {update})")
         self.add_line("{")
@@ -4042,7 +4044,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return f"!{operand}"
         elif node.op in ["++", "--"]:
             if getattr(node, "is_postfix", getattr(node, "postfix", False)):
-                return f"{operand}{node.op}"
+                return f"{postfix_operand(operand)}{node.op}"
             else:
                 return f"{node.op}{operand}"
         lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)
@@ -4226,13 +4228,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if enum_constructor is not None:
             return enum_constructor
 
-        refuse_swizzle_reference_arguments(
-            node,
-            raw_args,
-            self.function_parameters_by_name,
-            self.member_swizzle_components,
-            "HIP",
-        )
         args = [self.visit(arg) for arg in raw_args]
 
         half_constructor = self.hip_half_constructor_expression(
@@ -8711,6 +8706,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return args + self.hip_captured_function_call_args(func_name)
 
         params = getattr(callee, "parameters", getattr(callee, "params", []))
+        overlapping = overlapping_output_arguments(params, raw_args)
+        if overlapping:
+            raise HipLoweringRefused(
+                [
+                    f"overlapping out/inout arguments: {func_name} receives "
+                    f"{', '.join(overlapping)} through more than one parameter that "
+                    "reaches the caller; HIP references would not copy out separately"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):
@@ -9141,6 +9145,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             and not isinstance(value, bool)
         ):
             return f"{value}u"
+        if literal_type == "float":
+            float_text = c_float_literal_text(value)
+            if float_text is not None:
+                return float_text
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
@@ -9206,8 +9214,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_BlockNode(self, node) -> str:
-        if hasattr(node, "statements"):
-            self.emit_body(node.statements)
+        """A nested block keeps its braces: a declaration in it ends with the block (C++17 [basic.scope.block])."""
+        saved_types = dict(self.variable_types)
+        self.add_line("{")
+        self.indent_level += 1
+        try:
+            if hasattr(node, "statements"):
+                self.emit_body(node.statements)
+        finally:
+            self.indent_level -= 1
+            self.variable_types.clear()
+            self.variable_types.update(saved_types)
+        self.add_line("}")
         return ""
 
     def visit_BreakNode(self, node) -> str:
