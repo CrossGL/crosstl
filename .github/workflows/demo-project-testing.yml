@@ -7284,11 +7284,14 @@ jobs:
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
       # 126 legs here, a third of them on macOS; the three jobs
-      # together run at most 24 legs at once.
-      max-parallel: 8
+      # together run at most 28 legs at once. The group axis comes first, so
+      # GitHub starts each group's three platform legs together instead of
+      # every Linux leg before any macOS leg; at eight legs at a time the
+      # platforms ran one after another for about six hours.
+      max-parallel: 12
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
         group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - {group: copy-0, family: copy, shard: 0}
           - {group: copy-1, family: copy, shard: 1}
@@ -8603,11 +8606,12 @@ jobs:
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
       # 153 legs here, a third of them on macOS; the three jobs
-      # together run at most 24 legs at once.
+      # together run at most 28 legs at once, each group's platform legs
+      # together.
       max-parallel: 8
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
         group: [quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - {group: quantized-qmv-0, family: quantized-qmv, shard: 0}
           - {group: quantized-qmv-1, family: quantized-qmv, shard: 1}
@@ -8681,11 +8685,12 @@ jobs:
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
       # 144 legs here, a third of them on macOS; the three jobs
-      # together run at most 24 legs at once.
+      # together run at most 28 legs at once, each group's platform legs
+      # together.
       max-parallel: 8
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
         group: [gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - {group: gemm-family-0, family: gemm-family, shard: 0}
           - {group: gemm-family-1, family: gemm-family, shard: 1}
