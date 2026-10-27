@@ -490,9 +490,11 @@ def _translate_selected_artifact(
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
     assert materialization["specializationCount"] == 2
+    # The importer discovers the same five reachable specializations with ten
+    # units of dependency-discovery work (measured on the pinned source).
     assert materialization["accounting"] == {
         "reachableSpecializationCount": 5,
-        "dependencyDiscoveryWorkCount": 11,
+        "dependencyDiscoveryWorkCount": 10,
         "prunedCandidateCount": 131,
     }
     assert materialization["specializations"][0]["parameters"] == {

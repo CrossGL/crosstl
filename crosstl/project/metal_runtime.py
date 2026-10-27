@@ -186,6 +186,8 @@ class MetalComputeRuntime:
         self._servers_lock = threading.Lock()
         self._worker_directory = None
         self._worker_path = None
+        # (helper path, device name) of the last probe that found a device.
+        self._available_device = None
 
     def close(self):
         with self._servers_lock:
@@ -196,6 +198,7 @@ class MetalComputeRuntime:
             self._worker_directory.cleanup()
             self._worker_directory = None
         self._worker_path = None
+        self._available_device = None
 
     def _run(self, command, *, input_text=None):
         return self.command_runner(
@@ -373,21 +376,20 @@ class MetalComputeRuntime:
     def is_available(self, adapter, request):
         _ = adapter, request
         try:
-            result = self._run([str(self._worker()), "--probe"])
+            worker = str(self._worker())
+            # Persistent runtimes keep a probe that found a device for the
+            # same helper; a device lost later fails its dispatch instead.
+            known = self._available_device
+            if self._persistent and known is not None and known[0] == worker:
+                return self._availability(True, known[1])
+            result = self._run([worker, "--probe"])
             payload = json.loads(result.stdout)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid Metal device probe response.")
             available = result.returncode == 0 and payload.get("available") is True
-            return RuntimeExecutorAvailability(
-                available,
-                reason=None if available else "No Metal compute device is available.",
-                details={
-                    "target": "metal",
-                    "runtime": self.name,
-                    "reasonKind": "available" if available else "device-unavailable",
-                    "device": payload.get("device"),
-                },
-            )
+            if available and self._persistent:
+                self._available_device = (worker, payload.get("device"))
+            return self._availability(available, payload.get("device"))
         except (OSError, ValueError, TypeError, RuntimeAdapterSetupError) as exc:
             return RuntimeExecutorAvailability(
                 False,
@@ -398,6 +400,18 @@ class MetalComputeRuntime:
                     **getattr(exc, "details", {}),
                 },
             )
+
+    def _availability(self, available, device):
+        return RuntimeExecutorAvailability(
+            available,
+            reason=None if available else "No Metal compute device is available.",
+            details={
+                "target": "metal",
+                "runtime": self.name,
+                "reasonKind": "available" if available else "device-unavailable",
+                "device": device,
+            },
+        )
 
     def load_artifact(self, adapter, state, module_path):
         _ = adapter, state

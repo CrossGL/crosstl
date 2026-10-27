@@ -10,10 +10,29 @@ from tests import workflow_text
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The longest current-tree MLX kernel families run in their own job, one matrix
-# leg per runner and family group.
+# The longest current-tree MLX kernel families run in their own jobs, one matrix
+# leg per runner and family group. GitHub expands at most 256 legs from one
+# matrix, so the groups are split over several jobs. The first job defines the
+# steps and the others alias them.
 CURRENT_PARITY_JOB = "mlx-current-native-parity"
+CURRENT_PARITY_JOBS = (
+    CURRENT_PARITY_JOB,
+    "mlx-current-quantized-parity",
+    "mlx-current-gemm-parity",
+)
 CURRENT_PARITY_UPLOAD = "Upload current MLX native parity evidence"
+MAX_MATRIX_LEGS = 256
+
+
+def current_parity_matrix(workflow):
+    """Return the groups and include entries of every current-tree parity job."""
+    jobs = yaml.safe_load(workflow)["jobs"]
+    groups, include = [], []
+    for name in CURRENT_PARITY_JOBS:
+        matrix = jobs[name]["strategy"]["matrix"]
+        groups += matrix["group"]
+        include += matrix.get("include", [])
+    return {"group": groups, "include": include}
 
 
 def bounded_step_deadline(step, runner_os):
@@ -32,7 +51,9 @@ def bounded_step_deadline(step, runner_os):
     )
 
 
-def assert_native_step_prerequisites(step, *, job, pinned=False, group=None):
+def assert_native_step_prerequisites(
+    step, *, job, pinned=False, group=None, family=None
+):
     """Require exact native prerequisites without accepting optional execution."""
     assert job in (
         "portable-host",
@@ -40,8 +61,9 @@ def assert_native_step_prerequisites(step, *, job, pinned=False, group=None):
         "mlx-metal-porting",
         CURRENT_PARITY_JOB,
     )
-    # A parity step runs in exactly one family group of its matrix.
-    assert (group is not None) == (job == CURRENT_PARITY_JOB)
+    # A parity step runs in exactly one family group of its matrix, or in every
+    # shard group of one family.
+    assert ((group is not None) + (family is not None)) == (job == CURRENT_PARITY_JOB)
     definition = yaml.safe_load(step)
     if isinstance(definition, list):
         assert len(definition) == 1
@@ -49,7 +71,12 @@ def assert_native_step_prerequisites(step, *, job, pinned=False, group=None):
     assert isinstance(definition, dict)
     assert "continue-on-error" not in definition
     if job == CURRENT_PARITY_JOB:
-        assert definition.get("if") == f"matrix.group == '{group}'"
+        expected = (
+            f"matrix.group == '{group}'"
+            if family is None
+            else f"matrix.family == '{family}'"
+        )
+        assert definition.get("if") == expected
         return
     if job != "portable-host":
         assert "if" not in definition
@@ -113,8 +140,34 @@ def current_parity_step(workflow, name, *, group):
     step = workflow_text.workflow_step_section(job, name)
     assert step, name
     assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, group=group)
-    matrix = yaml.safe_load(workflow)["jobs"][CURRENT_PARITY_JOB]["strategy"]
-    assert group in matrix["matrix"]["group"]
+    assert group in current_parity_matrix(workflow)["group"]
+    return _checked_parity_step(workflow, job, name, step)
+
+
+def current_parity_shard_step(workflow, name, *, family, count):
+    """Return the step that runs every shard group of a family, after checking the matrix.
+
+    The groups ``<family>-0`` to ``<family>-<count - 1>`` carry their family and shard
+    index through the matrix ``include`` list. The one step selects on the family and
+    reads the index from ``matrix.shard``.
+    """
+    job = workflow_text.workflow_job_text(workflow, CURRENT_PARITY_JOB)
+    step = workflow_text.workflow_step_section(job, name)
+    assert step, name
+    assert_native_step_prerequisites(step, job=CURRENT_PARITY_JOB, family=family)
+    matrix = current_parity_matrix(workflow)
+    shards = {
+        entry["group"]: entry["shard"]
+        for entry in matrix.get("include", [])
+        if entry.get("family") == family
+    }
+    assert shards == {f"{family}-{index}": index for index in range(count)}, family
+    assert set(shards) <= set(matrix["group"]), family
+    assert "_SHARD_INDEX: ${{ matrix.shard }}" in step, name
+    return _checked_parity_step(workflow, job, name, step)
+
+
+def _checked_parity_step(workflow, job, name, step):
     # A family that also ran in the porting job would spend its budget twice.
     assert not workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", name
