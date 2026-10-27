@@ -410,6 +410,32 @@ def test_a_uniform_struct_is_declared_before_its_block_and_copied_into_a_mutable
     assert "params.lights[k].color[0]" in mojo and "var lights: Array[Light, 2]" in mojo
 
 
+def test_reserved_name_probes_use_their_own_language_s_words_at_every_declaration_and_use():
+    crossgl = probes.build(_feature("glsl", "reserved-type-name"), "crossgl").source
+    assert crossgl.index("struct type {") < crossgl.index("compute {")
+    assert "type make(float x)" in crossgl and "float weigh(type t)" in crossgl
+    for language, declaration, use in (
+        ("metal", "constant float var = 2.0;", "fin[i] * var + input[k]"),
+        ("hlsl", "static const float loop = 2.0;", "fin[i] * loop + type[k]"),
+        ("cuda", "__constant__ float var = 2.0f;", "mod[2 - k] * 1024.0f"),
+        ("wgsl", "const half: f32 = 2.0;", "fin[i] * half + output[k]"),
+        ("mojo", "comptime output: Array[Float32, 3]", "materialize[output]()"),
+    ):
+        source = probes.build(
+            _feature(language, "reserved-global-name"), language
+        ).source
+        assert declaration in source and use in source
+    opencl = probes.build(_feature("opencl", "reserved-type-name"), "opencl").source
+    assert "} let;" in opencl and "let make(float x)" in opencl
+    cuda = probes.build(_feature("cuda", "reserved-member-name"), "cuda").source
+    assert (
+        "__device__ float total(Rec r)" in cuda
+        and "r.fn = (float)(iin[i] & 7);" in cuda
+    )
+    rust = probes.build(_feature("rust", "reserved-type-name"), "rust").source
+    assert "pub struct var {" in rust and "var { a: x * 2.0, b: 3 }" in rust
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {

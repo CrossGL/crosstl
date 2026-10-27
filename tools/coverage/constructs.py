@@ -518,6 +518,9 @@ def _curated() -> list[Construct]:
             "OpTypeStruct",
             "OpCompositeExtract",
         ),
+        c("type", "reserved-member-name", "OpMemberName"),
+        c("type", "reserved-type-name", "OpName", "OpTypeStruct"),
+        c("type", "reserved-global-name", "OpName", "StorageClass.Private"),
     ]
 
 

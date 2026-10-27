@@ -21,6 +21,7 @@ from . import (
     forms,
     functions,
     helpers,
+    identifiers,
     idioms,
     initializers,
     layouts,
@@ -96,6 +97,7 @@ GLSL = {
     **blocks.GLSL,
     **workgroups.GLSL,
     **records.GLSL,
+    **identifiers.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -223,6 +225,7 @@ HLSL = {
     **blocks.FAMILY,
     **workgroups.FAMILY,
     **records.FAMILY,
+    **identifiers.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -395,6 +398,7 @@ METAL = {
     **blocks.METAL,
     **workgroups.METAL,
     **records.METAL,
+    **identifiers.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -605,6 +609,7 @@ WGSL = {
     **blocks.WGSL,
     **workgroups.WGSL,
     **records.WGSL,
+    **identifiers.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
