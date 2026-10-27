@@ -3466,7 +3466,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert "float hf = fabsf(__half2float(h1) - f1);" in hip_code
-        assert "float f_lit = fabsf(f1 - 1.0);" in hip_code
+        assert "float f_lit = fabsf(f1 - 1.0f);" in hip_code
         assert "float fi = fabsf(f1 - 1);" in hip_code
         assert "float hi = fabsf(__half2float(h1) - i1);" in hip_code
         assert "float fb = distance(f1, b1);" in hip_code
